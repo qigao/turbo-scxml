@@ -1,4 +1,4 @@
-# CFlow SCXML Core Frontend Design
+# TurboSCXML Core Frontend Design
 
 **Issue:** [qigao/turbo-utils#122](https://github.com/qigao/turbo-utils/issues/122)
 
@@ -104,7 +104,7 @@ zero-initialized output document empty.
 
 ## Public SCXML contract
 
-`cflow/scxml.h` exposes an opaque owning `cflow_scxml_program`. Compilation
+`scxml/scxml.h` exposes an opaque owning `scxml_program`. Compilation
 takes XML bytes, explicit limits, and a zero-initialized output. On success the
 program owns:
 

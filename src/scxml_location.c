@@ -1,12 +1,12 @@
-#include "cmeta_location.h"
+#include "scxml_location.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-static cflow_scxml_cmeta_expr_status location_report(
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic,
-    cflow_scxml_cmeta_expr_status status, size_t byte_offset,
+static scxml_expr_status location_report(
+    scxml_expr_diagnostic *diagnostic,
+    scxml_expr_status status, size_t byte_offset,
     const char *message) {
     if (diagnostic != NULL) {
         memset(diagnostic, 0, sizeof(*diagnostic));
@@ -127,34 +127,34 @@ static const cmeta_data_field_desc *location_find_field(
     return NULL;
 }
 
-cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_location_compile(
-    cflow_scxml_cmeta_location *out,
+scxml_expr_status scxml_location_compile(
+    scxml_location *out,
     const char *path, size_t path_size,
     const cmeta_data_desc *root, size_t max_depth,
     bool writable,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
+    scxml_expr_diagnostic *diagnostic) {
     const cmeta_data_desc *current = root;
     size_t absolute_offset = 0u;
     size_t segment_start = 0u;
     size_t depth = 0u;
     size_t index;
     size_t lexical_error = 0u;
-    cflow_scxml_cmeta_location compiled = {0};
+    scxml_location compiled = {0};
     if (out == NULL || out->root != NULL || path == NULL ||
         path_size == 0u || max_depth == 0u ||
         !cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
         root->storage_type == NULL)
         return location_report(diagnostic,
-                               CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT, 0u,
-                               "invalid CMeta location compile arguments");
+                               SCXML_EXPR_INVALID_ARGUMENT, 0u,
+                               "invalid SCXML location compile arguments");
     if (writable && path[0] == '_')
         return location_report(diagnostic,
-                               CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION, 0u,
+                               SCXML_EXPR_UNKNOWN_LOCATION, 0u,
                                "CMeta system locations are read-only");
     if (!location_path_valid(path, path_size, &lexical_error))
         return location_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR, lexical_error,
-            "CMeta location is not a dotted NCName path");
+            diagnostic, SCXML_EXPR_SYNTAX_ERROR, lexical_error,
+            "SCXML location is not a dotted NCName path");
     for (index = 0u; index <= path_size; ++index) {
         const bool at_end = index == path_size;
         const cmeta_data_struct_shape *shape;
@@ -162,14 +162,14 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_location_compile(
         if (!at_end && path[index] != '.') continue;
         if (++depth > max_depth)
             return location_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED, index,
-                "CMeta location path depth limit exceeded");
+                diagnostic, SCXML_EXPR_LIMIT_EXCEEDED, index,
+                "SCXML location path depth limit exceeded");
         if (!cmeta_data_desc_valid(current) ||
             current->kind != CMETA_DATA_STRUCT || current->shape == NULL ||
             current->storage_type == NULL)
             return location_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-                segment_start, "CMeta location traverses a non-struct value");
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
+                segment_start, "SCXML location traverses a non-struct value");
         shape = (const cmeta_data_struct_shape *)current->shape;
         field = location_find_field(
             shape, path + segment_start, index - segment_start);
@@ -180,8 +180,8 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_location_compile(
                 current->storage_type->size - field->offset ||
             absolute_offset > SIZE_MAX - field->offset)
             return location_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-                segment_start, "CMeta location is unresolved");
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
+                segment_start, "SCXML location is unresolved");
         absolute_offset += field->offset;
         current = field->value;
         if (at_end) break;
@@ -191,21 +191,21 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_location_compile(
         current->storage_type->size >
             root->storage_type->size - absolute_offset)
         return location_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION, 0u,
-            "CMeta location exceeds root storage");
+            diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
+            "SCXML location exceeds root storage");
     compiled.root = root;
     compiled.value = current;
     compiled.offset = absolute_offset;
     compiled.storage_size = current->storage_type->size;
     *out = compiled;
-    return location_report(diagnostic, CFLOW_SCXML_CMETA_EXPR_OK, 0u, NULL);
+    return location_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
 
-cflow_scxml_cmeta_expr_status
-cflow_scxml_cmeta_location_assign_owned_string(
-    const cflow_scxml_cmeta_location *location, void *root,
+scxml_expr_status
+scxml_location_assign_owned_string(
+    const scxml_location *location, void *root,
     const char *data, size_t size, size_t max_bytes,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
+    scxml_expr_diagnostic *diagnostic) {
     const cmeta_data_buffer_ops *ops;
     unsigned char *destination;
     cmeta_status status;
@@ -218,13 +218,13 @@ cflow_scxml_cmeta_location_assign_owned_string(
         location->storage_size >
             location->root->storage_type->size - location->offset)
         return location_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT, 0u,
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
             "invalid CMeta owned-string location assignment arguments");
     ops = cmeta_data_buffer_ops_of(location->value);
     if (ops == NULL || ops->ownership != CMETA_DATA_BUFFER_OWNED)
         return location_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH, 0u,
-            "CMeta location is not an owned string");
+            diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
+            "SCXML location is not an owned string");
     destination = (unsigned char *)root + location->offset;
     status = cmeta_data_buffer_restore_zero(location->value, destination);
     if (status == CMETA_OK)
@@ -233,8 +233,8 @@ cflow_scxml_cmeta_location_assign_owned_string(
             size, max_bytes);
     return status == CMETA_OK
         ? location_report(
-              diagnostic, CFLOW_SCXML_CMETA_EXPR_OK, 0u, NULL)
+              diagnostic, SCXML_EXPR_OK, 0u, NULL)
         : location_report(
-              diagnostic, CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR, 0u,
+              diagnostic, SCXML_EXPR_EVALUATION_ERROR, 0u,
               "CMeta owned-string location assignment failed");
 }

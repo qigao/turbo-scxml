@@ -1,4 +1,4 @@
-#include <cflow/scxml.h>
+#include <scxml/scxml.h>
 #include <turbostl/typed.h>
 
 #include "tinytest.h"
@@ -121,35 +121,35 @@ typedef struct foreach_legacy_compile_options_v1 {
 
 _Static_assert(
     sizeof(foreach_legacy_compile_options_v1) ==
-        offsetof(cflow_scxml_cmeta_compile_options_v1, max_iterations),
+        offsetof(scxml_cmeta_compile_options_v1, max_iterations),
     "legacy CMeta compile options prefix changed");
 
-static cflow_scxml_status compile_foreach(
-    const char *source, cflow_scxml_program *program,
-    cflow_scxml_diagnostic *diagnostic) {
-    const cflow_scxml_cmeta_compile_options_v1 options =
-        cflow_scxml_cmeta_default_compile_options(&foreach_root_data);
-    return cflow_scxml_compile_cmeta(
+static scxml_status compile_foreach(
+    const char *source, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    const scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&foreach_root_data);
+    return scxml_compile_cmeta(
         program, source, strlen(source), NULL, &options, diagnostic);
 }
 
-static cflow_scxml_status compile_foreach_with_options(
-    const char *source, cflow_scxml_program *program,
-    const cflow_scxml_cmeta_compile_options_v1 *options,
-    cflow_scxml_diagnostic *diagnostic) {
-    return cflow_scxml_compile_cmeta(
+static scxml_status compile_foreach_with_options(
+    const char *source, scxml_program *program,
+    const scxml_cmeta_compile_options_v1 *options,
+    scxml_diagnostic *diagnostic) {
+    return scxml_compile_cmeta(
         program, source, strlen(source), NULL, options, diagnostic);
 }
 
 static cflow_statechart_instance_stats run_foreach(
-    const cflow_scxml_program *program, const int *values,
+    const scxml_program *program, const int *values,
     size_t value_count, int item, size_t index, int total) {
     scxml_foreach_root initial = {
         .values = VecOf(int), .item = item, .index = index, .total = total};
     cflow_executor executor = {0};
-    cflow_scxml_session session = {0};
+    scxml_session session = {0};
     cflow_statechart_instance_stats stats = {0};
-    cflow_scxml_session_config config = {
+    scxml_session_config config = {
         .program = program,
         .executor = &executor,
         .external_event_capacity = 2u,
@@ -158,9 +158,9 @@ static cflow_statechart_instance_stats run_foreach(
         .microstep_limit = 32u,
         .max_storage_bytes = FOREACH_TEST_MAX_STORAGE_BYTES
     };
-    cflow_scxml_cmeta_session_options_v1 data = {
-        .abi_version = CFLOW_SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
-        .struct_size = sizeof(cflow_scxml_cmeta_session_options_v1),
+    scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(scxml_cmeta_session_options_v1),
         .initial_state = &initial
     };
     size_t value_index;
@@ -169,18 +169,18 @@ static cflow_statechart_instance_stats run_foreach(
     for (value_index = 0u; value_index < value_count; ++value_index)
         check_equal(vec_push(&initial.values, &values[value_index]), STL_OK);
     check_true(cflow_executor_serial_init(&executor));
-    check_equal(cflow_scxml_session_init_cmeta(&session, &config, &data),
+    check_equal(scxml_session_init_cmeta(&session, &config, &data),
                 CFLOW_STATECHART_INSTANCE_OK);
     check_true(cflow_executor_wait_idle(&executor));
-    check_true(cflow_scxml_session_get_stats(&session, &stats));
-    check_equal(cflow_scxml_session_destroy(&session),
+    check_true(scxml_session_get_stats(&session, &stats));
+    check_equal(scxml_session_destroy(&session),
                 CFLOW_STATECHART_INSTANCE_OK);
     cflow_executor_destroy(&executor);
     vec_destroy(&initial.values);
     return stats;
 }
 
-spec("CFlow SCXML CMeta foreach") {
+spec("TurboSCXML CMeta foreach") {
   it("assigns items and zero-based indexes in declared sequence order") {
     static const char source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -191,18 +191,18 @@ spec("CFlow SCXML CMeta foreach") {
         "&amp;&amp; index == 2' target='done'/></state>"
         "<final id='done'/></scxml>";
     const int values[] = {1, 2, 3};
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
-    cflow_scxml_status status;
+    scxml_status status;
 
     status = compile_foreach(source, &program, &diagnostic);
     info("diagnostic=%s", diagnostic.message);
-    check_equal(status, CFLOW_SCXML_OK);
+    check_equal(status, SCXML_OK);
     stats = run_foreach(&program, values, 3u, 0, 0u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("skips the body and preserves item and index for an empty sequence") {
@@ -214,18 +214,18 @@ spec("CFlow SCXML CMeta foreach") {
         "</onentry><transition cond='total == 5 &amp;&amp; item == 41 "
         "&amp;&amp; index == 43' target='done'/></state>"
         "<final id='done'/></scxml>";
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
-    cflow_scxml_status status;
+    scxml_status status;
 
     status = compile_foreach(source, &program, &diagnostic);
     info("diagnostic=%s", diagnostic.message);
-    check_equal(status, CFLOW_SCXML_OK);
+    check_equal(status, SCXML_OK);
     stats = run_foreach(&program, NULL, 0u, 41, 43u, 5);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("executes nested foreach and conditional ranges within the admitted depth") {
@@ -240,16 +240,16 @@ spec("CFlow SCXML CMeta foreach") {
         "</onentry><transition cond='total == 99' target='done'/></state>"
         "<final id='done'/></scxml>";
     const int values[] = {1, 2, 3};
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     check_equal(compile_foreach(source, &program, &diagnostic),
-                CFLOW_SCXML_OK);
+                SCXML_OK);
     stats = run_foreach(&program, values, 3u, 0, 0u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("retains and raises events declared inside a foreach body") {
@@ -260,16 +260,16 @@ spec("CFlow SCXML CMeta foreach") {
         "</foreach></onentry><transition event='tick' target='done'/>"
         "</state><final id='done'/></scxml>";
     const int values[] = {1};
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     check_equal(compile_foreach(source, &program, &diagnostic),
-                CFLOW_SCXML_OK);
+                SCXML_OK);
     stats = run_foreach(&program, values, 1u, 0, 0u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("accepts the original v1 options prefix and applies the bounded default") {
@@ -281,24 +281,24 @@ spec("CFlow SCXML CMeta foreach") {
         "</onentry><transition cond='total == 3 &amp;&amp; item == 3' "
         "target='done'/></state><final id='done'/></scxml>";
     const int values[] = {1, 2, 3};
-    const cflow_scxml_cmeta_compile_options_v1 current =
-        cflow_scxml_cmeta_default_compile_options(&foreach_root_data);
+    const scxml_cmeta_compile_options_v1 current =
+        scxml_cmeta_default_compile_options(&foreach_root_data);
     foreach_legacy_compile_options_v1 legacy;
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     memcpy(&legacy, &current, sizeof(legacy));
     legacy.struct_size = sizeof(legacy);
     check_equal(compile_foreach_with_options(
                     source, &program,
-                    (const cflow_scxml_cmeta_compile_options_v1 *)&legacy,
+                    (const scxml_cmeta_compile_options_v1 *)&legacy,
                     &diagnostic),
-                CFLOW_SCXML_OK);
+                SCXML_OK);
     stats = run_foreach(&program, values, 3u, 0, 0u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("raises error.execution and rolls back the whole block above the iteration limit") {
@@ -311,25 +311,25 @@ spec("CFlow SCXML CMeta foreach") {
         "cond='total == 0 &amp;&amp; item == 9 &amp;&amp; index == 7' "
         "target='done'/></state><final id='done'/></scxml>";
     const int values[] = {1, 2, 3};
-    cflow_scxml_cmeta_compile_options_v1 options =
-        cflow_scxml_cmeta_default_compile_options(&foreach_root_data);
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&foreach_root_data);
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     options.max_iterations = 2u;
     check_equal(compile_foreach_with_options(
                     source, &program, &options, &diagnostic),
-                CFLOW_SCXML_OK);
+                SCXML_OK);
     stats = run_foreach(&program, values, 3u, 9, 7u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
 
     options.max_iterations = 0u;
     check_equal(compile_foreach_with_options(
                     source, &program, &options, &diagnostic),
-                CFLOW_SCXML_INVALID_ARGUMENT);
+                SCXML_INVALID_ARGUMENT);
     check_null(program.impl);
   }
 
@@ -343,16 +343,16 @@ spec("CFlow SCXML CMeta foreach") {
         "cond='total == 0 &amp;&amp; item == 9 &amp;&amp; index == 7' "
         "target='done'/></state><final id='done'/></scxml>";
     const int values[] = {1};
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     check_equal(compile_foreach(source, &program, &diagnostic),
-                CFLOW_SCXML_OK);
+                SCXML_OK);
     stats = run_foreach(&program, values, 1u, 9, 7u, 0);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
   }
 
   it("rejects unresolved or mismatched foreach locations and empty bodies") {
@@ -369,9 +369,9 @@ spec("CFlow SCXML CMeta foreach") {
          invalid_index < sizeof(invalid) / sizeof(invalid[0]);
          ++invalid_index) {
         char source[1024];
-        cflow_scxml_program program = {0};
-        cflow_scxml_diagnostic diagnostic = {0};
-        cflow_scxml_status status;
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_status status;
         (void)snprintf(
             source, sizeof(source),
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -379,7 +379,7 @@ spec("CFlow SCXML CMeta foreach") {
             "</onentry></state></scxml>", invalid[invalid_index]);
         status = compile_foreach(source, &program, &diagnostic);
         info("case=%zu diagnostic=%s", invalid_index, diagnostic.message);
-        check_equal(status, CFLOW_SCXML_INVALID_STRUCTURE);
+        check_equal(status, SCXML_INVALID_STRUCTURE);
         check_null(program.impl);
     }
   }
@@ -391,11 +391,11 @@ spec("CFlow SCXML CMeta foreach") {
         "<invoke id='child'><finalize><foreach array='values' item='item'>"
         "<assign location='total' expr='item'/></foreach></finalize>"
         "</invoke></state></scxml>";
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
 
     check_equal(compile_foreach(source, &program, &diagnostic),
-                CFLOW_SCXML_UNSUPPORTED_FEATURE);
+                SCXML_UNSUPPORTED_FEATURE);
     check_null(program.impl);
   }
 }

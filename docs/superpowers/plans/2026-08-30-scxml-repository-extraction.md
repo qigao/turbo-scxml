@@ -4,18 +4,18 @@
 
 **Goal:** Extract the existing `cflow-scxml` library into a standalone `TurboSCXML` repository without deleting or changing the source copy in TurboUtils.
 
-**Architecture:** The new repository owns the SCXML-to-CFlow compiler, SCXML session runtime adapters, public `<cflow/scxml.h>` API, conformance corpus, and tests. It consumes an installed TurboUtils SDK through `TURBOUTILS_ROOT`; CFlow, CMeta, QueryVM, XmlParser, Core, STL, and TinyTest remain owned by TurboUtils. The initial extraction preserves C behavior and header paths while publishing the new CMake target `TurboSCXML::SCXML`.
+**Architecture:** The new repository owns the SCXML-to-CFlow compiler, SCXML session runtime adapters, public `<scxml/scxml.h>` API, conformance corpus, and tests. It consumes an installed TurboUtils SDK through `TURBOUTILS_ROOT`; CFlow, CMeta, QueryVM, XmlParser, Core, STL, and TinyTest remain owned by TurboUtils. The initial extraction preserves C behavior and header paths while publishing the new CMake target `TurboSCXML::SCXML`.
 
 **Tech Stack:** C11, CMake 3.20+, CMake Presets, Ninja/MSVC or GCC, CTest, TurboUtils TinyTest.
 
-**Spec:** `docs/specs/cflow-scxml-core-design.md`
+**Spec:** `docs/specs/scxml-core-design.md`
 
 ## Global Constraints
 
 - Do not delete or modify `C:\projects\cpp\turbonet\turbo-utils\cflow-scxml` during this extraction.
 - Copy source, public headers, tests, fixtures, and W3C corpus byte-for-byte before standalone build changes.
 - Resolve TurboUtils only from `$ENV{TURBOUTILS_ROOT}` with `NO_DEFAULT_PATH`; missing or incomplete roots fail configuration.
-- Preserve `<cflow/scxml.h>` and all existing `cflow_scxml_*` C symbols and ABI constants.
+- Preserve `<scxml/scxml.h>` and all existing `scxml_*` C symbols and ABI constants.
 - Keep `TurboUtils::CFlow` independent of XML, CSerde, and SCXML.
 - Use version-controlled `CMakeUserPresets.json` for configure, build, test, and install entry points.
 - Do not add QuickJS, HTTP, persistence, or server behavior to this extraction.
@@ -25,20 +25,20 @@
 ### Task 1: Preserve the SCXML source and design evidence
 
 **Files:**
-- Create: `include/cflow/scxml.h`
+- Create: `include/scxml/scxml.h`
 - Create: `src/scxml.c`
-- Create: `src/cmeta_expr.c`
-- Create: `src/cmeta_expr.h`
-- Create: `src/cmeta_assign.c`
-- Create: `src/cmeta_assign.h`
-- Create: `src/cmeta_location.c`
-- Create: `src/cmeta_location.h`
-- Create: `src/cmeta_sequence.c`
-- Create: `src/cmeta_sequence.h`
-- Create: `src/cmeta_foreach.c`
-- Create: `src/cmeta_foreach.h`
+- Create: `src/scxml_expr.c`
+- Create: `src/scxml_expr.h`
+- Create: `src/scxml_assign.c`
+- Create: `src/scxml_assign.h`
+- Create: `src/scxml_location.c`
+- Create: `src/scxml_location.h`
+- Create: `src/scxml_sequence.c`
+- Create: `src/scxml_sequence.h`
+- Create: `src/scxml_foreach.c`
+- Create: `src/scxml_foreach.h`
 - Create: `tests/` copied from the source module
-- Create: `docs/specs/cflow-scxml-core-design.md`
+- Create: `docs/specs/scxml-core-design.md`
 
 **Interfaces:**
 - Consumes: source module at `C:\projects\cpp\turbonet\turbo-utils\cflow-scxml`.
@@ -156,7 +156,7 @@ Expected: configure/build/test/install entries are visible and no user preset is
 
 **Interfaces:**
 - Consumes: installed `TurboSCXMLConfig.cmake` and `TurboUtilsConfig.cmake`.
-- Produces: proof that a downstream project can include `<cflow/scxml.h>` and link `TurboSCXML::SCXML`.
+- Produces: proof that a downstream project can include `<scxml/scxml.h>` and link `TurboSCXML::SCXML`.
 
 - [x] **Step 1: Configure through the Windows user preset**
 
@@ -189,7 +189,7 @@ Expected: library, public header, package config, version config, and targets ex
 
 - [x] **Step 4: Build and run the install consumer**
 
-The consumer calls `cflow_scxml_default_limits()` so its link verifies a real public symbol, not just header discovery.
+The consumer calls `scxml_default_limits()` so its link verifies a real public symbol, not just header discovery.
 
 - [x] **Step 5: Recheck source preservation and initialize history**
 

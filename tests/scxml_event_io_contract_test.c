@@ -1,5 +1,5 @@
 #include <cflow/executor.h>
-#include <cflow/scxml.h>
+#include <scxml/scxml.h>
 
 #include "tinytest.h"
 
@@ -31,8 +31,8 @@ typedef struct host_adapter_context host_adapter_context;
 typedef struct host_endpoint {
     bool in_use;
     bool accessible;
-    cflow_scxml_session *session;
-    const cflow_scxml_program *program;
+    scxml_session *session;
+    const scxml_program *program;
     host_adapter_context *adapter;
     size_t parent;
     size_t invoke_target;
@@ -131,17 +131,17 @@ static void host_adapter_init(host_adapter_context *adapter,
 }
 
 static bool host_router_register(
-    host_router *router, cflow_scxml_session *session,
-    const cflow_scxml_program *program, bool accessible,
+    host_router *router, scxml_session *session,
+    const scxml_program *program, bool accessible,
     host_adapter_context *adapter, size_t *out_endpoint) {
     char location[HOST_LOCATION_CAPACITY];
     size_t required = 0u;
     size_t index;
     if (router == NULL || session == NULL || program == NULL ||
         out_endpoint == NULL ||
-        cflow_scxml_session_copy_location(
+        scxml_session_copy_location(
             session, location, sizeof(location), &required) !=
-            CFLOW_SCXML_LOCATION_OK)
+            SCXML_LOCATION_OK)
         return false;
     turbo_mutex_lock(&router->lock);
     for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
@@ -279,8 +279,8 @@ static void host_ticket_discard(void *user) {
     turbo_mutex_unlock(&router->lock);
 }
 
-static cflow_scxml_adapter_status host_prepare_send(
-    void *user, const cflow_scxml_send_request_v3 *request,
+static scxml_adapter_status host_prepare_send(
+    void *user, const scxml_send_request_v3 *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     host_adapter_context *adapter = (host_adapter_context *)user;
     host_router *router = adapter != NULL ? adapter->router : NULL;
@@ -290,20 +290,20 @@ static cflow_scxml_adapter_status host_prepare_send(
     size_t index;
     if (router == NULL || request == NULL || out_ticket == NULL ||
         out_error == NULL || adapter->endpoint == SIZE_MAX)
-        return CFLOW_SCXML_ADAPTER_INVALID_CONTRACT;
+        return SCXML_ADAPTER_INVALID_CONTRACT;
     *out_error = NULL;
-    if (request->payload.kind != CFLOW_SCXML_PAYLOAD_NONE)
-        return CFLOW_SCXML_ADAPTER_INVALID_CONTRACT;
+    if (request->payload.kind != SCXML_PAYLOAD_NONE)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
     if (request->base.type_size != 0u &&
         !host_text_equal(request->base.type, request->base.type_size,
                          HOST_SCXML_PROCESSOR)) {
         *out_error = "unsupported Event I/O processor type";
-        return CFLOW_SCXML_ADAPTER_ERROR_EXECUTION;
+        return SCXML_ADAPTER_ERROR_EXECUTION;
     }
     turbo_mutex_lock(&router->lock);
     if (adapter->closed) {
         turbo_mutex_unlock(&router->lock);
-        return CFLOW_SCXML_ADAPTER_CLOSED;
+        return SCXML_ADAPTER_CLOSED;
     }
     source_relative_target = request->base.target_size == 0u ||
         host_text_equal(request->base.target, request->base.target_size,
@@ -320,7 +320,7 @@ static cflow_scxml_adapter_status host_prepare_send(
          !router->endpoints[target].accessible)) {
         turbo_mutex_unlock(&router->lock);
         *out_error = "target session is missing or inaccessible";
-        return CFLOW_SCXML_ADAPTER_ERROR_COMMUNICATION;
+        return SCXML_ADAPTER_ERROR_COMMUNICATION;
     }
     for (index = 0u; index < router->message_capacity; ++index) {
         if (router->messages[index].state == HOST_MESSAGE_FREE) {
@@ -330,7 +330,7 @@ static cflow_scxml_adapter_status host_prepare_send(
     }
     if (message == NULL) {
         turbo_mutex_unlock(&router->lock);
-        return CFLOW_SCXML_ADAPTER_FULL;
+        return SCXML_ADAPTER_FULL;
     }
     if (!host_copy(message->event, sizeof(message->event),
                    request->base.event, request->base.event_size) ||
@@ -340,7 +340,7 @@ static cflow_scxml_adapter_status host_prepare_send(
                    request->base.id, request->base.id_size)) {
         memset(message, 0, sizeof(*message));
         turbo_mutex_unlock(&router->lock);
-        return CFLOW_SCXML_ADAPTER_FULL;
+        return SCXML_ADAPTER_FULL;
     }
     message->router = router;
     message->source_adapter = adapter;
@@ -351,17 +351,17 @@ static cflow_scxml_adapter_status host_prepare_send(
     *out_ticket = (cflow_statechart_effect_ticket){
         host_ticket_commit, host_ticket_discard, message};
     turbo_mutex_unlock(&router->lock);
-    return CFLOW_SCXML_ADAPTER_ACCEPTED;
+    return SCXML_ADAPTER_ACCEPTED;
 }
 
-static cflow_scxml_adapter_status host_prepare_cancel(
-    void *user, const cflow_scxml_cancel_request *request,
+static scxml_adapter_status host_prepare_cancel(
+    void *user, const scxml_cancel_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     (void)user;
     (void)request;
     (void)out_ticket;
     if (out_error != NULL) *out_error = "cancel capability is not advertised";
-    return CFLOW_SCXML_ADAPTER_INVALID_CONTRACT;
+    return SCXML_ADAPTER_INVALID_CONTRACT;
 }
 
 static void host_adapter_close(void *user) {
@@ -382,10 +382,10 @@ static bool host_adapter_is_quiescent(void *user) {
     return quiescent;
 }
 
-static const cflow_scxml_event_io_adapter_v3 HOST_ADAPTER = {
-    .abi_version = CFLOW_SCXML_EVENT_IO_ADAPTER_ABI_V3,
-    .struct_size = sizeof(cflow_scxml_event_io_adapter_v3),
-    .capabilities = CFLOW_SCXML_EVENT_IO_CAP_SEND,
+static const scxml_event_io_adapter_v3 HOST_ADAPTER = {
+    .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V3,
+    .struct_size = sizeof(scxml_event_io_adapter_v3),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND,
     .prepare_send = host_prepare_send,
     .prepare_cancel = host_prepare_cancel,
     .close = host_adapter_close,
@@ -408,7 +408,7 @@ static host_pump_status host_router_pump(host_router *router) {
     host_endpoint target = {0};
     host_endpoint source = {0};
     cflow_event_view event = {0};
-    cflow_scxml_event_metadata metadata = {0};
+    scxml_event_metadata metadata = {0};
     cflow_mailbox_status mailbox_status = CFLOW_MAILBOX_INVALID_ARGUMENT;
     size_t index;
     if (router == NULL) return HOST_PUMP_EMPTY;
@@ -429,7 +429,7 @@ static host_pump_status host_router_pump(host_router *router) {
     target = router->endpoints[snapshot.target];
     turbo_mutex_unlock(&router->lock);
 
-    metadata = (cflow_scxml_event_metadata){
+    metadata = (scxml_event_metadata){
         .send_id = snapshot.send_id,
         .send_id_size = strlen(snapshot.send_id),
         .origin = source.location,
@@ -437,9 +437,9 @@ static host_pump_status host_router_pump(host_router *router) {
         .origin_type = HOST_ORIGIN_TYPE,
         .origin_type_size = sizeof(HOST_ORIGIN_TYPE) - 1u};
     if (source.in_use && target.in_use && target.accessible &&
-        cflow_scxml_program_event(
+        scxml_program_event(
             target.program, snapshot.event, strlen(snapshot.event), &event)) {
-        mailbox_status = cflow_scxml_session_try_send_v2(
+        mailbox_status = scxml_session_try_send_v2(
             target.session, &event, &metadata);
     }
 
@@ -471,24 +471,24 @@ static host_pump_status host_router_pump(host_router *router) {
     turbo_mutex_unlock(&router->lock);
     if (mailbox_status == CFLOW_MAILBOX_OK) return HOST_PUMP_DELIVERED;
     if (target.in_use)
-        (void)cflow_scxml_session_report_adapter_error(
-            target.session, CFLOW_SCXML_ADAPTER_ERROR_KIND_COMMUNICATION);
+        (void)scxml_session_report_adapter_error(
+            target.session, SCXML_ADAPTER_ERROR_KIND_COMMUNICATION);
     if (source.in_use)
-        (void)cflow_scxml_session_report_adapter_error(
-            source.session, CFLOW_SCXML_ADAPTER_ERROR_KIND_COMMUNICATION);
+        (void)scxml_session_report_adapter_error(
+            source.session, SCXML_ADAPTER_ERROR_KIND_COMMUNICATION);
     return HOST_PUMP_DROPPED;
 }
 
-static cflow_scxml_status host_compile(
-    const char *source, cflow_scxml_program *program,
-    cflow_scxml_diagnostic *diagnostic) {
-    return cflow_scxml_compile(
+static scxml_status host_compile(
+    const char *source, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    return scxml_compile(
         program, source, strlen(source), NULL, diagnostic);
 }
 
-static cflow_scxml_session_config host_session_config(
-    const cflow_scxml_program *program, cflow_executor *executor) {
-    return (cflow_scxml_session_config){
+static scxml_session_config host_session_config(
+    const scxml_program *program, cflow_executor *executor) {
+    return (scxml_session_config){
         .program = program,
         .executor = executor,
         .external_event_capacity = 4u,
@@ -507,16 +507,16 @@ spec("SCXML host Event I/O adapter contract") {
             "</state><final id='done'/></scxml>";
         host_router router;
         host_adapter_context sender_adapter;
-        cflow_scxml_program receiver_program = {0};
-        cflow_scxml_program sender_program = {0};
-        cflow_scxml_diagnostic diagnostic = {0};
-        cflow_scxml_session receiver = {0};
-        cflow_scxml_session sender = {0};
+        scxml_program receiver_program = {0};
+        scxml_program sender_program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session receiver = {0};
+        scxml_session sender = {0};
         cflow_executor receiver_executor = {0};
         cflow_executor sender_executor = {0};
-        cflow_scxml_session_config receiver_config;
-        cflow_scxml_session_config sender_config;
-        cflow_scxml_session_adapters_v3 adapters;
+        scxml_session_config receiver_config;
+        scxml_session_config sender_config;
+        scxml_session_adapters_v3 adapters;
         cflow_statechart_instance_stats stats = {0};
         cflow_event_view go = {0};
         char receiver_location[HOST_LOCATION_CAPACITY];
@@ -530,16 +530,16 @@ spec("SCXML host Event I/O adapter contract") {
         check_true(host_router_init(&router, HOST_MESSAGE_CAPACITY));
         host_adapter_init(&sender_adapter, &router);
         check_equal(host_compile(receiver_source, &receiver_program,
-                                 &diagnostic), CFLOW_SCXML_OK);
+                                 &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&receiver_executor));
         receiver_config = host_session_config(
             &receiver_program, &receiver_executor);
-        check_equal(cflow_scxml_session_init(&receiver, &receiver_config),
+        check_equal(scxml_session_init(&receiver, &receiver_config),
                     CFLOW_STATECHART_INSTANCE_OK);
-        check_equal(cflow_scxml_session_copy_location(
+        check_equal(scxml_session_copy_location(
                         &receiver, receiver_location,
                         sizeof(receiver_location), &receiver_required),
-                    CFLOW_SCXML_LOCATION_OK);
+                    SCXML_LOCATION_OK);
         check_true(host_router_register(
             &router, &receiver, &receiver_program, true, NULL,
             &receiver_endpoint));
@@ -552,36 +552,36 @@ spec("SCXML host Event I/O adapter contract") {
             "</state><state id='sent'/></scxml>",
             receiver_location) > 0);
         check_equal(host_compile(sender_source, &sender_program, &diagnostic),
-                    CFLOW_SCXML_OK);
+                    SCXML_OK);
         check_true(cflow_executor_serial_init(&sender_executor));
         sender_config = host_session_config(&sender_program, &sender_executor);
-        adapters = (cflow_scxml_session_adapters_v3){
-            .abi_version = CFLOW_SCXML_SESSION_ADAPTERS_ABI_V3,
+        adapters = (scxml_session_adapters_v3){
+            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
             .struct_size = sizeof(adapters),
             .event_io = &HOST_ADAPTER,
             .event_io_user = &sender_adapter};
-        check_equal(cflow_scxml_session_init_v3(
+        check_equal(scxml_session_init_v3(
                         &sender, &sender_config, &adapters),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_register(
             &router, &sender, &sender_program, true, &sender_adapter,
             &sender_endpoint));
-        check_equal(cflow_scxml_session_copy_location(
+        check_equal(scxml_session_copy_location(
                         &sender, sender_location, sizeof(sender_location),
                         &sender_required),
-                    CFLOW_SCXML_LOCATION_OK);
+                    SCXML_LOCATION_OK);
 
-        check_true(cflow_scxml_program_event(
+        check_true(scxml_program_event(
             &sender_program, "go", 2u, &go));
-        check_equal(cflow_scxml_session_try_send(&sender, &go),
+        check_equal(scxml_session_try_send(&sender, &go),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&sender_executor));
         check_equal(host_router_ready_count(&router), (size_t)1u);
-        check_true(cflow_scxml_session_get_stats(&receiver, &stats));
+        check_true(scxml_session_get_stats(&receiver, &stats));
         check_false(stats.done);
         check_equal(host_router_pump(&router), HOST_PUMP_DELIVERED);
         check_true(cflow_executor_wait_idle(&receiver_executor));
-        check_true(cflow_scxml_session_get_stats(&receiver, &stats));
+        check_true(scxml_session_get_stats(&receiver, &stats));
         check_true(stats.done);
         check_equal(router.last_delivery.count, (size_t)1u);
         check_equal(router.last_delivery.event, "ping");
@@ -590,16 +590,16 @@ spec("SCXML host Event I/O adapter contract") {
         check_equal(router.last_delivery.origin, sender_location);
         check_equal(router.last_delivery.origin_type, HOST_ORIGIN_TYPE);
 
-        check_equal(cflow_scxml_session_destroy(&sender),
+        check_equal(scxml_session_destroy(&sender),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_unregister(&router, sender_endpoint));
         check_true(host_router_unregister(&router, receiver_endpoint));
-        check_equal(cflow_scxml_session_destroy(&receiver),
+        check_equal(scxml_session_destroy(&receiver),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&sender_executor);
         cflow_executor_destroy(&receiver_executor);
-        cflow_scxml_program_destroy(&sender_program);
-        cflow_scxml_program_destroy(&receiver_program);
+        scxml_program_destroy(&sender_program);
+        scxml_program_destroy(&receiver_program);
         host_router_destroy(&router);
     }
 
@@ -612,12 +612,12 @@ spec("SCXML host Event I/O adapter contract") {
             "</state><final id='done'/></scxml>";
         host_router router;
         host_adapter_context adapter;
-        cflow_scxml_program program = {0};
-        cflow_scxml_diagnostic diagnostic = {0};
-        cflow_scxml_session session = {0};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
         cflow_executor executor = {0};
-        cflow_scxml_session_config config;
-        cflow_scxml_session_adapters_v3 adapters;
+        scxml_session_config config;
+        scxml_session_adapters_v3 adapters;
         cflow_statechart_instance_stats stats = {0};
         cflow_event_view go = {0};
         size_t endpoint = SIZE_MAX;
@@ -625,33 +625,33 @@ spec("SCXML host Event I/O adapter contract") {
         check_true(host_router_init(&router, 1u));
         host_adapter_init(&adapter, &router);
         check_equal(host_compile(source, &program, &diagnostic),
-                    CFLOW_SCXML_OK);
+                    SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
         config = host_session_config(&program, &executor);
-        adapters = (cflow_scxml_session_adapters_v3){
-            .abi_version = CFLOW_SCXML_SESSION_ADAPTERS_ABI_V3,
+        adapters = (scxml_session_adapters_v3){
+            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
             .struct_size = sizeof(adapters),
             .event_io = &HOST_ADAPTER,
             .event_io_user = &adapter};
-        check_equal(cflow_scxml_session_init_v3(
+        check_equal(scxml_session_init_v3(
                         &session, &config, &adapters),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_register(
             &router, &session, &program, true, &adapter, &endpoint));
-        check_true(cflow_scxml_program_event(&program, "go", 2u, &go));
-        check_equal(cflow_scxml_session_try_send(&session, &go),
+        check_true(scxml_program_event(&program, "go", 2u, &go));
+        check_equal(scxml_session_try_send(&session, &go),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(host_router_ready_count(&router), (size_t)0u);
-        check_true(cflow_scxml_session_get_stats(&session, &stats));
+        check_true(scxml_session_get_stats(&session, &stats));
         check_true(stats.done);
         check_false(stats.errored);
 
-        check_equal(cflow_scxml_session_destroy(&session),
+        check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_unregister(&router, endpoint));
         cflow_executor_destroy(&executor);
-        cflow_scxml_program_destroy(&program);
+        scxml_program_destroy(&program);
         host_router_destroy(&router);
     }
 
@@ -661,17 +661,17 @@ spec("SCXML host Event I/O adapter contract") {
             "<state id='waiting'><transition event='ping'/></state></scxml>";
         host_router router;
         host_adapter_context adapter;
-        cflow_scxml_program owner_program = {0};
-        cflow_scxml_program peer_program = {0};
-        cflow_scxml_diagnostic diagnostic = {0};
-        cflow_scxml_session owner = {0};
-        cflow_scxml_session peer = {0};
+        scxml_program owner_program = {0};
+        scxml_program peer_program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session owner = {0};
+        scxml_session peer = {0};
         cflow_executor owner_executor = {0};
         cflow_executor peer_executor = {0};
-        cflow_scxml_session_config owner_config;
-        cflow_scxml_session_config peer_config;
-        cflow_scxml_session_adapters_v3 adapters;
-        cflow_scxml_send_request_v3 request = {0};
+        scxml_session_config owner_config;
+        scxml_session_config peer_config;
+        scxml_session_adapters_v3 adapters;
+        scxml_send_request_v3 request = {0};
         cflow_statechart_effect_ticket first = {0};
         cflow_statechart_effect_ticket second = {0};
         const char *error = NULL;
@@ -681,22 +681,22 @@ spec("SCXML host Event I/O adapter contract") {
         check_true(host_router_init(&router, 1u));
         host_adapter_init(&adapter, &router);
         check_equal(host_compile(source, &owner_program, &diagnostic),
-                    CFLOW_SCXML_OK);
+                    SCXML_OK);
         check_equal(host_compile(source, &peer_program, &diagnostic),
-                    CFLOW_SCXML_OK);
+                    SCXML_OK);
         check_true(cflow_executor_serial_init(&owner_executor));
         check_true(cflow_executor_serial_init(&peer_executor));
         owner_config = host_session_config(&owner_program, &owner_executor);
         peer_config = host_session_config(&peer_program, &peer_executor);
-        adapters = (cflow_scxml_session_adapters_v3){
-            .abi_version = CFLOW_SCXML_SESSION_ADAPTERS_ABI_V3,
+        adapters = (scxml_session_adapters_v3){
+            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
             .struct_size = sizeof(adapters),
             .event_io = &HOST_ADAPTER,
             .event_io_user = &adapter};
-        check_equal(cflow_scxml_session_init_v3(
+        check_equal(scxml_session_init_v3(
                         &owner, &owner_config, &adapters),
                     CFLOW_STATECHART_INSTANCE_OK);
-        check_equal(cflow_scxml_session_init(&peer, &peer_config),
+        check_equal(scxml_session_init(&peer, &peer_config),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_register(
             &router, &owner, &owner_program, false, &adapter,
@@ -716,23 +716,23 @@ spec("SCXML host Event I/O adapter contract") {
         request.base.target_size = 8u;
         check_equal(host_prepare_send(
                         &adapter, &request, &first, &error),
-                    CFLOW_SCXML_ADAPTER_ACCEPTED);
+                    SCXML_ADAPTER_ACCEPTED);
         check_equal(host_prepare_send(
                         &adapter, &request, &second, &error),
-                    CFLOW_SCXML_ADAPTER_FULL);
+                    SCXML_ADAPTER_FULL);
         first.discard(first.user);
 
         request.base.target = "#_child";
         request.base.target_size = 7u;
         check_equal(host_prepare_send(
                         &adapter, &request, &first, &error),
-                    CFLOW_SCXML_ADAPTER_ACCEPTED);
+                    SCXML_ADAPTER_ACCEPTED);
         first.discard(first.user);
         request.base.type = "urn:unsupported";
         request.base.type_size = sizeof("urn:unsupported") - 1u;
         check_equal(host_prepare_send(
                         &adapter, &request, &second, &error),
-                    CFLOW_SCXML_ADAPTER_ERROR_EXECUTION);
+                    SCXML_ADAPTER_ERROR_EXECUTION);
         check_not_null(error);
         request.base.type = NULL;
         request.base.type_size = 0u;
@@ -740,26 +740,26 @@ spec("SCXML host Event I/O adapter contract") {
         request.base.target_size = 0u;
         check_equal(host_prepare_send(
                         &adapter, &request, &first, &error),
-                    CFLOW_SCXML_ADAPTER_ACCEPTED);
-        cflow_scxml_session_close(&owner);
+                    SCXML_ADAPTER_ACCEPTED);
+        scxml_session_close(&owner);
         check_false(host_adapter_is_quiescent(&adapter));
         check_equal(host_prepare_send(
                         &adapter, &request, &second, &error),
-                    CFLOW_SCXML_ADAPTER_CLOSED);
+                    SCXML_ADAPTER_CLOSED);
         first.discard(first.user);
         check_true(host_adapter_is_quiescent(&adapter));
         check_equal(host_router_ready_count(&router), (size_t)0u);
 
-        check_equal(cflow_scxml_session_destroy(&owner),
+        check_equal(scxml_session_destroy(&owner),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(host_router_unregister(&router, owner_endpoint));
         check_true(host_router_unregister(&router, peer_endpoint));
-        check_equal(cflow_scxml_session_destroy(&peer),
+        check_equal(scxml_session_destroy(&peer),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&owner_executor);
         cflow_executor_destroy(&peer_executor);
-        cflow_scxml_program_destroy(&owner_program);
-        cflow_scxml_program_destroy(&peer_program);
+        scxml_program_destroy(&owner_program);
+        scxml_program_destroy(&peer_program);
         host_router_destroy(&router);
     }
 }

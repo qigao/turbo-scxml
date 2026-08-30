@@ -1,4 +1,4 @@
-#include "cmeta_sequence.h"
+#include "scxml_sequence.h"
 
 #include <turbostl/typed.h>
 #include "tinytest.h"
@@ -107,21 +107,21 @@ static const cmeta_container_desc incomplete_sequence_desc = {
     .ext = &incomplete_sequence_ext
 };
 
-static cflow_scxml_cmeta_expr_status compile_sequence(
-    cflow_scxml_cmeta_sequence_program *program, const char *location) {
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-    return cflow_scxml_cmeta_sequence_compile(
+static scxml_expr_status compile_sequence(
+    scxml_sequence_program *program, const char *location) {
+    scxml_expr_diagnostic diagnostic = {0};
+    return scxml_sequence_compile(
         program, location, strlen(location), &sequence_root_data, 8u,
         &diagnostic);
 }
 
-spec("CFlow SCXML CMeta reflected sequence bridge") {
+spec("TurboSCXML CMeta reflected sequence bridge") {
   it("opens one declared Vec as a sized ordered borrowed Range") {
     const int first = 17;
     const int second = 29;
     scxml_sequence_root root = {.values = VecOf(int)};
-    cflow_scxml_cmeta_sequence_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_sequence_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     cmeta_range range = {0};
     cmeta_range_cursor cursor = {0};
     size_t length = 0u;
@@ -131,10 +131,10 @@ spec("CFlow SCXML CMeta reflected sequence bridge") {
     check_equal(vec_push(&root.values, &first), STL_OK);
     check_equal(vec_push(&root.values, &second), STL_OK);
     check_equal(compile_sequence(&program, "values"),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_sequence_open(
+                SCXML_EXPR_OK);
+    check_equal(scxml_sequence_open(
                     &program, &root, &range, &length, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_equal(length, (size_t)2u);
     check_equal(cmeta_range_next(&range, &cursor, &value), CMETA_GEN_VALUE);
     check_equal(value, first);
@@ -149,20 +149,20 @@ spec("CFlow SCXML CMeta reflected sequence bridge") {
   it("rejects malformed unresolved scalar and non-sequence locations") {
     static const char *const invalid[] = {
         "", ".values", "values.", "missing", "item", "members"};
-    static const cflow_scxml_cmeta_expr_status expected[] = {
-        CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT,
-        CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR,
-        CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR,
-        CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-        CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH,
-        CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH};
+    static const scxml_expr_status expected[] = {
+        SCXML_EXPR_INVALID_ARGUMENT,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_UNKNOWN_LOCATION,
+        SCXML_EXPR_TYPE_MISMATCH,
+        SCXML_EXPR_TYPE_MISMATCH};
     size_t index;
 
     for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
-        cflow_scxml_cmeta_sequence_program program = {0};
-        cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-        const cflow_scxml_cmeta_expr_status status =
-            cflow_scxml_cmeta_sequence_compile(
+        scxml_sequence_program program = {0};
+        scxml_expr_diagnostic diagnostic = {0};
+        const scxml_expr_status status =
+            scxml_sequence_compile(
                 &program, invalid[index], strlen(invalid[index]),
                 &sequence_root_data, 8u, &diagnostic);
         info("location=%s", invalid[index]);
@@ -173,24 +173,24 @@ spec("CFlow SCXML CMeta reflected sequence bridge") {
 
   it("rejects unbound or element-mismatched runtime handles transactionally") {
     scxml_sequence_root root = {0};
-    cflow_scxml_cmeta_sequence_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_sequence_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     cmeta_range range = {.object = &root};
     size_t length = 41u;
 
     check_equal(compile_sequence(&program, "values"),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_sequence_open(
+                SCXML_EXPR_OK);
+    check_equal(scxml_sequence_open(
                     &program, &root, &range, &length, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_true(range.object == &root);
     check_equal(length, (size_t)41u);
 
     root.values = VecOf(long);
     check_equal(vec_init(&root.values, 1u), STL_OK);
-    check_equal(cflow_scxml_cmeta_sequence_open(
+    check_equal(scxml_sequence_open(
                     &program, &root, &range, &length, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_true(range.object == &root);
     check_equal(length, (size_t)41u);
     vec_destroy(&root.values);
@@ -198,27 +198,27 @@ spec("CFlow SCXML CMeta reflected sequence bridge") {
 
   it("rejects sequence Ranges without sized and ordered capabilities") {
     scxml_sequence_root root = {.values = VecOf(int)};
-    cflow_scxml_cmeta_sequence_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_sequence_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     cmeta_range range = {.object = &root};
     size_t length = 73u;
 
     check_equal(vec_init(&root.values, 1u), STL_OK);
     root.values.cmeta.descriptor = &incomplete_sequence_desc;
     check_equal(compile_sequence(&program, "values"),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
 
     incomplete_sequence_flags = CMETA_RANGE_SIZED;
-    check_equal(cflow_scxml_cmeta_sequence_open(
+    check_equal(scxml_sequence_open(
                     &program, &root, &range, &length, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_true(range.object == &root);
     check_equal(length, (size_t)73u);
 
     incomplete_sequence_flags = CMETA_RANGE_ORDERED;
-    check_equal(cflow_scxml_cmeta_sequence_open(
+    check_equal(scxml_sequence_open(
                     &program, &root, &range, &length, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_true(range.object == &root);
     check_equal(length, (size_t)73u);
 
