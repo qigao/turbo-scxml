@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <datamodel>
+    <data id="sequence" expr="1"/>
+  </datamodel>
+  <state id="s0" initial="s0final">
+    <transition event="done.state.s0" cond="sequence == 2" target="pass"/>
+    <transition event="done.state.s0" target="fail"/>
+    <final id="s0final">
+      <onentry>
+        <assign location="sequence" expr="2"/>
+      </onentry>
+      <onexit>
+        <assign location="sequence" expr="3"/>
+      </onexit>
+    </final>
+  </state>
+  <final id="pass">
+    <onentry><send event="result.pass"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send event="result.fail"/></onentry>
+  </final>
+</scxml>

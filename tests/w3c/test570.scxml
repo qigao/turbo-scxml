@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="p0">
+  <datamodel>
+    <data id="sequence" expr="0"/>
+  </datamodel>
+  <parallel id="p0">
+    <onentry>
+      <raise event="e1"/>
+      <raise event="e2"/>
+    </onentry>
+    <transition event="done.state.p0s1">
+      <assign location="sequence" expr="1"/>
+    </transition>
+    <transition event="done.state.p0s2" target="s1"/>
+    <state id="p0s1" initial="p0s11">
+      <state id="p0s11">
+        <transition event="e1" target="p0s1final"/>
+      </state>
+      <final id="p0s1final"/>
+    </state>
+    <state id="p0s2" initial="p0s21">
+      <state id="p0s21">
+        <transition event="e2" target="p0s2final"/>
+      </state>
+      <final id="p0s2final"/>
+    </state>
+  </parallel>
+  <state id="s1">
+    <transition event="done.state.p0" cond="sequence == 1" target="pass"/>
+    <transition event="done.state.p0" target="fail"/>
+  </state>
+  <final id="pass">
+    <onentry><send event="result.pass"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send event="result.fail"/></onentry>
+  </final>
+</scxml>

@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboUtils currently executes 39
-local PASS transformations, records 129 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboUtils currently executes 42
+local PASS transformations, records 126 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -44,6 +44,8 @@ Status meanings are strict:
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
 | `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
+| `test372.scxml` | [test372.txml](https://www.w3.org/Voice/2013/scxml-irp/372/test372.txml) | A parent's `done.state` event is selected after its final child's `onentry` and before that child's `onexit`. |
+| `test570.scxml` | [test570.txml](https://www.w3.org/Voice/2013/scxml-irp/570/test570.txml) | Child completion is processed before completion of the containing parallel after every region reaches final. |
 | `test375.scxml` | [test375.txml](https://www.w3.org/Voice/2013/scxml-irp/375/test375.txml) | Multiple `onentry` handlers execute in document order. |
 | `test376.scxml` | [test376.txml](https://www.w3.org/Voice/2013/scxml-irp/376/test376.txml) | An execution error aborts only its `onentry` block; a later independent handler still executes. |
 | `test377.scxml` | [test377.txml](https://www.w3.org/Voice/2013/scxml-irp/377/test377.txml) | Multiple `onexit` handlers execute in document order. |
@@ -63,6 +65,7 @@ Status meanings are strict:
 | `test409.scxml` | [test409.txml](https://www.w3.org/Voice/2013/scxml-irp/409/test409.txml) | A state leaves the active configuration after its own `onexit` and before an ancestor's `onexit`. |
 | `test411.scxml` | [test411.txml](https://www.w3.org/Voice/2013/scxml-irp/411/test411.txml) | A state enters the active configuration immediately before its own `onentry`. |
 | `test412.scxml` | [test412.txml](https://www.w3.org/Voice/2013/scxml-irp/412/test412.txml) | Initial-transition content executes after the parent's `onentry` and before the child's `onentry`. |
+| `test415.scxml` | [test415.txml](https://www.w3.org/Voice/2013/scxml-irp/415/test415.txml) | Entering a root final halts processing before an internal event raised by its `onentry` is selected. |
 | `test416.scxml` | [test416.txml](https://www.w3.org/Voice/2013/scxml-irp/416/test416.txml) | Entering a compound state's final child generates `done.state.<id>`. |
 | `test417.scxml` | [test417.txml](https://www.w3.org/Voice/2013/scxml-irp/417/test417.txml) | Completing every region generates the parallel state's `done.state.<id>` event. |
 | `test419.scxml` | [test419.txml](https://www.w3.org/Voice/2013/scxml-irp/419/test419.txml) | An enabled eventless transition is selected before a queued internal event. |
@@ -110,6 +113,17 @@ missing, extra, or misordered exit either reaches `fail` or prevents the harness
 from observing completion. Their upstream timeout sends are omitted because the
 local harness already requires each run to terminate in `pass` without a runtime
 error.
+
+Tests 372 and 570 replace the generator's anonymous integer slot with the
+test-only CMeta `sequence` field. Test 372 accepts the parent completion only
+while that field contains the final child's `onentry` value; the child's
+`onexit` writes a distinct later value. Test 570 records the first region's
+child completion and accepts the parallel completion only after that write.
+Their terminal states send exactly one `result.pass` or `result.fail` effect to
+a bounded test adapter so the owning CMeta session remains a black box. Test
+415 retains the upstream root final and its `event1` raise. Its direct CFlow
+event hook observes transition-selection boundaries and requires the raise
+action to execute while `event1` is never selected before clean termination.
 
 Tests 376 and 378 replace the generator counter with a `second.block` event.
 Their test-only owning sessions inject `SCXML_ADAPTER_ERROR_EXECUTION`
