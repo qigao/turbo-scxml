@@ -1,0 +1,7 @@
+/build/
+/vcpkg_installed/
+/.codegraph/
+/.vs/
+/.vscode/
+*.user
+*.suo
