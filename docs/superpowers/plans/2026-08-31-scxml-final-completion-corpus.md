@@ -29,7 +29,7 @@ tests remain authoritative. The corpus totals move from 39/129/34 to
 - [x] Add a failing manifest/test expectation for document 415.
 - [x] Add the CFlow event-selection probe and local fixture for 415.
 - [x] Run the focused W3C test, adjacent regression tests, and all CTest targets.
-- [ ] Update corpus documentation and tracking issue #122 with exact evidence.
+- [x] Update corpus documentation and tracking issue #122 with exact evidence.
 
 ## Verification
 
