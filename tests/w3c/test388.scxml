@@ -1,0 +1,46 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="null" initial="bootstrap">
+  <state id="bootstrap">
+    <transition target="s012">
+      <raise event="leave.s0"/>
+    </transition>
+  </state>
+
+  <state id="s0" initial="s01">
+    <transition event="leave.s0" target="s1"/>
+    <transition event="restore.deep" cond="In(s012)" target="s2"/>
+    <transition event="restore.deep" target="fail"/>
+    <transition event="restore.shallow" cond="In(s011)" target="pass"/>
+    <transition event="restore.shallow" target="fail"/>
+
+    <history type="shallow" id="s0HistShallow">
+      <transition target="s02"/>
+    </history>
+    <history type="deep" id="s0HistDeep">
+      <transition target="s022"/>
+    </history>
+
+    <state id="s01" initial="s011">
+      <state id="s011"/>
+      <state id="s012"/>
+    </state>
+    <state id="s02" initial="s021">
+      <state id="s021"/>
+      <state id="s022"/>
+    </state>
+  </state>
+
+  <state id="s1">
+    <transition target="s0HistDeep">
+      <raise event="restore.deep"/>
+    </transition>
+  </state>
+  <state id="s2">
+    <transition target="s0HistShallow">
+      <raise event="restore.shallow"/>
+    </transition>
+  </state>
+
+  <final id="pass"/>
+  <final id="fail"/>
+</scxml>

@@ -104,19 +104,19 @@
 - Consumes: the native active configuration as the `In(id)` fact source and `check_w3c_fixture(const char *fixture_name)`.
 - Produces: one strict stored-history fixture and manifest totals of 39 `PASS`, 129 `UNSUPPORTED`, and 34 `N/A`.
 
-- [ ] **Step 1: Promote row 388 before adding its fixture**
+- [x] **Step 1: Promote row 388 before adding its fixture**
 
   Set row 388 to `PASS`/`TERMINAL_PASS`, document the local event-and-`In(id)` rewrite, add the exact fixture/source link to README, and change inventory totals to 39/129/34.
 
-- [ ] **Step 2: Run the focused test and observe RED**
+- [x] **Step 2: Run the focused test and observe RED**
 
   Expected: strict inventory validation fails because `test388.scxml` is absent.
 
-- [ ] **Step 3: Add the stored-history fixture**
+- [x] **Step 3: Add the stored-history fixture**
 
   Use root `initial="s012"` to visit deep leaf `s012` under `s0/s01`, then leave `s0`. An eventless transition from `s1` targets `s0HistDeep` while raising `restore.deep`; `s0` accepts that event only when `In(s012)` and otherwise targets `fail`. It then exits to `s2`, whose eventless transition targets `s0HistShallow` while raising `restore.shallow`; `s0` accepts that event only when `In(s011)` and targets terminal `pass`, otherwise `fail`. Declare default history transitions to different `s02` descendants so accidentally using an unset/default history path cannot pass.
 
-- [ ] **Step 4: Register and run the fixture**
+- [x] **Step 4: Register and run the fixture**
 
   Add exactly:
 
@@ -128,7 +128,7 @@
 
   Run the focused target and CTest. If the fixture exposes a production defect, retain the failing fixture, diagnose the violated history invariant, and make only the minimal runtime correction.
 
-- [ ] **Step 5: Run adjacent and full regression tests**
+- [x] **Step 5: Run adjacent and full regression tests**
 
   ```powershell
   ctest --preset win-release-user -R "^scxml_(w3c_conformance_)?test$" --output-on-failure
@@ -137,7 +137,7 @@
 
   Expected: 8/8 pass and inventory totals are 39/129/34.
 
-- [ ] **Step 6: Commit the independently verified task**
+- [x] **Step 6: Commit the independently verified task**
 
   ```powershell
   git add tests/w3c/test388.scxml tests/w3c/manifest.tsv tests/w3c/README.md tests/scxml_w3c_conformance_test.c

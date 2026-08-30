@@ -871,8 +871,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)38u);
-        check_equal(stats.unsupported, (size_t)130u);
+        check_equal(stats.passed, (size_t)39u);
+        check_equal(stats.unsupported, (size_t)129u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1000,6 +1000,9 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 387 enters the declared default history configuration") {
         check_w3c_fixture("test387.scxml");
+    }
+    it("test 388 restores stored shallow and deep configurations") {
+        check_w3c_fixture("test388.scxml");
     }
 
     it("test 399 applies unions prefixes boundaries and wildcards") {

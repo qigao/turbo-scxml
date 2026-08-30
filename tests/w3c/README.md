@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboUtils currently executes 38
-local PASS transformations, records 130 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboUtils currently executes 39
+local PASS transformations, records 129 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -49,6 +49,7 @@ Status meanings are strict:
 | `test377.scxml` | [test377.txml](https://www.w3.org/Voice/2013/scxml-irp/377/test377.txml) | Multiple `onexit` handlers execute in document order. |
 | `test378.scxml` | [test378.txml](https://www.w3.org/Voice/2013/scxml-irp/378/test378.txml) | An execution error aborts only its `onexit` block; a later independent handler still executes. |
 | `test387.scxml` | [test387.txml](https://www.w3.org/Voice/2013/scxml-irp/387/test387.txml) | An unset shallow or deep history slot enters its declared default stored configuration. |
+| `test388.scxml` | [test388.txml](https://www.w3.org/Voice/2013/scxml-irp/388/test388.txml) | A visited compound restores its stored deep leaf and its stored shallow child with default descent. |
 | `test399.scxml` | [test399.txml](https://www.w3.org/Voice/2013/scxml-irp/399/test399.txml) | Event descriptor unions, token prefixes, token boundaries, `.*`, and `*` select exactly the intended transitions. |
 | `test579.scxml` | [test579.txml](https://www.w3.org/Voice/2013/scxml-irp/579/test579.txml) | Unset history transition content executes after the parent's `onentry` and initial-transition content. |
 | `test580.scxml` | [test580.txml](https://www.w3.org/Voice/2013/scxml-irp/580/test580.txml) | A history pseudo-state never appears in the active configuration. |
@@ -118,8 +119,12 @@ adapter failure, rejects an event from the remainder of the failing block, and
 accepts only the witness raised by the next independent `onentry` block. Test
 387 preserves both unset-history targets and replaces wildcard failures with
 the finite wrong leaf-entry events; its timeout send is omitted because the
-harness requires terminal completion. Test 579 replaces the generator counter
-and timeout with a finite two-pass event trace. The first pass requires
+harness requires terminal completion. Test 388 replaces the generator counter
+with transition-time restoration events and strict `In(id)` guards. The deep
+history leg must restore `s012`; after that configuration is exited, the shallow
+history leg must restore `s01` and descend to its default `s011`. Declared
+history defaults point elsewhere so an unset-slot path cannot pass. Test 579
+replaces the generator counter and timeout with a finite two-pass event trace. The first pass requires
 parent-entry `event1`, initial-transition `event2`, and unset-history `event3`
 in order. Stored-history reentry requires `event1`, `event2`, and a leaf-entry
 witness while rejecting `event3`, proving that the history default content is
