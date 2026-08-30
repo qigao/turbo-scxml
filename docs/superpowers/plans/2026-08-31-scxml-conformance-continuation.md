@@ -154,14 +154,38 @@
 - Consumes: verified 39/129/34 manifest counts and the complete 202-row inventory.
 - Produces: checked plan steps, an evidence-backed #122 progress comment, and a next-batch feature/count table without changing #122's full-conformance checkbox.
 
-- [ ] **Step 1: Recompute counts from the manifest**
+- [x] **Step 1: Recompute counts from the manifest**
 
   Parse the TSV and record total, mandatory, optional, PASS, UNSUPPORTED, and N/A counts. Do not derive the claim from README prose.
 
-- [ ] **Step 2: Update #122 with exact evidence**
+- [x] **Step 2: Update #122 with exact evidence**
 
   Add a concise comment naming tests 364, 388, and 413, the local CTest result, and the new 39/129/34 counts. Keep “Run an SCXML conformance corpus” unchecked because 129 mandatory documents remain unsupported.
 
-- [ ] **Step 3: Select the next implementation batch**
+- [x] **Step 3: Select the next implementation batch**
 
   Group remaining mandatory `UNSUPPORTED` rows by feature and document the smallest next batch whose semantics are already present or whose missing host/runtime boundary is singular. Prefer completion/final semantics (372, 570, 415) before mixed transport/invoke groups.
+
+## Verified milestone and next batch
+
+The manifest remains the fact source and now contains exactly:
+
+| Applicability | Status | Documents |
+| --- | --- | ---: |
+| Mandatory | PASS | 39 |
+| Mandatory | UNSUPPORTED | 129 |
+| Optional | N/A | 34 |
+
+The next batch is W3C 372, 570, and 415. All three concern the final-state
+completion boundary, but each needs a distinct witness:
+
+- 372 must prove `done.state.<parent>` is queued after final-state `onentry`;
+- 570 must prove child completion precedes completion of the containing
+  parallel once every region is final; and
+- 415 must prove entry into a top-level final halts processing before an
+  internally raised event is selected.
+
+This batch should use a small test-only CMeta observation state or session
+event observer where ordinary terminal-state routing cannot distinguish the
+required ordering. It must not add mutable state to the production SCXML
+runtime or weaken the upstream assertions.
