@@ -871,8 +871,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)36u);
-        check_equal(stats.unsupported, (size_t)132u);
+        check_equal(stats.passed, (size_t)38u);
+        check_equal(stats.unsupported, (size_t)130u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -978,6 +978,9 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 355 selects the first root child when initial is omitted") {
         check_w3c_fixture("test355.scxml");
     }
+    it("test 364 enters every declared or document-order default") {
+        check_w3c_fixture("test364.scxml");
+    }
 
     it("test 375 executes onentry handlers in document order") {
         check_w3c_fixture("test375.scxml");
@@ -1081,5 +1084,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 576 enters both non-default root initial targets") {
         check_w3c_fixture("test576.scxml");
+    }
+    it("test 413 starts in the root initial configuration") {
+        check_w3c_fixture("test413.scxml");
     }
 }

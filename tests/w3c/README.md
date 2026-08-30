@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboUtils currently executes 36
-local PASS transformations, records 132 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboUtils currently executes 38
+local PASS transformations, records 130 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -43,6 +43,7 @@ Status meanings are strict:
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
+| `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
 | `test375.scxml` | [test375.txml](https://www.w3.org/Voice/2013/scxml-irp/375/test375.txml) | Multiple `onentry` handlers execute in document order. |
 | `test376.scxml` | [test376.txml](https://www.w3.org/Voice/2013/scxml-irp/376/test376.txml) | An execution error aborts only its `onentry` block; a later independent handler still executes. |
 | `test377.scxml` | [test377.txml](https://www.w3.org/Voice/2013/scxml-irp/377/test377.txml) | Multiple `onexit` handlers execute in document order. |
@@ -52,6 +53,7 @@ Status meanings are strict:
 | `test579.scxml` | [test579.txml](https://www.w3.org/Voice/2013/scxml-irp/579/test579.txml) | Unset history transition content executes after the parent's `onentry` and initial-transition content. |
 | `test580.scxml` | [test580.txml](https://www.w3.org/Voice/2013/scxml-irp/580/test580.txml) | A history pseudo-state never appears in the active configuration. |
 | `test576.scxml` | [test576.txml](https://www.w3.org/Voice/2013/scxml-irp/576/test576.txml) | Root `initial` IDREFS enter both deeply nested non-default siblings of one parallel state. |
+| `test413.scxml` | [test413.txml](https://www.w3.org/Voice/2013/scxml-irp/413/test413.txml) | Startup enters both non-default leaves selected by the root `initial` IDREFS. |
 | `test403a.scxml` | [test403a.txml](https://www.w3.org/Voice/2013/scxml-irp/403/test403a.txml) | Transition selection prefers descendant sources, then document order, and falls through disabled conditions. |
 | `test404.scxml` | [test404.txml](https://www.w3.org/Voice/2013/scxml-irp/404/test404.txml) | States execute `onexit` content in exit order before transition content. |
 | `test405.scxml` | [test405.txml](https://www.w3.org/Voice/2013/scxml-irp/405/test405.txml) | Selected transition content executes in document order after all required exits. |
@@ -87,9 +89,13 @@ removes redundant generator-level parent sentinels while retaining the complete
 three-event observation chain. Tests 405, 406, 412, 416, and 417
 omit the upstream one-second timeout `send`; it is only a liveness safety net,
 while the local harness directly fails any run that does not reach `pass`.
-Tests 399 and 576 retain the upstream event-descriptor and root multi-target
-structures respectively; they only remove generator metadata and timeout
-failure sends that the local synchronous harness does not need.
+Tests 399, 413, and 576 retain the upstream event-descriptor and root
+multi-target structures respectively; they only remove generator metadata and
+timeout failure sends that the local synchronous harness does not need. Test
+364 retains all three upstream default-entry paths: compound `initial` IDREFS,
+an explicit initial transition, and recursive first-child document-order
+selection. Its finite entry events replace generator pass/fail targets without
+changing which active configuration advances each stage.
 Test 419 keeps the queued internal event as the failure witness, replaces the
 wildcard with that exact event, and omits the additional external `send`; the
 retained event is sufficient to distinguish eventless-transition precedence.

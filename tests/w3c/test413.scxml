@@ -1,0 +1,28 @@
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="null" initial="s2p112 s2p122">
+  <state id="s1">
+    <transition target="fail"/>
+  </state>
+  <state id="s2" initial="s2p1">
+    <parallel id="s2p1">
+      <state id="s2p11" initial="s2p111">
+        <state id="s2p111">
+          <transition target="fail"/>
+        </state>
+        <state id="s2p112">
+          <onentry><raise event="entered.s2p112"/></onentry>
+        </state>
+      </state>
+      <state id="s2p12" initial="s2p121">
+        <state id="s2p121">
+          <transition target="fail"/>
+        </state>
+        <state id="s2p122">
+          <transition event="entered.s2p112" target="pass"/>
+        </state>
+      </state>
+    </parallel>
+  </state>
+  <final id="pass"/>
+  <final id="fail"/>
+</scxml>
