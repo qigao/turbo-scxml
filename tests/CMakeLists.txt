@@ -21,45 +21,45 @@ function(turboscxml_add_test target source)
   add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
-turboscxml_add_test(cflow_scxml_test cflow_scxml_test.c
+turboscxml_add_test(scxml_test scxml_test.c
   LIBS TurboUtils::Core
   DEFINITIONS
-    CFLOW_SCXML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+    SCXML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 turboscxml_add_test(
-  cflow_scxml_event_io_contract_test
-  cflow_scxml_event_io_contract_test.c
+  scxml_event_io_contract_test
+  scxml_event_io_contract_test.c
   LIBS TurboUtils::Core)
 
 turboscxml_add_test(
-  cflow_scxml_w3c_conformance_test
-  cflow_scxml_w3c_conformance_test.c
+  scxml_w3c_conformance_test
+  scxml_w3c_conformance_test.c
   LIBS TurboUtils::Core
   DEFINITIONS
-    CFLOW_SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+    SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 turboscxml_add_test(
-  cflow_scxml_cmeta_expr_test
-  cflow_scxml_cmeta_expr_test.c
+  scxml_expr_test
+  scxml_expr_test.c
   LIBS TurboUtils::CMeta
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
-  cflow_scxml_cmeta_test
-  cflow_scxml_cmeta_test.c)
+  scxml_cmeta_test
+  scxml_cmeta_test.c)
 
 turboscxml_add_test(
-  cflow_scxml_cmeta_sequence_test
-  cflow_scxml_cmeta_sequence_test.c
+  scxml_sequence_test
+  scxml_sequence_test.c
   LIBS TurboUtils::STL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
-  cflow_scxml_cmeta_foreach_test
-  cflow_scxml_cmeta_foreach_test.c
+  scxml_foreach_test
+  scxml_foreach_test.c
   LIBS TurboUtils::STL)
 
 turboscxml_add_test(
-  cflow_scxml_cmeta_managed_foreach_test
-  cflow_scxml_cmeta_managed_foreach_test.c
+  scxml_managed_foreach_test
+  scxml_managed_foreach_test.c
   LIBS TurboUtils::STL)

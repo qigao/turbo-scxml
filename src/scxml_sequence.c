@@ -1,12 +1,12 @@
-#include "cmeta_sequence.h"
+#include "scxml_sequence.h"
 
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-static cflow_scxml_cmeta_expr_status sequence_report(
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic,
-    cflow_scxml_cmeta_expr_status status, size_t byte_offset,
+static scxml_expr_status sequence_report(
+    scxml_expr_diagnostic *diagnostic,
+    scxml_expr_status status, size_t byte_offset,
     const char *message) {
     if (diagnostic != NULL) {
         memset(diagnostic, 0, sizeof(*diagnostic));
@@ -139,11 +139,11 @@ static const cmeta_field_desc *sequence_find_layout_field(
     return NULL;
 }
 
-cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
-    cflow_scxml_cmeta_sequence_program *out,
+scxml_expr_status scxml_sequence_compile(
+    scxml_sequence_program *out,
     const char *location, size_t location_size,
     const cmeta_data_desc *root, size_t max_path_depth,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
+    scxml_expr_diagnostic *diagnostic) {
     const cmeta_data_desc *current = root;
     const cmeta_data_field_desc *selected_data = NULL;
     const cmeta_field_desc *selected_layout = NULL;
@@ -152,18 +152,18 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
     size_t depth = 0u;
     size_t index;
     size_t lexical_error = 0u;
-    cflow_scxml_cmeta_sequence_program compiled = {0};
+    scxml_sequence_program compiled = {0};
     if (out == NULL || out->root != NULL || location == NULL ||
         location_size == 0u || max_path_depth == 0u ||
         !cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
         root->storage_type == NULL)
         return sequence_report(diagnostic,
-                               CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT, 0u,
-                               "invalid CMeta sequence compile arguments");
+                               SCXML_EXPR_INVALID_ARGUMENT, 0u,
+                               "invalid SCXML sequence compile arguments");
     if (!sequence_path_valid(location, location_size, &lexical_error))
         return sequence_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR, lexical_error,
-            "CMeta sequence location is not a dotted NCName path");
+            diagnostic, SCXML_EXPR_SYNTAX_ERROR, lexical_error,
+            "SCXML sequence location is not a dotted NCName path");
     for (index = 0u; index <= location_size; ++index) {
         const bool at_end = index == location_size;
         const cmeta_data_struct_shape *shape;
@@ -171,15 +171,15 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
         if (!at_end && location[index] != '.') continue;
         if (++depth > max_path_depth)
             return sequence_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED, index,
-                "CMeta sequence path depth limit exceeded");
+                diagnostic, SCXML_EXPR_LIMIT_EXCEEDED, index,
+                "SCXML sequence path depth limit exceeded");
         if (!cmeta_data_desc_valid(current) ||
             current->kind != CMETA_DATA_STRUCT || current->shape == NULL ||
             current->storage_type == NULL)
             return sequence_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
                 segment_start,
-                "CMeta sequence location traverses a non-struct value");
+                "SCXML sequence location traverses a non-struct value");
         shape = (const cmeta_data_struct_shape *)current->shape;
         field_size = index - segment_start;
         selected_data = sequence_find_data_field(
@@ -197,25 +197,25 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
                 current->storage_type->size - selected_layout->offset ||
             absolute_offset > SIZE_MAX - selected_layout->offset)
             return sequence_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-                segment_start, "CMeta sequence location is unresolved");
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
+                segment_start, "SCXML sequence location is unresolved");
         absolute_offset += selected_layout->offset;
         if (absolute_offset > root->storage_type->size ||
             selected_layout->size >
                 root->storage_type->size - absolute_offset)
             return sequence_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
                 segment_start,
-                "CMeta sequence location exceeds root storage");
+                "SCXML sequence location exceeds root storage");
         current = selected_data->value;
         if (at_end) break;
         if (current->storage_type == NULL ||
             !cmeta_type_equal(current->storage_type,
                               selected_layout->type))
             return sequence_report(
-                diagnostic, CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
                 segment_start,
-                "CMeta sequence location traverses abstract storage");
+                "SCXML sequence location traverses abstract storage");
         segment_start = index + 1u;
     }
     if (selected_data == NULL || selected_layout == NULL ||
@@ -226,8 +226,8 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
         !cmeta_type_equal(selected_layout->declared_type->storage_type,
                           selected_layout->type))
         return sequence_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH, segment_start,
-            "CMeta sequence location is not a declared unary sequence");
+            diagnostic, SCXML_EXPR_TYPE_MISMATCH, segment_start,
+            "SCXML sequence location is not a declared unary sequence");
     compiled.root = root;
     compiled.container_type = selected_layout->type;
     compiled.element_type = cmeta_declared_type_argument(
@@ -236,16 +236,16 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_compile(
     compiled.storage_size = selected_layout->size;
     if (!cmeta_type_desc_valid(compiled.element_type))
         return sequence_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH, segment_start,
-            "CMeta sequence element type is invalid");
+            diagnostic, SCXML_EXPR_TYPE_MISMATCH, segment_start,
+            "SCXML sequence element type is invalid");
     *out = compiled;
-    return sequence_report(diagnostic, CFLOW_SCXML_CMETA_EXPR_OK, 0u, NULL);
+    return sequence_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
 
-cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_open(
-    const cflow_scxml_cmeta_sequence_program *program,
+scxml_expr_status scxml_sequence_open(
+    const scxml_sequence_program *program,
     const void *root_object, cmeta_range *out_range, size_t *out_length,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
+    scxml_expr_diagnostic *diagnostic) {
     const unsigned char *root_bytes = (const unsigned char *)root_object;
     const void *container;
     const cmeta_data_desc *semantic;
@@ -263,8 +263,8 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_open(
             program->root->storage_type->size - program->offset ||
         program->storage_size != program->container_type->size)
         return sequence_report(diagnostic,
-                               CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT, 0u,
-                               "invalid CMeta sequence open arguments");
+                               SCXML_EXPR_INVALID_ARGUMENT, 0u,
+                               "invalid SCXML sequence open arguments");
     container = root_bytes + program->offset;
     semantic = cmeta_container_data(container);
     if (!cmeta_data_desc_valid(semantic) ||
@@ -272,8 +272,8 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_open(
         !cmeta_container_type_application_valid(container) ||
         cmeta_container_type_arity(container) != 1u) {
         return sequence_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH, 0u,
-            "CMeta sequence runtime container contract mismatched");
+            diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
+            "SCXML sequence runtime container contract mismatched");
     }
     runtime_element = cmeta_container_type_argument(container, 0u);
     if (!cmeta_type_equal(runtime_element, program->element_type) ||
@@ -282,11 +282,11 @@ cflow_scxml_cmeta_expr_status cflow_scxml_cmeta_sequence_open(
         !cmeta_type_equal(range.element_type, program->element_type) ||
         (range.flags & required) != required || range.size == NULL) {
         return sequence_report(
-            diagnostic, CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH, 0u,
-            "CMeta sequence Range contract mismatched");
+            diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
+            "SCXML sequence Range contract mismatched");
     }
     length = cmeta_range_size(&range);
     *out_range = range;
     *out_length = length;
-    return sequence_report(diagnostic, CFLOW_SCXML_CMETA_EXPR_OK, 0u, NULL);
+    return sequence_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }

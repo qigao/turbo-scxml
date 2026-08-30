@@ -1,5 +1,5 @@
-#include "cmeta_expr.h"
-#include "cmeta_assign.h"
+#include "scxml_expr.h"
+#include "scxml_assign.h"
 
 #include <cmeta/data.h>
 #include "tinytest.h"
@@ -269,40 +269,40 @@ static bool state_is_active(void *user, cflow_machine_state_id state,
     return true;
 }
 
-static cflow_scxml_cmeta_expr_status compile_expression(
-    cflow_scxml_cmeta_expr_program *program, const char *source,
-    const cflow_scxml_cmeta_expr_limits *limits,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
-    return cflow_scxml_cmeta_expr_compile(
+static scxml_expr_status compile_expression(
+    scxml_expr_program *program, const char *source,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic) {
+    return scxml_expr_compile(
         program, source, strlen(source), &root_data,
         resolve_state, NULL, limits, diagnostic);
 }
 
-static cflow_scxml_cmeta_expr_status compile_value_expression(
-    cflow_scxml_cmeta_expr_program *program, const char *source,
-    cflow_scxml_cmeta_expr_diagnostic *diagnostic) {
-    return cflow_scxml_cmeta_expr_compile_value(
+static scxml_expr_status compile_value_expression(
+    scxml_expr_program *program, const char *source,
+    scxml_expr_diagnostic *diagnostic) {
+    return scxml_expr_compile_value(
         program, source, strlen(source), &root_data,
         resolve_state, NULL, NULL, diagnostic);
 }
 
 static bool evaluate_expression(const char *source,
                                 const scxml_expr_root *root) {
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = false;
     check_equal(compile_expression(&program, source, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+                SCXML_EXPR_OK);
+    scxml_expr_program_destroy(&program);
     return result;
 }
 
-spec("CFlow SCXML private CMeta expressions") {
+spec("TurboSCXML private SCXML expressions") {
   static scxml_expr_root root;
 
   before_each() {
@@ -319,8 +319,8 @@ spec("CFlow SCXML private CMeta expressions") {
   }
 
   it("exposes finite nonzero default limits") {
-    const cflow_scxml_cmeta_expr_limits limits =
-        cflow_scxml_cmeta_expr_default_limits();
+    const scxml_expr_limits limits =
+        scxml_expr_default_limits();
     check_true(limits.max_source_bytes > 0u);
     check_true(limits.max_instructions > 0u);
     check_true(limits.max_operands > 0u);
@@ -332,24 +332,24 @@ spec("CFlow SCXML private CMeta expressions") {
 
   it("rejects invalid compile arguments without publishing a program") {
     static const char expression[] = "true";
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-    cflow_scxml_cmeta_expr_limits limits =
-        cflow_scxml_cmeta_expr_default_limits();
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_limits limits =
+        scxml_expr_default_limits();
 
-    check_equal(cflow_scxml_cmeta_expr_compile(
+    check_equal(scxml_expr_compile(
                     NULL, expression, sizeof(expression) - 1u, &root_data,
                     resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT);
-    check_equal(cflow_scxml_cmeta_expr_compile(
+                SCXML_EXPR_INVALID_ARGUMENT);
+    check_equal(scxml_expr_compile(
                     &program, NULL, 0u, &root_data, resolve_state, NULL,
                     NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT);
+                SCXML_EXPR_INVALID_ARGUMENT);
     limits.max_operands = 0u;
-    check_equal(cflow_scxml_cmeta_expr_compile(
+    check_equal(scxml_expr_compile(
                     &program, expression, sizeof(expression) - 1u,
                     &root_data, resolve_state, NULL, &limits, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT);
+                SCXML_EXPR_INVALID_ARGUMENT);
     check_null(program.impl);
   }
 
@@ -378,53 +378,53 @@ spec("CFlow SCXML private CMeta expressions") {
     const char *sources[] = {
         "true", "order.count", "order.total", "order.ratio",
         "label", "order.stage"};
-    const cflow_scxml_cmeta_expr_value_kind kinds[] = {
-        CFLOW_SCXML_CMETA_EXPR_VALUE_BOOL,
-        CFLOW_SCXML_CMETA_EXPR_VALUE_SINT,
-        CFLOW_SCXML_CMETA_EXPR_VALUE_UINT,
-        CFLOW_SCXML_CMETA_EXPR_VALUE_FLOAT,
-        CFLOW_SCXML_CMETA_EXPR_VALUE_STRING,
-        CFLOW_SCXML_CMETA_EXPR_VALUE_SINT};
+    const scxml_expr_value_kind kinds[] = {
+        SCXML_EXPR_VALUE_BOOL,
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_UINT,
+        SCXML_EXPR_VALUE_FLOAT,
+        SCXML_EXPR_VALUE_STRING,
+        SCXML_EXPR_VALUE_SINT};
     size_t index;
 
     for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
-      cflow_scxml_cmeta_expr_program program = {0};
-      cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-      cflow_scxml_cmeta_expr_value value = {0};
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
+      scxml_expr_value value = {0};
       state_fixture states = {false};
 
       check_equal(compile_value_expression(
                       &program, sources[index], &diagnostic),
-                  CFLOW_SCXML_CMETA_EXPR_OK);
-      check_equal(cflow_scxml_cmeta_expr_program_value_kind(&program),
+                  SCXML_EXPR_OK);
+      check_equal(scxml_expr_program_value_kind(&program),
                   kinds[index]);
-      check_equal(cflow_scxml_cmeta_expr_evaluate_value(
+      check_equal(scxml_expr_evaluate_value(
                       &program, &root, state_is_active, &states,
                       &value, &diagnostic),
-                  CFLOW_SCXML_CMETA_EXPR_OK);
+                  SCXML_EXPR_OK);
       check_equal(value.kind, kinds[index]);
-      if (value.kind == CFLOW_SCXML_CMETA_EXPR_VALUE_BOOL) {
+      if (value.kind == SCXML_EXPR_VALUE_BOOL) {
         check_true(value.data.boolean);
-      } else if (value.kind == CFLOW_SCXML_CMETA_EXPR_VALUE_SINT) {
+      } else if (value.kind == SCXML_EXPR_VALUE_SINT) {
         check_equal(value.data.sint,
                     index == 1u ? INT64_C(-3) : INT64_C(2));
-      } else if (value.kind == CFLOW_SCXML_CMETA_EXPR_VALUE_UINT) {
+      } else if (value.kind == SCXML_EXPR_VALUE_UINT) {
         check_equal(value.data.uint, (uint64_t)SIZE_MAX);
-      } else if (value.kind == CFLOW_SCXML_CMETA_EXPR_VALUE_FLOAT) {
+      } else if (value.kind == SCXML_EXPR_VALUE_FLOAT) {
         check_equal(value.data.number, 1.5);
-      } else if (value.kind == CFLOW_SCXML_CMETA_EXPR_VALUE_STRING) {
+      } else if (value.kind == SCXML_EXPR_VALUE_STRING) {
         check_equal(value.data.string.size, (size_t)5u);
         check_equal(value.data.string.data, "ready", (size_t)5u);
       }
-      cflow_scxml_cmeta_expr_program_destroy(&program);
+      scxml_expr_program_destroy(&program);
     }
 
     {
-      cflow_scxml_cmeta_expr_program program = {0};
-      cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
       check_equal(compile_expression(
                       &program, "order.count", NULL, &diagnostic),
-                  CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                  SCXML_EXPR_TYPE_MISMATCH);
       check_null(program.impl);
     }
   }
@@ -434,63 +434,63 @@ spec("CFlow SCXML private CMeta expressions") {
         "_name == \"Checkout\" && _sessionid != \"\"";
     static const char session_id[] =
         "00112233-4455-4677-8899-aabbccddeeff";
-    const cflow_scxml_cmeta_expr_system_values system_values = {
+    const scxml_expr_system_values system_values = {
         .name = {"Checkout", 8u},
         .session_id = {session_id, sizeof(session_id) - 1u}
     };
-    const cflow_scxml_cmeta_expr_system_values missing_session = {
+    const scxml_expr_system_values missing_session = {
         .name = {"Checkout", 8u}
     };
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-    cflow_scxml_cmeta_expr_value value = {0};
-    cflow_scxml_cmeta_expr_limits limits =
-        cflow_scxml_cmeta_expr_default_limits();
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_value value = {0};
+    scxml_expr_limits limits =
+        scxml_expr_default_limits();
     state_fixture states = {false};
     bool result = false;
 
     check_equal(compile_expression(
                     &program, condition, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
     result = true;
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &missing_session, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
+                SCXML_EXPR_EVALUATION_ERROR);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     check_equal(compile_value_expression(
                     &program, "_sessionid", &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_value_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_value_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &value, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(value.kind, CFLOW_SCXML_CMETA_EXPR_VALUE_STRING);
+                SCXML_EXPR_OK);
+    check_equal(value.kind, SCXML_EXPR_VALUE_STRING);
     check_equal(value.data.string.size, sizeof(session_id) - 1u);
     check_equal(value.data.string.data, session_id,
                 sizeof(session_id) - 1u);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     limits.max_string_bytes = 3u;
     check_equal(compile_expression(
                     &program, "_name == \"abc\"", &limits, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+                SCXML_EXPR_EVALUATION_ERROR);
+    scxml_expr_program_destroy(&program);
   }
 
   it("resolves only the bounded current SCXML event name") {
-    const cflow_scxml_cmeta_expr_system_values system_values = {
+    const scxml_expr_system_values system_values = {
         .event_name = {"go", 2u},
         .event_type = {"external", 8u},
         .event_send_id = {"s1", 2u},
@@ -500,28 +500,28 @@ spec("CFlow SCXML private CMeta expressions") {
         .event_data = {"payload", 7u},
         .scxml_location = {"#_scxml_session", 15u}
     };
-    const cflow_scxml_cmeta_expr_system_values missing_event = {0};
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
-    cflow_scxml_cmeta_expr_value value = {0};
+    const scxml_expr_system_values missing_event = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_value value = {0};
     state_fixture states = {false};
     bool result = false;
 
     check_equal(compile_expression(
                     &program, "_event.name == \"go\"", NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
     result = true;
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &missing_event, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
+                SCXML_EXPR_EVALUATION_ERROR);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     check_equal(compile_expression(
                     &program,
@@ -533,39 +533,39 @@ spec("CFlow SCXML private CMeta expressions") {
                     "_event.data == \"payload\" && "
                     "_ioprocessors.scxml.location == \"#_scxml_session\"",
                     NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     check_equal(compile_value_expression(
                     &program, "_event.name", &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_value_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_value_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &value, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(value.kind, CFLOW_SCXML_CMETA_EXPR_VALUE_STRING);
+                SCXML_EXPR_OK);
+    check_equal(value.kind, SCXML_EXPR_VALUE_STRING);
     check_equal(value.data.string.size, (size_t)2u);
     check_equal(value.data.string.data, "go", (size_t)2u);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     check_equal(compile_value_expression(
                     &program, "_event", &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION);
+                SCXML_EXPR_UNKNOWN_LOCATION);
     check_null(program.impl);
     check_equal(compile_value_expression(
                     &program, "_event.unknown", &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION);
+                SCXML_EXPR_UNKNOWN_LOCATION);
     check_null(program.impl);
   }
 
   it("reads structured current event data through the compiled CMeta schema") {
     scxml_expr_root event_data = root;
-    cflow_scxml_cmeta_expr_system_values system_values = {
+    scxml_expr_system_values system_values = {
         .event_name = {"structured", sizeof("structured") - 1u},
         .event_type = {"external", sizeof("external") - 1u},
         .event_send_id = {"", 0u},
@@ -576,8 +576,8 @@ spec("CFlow SCXML private CMeta expressions") {
         .event_data_schema = &root_data,
         .event_data_object = &event_data
     };
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = false;
 
@@ -588,66 +588,66 @@ spec("CFlow SCXML private CMeta expressions") {
                     "_event.data.order.count == 42 && "
                     "_event.data.order.ready == false",
                     NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
     system_values.event_data_schema = NULL;
     system_values.event_data_object = NULL;
-    check_equal(cflow_scxml_cmeta_expr_evaluate_with_system(
+    check_equal(scxml_expr_evaluate_with_system(
                     &program, &root, state_is_active, &states,
                     &system_values, &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+                SCXML_EXPR_EVALUATION_ERROR);
+    scxml_expr_program_destroy(&program);
   }
 
   it("applies exact reflected assignments and preserves destinations on failure") {
-    cflow_scxml_cmeta_assign_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_assign_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
 
-    check_equal(cflow_scxml_cmeta_assign_compile(
+    check_equal(scxml_assign_compile(
                     &program, "order.count", 11u, "9", 1u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_assign_apply(
+                SCXML_EXPR_OK);
+    check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_equal(root.order.count, 9);
-    cflow_scxml_cmeta_assign_program_destroy(&program);
+    scxml_assign_program_destroy(&program);
 
-    check_equal(cflow_scxml_cmeta_assign_compile(
+    check_equal(scxml_assign_compile(
                     &program, "order.count", 11u, "order.ratio", 11u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_assign_apply(
+                SCXML_EXPR_OK);
+    check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_equal(root.order.count, 9);
-    cflow_scxml_cmeta_assign_program_destroy(&program);
+    scxml_assign_program_destroy(&program);
 
-    check_equal(cflow_scxml_cmeta_assign_compile(
+    check_equal(scxml_assign_compile(
                     &program, "label", 5u, "label", 5u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_assign_apply(
+                SCXML_EXPR_OK);
+    check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_equal(root.label.size, (size_t)5u);
     check_equal(root.label.data, "ready", (size_t)5u);
-    cflow_scxml_cmeta_assign_program_destroy(&program);
+    scxml_assign_program_destroy(&program);
 
-    check_equal(cflow_scxml_cmeta_assign_compile(
+    check_equal(scxml_assign_compile(
                     &program, "_event", 6u, "true", 4u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION);
+                SCXML_EXPR_UNKNOWN_LOCATION);
     check_null(program.impl);
-    check_equal(cflow_scxml_cmeta_assign_compile(
+    check_equal(scxml_assign_compile(
                     &program, "order.ready", 11u, "1", 1u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
   }
 
@@ -664,19 +664,19 @@ spec("CFlow SCXML private CMeta expressions") {
 
   it("retains compiled string literals independently of source") {
     char source[] = "label == \"ready\"";
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = false;
     check_equal(compile_expression(&program, source, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     memset(source, 'x', sizeof(source) - 1u);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 
   it("rejects string locations without a borrowed read trait") {
@@ -686,8 +686,8 @@ spec("CFlow SCXML private CMeta expressions") {
     cmeta_data_field_desc unreadable_field = root_fields[2];
     cmeta_data_struct_shape unreadable_shape = root_shape;
     cmeta_data_desc unreadable_root = root_data;
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
 
     unreadable_ops.read = NULL;
     unreadable_text.buffer_ops = &unreadable_ops;
@@ -696,32 +696,32 @@ spec("CFlow SCXML private CMeta expressions") {
     unreadable_shape.field_count = 1u;
     unreadable_root.shape = &unreadable_shape;
 
-    check_equal(cflow_scxml_cmeta_expr_compile(
+    check_equal(scxml_expr_compile(
                     &program, expression, sizeof(expression) - 1u,
                     &unreadable_root, resolve_state, NULL, NULL,
                     &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
   }
 
   it("preserves output when a borrowed string exceeds its runtime limit") {
-    cflow_scxml_cmeta_expr_limits limits =
-        cflow_scxml_cmeta_expr_default_limits();
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_limits limits =
+        scxml_expr_default_limits();
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = true;
 
     limits.max_string_bytes = 4u;
     check_equal(compile_expression(&program, "label == \"ready\"", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
+                SCXML_EXPR_EVALUATION_ERROR);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 
   it("defines unordered floating point comparisons") {
@@ -747,36 +747,36 @@ spec("CFlow SCXML private CMeta expressions") {
 
   it("retains immutable compiled operands independently of source") {
     char source[] = "order.count == -3";
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = false;
     check_equal(compile_expression(&program, source, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     memset(source, 'x', sizeof(source) - 1u);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 
   it("rejects unknown paths nonboolean conditions and malformed syntax") {
     static const char *const invalid[] = {
         "order.missing == 1", "order.count", "true &&", "In(active)",
         "In(\"missing\")", "label == 1"};
-    static const cflow_scxml_cmeta_expr_status expected[] = {
-        CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-        CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH,
-        CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR,
-        CFLOW_SCXML_CMETA_EXPR_SYNTAX_ERROR,
-        CFLOW_SCXML_CMETA_EXPR_UNKNOWN_LOCATION,
-        CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH};
+    static const scxml_expr_status expected[] = {
+        SCXML_EXPR_UNKNOWN_LOCATION,
+        SCXML_EXPR_TYPE_MISMATCH,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_UNKNOWN_LOCATION,
+        SCXML_EXPR_TYPE_MISMATCH};
     size_t index;
     for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
-        cflow_scxml_cmeta_expr_program program = {0};
-        cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+        scxml_expr_program program = {0};
+        scxml_expr_diagnostic diagnostic = {0};
         check_equal(compile_expression(&program, invalid[index], NULL,
                                        &diagnostic), expected[index]);
         check_null(program.impl);
@@ -795,8 +795,8 @@ spec("CFlow SCXML private CMeta expressions") {
     cmeta_data_field_desc bad_root_field = root_fields[1];
     cmeta_data_struct_shape bad_root_shape = root_shape;
     cmeta_data_desc bad_root = root_data;
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
 
     bad_leaf.shape = &wide_shape;
     bad_order_field.value = &bad_leaf;
@@ -808,119 +808,119 @@ spec("CFlow SCXML private CMeta expressions") {
     bad_root_shape.field_count = 1u;
     bad_root.shape = &bad_root_shape;
 
-    check_equal(cflow_scxml_cmeta_expr_compile(
+    check_equal(scxml_expr_compile(
                     &program, expression, sizeof(expression) - 1u, &bad_root,
                     resolve_state, NULL, NULL, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_TYPE_MISMATCH);
+                SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
   }
 
   it("fails fast on configured source instruction and depth limits") {
-    cflow_scxml_cmeta_expr_limits limits =
-        cflow_scxml_cmeta_expr_default_limits();
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_limits limits =
+        scxml_expr_default_limits();
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
 
     limits.max_source_bytes = 4u;
     check_equal(compile_expression(&program, "true && false", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
     check_null(program.impl);
 
-    limits = cflow_scxml_cmeta_expr_default_limits();
+    limits = scxml_expr_default_limits();
     limits.max_instructions = 1u;
     check_equal(compile_expression(&program, "true && false", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
 
-    limits = cflow_scxml_cmeta_expr_default_limits();
+    limits = scxml_expr_default_limits();
     limits.max_expression_depth = 2u;
     check_equal(compile_expression(&program, "!!!true", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
 
-    limits = cflow_scxml_cmeta_expr_default_limits();
+    limits = scxml_expr_default_limits();
     limits.max_operands = 1u;
     check_equal(compile_expression(&program, "order.count == -3", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
 
-    limits = cflow_scxml_cmeta_expr_default_limits();
+    limits = scxml_expr_default_limits();
     limits.max_path_depth = 1u;
     check_equal(compile_expression(&program, "order.count == -3", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
 
-    limits = cflow_scxml_cmeta_expr_default_limits();
+    limits = scxml_expr_default_limits();
     limits.max_literal_bytes = 1u;
     check_equal(compile_expression(&program, "In(\"active\")", &limits,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_LIMIT_EXCEEDED);
+                SCXML_EXPR_LIMIT_EXCEEDED);
   }
 
   it("preserves output when an enum provider rejects the stored value") {
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {false};
     bool result = true;
     root.order.stage = (scxml_expr_stage)99;
     check_equal(compile_expression(&program, "order.stage == 2", NULL,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
+                SCXML_EXPR_EVALUATION_ERROR);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 
   it("preserves output when runtime inputs or callbacks fail") {
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {true};
     bool result = true;
     check_equal(compile_expression(&program, "In(\"active\")", NULL,
                                    &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_EVALUATION_ERROR);
+                SCXML_EXPR_EVALUATION_ERROR);
     check_true(result);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+    check_equal(scxml_expr_evaluate(
                     &program, NULL, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_INVALID_ARGUMENT);
+                SCXML_EXPR_INVALID_ARGUMENT);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 
   it("short circuits inactive Boolean branches") {
-    cflow_scxml_cmeta_expr_program program = {0};
-    cflow_scxml_cmeta_expr_diagnostic diagnostic = {0};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
     state_fixture states = {true};
     bool result = true;
     check_equal(compile_expression(
                     &program, "false && In(\"active\")", NULL,
                     &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_false(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
 
     check_equal(compile_expression(
                     &program, "true || In(\"active\")", NULL,
                     &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
-    check_equal(cflow_scxml_cmeta_expr_evaluate(
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate(
                     &program, &root, state_is_active, &states,
                     &result, &diagnostic),
-                CFLOW_SCXML_CMETA_EXPR_OK);
+                SCXML_EXPR_OK);
     check_true(result);
-    cflow_scxml_cmeta_expr_program_destroy(&program);
+    scxml_expr_program_destroy(&program);
   }
 }

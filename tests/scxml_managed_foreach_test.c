@@ -14,7 +14,7 @@ typedef struct scxml_foreach_managed_value {
        cmeta_traits_scxml_foreach_managed_value)
 #define CMETA_CALLABLE_TYPE_LIST CMETA_BUILTIN_TYPE_LIST
 
-#include <cflow/scxml.h>
+#include <scxml/scxml.h>
 #include <turbostl/typed.h>
 
 #include "tinytest.h"
@@ -236,16 +236,16 @@ static const cmeta_data_desc managed_root_data = {
 };
 
 static cflow_statechart_instance_stats run_managed_foreach(
-    const cflow_scxml_program *program, const int *values,
+    const scxml_program *program, const int *values,
     size_t value_count) {
     scxml_managed_foreach_root initial = {
         .values = VecOf(scxml_foreach_managed_value),
         .item = {0}, .index = 0u, .total = 0
     };
     cflow_executor executor = {0};
-    cflow_scxml_session session = {0};
+    scxml_session session = {0};
     cflow_statechart_instance_stats stats = {0};
-    cflow_scxml_session_config config = {
+    scxml_session_config config = {
         .program = program,
         .executor = &executor,
         .external_event_capacity = 2u,
@@ -254,9 +254,9 @@ static cflow_statechart_instance_stats run_managed_foreach(
         .microstep_limit = 32u,
         .max_storage_bytes = MANAGED_FOREACH_MAX_STORAGE_BYTES
     };
-    cflow_scxml_cmeta_session_options_v1 data = {
-        .abi_version = CFLOW_SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
-        .struct_size = sizeof(cflow_scxml_cmeta_session_options_v1),
+    scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(scxml_cmeta_session_options_v1),
         .initial_state = &initial
     };
     size_t index;
@@ -271,18 +271,18 @@ static cflow_statechart_instance_stats run_managed_foreach(
         managed_foreach_destroy(&value);
     }
     check_true(cflow_executor_serial_init(&executor));
-    check_equal(cflow_scxml_session_init_cmeta(&session, &config, &data),
+    check_equal(scxml_session_init_cmeta(&session, &config, &data),
                 CFLOW_STATECHART_INSTANCE_OK);
     check_true(cflow_executor_wait_idle(&executor));
-    check_true(cflow_scxml_session_get_stats(&session, &stats));
-    check_equal(cflow_scxml_session_destroy(&session),
+    check_true(scxml_session_get_stats(&session, &stats));
+    check_equal(scxml_session_destroy(&session),
                 CFLOW_STATECHART_INSTANCE_OK);
     cflow_executor_destroy(&executor);
     managed_root_destroy(&initial);
     return stats;
 }
 
-spec("CFlow SCXML CMeta managed foreach") {
+spec("TurboSCXML CMeta managed foreach") {
   it("moves independently owned Range values into the staged item") {
     static const char source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -293,25 +293,25 @@ spec("CFlow SCXML CMeta managed foreach") {
         "item.observed == 3 &amp;&amp; index == 2' target='done'/></state>"
         "<final id='done'/></scxml>";
     const int values[] = {1, 2, 3};
-    const cflow_scxml_cmeta_compile_options_v1 options =
-        cflow_scxml_cmeta_default_compile_options(&managed_root_data);
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    const scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&managed_root_data);
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     managed_foreach_live_resources = 0u;
     managed_foreach_copy_count = 0u;
     managed_foreach_move_count = 0u;
     {
-        const cflow_scxml_status status = cflow_scxml_compile_cmeta(
+        const scxml_status status = scxml_compile_cmeta(
             &program, source, strlen(source), NULL, &options, &diagnostic);
         info("diagnostic=%s", diagnostic.message);
-        check_equal(status, CFLOW_SCXML_OK);
+        check_equal(status, SCXML_OK);
     }
     stats = run_managed_foreach(&program, values, 3u);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
     check_true(managed_foreach_copy_count >= 3u);
     check_true(managed_foreach_move_count >= 3u);
     check_equal(managed_foreach_live_resources, (size_t)0u);
@@ -327,22 +327,22 @@ spec("CFlow SCXML CMeta managed foreach") {
         "cond='total == 0 &amp;&amp; item.observed == 41 &amp;&amp; "
         "index == 0' target='done'/></state><final id='done'/></scxml>";
     const int values[] = {7};
-    const cflow_scxml_cmeta_compile_options_v1 options =
-        cflow_scxml_cmeta_default_compile_options(&managed_root_data);
-    cflow_scxml_program program = {0};
-    cflow_scxml_diagnostic diagnostic = {0};
+    const scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&managed_root_data);
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
     cflow_statechart_instance_stats stats;
 
     managed_foreach_live_resources = 0u;
     managed_foreach_copy_count = 0u;
     managed_foreach_move_count = 0u;
-    check_equal(cflow_scxml_compile_cmeta(
+    check_equal(scxml_compile_cmeta(
                     &program, source, strlen(source), NULL, &options,
-                    &diagnostic), CFLOW_SCXML_OK);
+                    &diagnostic), SCXML_OK);
     stats = run_managed_foreach(&program, values, 1u);
     check_true(stats.done);
     check_false(stats.errored);
-    cflow_scxml_program_destroy(&program);
+    scxml_program_destroy(&program);
     check_true(managed_foreach_move_count >= 1u);
     check_equal(managed_foreach_live_resources, (size_t)0u);
   }

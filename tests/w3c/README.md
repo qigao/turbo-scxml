@@ -105,7 +105,7 @@ local harness already requires each run to terminate in `pass` without a runtime
 error.
 
 Tests 376 and 378 replace the generator counter with a `second.block` event.
-Their test-only owning sessions inject `CFLOW_SCXML_ADAPTER_ERROR_EXECUTION`
+Their test-only owning sessions inject `SCXML_ADAPTER_ERROR_EXECUTION`
 for the first handler's `send`, then require `error.execution` followed by the
 event from the later independent handler. Test 159 uses the same deterministic
 adapter failure, rejects an event from the remainder of the failing block, and
@@ -169,14 +169,14 @@ that Event instead of retaining stale values.
 The selected Event remains current through all eventless microsteps in the
 same run-to-completion cycle. Initial eventless work has no current Event and
 therefore fails evaluation when it reads `_event`. Scalar/text/XML data is
-exposed as a bounded string. `cflow_scxml_session_try_send_v3()` additionally
+exposed as a bounded string. `scxml_session_try_send_v3()` additionally
 copies structured CMeta data whose descriptor is exactly the compiled session
 root, allowing typed paths such as `_event.data.order.count`. The copy is owned
 by the session until the next Event is selected or the session is destroyed.
 Because a structured value is not a string, reading it as bare `_event.data`
 fails evaluation instead of silently substituting an empty value.
 The fixed storage cost is bounded by
-`external_event_capacity * CFLOW_SCXML_EVENT_DATA_CAPACITY`, plus one current
+`external_event_capacity * SCXML_EVENT_DATA_CAPACITY`, plus one current
 Event slot and row metadata.
 
 Format parsing remains outside the SCXML runtime. An embedding application may
@@ -192,7 +192,7 @@ The module deliberately retains a conforming-host adapter boundary instead of
 bundling a cross-session registry or transport. The public location-copy API
 lets a host register the exact address exposed through
 `_ioprocessors.scxml.location`, and
-`cflow_scxml_event_io_contract_test` demonstrates bounded routing and delivery
+`scxml_event_io_contract_test` demonstrates bounded routing and delivery
 through only public APIs. This evidence validates the adapter contract; it does
 not make the library alone a standalone SCXML Event I/O Processor. Accordingly,
 tests 189-192, 347-354, 495-496, and 500-501 remain `UNSUPPORTED` until the W3C

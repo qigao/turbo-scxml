@@ -1,0 +1,26 @@
+#ifndef SCXML_LOCATION_H
+#define SCXML_LOCATION_H
+
+#include "scxml_expr.h"
+
+typedef struct scxml_location {
+    const cmeta_data_desc *root;
+    const cmeta_data_desc *value;
+    size_t offset;
+    size_t storage_size;
+} scxml_location;
+
+scxml_expr_status scxml_location_compile(
+    scxml_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root, size_t max_depth,
+    bool writable,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status
+scxml_location_assign_owned_string(
+    const scxml_location *location, void *root,
+    const char *data, size_t size, size_t max_bytes,
+    scxml_expr_diagnostic *diagnostic);
+
+#endif

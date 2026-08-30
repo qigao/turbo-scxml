@@ -9,7 +9,7 @@ TurboSCXML 将 W3C SCXML 文档编译为 TurboUtils CFlow Statechart，并提供
 - 依赖方向固定为 `TurboSCXML -> installed TurboUtils`；TurboUtils 不依赖 TurboSCXML。
 - HTTP、QuickJS、持久化和服务部署不属于本次仓库提取范围。
 
-公开 C API 继续通过 `<cflow/scxml.h>` 提供，函数与类型保持 `cflow_scxml_*` 命名。CMake 消费目标为 `TurboSCXML::SCXML`。
+公开 C API 继续通过 `<scxml/scxml.h>` 提供，函数与类型保持 `scxml_*` 命名。CMake 消费目标为 `TurboSCXML::SCXML`。
 
 ## 构建
 

@@ -36,12 +36,16 @@ foreach(required_target IN ITEMS
 endforeach()
 
 add_library(turbo_scxml STATIC
-  src/scxml.c
-  src/cmeta_expr.c
-  src/cmeta_assign.c
-  src/cmeta_location.c
-  src/cmeta_sequence.c
-  src/cmeta_foreach.c)
+  src/scxml_analyze.c
+  src/scxml_runtime.c
+  src/scxml_emit.c
+  src/scxml_program.c
+  src/scxml_session.c
+  src/scxml_expr.c
+  src/scxml_assign.c
+  src/scxml_location.c
+  src/scxml_sequence.c
+  src/scxml_foreach.c)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 
 set_target_properties(turbo_scxml PROPERTIES
@@ -96,7 +100,7 @@ install(TARGETS turbo_scxml
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(
-  DIRECTORY include/cflow
+  DIRECTORY include/scxml
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   FILES_MATCHING PATTERN "*.h")
 
