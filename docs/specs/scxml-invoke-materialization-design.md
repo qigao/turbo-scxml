@@ -50,9 +50,10 @@ descriptor、autoforward 和 owner state。字符串、payload 与 content view 
 `prepare_start` 调用期间有效；异步 host 必须在返回 `ACCEPTED` 前复制所需数据。
 
 每次实际执行 invocation descriptor 都分配一个非零、session 单调递增 token。
-显式 `id` 直接进入 request；没有显式 `id` 时由 owner state ID 与本次 token
-组成动态 ID。`idlocation` 写入 staged state，因此同一 session 的并行或重复
-执行不会复用 ID，事务回滚也不会泄露半提交值。
+显式 `id` 直接进入 request；无 `id` 且无 `idlocation` 时使用编译期稳定的
+`owner.invoke.ordinal` descriptor ID；存在 `idlocation` 时才由 owner state ID
+与本次 token 组成运行时动态 ID，并写入 staged state。因此同一 session 的并行
+或重复 idlocation 执行不会复用 ID，事务回滚也不会泄露半提交值。
 
 ## 精确物化与发布顺序
 

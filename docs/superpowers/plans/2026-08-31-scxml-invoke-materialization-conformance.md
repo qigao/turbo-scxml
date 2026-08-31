@@ -8,7 +8,7 @@
 
 **Characterization gate:** Production code already appears to evaluate dynamic strings and payload/content at the stable invocation boundary and to stage `error.execution` without calling the adapter on evaluation failure. Add strict direct and W3C tests first. If they pass, keep production unchanged. If a direct regression fails, change only the owning analyzer/runtime layer exposed by that failure.
 
-**State and failure contract:** Every actual invoke execution consumes a unique nonzero session token. Generated IDs derive from owner state plus token and are written only to staged state. All arguments are evaluated after `onentry` against that staged state and before `prepare_start`. Any argument error yields no start callback, one failed row, and one internal `error.execution`; transaction failure discards every prepared external effect.
+**State and failure contract:** Every actual invoke execution consumes a unique nonzero session token. Explicit IDs pass through unchanged; absent IDs without `idlocation` use the compile-time `owner.invoke.ordinal` descriptor ID; dynamic idlocation IDs derive from owner state plus token and are written only to staged state. All arguments are evaluated after `onentry` against that staged state and before `prepare_start`. Any argument error yields no start callback, one failed row, and one internal `error.execution`; transaction failure discards every prepared external effect.
 
 **Compatibility:** No public API/ABI, dependency, CMake target, data format, or deployment change is expected. The platform-level SCXML processor remains a host adapter responsibility.
 

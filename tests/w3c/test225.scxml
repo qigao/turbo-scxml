@@ -5,7 +5,8 @@
     <invoke type="http://www.w3.org/TR/scxml/" idlocation="invoke_id"/>
     <invoke type="http://www.w3.org/TR/scxml/" idlocation="send_id"/>
     <transition event="done.invoke.*"
-                cond="invoke_id != send_id" target="pass"/>
+                cond="invoke_id == &quot;s0.1&quot; &amp;&amp;
+                      send_id == &quot;s0.2&quot;" target="pass"/>
     <transition event="done.invoke.*" target="fail"/>
     <transition event="*" target="fail"/>
   </state>
