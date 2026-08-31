@@ -3217,19 +3217,24 @@ static bool run_w3c_cmeta_rejected_send_fixture(const char *fixture_name) {
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
-static bool w3c_observe_event(
-    void *user, const cflow_statechart_instance_hook_context *context,
-    const cflow_statechart_observed_event *event, const char **out_error) {
+static cflow_statechart_host_result w3c_observe_event(
+    void *user, cflow_statechart_host_context *context,
+    const char **out_error) {
     w3c_event_probe *probe = (w3c_event_probe *)user;
-    if (probe == NULL || context == NULL || event == NULL ||
-        out_error == NULL)
-        return false;
+    const cflow_statechart_observed_event *event;
+    if (probe == NULL || context == NULL || out_error == NULL)
+        return CFLOW_STATECHART_HOST_FATAL;
+    *out_error = NULL;
+    if (cflow_statechart_host_context_phase(context) !=
+        CFLOW_STATECHART_HOST_PREPARE_TRIGGER)
+        return CFLOW_STATECHART_HOST_CONTINUE;
+    event = cflow_statechart_host_context_trigger(context);
+    if (event == NULL) return CFLOW_STATECHART_HOST_FATAL;
     if (event->kind == CFLOW_STATECHART_OBSERVED_INTERNAL &&
         event->event != NULL &&
         event->event->id == probe->expected_internal)
         ++probe->selected_internal;
-    *out_error = NULL;
-    return true;
+    return CFLOW_STATECHART_HOST_CONTINUE;
 }
 
 static bool run_w3c_top_level_final_fixture(const char *fixture_name) {
@@ -3247,10 +3252,9 @@ static bool run_w3c_top_level_final_fixture(const char *fixture_name) {
     cflow_statechart_instance_stats stats = {0};
     w3c_event_probe probe = {0};
     const cflow_statechart_instance_hooks hooks = {
-        .abi_version = CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V2,
-        .struct_size = offsetof(
-            cflow_statechart_instance_hooks, on_stable_transaction),
-        .on_event = w3c_observe_event};
+        .abi_version = CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V4,
+        .struct_size = sizeof(cflow_statechart_instance_hooks),
+        .on_host_transaction = w3c_observe_event};
     cflow_statechart_instance_config config = {0};
     bool executor_initialized = false;
     bool instance_initialized = false;
