@@ -4,6 +4,7 @@
 #include "tinytest.h"
 
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <turbo/thread.h>
@@ -578,6 +579,271 @@ static scxml_session_config host_session_config(
         .adapter_internal_event_capacity = 4u};
 }
 
+enum {
+    HOST_ORDER_INVOKE_CAPACITY = 3,
+    HOST_ORDER_TICKET_CAPACITY = 8,
+    HOST_ORDER_TRACE_CAPACITY = 16
+};
+
+typedef struct host_order_probe host_order_probe;
+
+typedef struct host_order_ticket {
+    host_order_probe *probe;
+    char commit_mark;
+    bool in_use;
+} host_order_ticket;
+
+struct host_order_probe {
+    char trace[HOST_ORDER_TRACE_CAPACITY];
+    size_t trace_size;
+    char starts[HOST_ORDER_INVOKE_CAPACITY][HOST_SEND_ID_CAPACITY];
+    size_t start_count;
+    size_t start_commits;
+    size_t discards;
+    size_t close_calls;
+    host_order_ticket tickets[HOST_ORDER_TICKET_CAPACITY];
+};
+
+typedef struct host_order_blocker {
+    atomic_bool entered;
+    atomic_bool release;
+} host_order_blocker;
+
+static bool host_order_append(host_order_probe *probe, char mark) {
+    if (probe == NULL || probe->trace_size + 1u >= sizeof(probe->trace))
+        return false;
+    probe->trace[probe->trace_size++] = mark;
+    probe->trace[probe->trace_size] = '\0';
+    return true;
+}
+
+static host_order_ticket *host_order_acquire_ticket(
+    host_order_probe *probe, char commit_mark) {
+    size_t index;
+    if (probe == NULL) return NULL;
+    for (index = 0u; index < HOST_ORDER_TICKET_CAPACITY; ++index) {
+        host_order_ticket *ticket = &probe->tickets[index];
+        if (ticket->in_use) continue;
+        *ticket = (host_order_ticket){
+            .probe = probe, .commit_mark = commit_mark, .in_use = true};
+        return ticket;
+    }
+    return NULL;
+}
+
+static void host_order_commit(void *user) {
+    host_order_ticket *ticket = (host_order_ticket *)user;
+    if (ticket == NULL || !ticket->in_use || ticket->probe == NULL) return;
+    if (ticket->commit_mark != '\0') {
+        (void)host_order_append(ticket->probe, ticket->commit_mark);
+        if (ticket->commit_mark == 'A' || ticket->commit_mark == 'B' ||
+            ticket->commit_mark == 'X')
+            ++ticket->probe->start_commits;
+    }
+    ticket->in_use = false;
+}
+
+static void host_order_discard(void *user) {
+    host_order_ticket *ticket = (host_order_ticket *)user;
+    if (ticket == NULL || !ticket->in_use || ticket->probe == NULL) return;
+    ++ticket->probe->discards;
+    ticket->in_use = false;
+}
+
+static bool host_order_make_ticket(
+    host_order_probe *probe, char commit_mark,
+    cflow_statechart_effect_ticket *out_ticket) {
+    host_order_ticket *ticket =
+        host_order_acquire_ticket(probe, commit_mark);
+    if (ticket == NULL || out_ticket == NULL) return false;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        host_order_commit, host_order_discard, ticket};
+    return true;
+}
+
+static scxml_adapter_status host_order_prepare_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    host_order_probe *probe = (host_order_probe *)user;
+    char prepare_mark = '\0';
+    char commit_mark = '\0';
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->id == NULL || request->id_size == 0u ||
+        probe->start_count >= HOST_ORDER_INVOKE_CAPACITY ||
+        request->id_size >= sizeof(probe->starts[0]))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (host_text_equal(request->id, request->id_size, "outerInvoke")) {
+        prepare_mark = 'a';
+        commit_mark = 'A';
+    } else if (host_text_equal(
+                   request->id, request->id_size, "liveInvoke")) {
+        prepare_mark = 'b';
+        commit_mark = 'B';
+    } else if (host_text_equal(
+                   request->id, request->id_size, "transientInvoke")) {
+        prepare_mark = 'x';
+        commit_mark = 'X';
+    } else {
+        *out_error = "unexpected invocation ID";
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    memcpy(probe->starts[probe->start_count], request->id, request->id_size);
+    probe->starts[probe->start_count][request->id_size] = '\0';
+    ++probe->start_count;
+    if (!host_order_append(probe, prepare_mark) ||
+        !host_order_make_ticket(probe, commit_mark, out_ticket))
+        return SCXML_ADAPTER_FULL;
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status host_order_prepare_invoke_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    host_order_probe *probe = (host_order_probe *)user;
+    if (probe == NULL || request == NULL || request->token == 0u ||
+        out_ticket == NULL || out_error == NULL ||
+        !host_order_make_ticket(probe, '\0', out_ticket))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status host_order_prepare_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    host_order_probe *probe = (host_order_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL ||
+        !host_text_equal(request->event, request->event_size, "selected") ||
+        !host_order_append(probe, 's') ||
+        !host_order_make_ticket(probe, 'S', out_ticket))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void host_order_close(void *user) {
+    host_order_probe *probe = (host_order_probe *)user;
+    if (probe != NULL) ++probe->close_calls;
+}
+
+static bool host_order_is_quiescent(void *user) {
+    const host_order_probe *probe = (const host_order_probe *)user;
+    return probe != NULL && probe->close_calls == 2u;
+}
+
+static void host_order_block_executor(void *user) {
+    host_order_blocker *blocker = (host_order_blocker *)user;
+    if (blocker == NULL) return;
+    atomic_store(&blocker->entered, true);
+    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+}
+
+static bool host_admit_named_event(
+    scxml_session *session, const scxml_program *program,
+    const char *event_name) {
+    cflow_event_view event = {0};
+    const size_t event_size = event_name != NULL ? strlen(event_name) : 0u;
+    return event_size != 0u &&
+        scxml_program_event(program, event_name, event_size, &event) &&
+        scxml_session_try_send(session, &event) == CFLOW_MAILBOX_OK;
+}
+
+static bool host_characterize_macrostep_invoke_order(void) {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='waiting'>"
+        "<state id='waiting'><transition event='enter' target='outer'/>"
+        "</state>"
+        "<state id='outer' initial='transient'>"
+        "<invoke id='outerInvoke' type='urn:test' src='outer'/>"
+        "<state id='transient'>"
+        "<invoke id='transientInvoke' type='urn:test' src='transient'/>"
+        "<transition target='live'/></state>"
+        "<state id='live'>"
+        "<invoke id='liveInvoke' type='urn:test' src='live'/>"
+        "<transition event='go' target='pass'>"
+        "<send event='selected'/></transition></state></state>"
+        "<state id='never'><transition event='noise' target='fail'/>"
+        "</state><final id='pass'/><final id='fail'/></scxml>";
+    const scxml_event_io_adapter_v1 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND,
+        .prepare_send = host_order_prepare_send,
+        .close = host_order_close,
+        .is_quiescent = host_order_is_quiescent};
+    const scxml_invoke_adapter_v1 invoke = {
+        .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
+        .struct_size = sizeof(invoke),
+        .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
+        .prepare_start = host_order_prepare_start,
+        .prepare_cancel = host_order_prepare_invoke_cancel,
+        .close = host_order_close,
+        .is_quiescent = host_order_is_quiescent};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    scxml_session session = {0};
+    cflow_executor executor = {0};
+    cflow_statechart_instance_stats stats = {0};
+    host_order_probe probe = {0};
+    host_order_blocker blocker;
+    scxml_session_config config;
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool blocker_posted = false;
+    bool succeeded = false;
+
+    atomic_init(&blocker.entered, false);
+    atomic_init(&blocker.release, false);
+    if (host_compile(source, &program, &diagnostic) != SCXML_OK ||
+        !cflow_executor_serial_init(&executor))
+        goto cleanup;
+    executor_initialized = true;
+    config = host_session_config(&program, &executor);
+    config.event_io = &event_io;
+    config.adapter_user = &probe;
+    config.invoke = &invoke;
+    config.invoke_user = &probe;
+    config.invocation_capacity = HOST_ORDER_INVOKE_CAPACITY;
+    if (scxml_session_init(&session, &config) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) ||
+        cflow_executor_try_post(
+            &executor, host_order_block_executor, &blocker) !=
+            CFLOW_ADMISSION_ACCEPTED)
+        goto cleanup;
+    blocker_posted = true;
+    while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+    if (!host_admit_named_event(&session, &program, "enter") ||
+        !host_admit_named_event(&session, &program, "noise") ||
+        !host_admit_named_event(&session, &program, "go"))
+        goto cleanup;
+    atomic_store(&blocker.release, true);
+    blocker_posted = false;
+    if (!cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats))
+        goto cleanup;
+    succeeded = stats.done && !stats.errored &&
+        probe.start_count == 2u && probe.start_commits == 2u &&
+        probe.discards == 0u &&
+        strcmp(probe.starts[0], "outerInvoke") == 0 &&
+        strcmp(probe.starts[1], "liveInvoke") == 0 &&
+        strcmp(probe.trace, "abABsS") == 0;
+
+cleanup:
+    if (blocker_posted) atomic_store(&blocker.release, true);
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    return succeeded;
+}
+
 typedef enum host_w3c_route_kind {
     HOST_W3C_INVOKE_TARGET = 0,
     HOST_W3C_BIDIRECTIONAL
@@ -720,6 +986,10 @@ cleanup:
 }
 
 spec("SCXML host Event I/O adapter contract") {
+    it("commits live invocations in document order before external selection") {
+        check_true(host_characterize_macrostep_invoke_order());
+    }
+
     it("routes an initial child send through #_parent") {
         static const char parent_source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"

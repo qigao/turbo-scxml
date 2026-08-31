@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 116
-local PASS transformations, records 52 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 118
+local PASS transformations, records 50 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -141,6 +141,8 @@ Status meanings are strict:
 | `test417.scxml` | [test417.txml](https://www.w3.org/Voice/2013/scxml-irp/417/test417.txml) | Completing every region generates the parallel state's `done.state.<id>` event. |
 | `test419.scxml` | [test419.txml](https://www.w3.org/Voice/2013/scxml-irp/419/test419.txml) | An enabled eventless transition is selected before a queued internal event. |
 | `test421.scxml` | [test421.txml](https://www.w3.org/Voice/2013/scxml-irp/421/test421.txml) | Unmatched internal events are removed until one enables a transition or the internal queue is empty. |
+| `test422.scxml` | [test422.txml](https://www.w3.org/Voice/2013/scxml-irp/422/test422.txml) | After macrostep settlement, only invocations owned by the still-active ancestor and descendant start, in document order. |
+| `test423.scxml` | [test423.txml](https://www.w3.org/Voice/2013/scxml-irp/423/test423.txml) | Internal work precedes external admission; one unmatched external Event is consumed before the later enabling Event is selected. |
 | `test503.scxml` | [test503.txml](https://www.w3.org/Voice/2013/scxml-irp/503/test503.txml) | A targetless transition has an empty exit set. |
 | `test504.scxml` | [test504.txml](https://www.w3.org/Voice/2013/scxml-irp/504/test504.txml) | An external transition exits every active proper descendant of the source/target LCCA. |
 | `test505.scxml` | [test505.txml](https://www.w3.org/Voice/2013/scxml-irp/505/test505.txml) | An internal transition from a compound state to a proper descendant retains the source state. |
@@ -317,7 +319,19 @@ replaces the exit counter with one exact internal exit event. Test 421
 retains the four internal events and matches only the third and fourth, which
 directly observes the named internal-queue draining assertion; the upstream
 external-send failure witness is outside that assertion and is omitted. Test
-504 replaces five counters with the two complete reverse-document exit traces
+422 replaces its three child interpreters with the versioned bounded invoke
+adapter. The adapter observes committed starts for `invokeS1` and `invokeS12`
+in document order, observes no start for the transient `invokeS11`, and returns
+the two child Events through their public invocation tokens. A separate real
+adapter trace in `scxml_event_io_contract_test` queues later external work and
+requires both live invocation tickets to commit before that Event is selected.
+Test 423 replaces the immediate/delayed sends with `start`, `externalEvent1`,
+and `externalEvent2` admitted FIFO while a serial-executor gate is held. The
+`start` transition raises `internalEvent` with both later external Events
+already queued; only internal-first processing reaches `s1`, where unmatched
+`externalEvent1` is consumed and `externalEvent2` reaches `pass`. Both fixtures
+are finite and bounded; neither adds a child interpreter or timer fallback.
+Test 504 replaces five counters with the two complete reverse-document exit traces
 produced by its external transitions. Exact observers require both parallel
 regions and their parallel parent to exit twice, and the containing state to
 exit once.
