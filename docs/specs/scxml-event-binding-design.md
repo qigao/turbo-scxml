@@ -25,8 +25,10 @@ empty optional field.
 ## Decision
 
 The CMeta expression language adds the Boolean primary expression
-`isBound(_event)`. It accepts exactly the unquoted `_event` system variable and
-no other argument.
+`isBound(_event)`. This whole-Event form accepts exactly the unquoted `_event`
+system variable. The later additive field-presence forms are specified in
+[`scxml-event-envelope-design.md`](scxml-event-envelope-design.md); arbitrary
+or nested paths remain invalid.
 
 At evaluation time:
 

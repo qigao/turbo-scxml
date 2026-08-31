@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <state id="waiting">
+    <transition event="external.check"
+                cond="isBound(_event.sendid) &amp;&amp; _event.sendid == &quot;&quot;"
+                target="pass"/>
+    <transition event="external.check" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

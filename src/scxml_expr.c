@@ -56,6 +56,7 @@ typedef enum expr_operand_kind {
     EXPR_OPERAND_STRING,
     EXPR_OPERAND_STATE,
     EXPR_OPERAND_SYSTEM_EVENT_BOUND,
+    EXPR_OPERAND_SYSTEM_EVENT_FIELD_BOUND,
     EXPR_OPERAND_SYSTEM_NAME_BOUND,
     EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND,
     EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND,
@@ -92,6 +93,7 @@ typedef struct expr_operand {
             size_t size;
         } string;
         cflow_machine_state_id state;
+        expr_operand_kind event_field;
     } value;
 } expr_operand;
 
@@ -196,6 +198,30 @@ static bool token_text_equal(const expr_parser *parser, const char *text) {
     const size_t size = strlen(text);
     return parser->token.size == size &&
            memcmp(parser->source + parser->token.offset, text, size) == 0;
+}
+
+static bool parser_event_field_kind(
+    const expr_parser *parser, expr_operand_kind *out_kind) {
+    if (parser == NULL || out_kind == NULL ||
+        parser->token.kind != EXPR_TOKEN_IDENT)
+        return false;
+    if (token_text_equal(parser, "name"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_NAME;
+    else if (token_text_equal(parser, "type"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_TYPE;
+    else if (token_text_equal(parser, "sendid"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_SEND_ID;
+    else if (token_text_equal(parser, "origin"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_ORIGIN;
+    else if (token_text_equal(parser, "origintype"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE;
+    else if (token_text_equal(parser, "invokeid"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID;
+    else if (token_text_equal(parser, "data"))
+        *out_kind = EXPR_OPERAND_SYSTEM_EVENT_DATA;
+    else
+        return false;
+    return true;
 }
 
 static void parser_next(expr_parser *parser) {
@@ -670,6 +696,18 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                                parser->token.offset,
                                "isBound requires a supported system variable");
         parser_next(parser);
+        if (operand.kind == EXPR_OPERAND_SYSTEM_EVENT_BOUND &&
+            parser->token.kind == EXPR_TOKEN_DOT) {
+            expr_operand_kind event_field;
+            parser_next(parser);
+            if (!parser_event_field_kind(parser, &event_field))
+                return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                                   parser->token.offset,
+                                   "isBound requires a supported _event field");
+            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_FIELD_BOUND;
+            operand.value.event_field = event_field;
+            parser_next(parser);
+        }
         if (parser->token.kind != EXPR_TOKEN_RPAREN)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
                                parser->token.offset,
@@ -701,21 +739,7 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                 parser->token.offset,
                 "unknown _event field");
         }
-        if (token_text_equal(parser, "name"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_NAME;
-        else if (token_text_equal(parser, "type"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_TYPE;
-        else if (token_text_equal(parser, "sendid"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_SEND_ID;
-        else if (token_text_equal(parser, "origin"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_ORIGIN;
-        else if (token_text_equal(parser, "origintype"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE;
-        else if (token_text_equal(parser, "invokeid"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID;
-        else if (token_text_equal(parser, "data"))
-            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_DATA;
-        else
+        if (!parser_event_field_kind(parser, &operand.kind))
             return parser_fail(
                 parser, SCXML_EXPR_UNKNOWN_LOCATION,
                 parser->token.offset, "unknown _event field");
@@ -1262,6 +1286,23 @@ static bool read_location_at(const expr_eval_context *context,
     }
 }
 
+static const scxml_expr_string_view *system_event_field_view(
+    const scxml_expr_system_values *values, expr_operand_kind kind) {
+    if (values == NULL) return NULL;
+    switch (kind) {
+        case EXPR_OPERAND_SYSTEM_EVENT_NAME: return &values->event_name;
+        case EXPR_OPERAND_SYSTEM_EVENT_TYPE: return &values->event_type;
+        case EXPR_OPERAND_SYSTEM_EVENT_SEND_ID: return &values->event_send_id;
+        case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN: return &values->event_origin;
+        case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE:
+            return &values->event_origin_type;
+        case EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID:
+            return &values->event_invoke_id;
+        case EXPR_OPERAND_SYSTEM_EVENT_DATA: return &values->event_data;
+        default: return NULL;
+    }
+}
+
 static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
     expr_eval_context *context = (expr_eval_context *)user;
     const expr_operand *operand;
@@ -1319,6 +1360,7 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             out->boolean = active;
             return 1;
         case EXPR_OPERAND_SYSTEM_EVENT_BOUND:
+        case EXPR_OPERAND_SYSTEM_EVENT_FIELD_BOUND:
         case EXPR_OPERAND_SYSTEM_NAME_BOUND:
         case EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND:
         case EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND: {
@@ -1326,6 +1368,27 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             if (context->system_values == NULL) {
                 context->failed = true;
                 return 0;
+            }
+            if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_FIELD_BOUND) {
+                const bool event_bound =
+                    context->system_values->event_name.data != NULL;
+                const expr_operand_kind field = operand->value.event_field;
+                view = system_event_field_view(context->system_values, field);
+                if (view == NULL) {
+                    context->failed = true;
+                    return 0;
+                }
+                make_value(out, EXPR_VALUE_BOOL);
+                if (field == EXPR_OPERAND_SYSTEM_EVENT_DATA) {
+                    const bool structured_data_bound =
+                        context->system_values->event_data_schema != NULL &&
+                        context->system_values->event_data_object != NULL;
+                    out->boolean = event_bound &&
+                        (view->data != NULL || structured_data_bound);
+                } else {
+                    out->boolean = event_bound && view->data != NULL;
+                }
+                return 1;
             }
             if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_BOUND)
                 view = &context->system_values->event_name;
@@ -1358,23 +1421,16 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
                 view = &context->system_values->name;
             } else if (operand->kind == EXPR_OPERAND_SYSTEM_SESSION_ID) {
                 view = &context->system_values->session_id;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_NAME) {
-                view = &context->system_values->event_name;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_TYPE) {
-                view = &context->system_values->event_type;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_SEND_ID) {
-                view = &context->system_values->event_send_id;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_ORIGIN) {
-                view = &context->system_values->event_origin;
             } else if (operand->kind ==
-                       EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE) {
-                view = &context->system_values->event_origin_type;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID) {
-                view = &context->system_values->event_invoke_id;
-            } else if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_DATA) {
-                view = &context->system_values->event_data;
-            } else {
+                       EXPR_OPERAND_SYSTEM_SCXML_LOCATION) {
                 view = &context->system_values->scxml_location;
+            } else {
+                view = system_event_field_view(
+                    context->system_values, operand->kind);
+                if (view == NULL) {
+                    context->failed = true;
+                    return 0;
+                }
             }
             if (view->data == NULL ||
                 view->size > context->program->max_string_bytes) {

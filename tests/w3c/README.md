@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 49
-local PASS transformations, records 119 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 55
+local PASS transformations, records 113 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -47,7 +47,13 @@ Status meanings are strict:
 | `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
 | `test323.scxml` | [test323.txml](https://www.w3.org/Voice/2013/scxml-irp/323/test323.txml) | `_name` is bound to the root `scxml/@name` value during initialization. |
 | `test325.scxml` | [test325.txml](https://www.w3.org/Voice/2013/scxml-irp/325/test325.txml) | `_ioprocessors` is bound to the supported Event I/O processor set during initialization. |
+| `test330.scxml` | [test330.txml](https://www.w3.org/Voice/2013/scxml-irp/330/test330.txml) | Every internal and external Event exposes all seven required Event fields, including empty optional values. |
+| `test331.scxml` | [test331.txml](https://www.w3.org/Voice/2013/scxml-irp/331/test331.txml) | Raised, processor-generated, and externally admitted Events are classified as `internal`, `platform`, and `external`. |
+| `test333.scxml` | [test333.txml](https://www.w3.org/Voice/2013/scxml-irp/333/test333.txml) | An ordinary external Event admitted without a send ID exposes an empty `sendid`. |
+| `test335.scxml` | [test335.txml](https://www.w3.org/Voice/2013/scxml-irp/335/test335.txml) | An internally raised Event exposes an empty `origin`. |
+| `test337.scxml` | [test337.txml](https://www.w3.org/Voice/2013/scxml-irp/337/test337.txml) | Internal and platform Events expose an empty `origintype`. |
 | `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
+| `test342.scxml` | [test342.txml](https://www.w3.org/Voice/2013/scxml-irp/342/test342.txml) | The selected Event's `_event.name` equals the name produced by its evaluated send expression. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
 | `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
 | `test372.scxml` | [test372.txml](https://www.w3.org/Voice/2013/scxml-irp/372/test372.txml) | A parent's `done.state` event is selected after its final child's `onentry` and before that child's `onexit`. |
@@ -132,17 +138,25 @@ a bounded test adapter so the owning CMeta session remains a black box. Test
 event hook observes transition-selection boundaries and requires the raise
 action to execute while `event1` is never selected before clean termination.
 
-Tests 318, 319, 321, 323, 325, 339, and 396 use the owning CMeta session so
-protected variables are observed through the public execution path. Test 318
+Tests 318, 319, 321, 323, 325, 330, 331, 333, 335, 337, 339, 342, and 396 use
+the owning CMeta session so protected variables are observed through the
+public execution path. Test 318
 raises another Event before checking that `_event.name` still names the Event
 whose transition is being processed. Test 319 maps the generator's
 `conf:systemVarIsBound` query to the finite CMeta expression
 `isBound(_event)`. Tests 321, 323, and 325 map the same generator predicate to
 `isBound(_sessionid)`, `isBound(_name)`, and `isBound(_ioprocessors)` during
-initial eventless processing. Tests 339 and 396 compare the empty non-invoke
-`invokeid` and the selected Event name directly. Their terminal states use the
-same bounded `result.pass`/`result.fail` adapter probe as the completion
-fixtures.
+initial eventless processing. Test 330 checks the complete seven-field envelope
+on a raised internal Event and a bounded host-admitted external Event. Test 331
+uses an internal raise, a processor-generated execution error, and an external
+admission to observe all three Event classifications. Tests 333, 335, and 337
+require empty optional metadata to remain present in the applicable external,
+internal, and platform envelopes. Test 339 compares the empty non-invoke
+`invokeid`. Test 342 retains `eventexpr`; its test host exposes the copied send
+only after ticket commit, then loops it through the public external-admission
+API before the fixture compares `_event.name`. Test 396 compares the selected
+Event name directly. Their terminal states use the same bounded
+`result.pass`/`result.fail` adapter probe as the completion fixtures.
 
 Tests 376 and 378 replace the generator counter with a `second.block` event.
 Their test-only owning sessions inject `SCXML_ADAPTER_ERROR_EXECUTION`
@@ -209,6 +223,13 @@ CMeta sessions expose the complete read-only `_event` profile from
 external and invocation-completion Events. Missing optional metadata is the
 empty CMeta string; selecting the next Event clears metadata not supplied by
 that Event instead of retaining stale values.
+
+The finite predicate `isBound(_event)` and the seven exact field forms for
+`name`, `type`, `sendid`, `origin`, `origintype`, `invokeid`, and `data`
+distinguish the absent startup Event from fields in a selected envelope.
+Unknown and nested field queries remain compile errors. Structured `data` is
+considered present through its CMeta schema/object witness even though it has
+no scalar string view.
 
 The selected Event remains current through all eventless microsteps in the
 same run-to-completion cycle. Initial eventless work has no current Event and

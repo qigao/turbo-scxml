@@ -594,6 +594,66 @@ spec("TurboSCXML private SCXML expressions") {
     scxml_expr_program_destroy(&program);
   }
 
+  it("reports required current Event field bindings") {
+    static const char *const expressions[] = {
+        "isBound(_event.name)",
+        "isBound(_event.type)",
+        "isBound(_event.sendid)",
+        "isBound(_event.origin)",
+        "isBound(_event.origintype)",
+        "isBound(_event.invokeid)",
+        "isBound(_event.data)"};
+    const scxml_expr_system_values unbound_event = {
+        .event_send_id = {"", 0u},
+        .event_origin = {"", 0u},
+        .event_origin_type = {"", 0u},
+        .event_invoke_id = {"", 0u},
+        .event_data = {"", 0u}};
+    const scxml_expr_system_values bound_event = {
+        .event_name = {"go", 2u},
+        .event_type = {"external", sizeof("external") - 1u},
+        .event_send_id = {"", 0u},
+        .event_origin = {"", 0u},
+        .event_origin_type = {"", 0u},
+        .event_invoke_id = {"", 0u},
+        .event_data = {NULL, 0u},
+        .event_data_schema = &root_data,
+        .event_data_object = &root};
+    state_fixture states = {false};
+    size_t index;
+
+    for (index = 0u;
+         index < sizeof(expressions) / sizeof(expressions[0]); ++index) {
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
+      bool result = true;
+
+      check_equal(compile_expression(
+                      &program, expressions[index], NULL, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_equal(scxml_expr_evaluate_with_system(
+                      &program, &root, state_is_active, &states,
+                      &unbound_event, &result, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_false(result);
+      check_equal(scxml_expr_evaluate_with_system(
+                      &program, &root, state_is_active, &states,
+                      &bound_event, &result, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_true(result);
+
+      if (index == 0u) {
+        result = true;
+        check_equal(scxml_expr_evaluate_with_system(
+                        &program, &root, state_is_active, &states,
+                        NULL, &result, &diagnostic),
+                    SCXML_EXPR_EVALUATION_ERROR);
+        check_true(result);
+      }
+      scxml_expr_program_destroy(&program);
+    }
+  }
+
   it("reports startup system-variable bindings") {
     static const char *const expressions[] = {
         "isBound(_name)",
@@ -851,8 +911,8 @@ spec("TurboSCXML private SCXML expressions") {
     static const char *const invalid[] = {
         "order.missing == 1", "order.count", "true &&", "In(active)",
         "In(\"missing\")", "label == 1", "isBound()",
-        "isBound(_event.name)", "isBound(other)",
-        "isBound(_ioprocessors.scxml)"};
+        "isBound(_event.unknown)", "isBound(_event.data.sequence)",
+        "isBound(other)", "isBound(_ioprocessors.scxml)"};
     static const scxml_expr_status expected[] = {
         SCXML_EXPR_UNKNOWN_LOCATION,
         SCXML_EXPR_TYPE_MISMATCH,
@@ -860,6 +920,7 @@ spec("TurboSCXML private SCXML expressions") {
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_UNKNOWN_LOCATION,
         SCXML_EXPR_TYPE_MISMATCH,
+        SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
