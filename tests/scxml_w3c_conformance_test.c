@@ -3271,6 +3271,26 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test403c.scxml"));
     }
 
+    it("test 403c keeps one wildcard transition across selection rounds") {
+        static const char wildcard_transition[] = "<transition event=\"*\"";
+        char path[W3C_FIXTURE_PATH_CAPACITY];
+        char *source = NULL;
+        size_t source_size = 0u;
+        int path_size = snprintf(path, sizeof(path), "%s/%s",
+                                 SCXML_W3C_FIXTURE_DIR, "test403c.scxml");
+
+        check_true(path_size >= 0 && (size_t)path_size < sizeof(path));
+        source = tt_read_file(path, &source_size);
+        check_not_null(source);
+        if (source != NULL) {
+            const char *first = strstr(source, wildcard_transition);
+            check_not_null(first);
+            if (first != NULL)
+                check_null(strstr(first + 1u, wildcard_transition));
+        }
+        free(source);
+    }
+
     it("test 404 executes exits in exit order before transition content") {
         check_w3c_fixture("test404.scxml");
     }

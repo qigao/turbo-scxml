@@ -26,13 +26,14 @@
         </transition>
       </state>
       <state id="p0s4">
-        <transition event="*" cond="_event.name == &quot;event1&quot;">
-          <assign location="sequence" expr="1"/>
-          <raise event="wildcard.one"/>
-        </transition>
-        <transition event="*" cond="_event.name == &quot;event2&quot;">
-          <assign location="sequence" expr="3"/>
-          <raise event="wildcard.two"/>
+        <transition event="*">
+          <if cond="_event.name == &quot;event1&quot;">
+            <assign location="sequence" expr="1"/>
+            <raise event="wildcard.one"/>
+            <else/>
+            <assign location="sequence" expr="3"/>
+            <raise event="wildcard.two"/>
+          </if>
         </transition>
       </state>
     </parallel>

@@ -206,6 +206,8 @@ both the root-ancestor action and any duplicate selected marker. Test 403c
 requires the exact `wildcard.one`, `targetless.two`, `descendant.two`,
 `wildcard.two` trace, so a dropped compatible transition, retained conflicting
 transition, or reordered selected action reaches `fail` or cannot complete.
+The same `event="*"` transition branches its executable content on
+`_event.name`, so it must be selected independently for both source Events.
 The only omitted mechanism is 403c's one-second generator liveness timeout;
 the bounded local harness rejects non-terminal execution synchronously. These
 fixtures retain the assertion witness; they do not certify the full W3C suite.
