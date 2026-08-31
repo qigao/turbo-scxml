@@ -36,6 +36,7 @@ foreach(required_target IN ITEMS
 endforeach()
 
 add_library(turbo_scxml STATIC
+  src/scxml_ast.c
   src/scxml_analyze.c
   src/scxml_runtime.c
   src/scxml_emit.c

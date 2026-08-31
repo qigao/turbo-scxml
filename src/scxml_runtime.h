@@ -7,23 +7,12 @@ scxml_delayed_send *scxml_runtime_find_delayed_send_locked(
     scxml_session_impl *session, const char *id,
     size_t id_size, size_t *out_index);
 void scxml_runtime_increment_u64(uint64_t *value);
-cflow_statechart_stable_transaction_result
-scxml_runtime_start_stable_invocations_transaction(
-    void *user,
-    const cflow_statechart_stable_transaction_context *context,
-    const char **out_error);
-cflow_statechart_external_preprocess_result
-scxml_runtime_preprocess_invocation_external(
-    void *user, const cflow_statechart_instance_hook_context *context,
-    const cflow_event_view *event, uint64_t source_token,
+cflow_statechart_host_result scxml_runtime_host_transaction(
+    void *user, cflow_statechart_host_context *context,
     const char **out_error);
 void scxml_runtime_destroy_event_data_object(
     const cmeta_data_desc *schema, void *object);
 void scxml_runtime_clear_current_event_metadata(scxml_session_impl *session);
-bool scxml_runtime_observe_event(
-    void *user, const cflow_statechart_instance_hook_context *context,
-    const cflow_statechart_observed_event *event,
-    const char **out_error);
 bool scxml_runtime_metadata_field_valid(const char *data, size_t size);
 scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     scxml_session_impl *session, const scxml_event_metadata *metadata,

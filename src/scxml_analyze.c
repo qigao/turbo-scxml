@@ -157,10 +157,10 @@ const scxml_name_ref *scxml_analyze_find_earliest_duplicate(
 }
 
 int scxml_analyze_compare_node_ref(const void *left, const void *right) {
-    const uintptr_t left_node =
-        (uintptr_t)((const scxml_node_ref *)left)->node;
-    const uintptr_t right_node =
-        (uintptr_t)((const scxml_node_ref *)right)->node;
+    const scxml_ast_node_id left_node =
+        ((const scxml_node_ref *)left)->node_id;
+    const scxml_ast_node_id right_node =
+        ((const scxml_node_ref *)right)->node_id;
     return left_node < right_node ? -1 : left_node > right_node ? 1 : 0;
 }
 
@@ -347,34 +347,8 @@ bool scxml_analyze_parse_null_in_condition(
     return cursor == value.size && is_xml_ncname(*out_state);
 }
 
-scxml_element_kind scxml_analyze_element_kind(turbo_xml_node node) {
-    const turbo_xml_string_view name = turbo_xml_node_local_name(node);
-    if (scxml_analyze_view_equal_raw(name, "scxml")) return SCXML_ELEMENT_SCXML;
-    if (scxml_analyze_view_equal_raw(name, "state")) return SCXML_ELEMENT_STATE;
-    if (scxml_analyze_view_equal_raw(name, "parallel")) return SCXML_ELEMENT_PARALLEL;
-    if (scxml_analyze_view_equal_raw(name, "transition")) return SCXML_ELEMENT_TRANSITION;
-    if (scxml_analyze_view_equal_raw(name, "initial")) return SCXML_ELEMENT_INITIAL;
-    if (scxml_analyze_view_equal_raw(name, "final")) return SCXML_ELEMENT_FINAL;
-    if (scxml_analyze_view_equal_raw(name, "history")) return SCXML_ELEMENT_HISTORY;
-    if (scxml_analyze_view_equal_raw(name, "onentry")) return SCXML_ELEMENT_ONENTRY;
-    if (scxml_analyze_view_equal_raw(name, "onexit")) return SCXML_ELEMENT_ONEXIT;
-    if (scxml_analyze_view_equal_raw(name, "raise")) return SCXML_ELEMENT_RAISE;
-    if (scxml_analyze_view_equal_raw(name, "send")) return SCXML_ELEMENT_SEND;
-    if (scxml_analyze_view_equal_raw(name, "cancel")) return SCXML_ELEMENT_CANCEL;
-    if (scxml_analyze_view_equal_raw(name, "log")) return SCXML_ELEMENT_LOG;
-    if (scxml_analyze_view_equal_raw(name, "assign")) return SCXML_ELEMENT_ASSIGN;
-    if (scxml_analyze_view_equal_raw(name, "foreach")) return SCXML_ELEMENT_FOREACH;
-    if (scxml_analyze_view_equal_raw(name, "if")) return SCXML_ELEMENT_IF;
-    if (scxml_analyze_view_equal_raw(name, "elseif")) return SCXML_ELEMENT_ELSEIF;
-    if (scxml_analyze_view_equal_raw(name, "else")) return SCXML_ELEMENT_ELSE;
-    if (scxml_analyze_view_equal_raw(name, "invoke")) return SCXML_ELEMENT_INVOKE;
-    if (scxml_analyze_view_equal_raw(name, "finalize")) return SCXML_ELEMENT_FINALIZE;
-    if (scxml_analyze_view_equal_raw(name, "content")) return SCXML_ELEMENT_CONTENT;
-    if (scxml_analyze_view_equal_raw(name, "param")) return SCXML_ELEMENT_PARAM;
-    if (scxml_analyze_view_equal_raw(name, "datamodel")) return SCXML_ELEMENT_DATAMODEL;
-    if (scxml_analyze_view_equal_raw(name, "data")) return SCXML_ELEMENT_DATA;
-    if (scxml_analyze_view_equal_raw(name, "donedata")) return SCXML_ELEMENT_DONEDATA;
-    return SCXML_ELEMENT_UNKNOWN;
+scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node) {
+    return node.impl != NULL ? node.impl->kind : SCXML_ELEMENT_UNKNOWN;
 }
 
 bool scxml_analyze_is_state_element(scxml_element_kind kind) {
@@ -382,22 +356,10 @@ bool scxml_analyze_is_state_element(scxml_element_kind kind) {
            kind == SCXML_ELEMENT_FINAL;
 }
 
-turbo_xml_attribute scxml_analyze_find_attribute(turbo_xml_node node,
+scxml_syntax_attribute scxml_analyze_find_attribute(scxml_syntax_node node,
                                           const char *local_name) {
-    turbo_xml_attribute result = {NULL};
-    size_t index;
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        if (!is_empty_view(namespace_uri)) continue;
-        if (scxml_analyze_view_equal_raw(turbo_xml_attribute_local_name(attribute),
-                           local_name)) {
-            return attribute;
-        }
-    }
-    return result;
+    return scxml_syntax_node_find_attribute(
+        node, scxml_ast_attribute_kind_from_name(local_name));
 }
 
 static bool attribute_allowed(scxml_element_kind kind,
@@ -487,20 +449,20 @@ static bool attribute_allowed(scxml_element_kind kind,
 }
 
 scxml_status scxml_analyze_validate_element_attributes(
-    scxml_build *build, turbo_xml_node node, scxml_element_kind kind) {
+    scxml_build *build, scxml_syntax_node node, scxml_element_kind kind) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_attribute_count(node); ++index) {
+        const scxml_syntax_attribute attribute =
+            scxml_syntax_node_attribute_at(node, index);
         const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
+            scxml_syntax_attribute_namespace_uri(attribute);
         const turbo_xml_string_view name =
-            turbo_xml_attribute_local_name(attribute);
+            scxml_syntax_attribute_local_name(attribute);
         if (!is_empty_view(namespace_uri)) continue;
         if (kind == SCXML_ELEMENT_LOG && scxml_analyze_view_equal_raw(name, "expr")) {
             return scxml_analyze_fail(
                 build, SCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                scxml_syntax_attribute_location(attribute),
                 "SCXML null data model has no log value expressions");
         }
         if (!attribute_allowed(kind, name)) {
@@ -509,7 +471,7 @@ scxml_status scxml_analyze_validate_element_attributes(
                 kind == SCXML_ELEMENT_LOG || kind == SCXML_ELEMENT_ASSIGN
                     ? SCXML_INVALID_STRUCTURE
                     : SCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                scxml_syntax_attribute_location(attribute),
                 kind == SCXML_ELEMENT_LOG || kind == SCXML_ELEMENT_ASSIGN
                     ? "executable element has an invalid unqualified attribute"
                     : "unsupported unqualified SCXML attribute");
@@ -519,32 +481,32 @@ scxml_status scxml_analyze_validate_element_attributes(
 }
 
 static scxml_status require_scxml_element(scxml_build *build,
-                                                turbo_xml_node node,
+                                                scxml_syntax_node node,
                                                 scxml_element_kind *out_kind) {
     const turbo_xml_string_view namespace_uri =
-        turbo_xml_node_namespace_uri(node);
+        scxml_syntax_node_namespace_uri(node);
     const scxml_element_kind kind = scxml_analyze_element_kind(node);
     if (!scxml_analyze_view_equal_raw(namespace_uri, SCXML_NAMESPACE)) {
         return scxml_analyze_fail(build, SCXML_INVALID_NAMESPACE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "SCXML elements must use the W3C SCXML namespace");
     }
     if (kind == SCXML_ELEMENT_UNKNOWN) {
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "unsupported SCXML element");
     }
     *out_kind = kind;
     return scxml_analyze_validate_element_attributes(build, node, kind);
 }
 
-size_t scxml_analyze_element_child_count(turbo_xml_node node,
+size_t scxml_analyze_element_child_count(scxml_syntax_node node,
                                   scxml_element_kind wanted) {
     size_t count = 0u;
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) == TURBO_XML_ELEMENT &&
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
             scxml_analyze_element_kind(child) == wanted) {
             ++count;
         }
@@ -552,12 +514,12 @@ size_t scxml_analyze_element_child_count(turbo_xml_node node,
     return count;
 }
 
-static turbo_xml_node first_real_child(turbo_xml_node node) {
+static scxml_syntax_node first_real_child(scxml_syntax_node node) {
     size_t index;
-    turbo_xml_node empty = {NULL};
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) == TURBO_XML_ELEMENT &&
+    scxml_syntax_node empty = {NULL};
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
             scxml_analyze_is_state_element(scxml_analyze_element_kind(child))) {
             return child;
         }
@@ -663,28 +625,28 @@ bool scxml_analyze_completion_descriptor_matches(
 }
 
 static scxml_status analyze_raise(scxml_build *build,
-                                        turbo_xml_node node,
+                                        scxml_syntax_node node,
                                         scxml_counts *counts) {
-    const turbo_xml_attribute event_attribute = scxml_analyze_find_attribute(node, "event");
+    const scxml_syntax_attribute event_attribute = scxml_analyze_find_attribute(node, "event");
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_RAISE);
     size_t index;
     if (status != SCXML_OK) return status;
     if (event_attribute.impl == NULL) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "raise requires one event NMTOKEN");
     }
-    if (!scxml_analyze_is_xml_nmtoken(turbo_xml_attribute_value(event_attribute))) {
+    if (!scxml_analyze_is_xml_nmtoken(scxml_syntax_attribute_value(event_attribute))) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(event_attribute),
+                          scxml_syntax_attribute_location(event_attribute),
                           "raise event must be one XML NMTOKEN");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) != TURBO_XML_COMMENT) {
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "raise cannot contain executable or text content");
         }
     }
@@ -693,7 +655,7 @@ static scxml_status analyze_raise(scxml_build *build,
         !scxml_analyze_checked_add(counts->event_occurrences, 1u,
                      &counts->event_occurrences)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_attribute_location(event_attribute),
+                          scxml_syntax_attribute_location(event_attribute),
                           "raise step count overflow");
     }
     return SCXML_OK;
@@ -763,7 +725,7 @@ static bool count_retained_view(turbo_xml_string_view value,
 }
 
 static scxml_status validate_empty_effect(
-    scxml_build *build, turbo_xml_node node, const char *message);
+    scxml_build *build, scxml_syntax_node node, const char *message);
 
 bool scxml_analyze_cmeta_content_kind_is_scalar(cmeta_data_kind kind) {
     return kind == CMETA_DATA_BOOL || kind == CMETA_DATA_SINT ||
@@ -772,21 +734,21 @@ bool scxml_analyze_cmeta_content_kind_is_scalar(cmeta_data_kind kind) {
 }
 
 scxml_status scxml_analyze_inspect_inline_content(
-    scxml_build *build, turbo_xml_node content,
+    scxml_build *build, scxml_syntax_node content,
     scxml_content_kind *out_kind, size_t *out_size) {
     size_t index;
     turbo_xml_status xml_status;
     bool has_markup = false;
     if (build == NULL || out_kind == NULL || out_size == NULL)
         return SCXML_INVALID_ARGUMENT;
-    for (index = 0u; index < turbo_xml_node_child_count(content); ++index) {
-        if (turbo_xml_node_type(turbo_xml_node_child_at(content, index)) !=
+    for (index = 0u; index < scxml_syntax_node_child_count(content); ++index) {
+        if (scxml_syntax_node_type(scxml_syntax_node_child_at(content, index)) !=
             TURBO_XML_TEXT) {
             has_markup = true;
             break;
         }
     }
-    xml_status = turbo_xml_serialize_children(
+    xml_status = scxml_syntax_serialize_children(
         content, NULL, 0u, build->limits.max_name_bytes, out_size);
     if (xml_status != TURBO_XML_OK) {
         return scxml_analyze_fail(
@@ -796,7 +758,7 @@ scxml_status scxml_analyze_inspect_inline_content(
                 : xml_status == TURBO_XML_ALLOCATION_FAILED
                     ? SCXML_ALLOCATION_FAILED
                     : SCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(content),
+            scxml_syntax_node_location(content),
             "SCXML inline content serialization failed");
     }
     *out_kind = has_markup ? SCXML_CONTENT_XML_UTF8
@@ -805,11 +767,11 @@ scxml_status scxml_analyze_inspect_inline_content(
 }
 
 static bool content_expression_requires_v3(
-    const scxml_build *build, turbo_xml_attribute expression) {
+    const scxml_build *build, scxml_syntax_attribute expression) {
     scxml_location location = {0};
     scxml_expr_diagnostic diagnostic = {0};
     const turbo_xml_string_view source =
-        turbo_xml_attribute_value(expression);
+        scxml_syntax_attribute_value(expression);
     return build != NULL && expression.impl != NULL &&
         scxml_location_compile(
             &location, source.data, source.size, build->cmeta_root,
@@ -820,22 +782,22 @@ static bool content_expression_requires_v3(
 }
 
 static scxml_status analyze_param(
-    scxml_build *build, turbo_xml_node node) {
-    const turbo_xml_attribute name = scxml_analyze_find_attribute(node, "name");
-    const turbo_xml_attribute expression = scxml_analyze_find_attribute(node, "expr");
-    const turbo_xml_attribute location = scxml_analyze_find_attribute(node, "location");
+    scxml_build *build, scxml_syntax_node node) {
+    const scxml_syntax_attribute name = scxml_analyze_find_attribute(node, "name");
+    const scxml_syntax_attribute expression = scxml_analyze_find_attribute(node, "expr");
+    const scxml_syntax_attribute location = scxml_analyze_find_attribute(node, "location");
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_PARAM);
     if (status != SCXML_OK) return status;
     if (build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "param requires the CMeta data model");
     if (name.impl == NULL ||
-        is_empty_view(turbo_xml_attribute_value(name)) ||
+        is_empty_view(scxml_syntax_attribute_value(name)) ||
         ((expression.impl == NULL) == (location.impl == NULL)))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "param requires a name and exactly one expr or location");
     if (validate_empty_effect(build, node,
                               "param cannot contain child content") !=
@@ -845,7 +807,7 @@ static scxml_status analyze_param(
 }
 
 static scxml_status analyze_send_content(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     bool *out_has_data, bool *out_requires_v3,
     size_t *out_param_count) {
     size_t index;
@@ -853,15 +815,15 @@ static scxml_status analyze_send_content(
     *out_has_data = false;
     *out_requires_v3 = false;
     *out_param_count = 0u;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child)))) {
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child)))) {
             continue;
         }
-        if (turbo_xml_node_type(child) == TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT) {
             scxml_status namespace_status = require_scxml_element(
                 build, child, &child_kind);
             if (namespace_status != SCXML_OK)
@@ -873,29 +835,29 @@ static scxml_status analyze_send_content(
             scxml_status status;
             if (found)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "send content is mutually exclusive with param");
             status = analyze_param(build, child);
             if (status != SCXML_OK) return status;
             if (!scxml_analyze_checked_add(*out_param_count, 1u, out_param_count))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "send param count overflow");
             continue;
         }
         if (child_kind != SCXML_ELEMENT_CONTENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "send accepts only param or bounded scalar content");
         }
         if (found || *out_param_count != 0u) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "send content is unique and mutually exclusive with param");
         }
         found = true;
         {
-            const turbo_xml_attribute expression =
+            const scxml_syntax_attribute expression =
                 scxml_analyze_find_attribute(child, "expr");
             size_t content_size = 0u;
             size_t retained = 0u;
@@ -908,16 +870,16 @@ static scxml_status analyze_send_content(
             if (status != SCXML_OK) return status;
             if (expression.impl != NULL) {
                 if (build->data_model != SCXML_DATA_MODEL_CMETA ||
-                    is_empty_view(turbo_xml_attribute_value(expression))) {
+                    is_empty_view(scxml_syntax_attribute_value(expression))) {
                     return scxml_analyze_fail(
                         build, SCXML_UNSUPPORTED_FEATURE,
-                        turbo_xml_attribute_location(expression),
+                        scxml_syntax_attribute_location(expression),
                         "send content expr requires the CMeta data model");
                 }
                 if (content_size != 0u) {
                     return scxml_analyze_fail(
                         build, SCXML_INVALID_STRUCTURE,
-                        turbo_xml_node_location(child),
+                        scxml_syntax_node_location(child),
                         "content expr cannot have inline child content");
                 }
                 *out_requires_v3 = content_expression_requires_v3(
@@ -928,7 +890,7 @@ static scxml_status analyze_send_content(
                                  &counts->effect_string_bytes)) {
                     return scxml_analyze_fail(
                         build, SCXML_LIMIT_EXCEEDED,
-                        turbo_xml_node_location(child),
+                        scxml_syntax_node_location(child),
                         "send inline content storage size overflow");
                 }
                 *out_requires_v3 = true;
@@ -940,32 +902,32 @@ static scxml_status analyze_send_content(
 }
 
 static scxml_status analyze_done_data(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts) {
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
     size_t index;
     bool found_content = false;
     bool has_expression = false;
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_DONEDATA);
     if (status != SCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        turbo_xml_attribute expression;
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        scxml_syntax_attribute expression;
         size_t content_size = 0u;
         size_t retained = 0u;
         scxml_content_kind content_kind;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
             scxml_analyze_element_kind(child) != SCXML_ELEMENT_CONTENT)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "donedata admits exactly one content child");
         expression = scxml_analyze_find_attribute(child, "expr");
         if (found_content)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "donedata accepts exactly one content child");
         found_content = true;
         status = scxml_analyze_validate_element_attributes(
@@ -977,19 +939,19 @@ static scxml_status analyze_done_data(
         if (expression.impl != NULL) {
             has_expression = true;
             if (build->data_model != SCXML_DATA_MODEL_CMETA ||
-                is_empty_view(turbo_xml_attribute_value(expression)))
+                is_empty_view(scxml_syntax_attribute_value(expression)))
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "donedata content expr requires the CMeta data model");
             if (content_size != 0u)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "donedata content expr cannot have inline children");
             if (content_expression_requires_v3(build, expression))
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_attribute_location(expression),
+                    scxml_syntax_attribute_location(expression),
                     "structured donedata requires the completion payload ABI");
         } else {
             if (content_size > SCXML_EVENT_METADATA_CAPACITY ||
@@ -998,13 +960,13 @@ static scxml_status analyze_done_data(
                              &counts->effect_string_bytes))
                 return scxml_analyze_fail(
                     build, SCXML_LIMIT_EXCEEDED,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "donedata inline content exceeds the Event metadata bound");
         }
     }
     if (!found_content)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "donedata requires one content child");
     if (!scxml_analyze_checked_add(counts->done_data_rows, 1u,
                      &counts->done_data_rows) ||
@@ -1012,61 +974,61 @@ static scxml_status analyze_done_data(
          !scxml_analyze_checked_add(counts->dynamic_expression_rows, 1u,
                       &counts->dynamic_expression_rows)))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "donedata descriptor count overflow");
     return SCXML_OK;
 }
 
 static scxml_status validate_empty_effect(
-    scxml_build *build, turbo_xml_node node, const char *message) {
+    scxml_build *build, scxml_syntax_node node, const char *message) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(child), message);
+                          scxml_syntax_node_location(child), message);
     }
     return SCXML_OK;
 }
 
 static scxml_status analyze_send(scxml_build *build,
-                                       turbo_xml_node node,
+                                       scxml_syntax_node node,
                                        scxml_counts *counts) {
-    const turbo_xml_attribute event_attribute = scxml_analyze_find_attribute(node, "event");
-    const turbo_xml_attribute event_expr_attribute =
+    const scxml_syntax_attribute event_attribute = scxml_analyze_find_attribute(node, "event");
+    const scxml_syntax_attribute event_expr_attribute =
         scxml_analyze_find_attribute(node, "eventexpr");
-    const turbo_xml_attribute target_attribute = scxml_analyze_find_attribute(node, "target");
-    const turbo_xml_attribute target_expr_attribute =
+    const scxml_syntax_attribute target_attribute = scxml_analyze_find_attribute(node, "target");
+    const scxml_syntax_attribute target_expr_attribute =
         scxml_analyze_find_attribute(node, "targetexpr");
-    const turbo_xml_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
-    const turbo_xml_attribute type_expr_attribute =
+    const scxml_syntax_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
+    const scxml_syntax_attribute type_expr_attribute =
         scxml_analyze_find_attribute(node, "typeexpr");
-    const turbo_xml_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
-    const turbo_xml_attribute delay_attribute = scxml_analyze_find_attribute(node, "delay");
-    const turbo_xml_attribute delay_expr_attribute =
+    const scxml_syntax_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
+    const scxml_syntax_attribute delay_attribute = scxml_analyze_find_attribute(node, "delay");
+    const scxml_syntax_attribute delay_expr_attribute =
         scxml_analyze_find_attribute(node, "delayexpr");
-    const turbo_xml_attribute idlocation_attribute =
+    const scxml_syntax_attribute idlocation_attribute =
         scxml_analyze_find_attribute(node, "idlocation");
-    const turbo_xml_attribute namelist_attribute =
+    const scxml_syntax_attribute namelist_attribute =
         scxml_analyze_find_attribute(node, "namelist");
     const turbo_xml_string_view event =
         event_attribute.impl != NULL
-            ? turbo_xml_attribute_value(event_attribute)
+            ? scxml_syntax_attribute_value(event_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     const turbo_xml_string_view target =
         target_attribute.impl != NULL
-            ? turbo_xml_attribute_value(target_attribute)
+            ? scxml_syntax_attribute_value(target_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     const turbo_xml_string_view type =
         type_attribute.impl != NULL
-            ? turbo_xml_attribute_value(type_attribute)
+            ? scxml_syntax_attribute_value(type_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     const turbo_xml_string_view id =
         id_attribute.impl != NULL
-            ? turbo_xml_attribute_value(id_attribute)
+            ? scxml_syntax_attribute_value(id_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     uint64_t delay_ms = 0u;
     bool internal_target;
@@ -1085,8 +1047,8 @@ static scxml_status analyze_send(scxml_build *build,
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
             event_attribute.impl != NULL
-                ? turbo_xml_attribute_location(event_attribute)
-                : turbo_xml_node_location(node),
+                ? scxml_syntax_attribute_location(event_attribute)
+                : scxml_syntax_node_location(node),
             "send event and eventexpr are mutually exclusive");
     }
     if ((target_attribute.impl != NULL && target_expr_attribute.impl != NULL) ||
@@ -1094,7 +1056,7 @@ static scxml_status analyze_send(scxml_build *build,
         (delay_attribute.impl != NULL && delay_expr_attribute.impl != NULL) ||
         (id_attribute.impl != NULL && idlocation_attribute.impl != NULL))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send literal and expression attributes are mutually exclusive");
     if ((event_expr_attribute.impl != NULL ||
          target_expr_attribute.impl != NULL ||
@@ -1104,17 +1066,17 @@ static scxml_status analyze_send(scxml_build *build,
          namelist_attribute.impl != NULL) &&
         build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send expressions require the CMeta data model");
     if (idlocation_attribute.impl != NULL &&
-        is_empty_view(turbo_xml_attribute_value(idlocation_attribute)))
+        is_empty_view(scxml_syntax_attribute_value(idlocation_attribute)))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(idlocation_attribute),
+                          scxml_syntax_attribute_location(idlocation_attribute),
                           "send idlocation must be non-empty");
     if ((target_attribute.impl != NULL && target.size == 0u) ||
         (type_attribute.impl != NULL && type.size == 0u) ||
         (id_attribute.impl != NULL && !is_xml_ncname(id))) {
-        turbo_xml_attribute owner = target_attribute.impl != NULL &&
+        scxml_syntax_attribute owner = target_attribute.impl != NULL &&
                                             target.size == 0u
                                         ? target_attribute
                                     : type_attribute.impl != NULL &&
@@ -1122,20 +1084,20 @@ static scxml_status analyze_send(scxml_build *build,
                                         ? type_attribute
                                         : id_attribute;
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(owner),
+                          scxml_syntax_attribute_location(owner),
                           "send literal attributes must be non-empty and id must be an XML NCName");
     }
     if (delay_attribute.impl != NULL &&
-        !scxml_analyze_parse_delay_ms(turbo_xml_attribute_value(delay_attribute),
+        !scxml_analyze_parse_delay_ms(scxml_syntax_attribute_value(delay_attribute),
                         &delay_ms)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(delay_attribute),
+                          scxml_syntax_attribute_location(delay_attribute),
                           "send delay must be an unsigned ms or s literal with millisecond precision");
     }
     if (delay_ms != 0u && id_attribute.impl == NULL &&
         idlocation_attribute.impl == NULL) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(delay_attribute),
+                          scxml_syntax_attribute_location(delay_attribute),
                           "delayed send requires id or idlocation");
     }
     status = analyze_send_content(
@@ -1145,44 +1107,44 @@ static scxml_status analyze_send(scxml_build *build,
     if (!has_data && event_attribute.impl == NULL &&
         event_expr_attribute.impl == NULL)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send requires exactly one event, eventexpr, or content");
     if (has_data &&
         (namelist_attribute.impl != NULL || param_count != 0u))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send content is mutually exclusive with namelist and param");
     if (namelist_attribute.impl != NULL) {
         const turbo_xml_string_view namelist =
-            turbo_xml_attribute_value(namelist_attribute);
+            scxml_syntax_attribute_value(namelist_attribute);
         while (scxml_analyze_token_next(namelist, &token_cursor, &token)) {
             if (!scxml_analyze_checked_add(payload_count, 1u, &payload_count) ||
                 !count_retained_view(token,
                                      &counts->effect_string_bytes))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_attribute_location(
+                                  scxml_syntax_attribute_location(
                                       namelist_attribute),
                                   "send namelist storage size overflow");
         }
         if (payload_count == 0u)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_attribute_location(
+                              scxml_syntax_attribute_location(
                                   namelist_attribute),
                               "send namelist must contain one location");
     }
     for (child_index = 0u;
-         child_index < turbo_xml_node_child_count(node); ++child_index) {
-        const turbo_xml_node child =
-            turbo_xml_node_child_at(node, child_index);
-        turbo_xml_attribute name;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
+         child_index < scxml_syntax_node_child_count(node); ++child_index) {
+        const scxml_syntax_node child =
+            scxml_syntax_node_child_at(node, child_index);
+        scxml_syntax_attribute name;
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
             scxml_analyze_element_kind(child) != SCXML_ELEMENT_PARAM)
             continue;
         name = scxml_analyze_find_attribute(child, "name");
-        if (!count_retained_view(turbo_xml_attribute_value(name),
+        if (!count_retained_view(scxml_syntax_attribute_value(name),
                                  &counts->effect_string_bytes))
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_attribute_location(name),
+                              scxml_syntax_attribute_location(name),
                               "send param name storage size overflow");
     }
     if (!scxml_analyze_checked_add(payload_count, param_count, &payload_count) ||
@@ -1190,7 +1152,7 @@ static scxml_status analyze_send(scxml_build *build,
         !scxml_analyze_checked_add(counts->payload_rows, payload_count,
                      &counts->payload_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send payload entry limit exceeded");
     if (payload_count > counts->max_payload_entries)
         counts->max_payload_entries = payload_count;
@@ -1199,12 +1161,12 @@ static scxml_status analyze_send(scxml_build *build,
     if (has_data && internal_target &&
         (delay_attribute.impl != NULL || delay_expr_attribute.impl != NULL))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "internal send content cannot be delayed");
     if (payload_count != 0u && internal_target)
         return scxml_analyze_fail(
             build, SCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_node_location(node),
+            scxml_syntax_node_location(node),
             "internal named-object payloads are not admitted by this scalar profile");
     if (!scxml_analyze_checked_add(counts->executable_steps, 1u,
                      &counts->executable_steps) ||
@@ -1221,7 +1183,7 @@ static scxml_status analyze_send(scxml_build *build,
         (id_attribute.impl != NULL &&
          !count_retained_view(id, &counts->effect_string_bytes))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send descriptor storage size overflow");
     }
     if ((event_expr_attribute.impl != NULL ||
@@ -1232,7 +1194,7 @@ static scxml_status analyze_send(scxml_build *build,
         !scxml_analyze_checked_add(counts->dynamic_expression_rows, 1u,
                      &counts->dynamic_expression_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "send expression count overflow");
     if ((target_expr_attribute.impl == NULL && !internal_target) ||
         delay_ms != 0u || delay_expr_attribute.impl != NULL ||
@@ -1251,14 +1213,14 @@ static scxml_status analyze_send(scxml_build *build,
 }
 
 static scxml_status analyze_cancel(scxml_build *build,
-                                         turbo_xml_node node,
+                                         scxml_syntax_node node,
                                          scxml_counts *counts) {
-    const turbo_xml_attribute sendid_attribute = scxml_analyze_find_attribute(node, "sendid");
-    const turbo_xml_attribute sendid_expr_attribute =
+    const scxml_syntax_attribute sendid_attribute = scxml_analyze_find_attribute(node, "sendid");
+    const scxml_syntax_attribute sendid_expr_attribute =
         scxml_analyze_find_attribute(node, "sendidexpr");
     const turbo_xml_string_view sendid =
         sendid_attribute.impl != NULL
-            ? turbo_xml_attribute_value(sendid_attribute)
+            ? scxml_syntax_attribute_value(sendid_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_CANCEL);
@@ -1269,14 +1231,14 @@ static scxml_status analyze_cancel(scxml_build *build,
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
             sendid_attribute.impl != NULL
-                ? turbo_xml_attribute_location(sendid_attribute)
-                : turbo_xml_node_location(node),
+                ? scxml_syntax_attribute_location(sendid_attribute)
+                : scxml_syntax_node_location(node),
             "cancel requires exactly one sendid or sendidexpr");
     }
     if (sendid_expr_attribute.impl != NULL &&
         build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_attribute_location(sendid_expr_attribute),
+                          scxml_syntax_attribute_location(sendid_expr_attribute),
                           "cancel sendidexpr requires the CMeta data model");
     status = validate_empty_effect(build, node, "cancel must be empty");
     if (status != SCXML_OK) return status;
@@ -1286,14 +1248,14 @@ static scxml_status analyze_cancel(scxml_build *build,
         (sendid_attribute.impl != NULL &&
          !count_retained_view(sendid, &counts->effect_string_bytes))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "cancel descriptor storage size overflow");
     }
     if (sendid_expr_attribute.impl != NULL &&
         !scxml_analyze_checked_add(counts->dynamic_expression_rows, 1u,
                      &counts->dynamic_expression_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "cancel expression count overflow");
     counts->requirements |= SCXML_REQUIREMENT_EVENT_IO |
                             SCXML_REQUIREMENT_DELAYED_SEND |
@@ -1302,28 +1264,28 @@ static scxml_status analyze_cancel(scxml_build *build,
 }
 
 static scxml_status analyze_executable_content(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     size_t conditional_depth, bool finalize_safe);
 
 static scxml_status analyze_log(scxml_build *build,
-                                      turbo_xml_node node,
+                                      scxml_syntax_node node,
                                       scxml_counts *counts) {
-    const turbo_xml_attribute label_attribute = scxml_analyze_find_attribute(node, "label");
+    const scxml_syntax_attribute label_attribute = scxml_analyze_find_attribute(node, "label");
     const turbo_xml_string_view label =
         label_attribute.impl != NULL
-            ? turbo_xml_attribute_value(label_attribute)
+            ? scxml_syntax_attribute_value(label_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     size_t retained_bytes;
     size_t index;
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_LOG);
     if (status != SCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) != TURBO_XML_COMMENT) {
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT) {
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
-                turbo_xml_node_location(child),
+                scxml_syntax_node_location(child),
                 "log cannot contain executable or text content");
         }
     }
@@ -1333,50 +1295,50 @@ static scxml_status analyze_log(scxml_build *build,
         !scxml_analyze_checked_add(counts->executable_steps, 1u,
                      &counts->executable_steps)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "log label storage size overflow");
     }
     if (counts->log_label_bytes > build->limits.max_name_bytes) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "log labels exceed max_name_bytes");
     }
     return SCXML_OK;
 }
 
 static scxml_status analyze_assign(scxml_build *build,
-                                         turbo_xml_node node,
+                                         scxml_syntax_node node,
                                          scxml_counts *counts) {
-    const turbo_xml_attribute location = scxml_analyze_find_attribute(node, "location");
-    const turbo_xml_attribute expression = scxml_analyze_find_attribute(node, "expr");
+    const scxml_syntax_attribute location = scxml_analyze_find_attribute(node, "location");
+    const scxml_syntax_attribute expression = scxml_analyze_find_attribute(node, "expr");
     size_t index;
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_ASSIGN);
     if (status != SCXML_OK) return status;
     if (build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "assign requires the CMeta data model");
     if (location.impl == NULL ||
-        is_empty_view(turbo_xml_attribute_value(location)) ||
+        is_empty_view(scxml_syntax_attribute_value(location)) ||
         expression.impl == NULL ||
-        is_empty_view(turbo_xml_attribute_value(expression))) {
+        is_empty_view(scxml_syntax_attribute_value(expression))) {
         const turbo_xml_location failure_location =
             location.impl == NULL || expression.impl == NULL
-                ? turbo_xml_node_location(node)
+                ? scxml_syntax_node_location(node)
                 : location.impl != NULL &&
-                          is_empty_view(turbo_xml_attribute_value(location))
-                      ? turbo_xml_attribute_location(location)
-                      : turbo_xml_attribute_location(expression);
+                          is_empty_view(scxml_syntax_attribute_value(location))
+                      ? scxml_syntax_attribute_location(location)
+                      : scxml_syntax_attribute_location(expression);
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           failure_location,
                           "assign requires non-empty location and expr attributes");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) != TURBO_XML_COMMENT)
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "assign cannot contain child content");
     }
     if (!scxml_analyze_checked_add(counts->executable_steps, 1u,
@@ -1384,52 +1346,52 @@ static scxml_status analyze_assign(scxml_build *build,
         !scxml_analyze_checked_add(counts->assignment_rows, 1u,
                      &counts->assignment_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "assignment descriptor count overflow");
     return SCXML_OK;
 }
 
 static scxml_status analyze_foreach(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     size_t executable_depth, bool finalize_safe) {
-    const turbo_xml_attribute array = scxml_analyze_find_attribute(node, "array");
-    const turbo_xml_attribute item = scxml_analyze_find_attribute(node, "item");
-    const turbo_xml_attribute index = scxml_analyze_find_attribute(node, "index");
+    const scxml_syntax_attribute array = scxml_analyze_find_attribute(node, "array");
+    const scxml_syntax_attribute item = scxml_analyze_find_attribute(node, "item");
+    const scxml_syntax_attribute index = scxml_analyze_find_attribute(node, "index");
     const size_t first_child_step = counts->executable_steps;
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_FOREACH);
     if (status != SCXML_OK) return status;
     if (build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "foreach requires the CMeta data model");
     if (finalize_safe)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "CMeta finalize foreach is not supported yet");
     if (array.impl == NULL ||
-        is_empty_view(turbo_xml_attribute_value(array)) ||
+        is_empty_view(scxml_syntax_attribute_value(array)) ||
         item.impl == NULL ||
-        is_empty_view(turbo_xml_attribute_value(item)) ||
+        is_empty_view(scxml_syntax_attribute_value(item)) ||
         (index.impl != NULL &&
-         is_empty_view(turbo_xml_attribute_value(index))))
+         is_empty_view(scxml_syntax_attribute_value(index))))
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
             array.impl == NULL || item.impl == NULL
-                ? turbo_xml_node_location(node)
+                ? scxml_syntax_node_location(node)
                 : array.impl != NULL &&
-                          is_empty_view(turbo_xml_attribute_value(array))
-                      ? turbo_xml_attribute_location(array)
+                          is_empty_view(scxml_syntax_attribute_value(array))
+                      ? scxml_syntax_attribute_location(array)
                       : item.impl != NULL &&
-                                is_empty_view(turbo_xml_attribute_value(item))
-                            ? turbo_xml_attribute_location(item)
-                            : turbo_xml_attribute_location(index),
+                                is_empty_view(scxml_syntax_attribute_value(item))
+                            ? scxml_syntax_attribute_location(item)
+                            : scxml_syntax_attribute_location(index),
             "foreach requires non-empty array and item, and a non-empty index when present");
     if (!scxml_analyze_checked_add(counts->executable_steps, 1u,
                      &counts->executable_steps) ||
         !scxml_analyze_checked_add(counts->foreach_rows, 1u, &counts->foreach_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "foreach descriptor count overflow");
     if (executable_depth > counts->max_conditional_depth)
         counts->max_conditional_depth = executable_depth;
@@ -1438,23 +1400,23 @@ static scxml_status analyze_foreach(
     if (status != SCXML_OK) return status;
     if (counts->executable_steps == first_child_step + 1u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "foreach requires executable child content");
     return SCXML_OK;
 }
 
 static scxml_status validate_condition_attribute(
-    scxml_build *build, turbo_xml_node node) {
-    const turbo_xml_attribute condition = scxml_analyze_find_attribute(node, "cond");
+    scxml_build *build, scxml_syntax_node node) {
+    const scxml_syntax_attribute condition = scxml_analyze_find_attribute(node, "cond");
     turbo_xml_string_view state;
     if (build->data_model == SCXML_DATA_MODEL_CMETA) {
         if (condition.impl == NULL ||
-            is_empty_view(turbo_xml_attribute_value(condition))) {
+            is_empty_view(scxml_syntax_attribute_value(condition))) {
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
                 condition.impl != NULL
-                    ? turbo_xml_attribute_location(condition)
-                    : turbo_xml_node_location(node),
+                    ? scxml_syntax_attribute_location(condition)
+                    : scxml_syntax_node_location(node),
                 "if and elseif require one non-empty CMeta condition");
         }
         return SCXML_OK;
@@ -1462,38 +1424,38 @@ static scxml_status validate_condition_attribute(
     if (condition.impl == NULL) {
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(node),
+            scxml_syntax_node_location(node),
             "if and elseif require one null-model In(id) condition");
     }
     if (!scxml_analyze_parse_null_in_condition(
-            turbo_xml_attribute_value(condition), &state)) {
+            scxml_syntax_attribute_value(condition), &state)) {
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(condition),
+            scxml_syntax_attribute_location(condition),
             "null-model condition must be In(id)");
     }
     return SCXML_OK;
 }
 
 static scxml_status validate_empty_marker(
-    scxml_build *build, turbo_xml_node node) {
+    scxml_build *build, scxml_syntax_node node) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(child),
+            scxml_syntax_node_location(child),
             "elseif and else markers must be empty");
     }
     return SCXML_OK;
 }
 
 static scxml_status analyze_conditional(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     size_t conditional_depth, bool finalize_safe) {
     size_t branch_count = 1u;
     size_t index;
@@ -1501,12 +1463,12 @@ static scxml_status analyze_conditional(
     scxml_status status;
 
     if (build->data_model == SCXML_DATA_MODEL_CMETA && finalize_safe) {
-        const turbo_xml_attribute condition = scxml_analyze_find_attribute(node, "cond");
+        const scxml_syntax_attribute condition = scxml_analyze_find_attribute(node, "cond");
         return scxml_analyze_fail(
             build, SCXML_UNSUPPORTED_FEATURE,
             condition.impl != NULL
-                ? turbo_xml_attribute_location(condition)
-                : turbo_xml_node_location(node),
+                ? scxml_syntax_attribute_location(condition)
+                : scxml_syntax_node_location(node),
             "CMeta finalize conditions are not supported yet");
     }
     status = validate_condition_attribute(build, node);
@@ -1515,21 +1477,21 @@ static scxml_status analyze_conditional(
             counts->executable_steps, 1u, &counts->executable_steps)) {
         return scxml_analyze_fail(
             build, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(node), "conditional step count overflow");
+            scxml_syntax_node_location(node), "conditional step count overflow");
     }
     if (conditional_depth > counts->max_conditional_depth)
         counts->max_conditional_depth = conditional_depth;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
             return scxml_analyze_fail(
                 build, SCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                scxml_syntax_node_location(child),
                 "conditional text content is not supported");
         }
         status = require_scxml_element(build, child, &child_kind);
@@ -1539,7 +1501,7 @@ static scxml_status analyze_conditional(
             if (saw_else) {
                 return scxml_analyze_fail(
                     build, SCXML_INVALID_STRUCTURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "elseif and else cannot follow else");
             }
             if (child_kind == SCXML_ELEMENT_ELSEIF) {
@@ -1553,14 +1515,14 @@ static scxml_status analyze_conditional(
             if (!scxml_analyze_checked_add(branch_count, 1u, &branch_count)) {
                 return scxml_analyze_fail(
                     build, SCXML_LIMIT_EXCEEDED,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "conditional branch count overflow");
             }
         } else if (child_kind == SCXML_ELEMENT_RAISE) {
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_raise(build, child, counts);
             if (status != SCXML_OK) return status;
@@ -1568,7 +1530,7 @@ static scxml_status analyze_conditional(
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_send(build, child, counts);
             if (status != SCXML_OK) return status;
@@ -1576,7 +1538,7 @@ static scxml_status analyze_conditional(
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_cancel(build, child, counts);
             if (status != SCXML_OK) return status;
@@ -1584,11 +1546,6 @@ static scxml_status analyze_conditional(
             status = analyze_log(build, child, counts);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_ASSIGN) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
-                    "finalize cannot mutate CMeta state");
             status = analyze_assign(build, child, counts);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_IF) {
@@ -1596,7 +1553,7 @@ static scxml_status analyze_conditional(
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth)) {
                 return scxml_analyze_fail(
                     build, SCXML_LIMIT_EXCEEDED,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "conditional nesting depth overflow");
             }
             status = analyze_conditional(
@@ -1606,7 +1563,7 @@ static scxml_status analyze_conditional(
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "foreach nesting depth overflow");
             status = analyze_foreach(
                 build, child, counts, next_depth, finalize_safe);
@@ -1614,7 +1571,7 @@ static scxml_status analyze_conditional(
         } else {
             return scxml_analyze_fail(
                 build, SCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                scxml_syntax_node_location(child),
                 "unsupported conditional executable element");
         }
     }
@@ -1622,27 +1579,27 @@ static scxml_status analyze_conditional(
                      &counts->conditional_branches)) {
         return scxml_analyze_fail(
             build, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(node),
+            scxml_syntax_node_location(node),
             "conditional branch count overflow");
     }
     return SCXML_OK;
 }
 
 static scxml_status analyze_executable_content(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     size_t conditional_depth, bool finalize_safe) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
         scxml_status status;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "executable block text content is not supported");
         }
         status = require_scxml_element(build, child, &child_kind);
@@ -1651,38 +1608,33 @@ static scxml_status analyze_executable_content(
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_raise(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_SEND) {
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_send(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_CANCEL) {
             if (finalize_safe)
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "finalize cannot raise or invoke external effects");
             status = analyze_cancel(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_LOG) {
             status = analyze_log(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_ASSIGN) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    turbo_xml_node_location(child),
-                    "finalize cannot mutate CMeta state");
             status = analyze_assign(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_IF) {
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth)) {
                 return scxml_analyze_fail(
                     build, SCXML_LIMIT_EXCEEDED,
-                    turbo_xml_node_location(child),
+                    scxml_syntax_node_location(child),
                     "conditional nesting depth overflow");
             }
             status = analyze_conditional(
@@ -1691,7 +1643,7 @@ static scxml_status analyze_executable_content(
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "foreach nesting depth overflow");
             status = analyze_foreach(
                 build, child, counts, next_depth, finalize_safe);
@@ -1699,11 +1651,11 @@ static scxml_status analyze_executable_content(
                    child_kind == SCXML_ELEMENT_ELSE) {
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
-                turbo_xml_node_location(child),
+                scxml_syntax_node_location(child),
                 "elseif and else are legal only inside if");
         } else {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "unsupported executable element");
         }
         if (status != SCXML_OK) return status;
@@ -1712,7 +1664,7 @@ static scxml_status analyze_executable_content(
 }
 
 static scxml_status analyze_executable_block(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts,
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
     bool finalize_safe, bool *out_nonempty) {
     const size_t first_step = counts->executable_steps;
     scxml_status status;
@@ -1726,7 +1678,7 @@ static scxml_status analyze_executable_block(
           !scxml_analyze_checked_add(counts->executable_blocks, 1u,
                        &counts->executable_blocks)))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "executable block count overflow");
     }
     *out_nonempty = counts->executable_steps != first_step;
@@ -1734,12 +1686,12 @@ static scxml_status analyze_executable_block(
 }
 
 static scxml_status analyze_transition(scxml_build *build,
-                                             turbo_xml_node node,
+                                             scxml_syntax_node node,
                                              bool require_default,
                                              scxml_counts *counts) {
-    turbo_xml_attribute event_attribute;
-    turbo_xml_attribute target_attribute;
-    turbo_xml_attribute condition_attribute;
+    scxml_syntax_attribute event_attribute;
+    scxml_syntax_attribute target_attribute;
+    scxml_syntax_attribute condition_attribute;
     turbo_xml_string_view value;
     turbo_xml_string_view token;
     size_t cursor = 0u;
@@ -1756,44 +1708,44 @@ static scxml_status analyze_transition(scxml_build *build,
     condition_attribute = scxml_analyze_find_attribute(node, "cond");
     if (require_default && event_attribute.impl != NULL) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(event_attribute),
+                          scxml_syntax_attribute_location(event_attribute),
                           "initial and history defaults must be eventless");
     }
     if (require_default && target_attribute.impl == NULL) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "initial and history defaults require one target");
     }
     if (require_default && condition_attribute.impl != NULL) {
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(condition_attribute),
+            scxml_syntax_attribute_location(condition_attribute),
             "initial and history default transitions cannot have cond");
     }
     if (condition_attribute.impl != NULL &&
         build->data_model == SCXML_DATA_MODEL_NULL) {
         turbo_xml_string_view state_name;
         if (!scxml_analyze_parse_null_in_condition(
-                turbo_xml_attribute_value(condition_attribute), &state_name)) {
+                scxml_syntax_attribute_value(condition_attribute), &state_name)) {
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(condition_attribute),
+                scxml_syntax_attribute_location(condition_attribute),
                 "null-model transition condition must be In(id)");
         }
     }
     if (target_attribute.impl != NULL) {
-        value = turbo_xml_attribute_value(target_attribute);
+        value = scxml_syntax_attribute_value(target_attribute);
         cursor = 0u;
         while (scxml_analyze_token_next(value, &cursor, &token)) ++target_count;
         if (target_count == 0u) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_attribute_location(target_attribute),
+                              scxml_syntax_attribute_location(target_attribute),
                               "transition target must contain an IDREF");
         }
     }
     token_count = 0u;
     if (event_attribute.impl != NULL) {
-        value = turbo_xml_attribute_value(event_attribute);
+        value = scxml_syntax_attribute_value(event_attribute);
         cursor = 0u;
         while (scxml_analyze_token_next(value, &cursor, &token)) {
             turbo_xml_string_view completed = {NULL, 0u};
@@ -1805,7 +1757,7 @@ static scxml_status analyze_transition(scxml_build *build,
                     token, &descriptor_base, &match_all)) {
                 return scxml_analyze_fail(
                     build, SCXML_INVALID_STRUCTURE,
-                    turbo_xml_attribute_location(event_attribute),
+                    scxml_syntax_attribute_location(event_attribute),
                     "event descriptor wildcard must be '*' or a trailing '.*'");
             }
             ++descriptor_count;
@@ -1813,13 +1765,13 @@ static scxml_status analyze_transition(scxml_build *build,
                 !scxml_analyze_checked_add(counts->event_occurrences, 1u,
                              &counts->event_occurrences)) {
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_attribute_location(event_attribute),
+                                  scxml_syntax_attribute_location(event_attribute),
                                   "event occurrence count overflow");
             }
         }
         if (token_count == 0u) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_attribute_location(event_attribute),
+                              scxml_syntax_attribute_location(event_attribute),
                               "event attribute must contain a descriptor");
         }
     } else {
@@ -1828,13 +1780,13 @@ static scxml_status analyze_transition(scxml_build *build,
     if (!scxml_analyze_checked_add(counts->event_descriptor_rows, descriptor_count,
                      &counts->event_descriptor_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "event descriptor count overflow");
     }
     if (!scxml_analyze_checked_add(counts->transition_rows, token_count,
                      &counts->transition_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "transition count overflow");
     }
     if (target_count != 0u) {
@@ -1845,7 +1797,7 @@ static scxml_status analyze_transition(scxml_build *build,
                          emitted_target_count,
                          &counts->transition_target_rows)) {
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_attribute_location(target_attribute),
+                              scxml_syntax_attribute_location(target_attribute),
                               "transition target count overflow");
         }
         if (!scxml_analyze_checked_multiply(target_count, descriptor_count,
@@ -1854,7 +1806,7 @@ static scxml_status analyze_transition(scxml_build *build,
                          emitted_target_count,
                          &counts->event_descriptor_target_rows)) {
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_attribute_location(target_attribute),
+                              scxml_syntax_attribute_location(target_attribute),
                               "descriptor target count overflow");
         }
     }
@@ -1862,7 +1814,7 @@ static scxml_status analyze_transition(scxml_build *build,
         !scxml_analyze_checked_add(counts->guard_rows, token_count,
                      &counts->guard_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_attribute_location(condition_attribute),
+                          scxml_syntax_attribute_location(condition_attribute),
                           "transition guard count overflow");
     }
     if (condition_attribute.impl != NULL &&
@@ -1870,7 +1822,7 @@ static scxml_status analyze_transition(scxml_build *build,
                      descriptor_count,
                      &counts->event_descriptor_guard_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_attribute_location(condition_attribute),
+                          scxml_syntax_attribute_location(condition_attribute),
                           "descriptor guard count overflow");
     }
     status = analyze_executable_block(
@@ -1880,7 +1832,7 @@ static scxml_status analyze_transition(scxml_build *build,
         !scxml_analyze_checked_add(counts->transition_action_rows, token_count,
                      &counts->transition_action_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "transition action count overflow");
     }
     if (nonempty &&
@@ -1888,7 +1840,7 @@ static scxml_status analyze_transition(scxml_build *build,
                      descriptor_count,
                      &counts->event_descriptor_action_rows)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "descriptor action count overflow");
     }
     return SCXML_OK;
@@ -1904,7 +1856,7 @@ static size_t decimal_digits(size_t value) {
 }
 
 static scxml_status analyze_invoke(
-    scxml_build *build, turbo_xml_node node,
+    scxml_build *build, scxml_syntax_node node,
     turbo_xml_string_view owner_id, size_t ordinal,
     scxml_counts *counts) {
     static const size_t generated_separator_size =
@@ -1913,27 +1865,27 @@ static scxml_status analyze_invoke(
         sizeof("done.invoke.") - 1u;
     static const size_t max_token_digits =
         sizeof("18446744073709551615") - 1u;
-    const turbo_xml_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
-    const turbo_xml_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
-    const turbo_xml_attribute src_attribute = scxml_analyze_find_attribute(node, "src");
-    const turbo_xml_attribute autoforward_attribute =
+    const scxml_syntax_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
+    const scxml_syntax_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
+    const scxml_syntax_attribute src_attribute = scxml_analyze_find_attribute(node, "src");
+    const scxml_syntax_attribute autoforward_attribute =
         scxml_analyze_find_attribute(node, "autoforward");
-    const turbo_xml_attribute type_expr_attribute =
+    const scxml_syntax_attribute type_expr_attribute =
         scxml_analyze_find_attribute(node, "typeexpr");
-    const turbo_xml_attribute src_expr_attribute =
+    const scxml_syntax_attribute src_expr_attribute =
         scxml_analyze_find_attribute(node, "srcexpr");
-    const turbo_xml_attribute idlocation_attribute =
+    const scxml_syntax_attribute idlocation_attribute =
         scxml_analyze_find_attribute(node, "idlocation");
-    const turbo_xml_attribute namelist_attribute =
+    const scxml_syntax_attribute namelist_attribute =
         scxml_analyze_find_attribute(node, "namelist");
     const turbo_xml_string_view id = id_attribute.impl != NULL
-        ? turbo_xml_attribute_value(id_attribute)
+        ? scxml_syntax_attribute_value(id_attribute)
         : (turbo_xml_string_view){NULL, 0u};
     const turbo_xml_string_view type = type_attribute.impl != NULL
-        ? turbo_xml_attribute_value(type_attribute)
+        ? scxml_syntax_attribute_value(type_attribute)
         : (turbo_xml_string_view){NULL, 0u};
     const turbo_xml_string_view src = src_attribute.impl != NULL
-        ? turbo_xml_attribute_value(src_attribute)
+        ? scxml_syntax_attribute_value(src_attribute)
         : (turbo_xml_string_view){NULL, 0u};
     size_t id_size = id.size;
     size_t done_size;
@@ -1953,7 +1905,7 @@ static scxml_status analyze_invoke(
     if (status != SCXML_OK) return status;
     if (id_attribute.impl != NULL && idlocation_attribute.impl != NULL)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke id and idlocation are mutually exclusive");
     if ((type_expr_attribute.impl != NULL ||
          src_expr_attribute.impl != NULL ||
@@ -1961,12 +1913,12 @@ static scxml_status analyze_invoke(
          namelist_attribute.impl != NULL) &&
         build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke expressions require the CMeta data model");
     if ((type_attribute.impl != NULL && type_expr_attribute.impl != NULL) ||
         (src_attribute.impl != NULL && src_expr_attribute.impl != NULL))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke literal and expression attributes are mutually exclusive");
     if (idlocation_attribute.impl != NULL) {
         status = scxml_emit_compile_cmeta_owned_string_location(
@@ -1981,74 +1933,74 @@ static scxml_status analyze_invoke(
                          &dynamic_done_size) ||
             dynamic_done_size > SCXML_EVENT_METADATA_CAPACITY) {
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_attribute_location(
+                              scxml_syntax_attribute_location(
                                   idlocation_attribute),
                               "dynamic invoke id or done Event exceeds metadata limit");
         }
     }
     if (id_attribute.impl != NULL && !is_xml_ncname(id)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(id_attribute),
+                          scxml_syntax_attribute_location(id_attribute),
                           "invoke id must be an XML NCName");
     }
     if (id_attribute.impl == NULL &&
         (!scxml_analyze_checked_add(owner_id.size, generated_separator_size, &id_size) ||
          !scxml_analyze_checked_add(id_size, decimal_digits(ordinal), &id_size))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "generated invoke id size overflow");
     }
     if ((type_attribute.impl != NULL && type.size == 0u) ||
         (src_attribute.impl != NULL && src.size == 0u)) {
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(
+            scxml_syntax_attribute_location(
                 type_attribute.impl != NULL && type.size == 0u
                     ? type_attribute : src_attribute),
             "invoke literal type and src must be nonempty");
     }
     if (autoforward_attribute.impl != NULL) {
         const turbo_xml_string_view value =
-            turbo_xml_attribute_value(autoforward_attribute);
+            scxml_syntax_attribute_value(autoforward_attribute);
         if (!scxml_analyze_view_equal_raw(value, "true") &&
             !scxml_analyze_view_equal_raw(value, "false")) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_attribute_location(
+                              scxml_syntax_attribute_location(
                                   autoforward_attribute),
                               "invoke autoforward must be true or false");
         }
     }
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
         bool nonempty = false;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "invoke text content is not supported");
         }
         status = require_scxml_element(build, child, &child_kind);
         if (status != SCXML_OK) return status;
         if (child_kind == SCXML_ELEMENT_PARAM) {
-            turbo_xml_attribute name;
+            scxml_syntax_attribute name;
             status = analyze_param(build, child);
             if (status != SCXML_OK) return status;
             name = scxml_analyze_find_attribute(child, "name");
             if (!count_retained_view(
-                    turbo_xml_attribute_value(name),
+                    scxml_syntax_attribute_value(name),
                     &counts->invocation_string_bytes) ||
                 !scxml_analyze_checked_add(param_count, 1u, &param_count))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "invoke param storage size overflow");
             continue;
         }
         if (child_kind == SCXML_ELEMENT_CONTENT) {
-            const turbo_xml_attribute expression =
+            const scxml_syntax_attribute expression =
                 scxml_analyze_find_attribute(child, "expr");
             size_t content_size = 0u;
             size_t retained = 0u;
@@ -2058,22 +2010,22 @@ static scxml_status analyze_invoke(
             if (status != SCXML_OK) return status;
             if (++content_count > 1u)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "invoke may contain at most one content child");
             status = scxml_analyze_inspect_inline_content(
                 build, child, &content_kind, &content_size);
             if (status != SCXML_OK) return status;
             if (expression.impl != NULL) {
                 if (build->data_model != SCXML_DATA_MODEL_CMETA ||
-                    is_empty_view(turbo_xml_attribute_value(expression)))
+                    is_empty_view(scxml_syntax_attribute_value(expression)))
                     return scxml_analyze_fail(
                         build, SCXML_UNSUPPORTED_FEATURE,
-                        turbo_xml_node_location(child),
+                        scxml_syntax_node_location(child),
                         "invoke content expr requires the CMeta data model");
                 if (content_size != 0u)
                     return scxml_analyze_fail(
                         build, SCXML_INVALID_STRUCTURE,
-                        turbo_xml_node_location(child),
+                        scxml_syntax_node_location(child),
                         "invoke content expr cannot have inline children");
                 content_requires_v3 = content_expression_requires_v3(
                     build, expression);
@@ -2083,7 +2035,7 @@ static scxml_status analyze_invoke(
                                  &counts->invocation_string_bytes))
                     return scxml_analyze_fail(
                         build, SCXML_LIMIT_EXCEEDED,
-                        turbo_xml_node_location(child),
+                        scxml_syntax_node_location(child),
                         "invoke inline content storage size overflow");
                 content_requires_v3 = true;
             }
@@ -2091,12 +2043,12 @@ static scxml_status analyze_invoke(
         }
         if (child_kind != SCXML_ELEMENT_FINALIZE) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "invoke parameters and content are not supported");
         }
         if (++finalize_count > 1u) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "invoke may contain at most one finalize");
         }
         status = analyze_executable_block(
@@ -2107,27 +2059,27 @@ static scxml_status analyze_invoke(
         (src_attribute.impl != NULL || src_expr_attribute.impl != NULL ||
          namelist_attribute.impl != NULL || param_count != 0u))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke content is mutually exclusive with src, namelist, and param");
     if (namelist_attribute.impl != NULL && param_count != 0u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke namelist and param are mutually exclusive");
     if (namelist_attribute.impl != NULL) {
         const turbo_xml_string_view namelist =
-            turbo_xml_attribute_value(namelist_attribute);
+            scxml_syntax_attribute_value(namelist_attribute);
         while (scxml_analyze_token_next(namelist, &token_cursor, &token)) {
             if (!scxml_analyze_checked_add(payload_count, 1u, &payload_count) ||
                 !count_retained_view(
                     token, &counts->invocation_string_bytes))
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_attribute_location(
+                                  scxml_syntax_attribute_location(
                                       namelist_attribute),
                                   "invoke namelist storage size overflow");
         }
         if (payload_count == 0u)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_attribute_location(
+                              scxml_syntax_attribute_location(
                                   namelist_attribute),
                               "invoke namelist must contain one location");
     }
@@ -2136,7 +2088,7 @@ static scxml_status analyze_invoke(
         !scxml_analyze_checked_add(counts->payload_rows, payload_count,
                      &counts->payload_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke payload entry limit exceeded");
     if (payload_count > counts->max_payload_entries)
         counts->max_payload_entries = payload_count;
@@ -2164,7 +2116,7 @@ static scxml_status analyze_invoke(
         (src_attribute.impl != NULL &&
          !count_retained_view(src, &counts->invocation_string_bytes))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke descriptor storage size overflow");
     }
     if ((type_expr_attribute.impl != NULL || src_expr_attribute.impl != NULL ||
@@ -2172,7 +2124,7 @@ static scxml_status analyze_invoke(
         !scxml_analyze_checked_add(counts->dynamic_expression_rows, 1u,
                      &counts->dynamic_expression_rows))
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke expression count overflow");
     counts->requirements |= SCXML_REQUIREMENT_INVOKE;
     if (idlocation_attribute.impl != NULL)
@@ -2186,7 +2138,7 @@ static scxml_status analyze_invoke(
 }
 
 static scxml_status analyze_datamodel(
-    scxml_build *build, turbo_xml_node node, scxml_counts *counts) {
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
     size_t index;
     size_t data_count = 0u;
     scxml_status status = scxml_analyze_validate_element_attributes(
@@ -2194,22 +2146,22 @@ static scxml_status analyze_datamodel(
     if (status != SCXML_OK) return status;
     if (build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "data declarations require the CMeta data model");
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
-        turbo_xml_attribute id;
-        turbo_xml_attribute expression;
-        turbo_xml_attribute source;
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        scxml_syntax_attribute id;
+        scxml_syntax_attribute expression;
+        scxml_syntax_attribute source;
         size_t child_index;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT ||
-            (turbo_xml_node_type(child) == TURBO_XML_TEXT &&
-             is_xml_whitespace(turbo_xml_node_value(child))))
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
             scxml_analyze_element_kind(child) != SCXML_ELEMENT_DATA)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "datamodel accepts only data children");
         id = scxml_analyze_find_attribute(child, "id");
         expression = scxml_analyze_find_attribute(child, "expr");
@@ -2219,24 +2171,24 @@ static scxml_status analyze_datamodel(
         if (status != SCXML_OK) return status;
         if (source.impl != NULL)
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_attribute_location(source),
+                              scxml_syntax_attribute_location(source),
                               "CMeta data src requires an external resource loader");
         if (id.impl == NULL || expression.impl == NULL ||
-            is_empty_view(turbo_xml_attribute_value(id)) ||
-            is_empty_view(turbo_xml_attribute_value(expression)))
+            is_empty_view(scxml_syntax_attribute_value(id)) ||
+            is_empty_view(scxml_syntax_attribute_value(expression)))
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "CMeta data requires nonempty id and expr attributes");
         for (child_index = 0u;
-             child_index < turbo_xml_node_child_count(child); ++child_index) {
-            const turbo_xml_node content =
-                turbo_xml_node_child_at(child, child_index);
-            if (turbo_xml_node_type(content) == TURBO_XML_COMMENT ||
-                (turbo_xml_node_type(content) == TURBO_XML_TEXT &&
-                 is_xml_whitespace(turbo_xml_node_value(content))))
+             child_index < scxml_syntax_node_child_count(child); ++child_index) {
+            const scxml_syntax_node content =
+                scxml_syntax_node_child_at(child, child_index);
+            if (scxml_syntax_node_type(content) == TURBO_XML_COMMENT ||
+                (scxml_syntax_node_type(content) == TURBO_XML_TEXT &&
+                 is_xml_whitespace(scxml_syntax_node_value(content))))
                 continue;
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(content),
+                              scxml_syntax_node_location(content),
                               "CMeta data expr cannot have child content");
         }
         if (!scxml_analyze_checked_add(counts->assignment_rows, 1u,
@@ -2244,11 +2196,11 @@ static scxml_status analyze_datamodel(
             !scxml_analyze_checked_add(counts->data_initializer_rows, 1u,
                          &counts->data_initializer_rows))
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "CMeta data initializer count overflow");
         if (!scxml_analyze_checked_add(data_count, 1u, &data_count))
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "CMeta data declaration count overflow");
     }
     if (build->late_binding && data_count != 0u) {
@@ -2263,7 +2215,7 @@ static scxml_status analyze_datamodel(
             !scxml_analyze_checked_add(counts->state_action_rows, 1u,
                          &counts->state_action_rows)) {
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_node_location(node),
+                              scxml_syntax_node_location(node),
                               "late data initializer storage overflow");
         }
         counts->requirements |= SCXML_REQUIREMENT_LATE_BINDING;
@@ -2272,12 +2224,12 @@ static scxml_status analyze_datamodel(
 }
 
 scxml_status scxml_analyze_state(scxml_build *build,
-                                        turbo_xml_node node,
+                                        scxml_syntax_node node,
                                         scxml_element_kind kind,
                                         bool is_root,
                                         scxml_counts *counts) {
-    const turbo_xml_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
-    const turbo_xml_attribute initial_attribute = scxml_analyze_find_attribute(node, "initial");
+    const scxml_syntax_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
+    const scxml_syntax_attribute initial_attribute = scxml_analyze_find_attribute(node, "initial");
     const size_t real_children =
         scxml_analyze_element_child_count(node, SCXML_ELEMENT_STATE) +
         scxml_analyze_element_child_count(node, SCXML_ELEMENT_PARALLEL) +
@@ -2292,19 +2244,19 @@ scxml_status scxml_analyze_state(scxml_build *build,
 
     if (scxml_analyze_element_child_count(node, SCXML_ELEMENT_DATAMODEL) > 1u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "a state may contain at most one datamodel");
 
     if (!scxml_analyze_checked_add(counts->state_rows, 1u, &counts->state_rows) ||
         !scxml_analyze_checked_add(counts->node_refs, 1u, &counts->node_refs)) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "state count overflow");
     }
     if (id_attribute.impl != NULL &&
-        !is_xml_ncname(turbo_xml_attribute_value(id_attribute))) {
+        !is_xml_ncname(scxml_syntax_attribute_value(id_attribute))) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_attribute_location(id_attribute),
+                          scxml_syntax_attribute_location(id_attribute),
                           "SCXML state id must be an XML NCName");
     }
     if (is_root) {
@@ -2312,32 +2264,32 @@ scxml_status scxml_analyze_state(scxml_build *build,
             if (!scxml_analyze_checked_add(counts->state_names, 1u,
                              &counts->state_names)) {
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_attribute_location(id_attribute),
+                                  scxml_syntax_attribute_location(id_attribute),
                                   "state name count overflow");
             }
         }
     } else if (kind != SCXML_ELEMENT_INITIAL) {
         if (id_attribute.impl == NULL ||
-            is_empty_view(turbo_xml_attribute_value(id_attribute))) {
+            is_empty_view(scxml_syntax_attribute_value(id_attribute))) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(node),
+                              scxml_syntax_node_location(node),
                               "supported SCXML states require a nonempty id");
         }
         if (!scxml_analyze_checked_add(counts->state_names, 1u, &counts->state_names)) {
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                              turbo_xml_attribute_location(id_attribute),
+                              scxml_syntax_attribute_location(id_attribute),
                               "state name count overflow");
         }
     }
     if (kind == SCXML_ELEMENT_HISTORY) {
-        const turbo_xml_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
+        const scxml_syntax_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
         if (type_attribute.impl != NULL) {
             const turbo_xml_string_view type =
-                turbo_xml_attribute_value(type_attribute);
+                scxml_syntax_attribute_value(type_attribute);
             if (!scxml_analyze_view_equal_raw(type, "shallow") &&
                 !scxml_analyze_view_equal_raw(type, "deep")) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_attribute_location(type_attribute),
+                                  scxml_syntax_attribute_location(type_attribute),
                                   "history type must be shallow or deep");
             }
         }
@@ -2345,34 +2297,34 @@ scxml_status scxml_analyze_state(scxml_build *build,
     if ((kind == SCXML_ELEMENT_PARALLEL && real_children == 0u) ||
         (is_root && real_children == 0u)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "compound and parallel states require real children");
     }
     if (kind == SCXML_ELEMENT_STATE && !compound &&
         (explicit_initials != 0u || initial_attribute.impl != NULL ||
          scxml_analyze_element_child_count(node, SCXML_ELEMENT_HISTORY) != 0u)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "atomic states cannot declare initial or history children");
     }
     if (kind == SCXML_ELEMENT_PARALLEL &&
         (explicit_initials != 0u || initial_attribute.impl != NULL)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "parallel states do not declare one initial child");
     }
     if (compound) {
         if (explicit_initials > 1u ||
             (explicit_initials != 0u && initial_attribute.impl != NULL)) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(node),
+                              scxml_syntax_node_location(node),
                               "compound states require one initial declaration");
         }
         if (explicit_initials == 0u) {
             size_t initial_target_count = 1u;
             if (initial_attribute.impl != NULL) {
                 const turbo_xml_string_view initial_value =
-                    turbo_xml_attribute_value(initial_attribute);
+                    scxml_syntax_attribute_value(initial_attribute);
                 turbo_xml_string_view initial_token;
                 size_t initial_cursor = 0u;
                 initial_target_count = 0u;
@@ -2382,7 +2334,7 @@ scxml_status scxml_analyze_state(scxml_build *build,
                 if (initial_target_count == 0u) {
                     return scxml_analyze_fail(
                         build, SCXML_INVALID_STRUCTURE,
-                        turbo_xml_attribute_location(initial_attribute),
+                        scxml_syntax_attribute_location(initial_attribute),
                         "initial must contain an IDREF");
                 }
             }
@@ -2395,19 +2347,19 @@ scxml_status scxml_analyze_state(scxml_build *build,
                              initial_target_count,
                              &counts->transition_target_rows)) {
                 return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                  turbo_xml_node_location(node),
+                                  scxml_syntax_node_location(node),
                                   "synthetic initial count overflow");
             }
         }
     }
 
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (turbo_xml_node_type(child) == TURBO_XML_COMMENT) continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT) continue;
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "non-whitespace SCXML text is not supported");
         }
         status = require_scxml_element(build, child, &child_kind);
@@ -2416,28 +2368,28 @@ scxml_status scxml_analyze_state(scxml_build *build,
             if (kind == SCXML_ELEMENT_FINAL || kind == SCXML_ELEMENT_INITIAL ||
                 kind == SCXML_ELEMENT_HISTORY) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "this SCXML element cannot contain states");
             }
             status = scxml_analyze_state(build, child, child_kind, false, counts);
         } else if (child_kind == SCXML_ELEMENT_INITIAL) {
             if (!compound) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "initial must be a child of a compound state");
             }
             status = scxml_analyze_state(build, child, child_kind, false, counts);
         } else if (child_kind == SCXML_ELEMENT_HISTORY) {
             if (!(compound || kind == SCXML_ELEMENT_PARALLEL)) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "history must be a child of compound or parallel");
             }
             status = scxml_analyze_state(build, child, child_kind, false, counts);
         } else if (child_kind == SCXML_ELEMENT_TRANSITION) {
             if (is_root || kind == SCXML_ELEMENT_FINAL) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "this SCXML element cannot contain transitions");
             }
             status = analyze_transition(
@@ -2450,7 +2402,7 @@ scxml_status scxml_analyze_state(scxml_build *build,
             if (kind == SCXML_ELEMENT_INITIAL || kind == SCXML_ELEMENT_HISTORY ||
                 is_root) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "onentry/onexit is not allowed at this location");
             }
             status = analyze_executable_block(
@@ -2459,7 +2411,7 @@ scxml_status scxml_analyze_state(scxml_build *build,
                 !scxml_analyze_checked_add(counts->state_action_rows, 1u,
                              &counts->state_action_rows)) {
                 status = scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
-                                    turbo_xml_node_location(child),
+                                    scxml_syntax_node_location(child),
                                     "state action count overflow");
             }
         } else if (child_kind == SCXML_ELEMENT_INVOKE) {
@@ -2467,38 +2419,38 @@ scxml_status scxml_analyze_state(scxml_build *build,
                 kind == SCXML_ELEMENT_INITIAL ||
                 kind == SCXML_ELEMENT_HISTORY) {
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "invoke is allowed only in state or parallel");
             }
             ++invoke_ordinal;
             status = analyze_invoke(
-                build, child, turbo_xml_attribute_value(id_attribute),
+                build, child, scxml_syntax_attribute_value(id_attribute),
                 invoke_ordinal, counts);
         } else if (child_kind == SCXML_ELEMENT_DATAMODEL) {
             if (kind == SCXML_ELEMENT_FINAL ||
                 kind == SCXML_ELEMENT_INITIAL ||
                 kind == SCXML_ELEMENT_HISTORY)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "datamodel is allowed only in scxml, state, or parallel");
             status = analyze_datamodel(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_DONEDATA) {
             if (kind != SCXML_ELEMENT_FINAL)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "donedata is allowed only inside final");
             if (scxml_analyze_element_child_count(node, SCXML_ELEMENT_DONEDATA) != 1u)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "final accepts at most one donedata child");
             status = analyze_done_data(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_FINALIZE) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "finalize is allowed only inside invoke");
         } else {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "unsupported SCXML child element");
         }
         if (status != SCXML_OK) return status;
@@ -2507,13 +2459,13 @@ scxml_status scxml_analyze_state(scxml_build *build,
     if ((kind == SCXML_ELEMENT_INITIAL || kind == SCXML_ELEMENT_HISTORY) &&
         scxml_analyze_element_child_count(node, SCXML_ELEMENT_TRANSITION) != 1u) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "initial and history require exactly one transition");
     }
     return SCXML_OK;
 }
 
-static cflow_statechart_state_kind native_state_kind(turbo_xml_node node,
+static cflow_statechart_state_kind native_state_kind(scxml_syntax_node node,
                                                       bool is_root) {
     const scxml_element_kind kind = scxml_analyze_element_kind(node);
     if (is_root) return CFLOW_STATECHART_COMPOUND;
@@ -2521,9 +2473,9 @@ static cflow_statechart_state_kind native_state_kind(turbo_xml_node node,
     if (kind == SCXML_ELEMENT_FINAL) return CFLOW_STATECHART_FINAL;
     if (kind == SCXML_ELEMENT_INITIAL) return CFLOW_STATECHART_INITIAL;
     if (kind == SCXML_ELEMENT_HISTORY) {
-        const turbo_xml_attribute type = scxml_analyze_find_attribute(node, "type");
+        const scxml_syntax_attribute type = scxml_analyze_find_attribute(node, "type");
         return type.impl != NULL &&
-                       scxml_analyze_view_equal_raw(turbo_xml_attribute_value(type), "deep")
+                       scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(type), "deep")
                    ? CFLOW_STATECHART_HISTORY_DEEP
                    : CFLOW_STATECHART_HISTORY_SHALLOW;
     }
@@ -2532,7 +2484,7 @@ static cflow_statechart_state_kind native_state_kind(turbo_xml_node node,
 }
 
 scxml_status scxml_analyze_emit_state(scxml_build *build,
-                                     turbo_xml_node node,
+                                     scxml_syntax_node node,
                                      cflow_machine_state_id parent,
                                      bool is_root) {
     const scxml_element_kind kind = scxml_analyze_element_kind(node);
@@ -2540,8 +2492,8 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
         (cflow_machine_state_id)(build->state_index + 1u);
     const cflow_statechart_state_kind native_kind =
         native_state_kind(node, is_root);
-    const turbo_xml_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
-    const turbo_xml_attribute initial_attribute = scxml_analyze_find_attribute(node, "initial");
+    const scxml_syntax_attribute id_attribute = scxml_analyze_find_attribute(node, "id");
+    const scxml_syntax_attribute initial_attribute = scxml_analyze_find_attribute(node, "initial");
     const bool compound = native_kind == CFLOW_STATECHART_COMPOUND;
     const bool has_explicit_initial =
         scxml_analyze_element_child_count(node, SCXML_ELEMENT_INITIAL) != 0u;
@@ -2551,29 +2503,29 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
         id, parent, native_kind, (uint32_t)build->state_index};
     ++build->state_index;
     build->node_refs[build->node_ref_index++] =
-        (scxml_node_ref){node.impl, id};
+        (scxml_node_ref){node.impl->id, id};
     if (id_attribute.impl != NULL) {
         build->state_names[build->state_name_index] = (scxml_name_ref){
-            turbo_xml_attribute_value(id_attribute),
-            turbo_xml_attribute_location(id_attribute), id,
+            scxml_syntax_attribute_value(id_attribute),
+            scxml_syntax_attribute_location(id_attribute), id,
             build->state_name_index};
         ++build->state_name_index;
     }
 
     if (compound && !has_explicit_initial) {
-        turbo_xml_node target_node = first_real_child(node);
-        turbo_xml_attribute target_id;
+        scxml_syntax_node target_node = first_real_child(node);
+        scxml_syntax_attribute target_id;
         turbo_xml_string_view target;
         turbo_xml_location location;
         const cflow_machine_state_id initial_id =
             (cflow_machine_state_id)(build->state_index + 1u);
         if (initial_attribute.impl != NULL) {
-            target = turbo_xml_attribute_value(initial_attribute);
-            location = turbo_xml_attribute_location(initial_attribute);
+            target = scxml_syntax_attribute_value(initial_attribute);
+            location = scxml_syntax_attribute_location(initial_attribute);
         } else {
             target_id = scxml_analyze_find_attribute(target_node, "id");
-            target = turbo_xml_attribute_value(target_id);
-            location = turbo_xml_node_location(target_node);
+            target = scxml_syntax_attribute_value(target_id);
+            location = scxml_syntax_node_location(target_node);
         }
         build->states[build->state_index] = (cflow_statechart_state){
             initial_id, id, CFLOW_STATECHART_INITIAL,
@@ -2583,10 +2535,10 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
             (scxml_synthetic_initial){id, initial_id, target, location};
     }
 
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind child_kind = scxml_analyze_element_kind(child);
-        if (turbo_xml_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
             (scxml_analyze_is_state_element(child_kind) ||
              child_kind == SCXML_ELEMENT_INITIAL ||
              child_kind == SCXML_ELEMENT_HISTORY)) {
@@ -2614,18 +2566,18 @@ const scxml_name_ref *scxml_analyze_find_name_ref(const scxml_name_ref *names,
 }
 
 cflow_machine_state_id scxml_analyze_node_id(const scxml_build *build,
-                                      turbo_xml_node node,
+                                      scxml_syntax_node node,
                                       size_t node_count) {
     size_t low = 0u;
     size_t high = node_count;
-    const uintptr_t wanted = (uintptr_t)node.impl;
+    const scxml_ast_node_id wanted = node.impl->id;
     while (low < high) {
         const size_t middle = low + (high - low) / 2u;
-        const uintptr_t value = (uintptr_t)build->node_refs[middle].node;
+        const scxml_ast_node_id value = build->node_refs[middle].node_id;
         if (value < wanted) low = middle + 1u;
         else high = middle;
     }
-    return low < node_count && build->node_refs[low].node == node.impl
+    return low < node_count && build->node_refs[low].node_id == wanted
                ? build->node_refs[low].id
                : 0u;
 }
@@ -2662,7 +2614,7 @@ static bool retain_invocation_view(
 }
 
 static scxml_status retain_invocation_inline_content(
-    scxml_build *build, turbo_xml_node node,
+    scxml_build *build, scxml_syntax_node node,
     scxml_content_descriptor *content) {
     size_t retained;
     size_t actual = 0u;
@@ -2674,44 +2626,44 @@ static scxml_status retain_invocation_inline_content(
         (stored = reserve_invocation_storage(build, retained)) == NULL)
         return scxml_analyze_fail(
             build, SCXML_NATIVE_IR_REJECTED,
-            turbo_xml_node_location(node),
+            scxml_syntax_node_location(node),
             "invoke inline content storage mismatched admission");
     content->bytes = stored;
-    if (turbo_xml_serialize_children(
+    if (scxml_syntax_serialize_children(
             node, stored, retained, build->limits.max_name_bytes,
             &actual) != TURBO_XML_OK || actual != content->byte_count)
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                          turbo_xml_node_location(node),
+                          scxml_syntax_node_location(node),
                           "invoke inline content changed during emission");
     return SCXML_OK;
 }
 
 scxml_status scxml_analyze_emit_invocation_declarations(
-    scxml_build *build, turbo_xml_node node, size_t node_count) {
+    scxml_build *build, scxml_syntax_node node, size_t node_count) {
     static const char generated_separator[] = ".invoke.";
     static const char done_prefix[] = "done.invoke.";
     static const size_t max_token_digits =
         sizeof("18446744073709551615") - 1u;
     const cflow_machine_state_id owner = scxml_analyze_node_id(build, node, node_count);
-    const turbo_xml_attribute owner_id_attribute = scxml_analyze_find_attribute(node, "id");
+    const scxml_syntax_attribute owner_id_attribute = scxml_analyze_find_attribute(node, "id");
     const turbo_xml_string_view owner_id =
         owner_id_attribute.impl != NULL
-            ? turbo_xml_attribute_value(owner_id_attribute)
+            ? scxml_syntax_attribute_value(owner_id_attribute)
             : (turbo_xml_string_view){NULL, 0u};
     size_t ordinal = 0u;
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind kind = scxml_analyze_element_kind(child);
         scxml_invocation_descriptor *descriptor;
-        turbo_xml_attribute id_attribute;
-        turbo_xml_attribute type_attribute;
-        turbo_xml_attribute type_expr_attribute;
-        turbo_xml_attribute src_attribute;
-        turbo_xml_attribute src_expr_attribute;
-        turbo_xml_attribute idlocation_attribute;
-        turbo_xml_attribute namelist_attribute;
-        turbo_xml_attribute autoforward_attribute;
+        scxml_syntax_attribute id_attribute;
+        scxml_syntax_attribute type_attribute;
+        scxml_syntax_attribute type_expr_attribute;
+        scxml_syntax_attribute src_attribute;
+        scxml_syntax_attribute src_expr_attribute;
+        scxml_syntax_attribute idlocation_attribute;
+        scxml_syntax_attribute namelist_attribute;
+        scxml_syntax_attribute autoforward_attribute;
         turbo_xml_location id_location;
         char *generated;
         size_t generated_size;
@@ -2720,13 +2672,13 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         int ordinal_size;
         char *done_name;
         scxml_status expression_status;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
             kind != SCXML_ELEMENT_INVOKE)
             continue;
         ++ordinal;
         if (build->invocation_index >= build->invocation_capacity) {
             return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "invoke exceeded admitted descriptor storage");
         }
         descriptor = &build->invocations[build->invocation_index];
@@ -2740,13 +2692,13 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         autoforward_attribute = scxml_analyze_find_attribute(child, "autoforward");
         if (id_attribute.impl != NULL) {
             if (!retain_invocation_view(
-                    build, turbo_xml_attribute_value(id_attribute),
+                    build, scxml_syntax_attribute_value(id_attribute),
                     &descriptor->id, &descriptor->id_size)) {
                 return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "invoke id storage mismatched admission");
             }
-            id_location = turbo_xml_attribute_location(id_attribute);
+            id_location = scxml_syntax_attribute_location(id_attribute);
         } else {
             ordinal_size = snprintf(
                 ordinal_buffer, sizeof(ordinal_buffer), "%zu", ordinal);
@@ -2760,7 +2712,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                 (generated = reserve_invocation_storage(
                      build, retained_size)) == NULL) {
                 return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                                  turbo_xml_node_location(child),
+                                  scxml_syntax_node_location(child),
                                   "generated invoke id storage mismatched admission");
             }
             memcpy(generated, owner_id.data, owner_id.size);
@@ -2772,18 +2724,18 @@ scxml_status scxml_analyze_emit_invocation_declarations(
             generated[generated_size] = '\0';
             descriptor->id = generated;
             descriptor->id_size = generated_size;
-            id_location = turbo_xml_node_location(child);
+            id_location = scxml_syntax_node_location(child);
         }
         if (!retain_invocation_view(
                 build,
                 type_attribute.impl != NULL
-                    ? turbo_xml_attribute_value(type_attribute)
+                    ? scxml_syntax_attribute_value(type_attribute)
                     : (turbo_xml_string_view){NULL, 0u},
                 &descriptor->type, &descriptor->type_size) ||
             !retain_invocation_view(
                 build,
                 src_attribute.impl != NULL
-                    ? turbo_xml_attribute_value(src_attribute)
+                    ? scxml_syntax_attribute_value(src_attribute)
                     : (turbo_xml_string_view){NULL, 0u},
                 &descriptor->src, &descriptor->src_size) ||
             !scxml_analyze_checked_add(sizeof(done_prefix) - 1u, descriptor->id_size,
@@ -2792,7 +2744,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
             (done_name = reserve_invocation_storage(
                  build, retained_size)) == NULL) {
             return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                              turbo_xml_node_location(child),
+                              scxml_syntax_node_location(child),
                               "invoke literal storage mismatched admission");
         }
         memcpy(done_name, done_prefix, sizeof(done_prefix) - 1u);
@@ -2804,11 +2756,11 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         descriptor->payload_first = build->payload_index;
         descriptor->done_name = done_name;
         descriptor->done_name_size = generated_size;
-        descriptor->source_node = child.impl;
+        descriptor->source_node_id = child.impl->id;
         descriptor->autoforward =
             autoforward_attribute.impl != NULL &&
             scxml_analyze_view_equal_raw(
-                turbo_xml_attribute_value(autoforward_attribute), "true");
+                scxml_syntax_attribute_value(autoforward_attribute), "true");
         if (idlocation_attribute.impl != NULL) {
             if (!scxml_analyze_checked_add(owner_id.size, 1u,
                              &descriptor->dynamic_id_max_size) ||
@@ -2824,7 +2776,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                     SCXML_EVENT_METADATA_CAPACITY) {
                 return scxml_analyze_fail(
                     build, SCXML_NATIVE_IR_REJECTED,
-                    turbo_xml_attribute_location(idlocation_attribute),
+                    scxml_syntax_attribute_location(idlocation_attribute),
                     "dynamic invoke id budget mismatched admission");
             }
             expression_status = scxml_emit_compile_cmeta_owned_string_location(
@@ -2854,7 +2806,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         }
         if (namelist_attribute.impl != NULL) {
             const turbo_xml_string_view namelist =
-                turbo_xml_attribute_value(namelist_attribute);
+                scxml_syntax_attribute_value(namelist_attribute);
             size_t cursor = 0u;
             turbo_xml_string_view token;
             while (scxml_analyze_token_next(namelist, &cursor, &token)) {
@@ -2862,7 +2814,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                 if (build->payload_index >= build->payload_capacity)
                     return scxml_analyze_fail(
                         build, SCXML_NATIVE_IR_REJECTED,
-                        turbo_xml_attribute_location(namelist_attribute),
+                        scxml_syntax_attribute_location(namelist_attribute),
                         "invoke payload emission exceeded admission");
                 payload = &build->payloads[build->payload_index];
                 if (!retain_invocation_view(
@@ -2870,11 +2822,11 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                         &payload->name_size))
                     return scxml_analyze_fail(
                         build, SCXML_NATIVE_IR_REJECTED,
-                        turbo_xml_attribute_location(namelist_attribute),
+                        scxml_syntax_attribute_location(namelist_attribute),
                         "invoke namelist storage mismatched admission");
                 expression_status = scxml_emit_compile_cmeta_payload_token(
                     build, token,
-                    turbo_xml_attribute_location(namelist_attribute),
+                    scxml_syntax_attribute_location(namelist_attribute),
                     "invoke namelist", &payload->expression);
                 if (expression_status != SCXML_OK)
                     return expression_status;
@@ -2884,40 +2836,40 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         {
             size_t payload_child_index;
             for (payload_child_index = 0u;
-                 payload_child_index < turbo_xml_node_child_count(child);
+                 payload_child_index < scxml_syntax_node_child_count(child);
                  ++payload_child_index) {
-                const turbo_xml_node payload_child =
-                    turbo_xml_node_child_at(child, payload_child_index);
+                const scxml_syntax_node payload_child =
+                    scxml_syntax_node_child_at(child, payload_child_index);
                 const scxml_element_kind payload_kind =
                     scxml_analyze_element_kind(payload_child);
-                if (turbo_xml_node_type(payload_child) !=
+                if (scxml_syntax_node_type(payload_child) !=
                     TURBO_XML_ELEMENT)
                     continue;
                 if (payload_kind == SCXML_ELEMENT_PARAM) {
-                    const turbo_xml_attribute name =
+                    const scxml_syntax_attribute name =
                         scxml_analyze_find_attribute(payload_child, "name");
-                    const turbo_xml_attribute expression =
+                    const scxml_syntax_attribute expression =
                         scxml_analyze_find_attribute(payload_child, "expr");
-                    const turbo_xml_attribute location =
+                    const scxml_syntax_attribute location =
                         scxml_analyze_find_attribute(payload_child, "location");
                     scxml_payload_descriptor *payload;
                     if (build->payload_index >= build->payload_capacity)
                         return scxml_analyze_fail(
                             build, SCXML_NATIVE_IR_REJECTED,
-                            turbo_xml_node_location(payload_child),
+                            scxml_syntax_node_location(payload_child),
                             "invoke param emission exceeded admission");
                     payload = &build->payloads[build->payload_index];
                     if (!retain_invocation_view(
-                            build, turbo_xml_attribute_value(name),
+                            build, scxml_syntax_attribute_value(name),
                             &payload->name, &payload->name_size))
                         return scxml_analyze_fail(
                             build, SCXML_NATIVE_IR_REJECTED,
-                            turbo_xml_attribute_location(name),
+                            scxml_syntax_attribute_location(name),
                             "invoke param storage mismatched admission");
                     if (location.impl != NULL)
                         expression_status = scxml_emit_compile_cmeta_payload_token(
-                            build, turbo_xml_attribute_value(location),
-                            turbo_xml_attribute_location(location),
+                            build, scxml_syntax_attribute_value(location),
+                            scxml_syntax_attribute_location(location),
                             "invoke param location", &payload->expression);
                     else
                         expression_status = scxml_emit_compile_cmeta_value_program(
@@ -2955,10 +2907,10 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         ++build->event_occurrence_index;
         ++build->invocation_index;
     }
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind kind = scxml_analyze_element_kind(child);
-        if (turbo_xml_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
             (scxml_analyze_is_state_element(kind) || kind == SCXML_ELEMENT_INITIAL ||
              kind == SCXML_ELEMENT_HISTORY)) {
             scxml_status status = scxml_analyze_emit_invocation_declarations(
@@ -2989,18 +2941,18 @@ scxml_status scxml_analyze_resolve_invocation_events(scxml_build *build) {
 }
 
 scxml_status scxml_analyze_collect_transition_events(
-    scxml_build *build, turbo_xml_node node) {
+    scxml_build *build, scxml_syntax_node node) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind child_kind = scxml_analyze_element_kind(child);
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT) continue;
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) continue;
         if (child_kind == SCXML_ELEMENT_TRANSITION) {
-            const turbo_xml_attribute event_attribute =
+            const scxml_syntax_attribute event_attribute =
                 scxml_analyze_find_attribute(child, "event");
             if (event_attribute.impl != NULL) {
                 const turbo_xml_string_view value =
-                    turbo_xml_attribute_value(event_attribute);
+                    scxml_syntax_attribute_value(event_attribute);
                 turbo_xml_string_view token;
                 size_t cursor = 0u;
                 while (scxml_analyze_token_next(value, &cursor, &token)) {
@@ -3012,14 +2964,14 @@ scxml_status scxml_analyze_collect_transition_events(
                                 token, &descriptor_base, &match_all)) {
                             return scxml_analyze_fail(
                                 build, SCXML_INVALID_STRUCTURE,
-                                turbo_xml_attribute_location(event_attribute),
+                                scxml_syntax_attribute_location(event_attribute),
                                 "invalid event descriptor");
                         }
                         if (match_all) continue;
                         build->event_occurrences[build->event_occurrence_index] =
                             (scxml_name_ref){
                                 descriptor_base,
-                                turbo_xml_attribute_location(event_attribute),
+                                scxml_syntax_attribute_location(event_attribute),
                                 0u, build->event_occurrence_index};
                         ++build->event_occurrence_index;
                     }
@@ -3033,12 +2985,12 @@ scxml_status scxml_analyze_collect_transition_events(
         } else if (child_kind == SCXML_ELEMENT_RAISE ||
                    (child_kind == SCXML_ELEMENT_SEND &&
                     scxml_analyze_find_attribute(child, "event").impl != NULL)) {
-            const turbo_xml_attribute event_attribute =
+            const scxml_syntax_attribute event_attribute =
                 scxml_analyze_find_attribute(child, "event");
             build->event_occurrences[build->event_occurrence_index] =
                 (scxml_name_ref){
-                    turbo_xml_attribute_value(event_attribute),
-                    turbo_xml_attribute_location(event_attribute), 0u,
+                    scxml_syntax_attribute_value(event_attribute),
+                    scxml_syntax_attribute_location(event_attribute), 0u,
                     build->event_occurrence_index};
             ++build->event_occurrence_index;
         } else if (scxml_analyze_is_state_element(child_kind) ||

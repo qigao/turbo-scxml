@@ -8,6 +8,36 @@ typedef enum scxml_execute_outcome {
     SCXML_EXECUTE_FATAL
 } scxml_execute_outcome;
 
+typedef struct scxml_mutable_state {
+    void *value;
+    cflow_statechart_host_context *host_context;
+} scxml_mutable_state;
+
+static void *mutable_state_get(
+    scxml_mutable_state *state, const char **out_error) {
+    if (state == NULL) return NULL;
+    if (state->value == NULL && state->host_context != NULL) {
+        state->value = cflow_statechart_host_context_edit_state(
+            state->host_context, out_error);
+    }
+    return state->value;
+}
+
+static const void *mutable_state_read(
+    const scxml_mutable_state *state,
+    const cflow_statechart_executable_context *context) {
+    return state != NULL && state->value != NULL
+        ? state->value : context->state;
+}
+
+static scxml_execute_outcome execute_scxml_range(
+    const scxml_block *block, scxml_session_impl *session,
+    const cflow_statechart_executable_context *context,
+    scxml_mutable_state *mutable_state,
+    const scxml_expr_system_values *system_values,
+    size_t begin, size_t end, size_t depth,
+    bool abort_condition_error, const char **out_error);
+
 static bool same_send_id(const scxml_delayed_send *row,
                          const char *id, size_t id_size) {
     return row->state != SCXML_DELAYED_FREE && row->id_size == id_size &&
@@ -203,11 +233,13 @@ static void commit_invocation_lifecycle(void *user) {
     size_t id_size = 0u;
     bool cancel = false;
     bool start = false;
+    bool forward = false;
     if (effect == NULL || !effect->in_use || effect->session == NULL) return;
     session = effect->session;
     if (effect->invocation >= session->program->invocation_count) return;
     kind = effect->kind;
-    if (kind == SCXML_INVOCATION_EFFECT_START)
+    if (kind == SCXML_INVOCATION_EFFECT_START ||
+        kind == SCXML_INVOCATION_EFFECT_FORWARD)
         adapter_ticket = effect->adapter_ticket;
     turbo_mutex_lock(&session->registry_lock);
     if (effect->invocation < session->invocation_capacity) {
@@ -243,11 +275,25 @@ static void commit_invocation_lifecycle(void *user) {
                    row->token == effect->token) {
             row->state = SCXML_INVOCATION_FAILED;
             scxml_runtime_increment_u64(&session->invoke_stats.start_failed);
+        } else if (effect->kind == SCXML_INVOCATION_EFFECT_COMPLETE &&
+                   row->state == SCXML_INVOCATION_ACTIVE &&
+                   row->token == effect->token) {
+            *row = (scxml_invocation_row){0};
+            if (session->invoke_stats.active != 0u)
+                --session->invoke_stats.active;
+            scxml_runtime_increment_u64(&session->invoke_stats.completed);
+        } else if (effect->kind == SCXML_INVOCATION_EFFECT_FORWARD) {
+            scxml_runtime_increment_u64(&session->invoke_stats.forwarded);
+            forward = true;
         }
     }
     effect->in_use = false;
     turbo_mutex_unlock(&session->registry_lock);
     if (start) {
+        adapter_ticket.commit(adapter_ticket.user);
+        return;
+    }
+    if (forward) {
         adapter_ticket.commit(adapter_ticket.user);
         return;
     }
@@ -307,6 +353,9 @@ static void discard_invocation_lifecycle(void *user) {
             adapter_ticket = effect->adapter_ticket;
             discard_adapter = adapter_ticket.discard != NULL;
         }
+    } else if (effect->kind == SCXML_INVOCATION_EFFECT_FORWARD) {
+        adapter_ticket = effect->adapter_ticket;
+        discard_adapter = adapter_ticket.discard != NULL;
     }
     effect->in_use = false;
     turbo_mutex_unlock(&session->registry_lock);
@@ -531,6 +580,46 @@ static bool restore_invocation_id_location(
     return false;
 }
 
+static bool host_context_is_active(
+    void *user, cflow_machine_state_id state) {
+    return cflow_statechart_host_context_is_active(
+        (const cflow_statechart_host_context *)user, state);
+}
+
+static bool host_context_raise_internal(
+    void *user, const cflow_event_view *event, const char **out_error) {
+    return cflow_statechart_host_context_raise_internal(
+        (cflow_statechart_host_context *)user, event, 0u, out_error);
+}
+
+static bool host_context_stage_effect(
+    void *user, const cflow_statechart_effect_ticket *ticket,
+    const char **out_error) {
+    return cflow_statechart_host_context_stage_effect(
+        (cflow_statechart_host_context *)user, ticket, out_error);
+}
+
+typedef struct scxml_active_query {
+    cflow_statechart_is_active_fn function;
+    void *user;
+} scxml_active_query;
+
+static bool evaluate_hook_active(
+    void *user, cflow_machine_state_id state, bool *out_active);
+
+static cflow_statechart_instance_hook_context host_evaluation_context(
+    cflow_statechart_host_context *context, const void *state) {
+    const cflow_statechart_instance_hook_context evaluation = {
+        .state = state,
+        .configuration_version =
+            cflow_statechart_host_context_configuration_version(context),
+        .is_active = host_context_is_active,
+        .configuration_user = context,
+        .enqueue_internal = host_context_raise_internal,
+        .enqueue_user = context};
+    return evaluation;
+}
+
 static bool stage_invocation_result(
     scxml_session_impl *session, size_t invocation,
     uint64_t token, const char *id, size_t id_size, bool own_id,
@@ -599,7 +688,79 @@ static bool stage_invocation_result(
     return true;
 }
 
-cflow_statechart_stable_transaction_result
+static bool stage_invocation_completion(
+    scxml_session_impl *session, size_t invocation, uint64_t token,
+    cflow_statechart_host_context *context, const char **out_error) {
+    scxml_invocation_lifecycle_effect *effect;
+    cflow_statechart_effect_ticket ticket;
+    if (session == NULL || invocation >= session->invocation_capacity ||
+        token == 0u || context == NULL || out_error == NULL) {
+        if (out_error != NULL)
+            *out_error = "SCXML invocation completion is invalid";
+        return false;
+    }
+    turbo_mutex_lock(&session->registry_lock);
+    effect = acquire_invocation_effect_locked(session);
+    if (effect != NULL) {
+        effect->invocation = invocation;
+        effect->token = token;
+        effect->kind = SCXML_INVOCATION_EFFECT_COMPLETE;
+    }
+    turbo_mutex_unlock(&session->registry_lock);
+    if (effect == NULL) {
+        *out_error = "SCXML invocation effect storage is full";
+        return false;
+    }
+    ticket = (cflow_statechart_effect_ticket){
+        commit_invocation_lifecycle, discard_invocation_lifecycle, effect};
+    if (!cflow_statechart_host_context_stage_effect(
+            context, &ticket, out_error)) {
+        discard_invocation_lifecycle(effect);
+        return false;
+    }
+    return true;
+}
+
+static bool stage_invocation_forward(
+    scxml_session_impl *session, size_t invocation,
+    const cflow_statechart_effect_ticket *adapter_ticket,
+    cflow_statechart_host_context *context, const char **out_error) {
+    scxml_invocation_lifecycle_effect *effect;
+    cflow_statechart_effect_ticket ticket;
+    if (session == NULL || invocation >= session->invocation_capacity ||
+        adapter_ticket == NULL || adapter_ticket->commit == NULL ||
+        adapter_ticket->discard == NULL || context == NULL ||
+        out_error == NULL) {
+        if (adapter_ticket != NULL && adapter_ticket->discard != NULL)
+            adapter_ticket->discard(adapter_ticket->user);
+        if (out_error != NULL)
+            *out_error = "SCXML invocation forward ticket is invalid";
+        return false;
+    }
+    turbo_mutex_lock(&session->registry_lock);
+    effect = acquire_invocation_effect_locked(session);
+    if (effect != NULL) {
+        effect->invocation = invocation;
+        effect->kind = SCXML_INVOCATION_EFFECT_FORWARD;
+        effect->adapter_ticket = *adapter_ticket;
+    }
+    turbo_mutex_unlock(&session->registry_lock);
+    if (effect == NULL) {
+        adapter_ticket->discard(adapter_ticket->user);
+        *out_error = "SCXML invocation effect storage is full";
+        return false;
+    }
+    ticket = (cflow_statechart_effect_ticket){
+        commit_invocation_lifecycle, discard_invocation_lifecycle, effect};
+    if (!cflow_statechart_host_context_stage_effect(
+            context, &ticket, out_error)) {
+        discard_invocation_lifecycle(effect);
+        return false;
+    }
+    return true;
+}
+
+static cflow_statechart_stable_transaction_result
 scxml_runtime_start_stable_invocations_transaction(
     void *user,
     const cflow_statechart_stable_transaction_context *context,
@@ -788,96 +949,56 @@ scxml_runtime_start_stable_invocations_transaction(
                    : CFLOW_STATECHART_STABLE_TRANSACTION_NOOP;
 }
 
-static bool execute_finalize_range(
-    const scxml_block *block,
-    const cflow_statechart_instance_hook_context *context,
-    size_t begin, size_t end, size_t depth, const char **out_error) {
-    size_t index = begin;
-    if (block == NULL || context == NULL || out_error == NULL ||
-        depth > block->max_conditional_depth || begin > end ||
-        end > block->step_storage_count) {
-        if (out_error != NULL)
-            *out_error = "SCXML finalize range is invalid";
-        return false;
-    }
-    while (index < end) {
-        const scxml_step *step = &block->steps[index];
-        if (step->next <= index || step->next > end) {
-            *out_error = "SCXML finalize step span is invalid";
-            return false;
-        }
-        if (step->kind == SCXML_STEP_LOG) {
-            if (step->label == NULL) {
-                *out_error = "SCXML finalize log storage is invalid";
-                return false;
-            }
-            TURBO_LOG_DEBUG(
-                tlog_peek_default(), "cflow.scxml", step->label);
-        } else if (step->kind == SCXML_STEP_IF) {
-            const scxml_branch *selected = NULL;
-            size_t branch;
-            if (step->branch_first > block->branch_storage_count ||
-                step->branch_count >
-                    block->branch_storage_count - step->branch_first) {
-                *out_error = "SCXML finalize branch span is invalid";
-                return false;
-            }
-            for (branch = 0u; branch < step->branch_count; ++branch) {
-                const scxml_branch *candidate =
-                    &block->branches[step->branch_first + branch];
-                if (candidate->step_begin < index + 1u ||
-                    candidate->step_begin > candidate->step_end ||
-                    candidate->step_end > step->next ||
-                    (!candidate->unconditional && candidate->state == 0u)) {
-                    *out_error = "SCXML finalize branch is invalid";
-                    return false;
-                }
-                if (candidate->unconditional ||
-                    context->is_active(
-                        context->configuration_user, candidate->state)) {
-                    selected = candidate;
-                    break;
-                }
-            }
-            if (selected != NULL) {
-                size_t next_depth;
-                if (!scxml_analyze_checked_add(depth, 1u, &next_depth) ||
-                    !execute_finalize_range(
-                        block, context, selected->step_begin,
-                        selected->step_end, next_depth, out_error))
-                    return false;
-            }
-        } else {
-            *out_error = "SCXML finalize executable is invalid";
-            return false;
-        }
-        index = step->next;
-    }
-    return true;
-}
-
 static bool execute_invocation_finalize(
     const scxml_invocation_descriptor *descriptor,
-    const cflow_statechart_instance_hook_context *context,
+    scxml_session_impl *session,
+    cflow_statechart_host_context *context,
     const char **out_error) {
     const scxml_block *block = descriptor->finalize;
+    const cflow_statechart_observed_event *trigger;
+    cflow_statechart_executable_context executable;
+    scxml_mutable_state mutable_state = {0};
+    scxml_execute_outcome outcome;
     if (block == NULL) return true;
     if (block->steps == NULL ||
         (block->branch_storage_count != 0u && block->branches == NULL) ||
         block->step_begin >= block->step_end ||
-        block->step_end > block->step_storage_count ||
-        context->is_active == NULL || context->configuration_user == NULL) {
+        block->step_end > block->step_storage_count) {
         *out_error = "SCXML finalize block context is invalid";
         return false;
     }
-    return execute_finalize_range(
-        block, context, block->step_begin, block->step_end, 0u, out_error);
+    trigger = cflow_statechart_host_context_trigger(context);
+    if (trigger == NULL || trigger->kind != CFLOW_STATECHART_OBSERVED_EXTERNAL ||
+        trigger->event == NULL) {
+        *out_error = "SCXML finalize trigger is invalid";
+        return false;
+    }
+    executable = (cflow_statechart_executable_context){
+        .state = cflow_statechart_host_context_state(context),
+        .event = trigger->event,
+        .raise_internal = host_context_raise_internal,
+        .raise_user = context,
+        .stage_effect = host_context_stage_effect,
+        .effect_user = context,
+        .is_active = host_context_is_active,
+        .configuration_user = context};
+    mutable_state.host_context = context;
+    outcome = execute_scxml_range(
+        block, session, &executable, &mutable_state,
+        &session->system_values, block->step_begin,
+        block->step_end, 0u, true, out_error);
+    if (outcome == SCXML_EXECUTE_CONTINUE) return true;
+    if (*out_error == NULL)
+        *out_error = "SCXML finalize execution failed";
+    return false;
 }
 
 static bool forward_external_to_invocations(
     scxml_session_impl *session,
     const cflow_statechart_instance_hook_context *context,
-    const cflow_event_view *event, const char **out_error) {
+    cflow_statechart_host_context *host_context,
+    const cflow_event_view *event, size_t skipped_invocation,
+    const char **out_error) {
     size_t index;
     for (index = 0u; index < session->program->invocation_count; ++index) {
         const scxml_invocation_descriptor *descriptor =
@@ -890,7 +1011,7 @@ static bool forward_external_to_invocations(
         char id[SCXML_EVENT_METADATA_CAPACITY + 1u] = {0};
         const char *request_id = NULL;
         size_t id_size = 0u;
-        if (!descriptor->autoforward) continue;
+        if (!descriptor->autoforward || index == skipped_invocation) continue;
         turbo_mutex_lock(&session->registry_lock);
         if (session->invocation_rows[index].state ==
                 SCXML_INVOCATION_ACTIVE) {
@@ -920,10 +1041,10 @@ static bool forward_external_to_invocations(
             session->invoke_user, &request, &adapter_ticket, &adapter_error);
         if (status == SCXML_ADAPTER_ACCEPTED &&
             adapter_ticket.commit != NULL && adapter_ticket.discard != NULL) {
-            turbo_mutex_lock(&session->registry_lock);
-            scxml_runtime_increment_u64(&session->invoke_stats.forwarded);
-            turbo_mutex_unlock(&session->registry_lock);
-            adapter_ticket.commit(adapter_ticket.user);
+            if (!stage_invocation_forward(
+                    session, index, &adapter_ticket, host_context,
+                    out_error))
+                return false;
             continue;
         }
         turbo_mutex_lock(&session->registry_lock);
@@ -1005,11 +1126,6 @@ void scxml_runtime_clear_current_event_metadata(scxml_session_impl *session) {
     session->system_values.event_invoke_id = empty;
     session->system_values.event_data = empty;
 }
-
-typedef struct scxml_active_query {
-    cflow_statechart_is_active_fn function;
-    void *user;
-} scxml_active_query;
 
 static bool evaluate_hook_active(
     void *user, cflow_machine_state_id state, bool *out_active) {
@@ -1100,7 +1216,7 @@ static bool bind_completion_done_data(
     return true;
 }
 
-bool scxml_runtime_observe_event(
+static bool scxml_runtime_observe_event(
     void *user, const cflow_statechart_instance_hook_context *context,
     const cflow_statechart_observed_event *event, const char **out_error) {
     static const char external_type[] = "external";
@@ -1303,22 +1419,24 @@ bool scxml_runtime_observe_event(
     return true;
 }
 
-cflow_statechart_external_preprocess_result
-scxml_runtime_preprocess_invocation_external(
-    void *user, const cflow_statechart_instance_hook_context *context,
+static cflow_statechart_host_result preprocess_invocation_external(
+    scxml_session_impl *session, cflow_statechart_host_context *context,
     const cflow_event_view *event, uint64_t source_token,
     const char **out_error) {
-    scxml_session_impl *session = (scxml_session_impl *)user;
     const scxml_invocation_descriptor *source = NULL;
+    cflow_statechart_instance_hook_context evaluation;
     size_t source_index = SIZE_MAX;
+    size_t skipped_invocation = SIZE_MAX;
     size_t index;
     if (out_error != NULL) *out_error = NULL;
     if (session == NULL || context == NULL || event == NULL ||
         out_error == NULL) {
         if (out_error != NULL)
             *out_error = "SCXML invocation preprocess context is invalid";
-        return CFLOW_STATECHART_EXTERNAL_PREPROCESS_FATAL;
+        return CFLOW_STATECHART_HOST_FATAL;
     }
+    evaluation = host_evaluation_context(
+        context, cflow_statechart_host_context_state(context));
     if (source_token != 0u &&
         (source_token & SCXML_EXTERNAL_METADATA_TOKEN_BIT) == 0u) {
         turbo_mutex_lock(&session->registry_lock);
@@ -1334,31 +1452,115 @@ scxml_runtime_preprocess_invocation_external(
         if (source_index == SIZE_MAX) {
             scxml_runtime_increment_u64(&session->invoke_stats.returned_rejected);
             turbo_mutex_unlock(&session->registry_lock);
-            return CFLOW_STATECHART_EXTERNAL_PREPROCESS_DROP;
+            return CFLOW_STATECHART_HOST_DROP;
         }
         turbo_mutex_unlock(&session->registry_lock);
         source = &session->program->invocations[source_index];
-        if (!execute_invocation_finalize(source, context, out_error))
-            return CFLOW_STATECHART_EXTERNAL_PREPROCESS_FATAL;
+        if (!execute_invocation_finalize(
+                source, session, context, out_error))
+            return CFLOW_STATECHART_HOST_FATAL;
         if (event->id == source->done_event) {
-            turbo_mutex_lock(&session->registry_lock);
-            if (session->invocation_rows[source_index].state ==
-                    SCXML_INVOCATION_ACTIVE &&
-                session->invocation_rows[source_index].token ==
-                    source_token) {
-                session->invocation_rows[source_index] =
-                    (scxml_invocation_row){0};
-                if (session->invoke_stats.active != 0u)
-                    --session->invoke_stats.active;
-                scxml_runtime_increment_u64(&session->invoke_stats.completed);
-            }
-            turbo_mutex_unlock(&session->registry_lock);
+            if (!stage_invocation_completion(
+                    session, source_index, source_token, context,
+                    out_error))
+                return CFLOW_STATECHART_HOST_FATAL;
+            skipped_invocation = source_index;
         }
     }
     if (!forward_external_to_invocations(
-            session, context, event, out_error))
-        return CFLOW_STATECHART_EXTERNAL_PREPROCESS_FATAL;
-    return CFLOW_STATECHART_EXTERNAL_PREPROCESS_CONTINUE;
+            session, &evaluation, context, event, skipped_invocation,
+            out_error))
+        return CFLOW_STATECHART_HOST_FATAL;
+    return CFLOW_STATECHART_HOST_CONTINUE;
+}
+
+static bool has_pending_active_invocation(
+    scxml_session_impl *session,
+    cflow_statechart_host_context *context) {
+    size_t index;
+    for (index = 0u; index < session->program->invocation_count; ++index) {
+        bool pending;
+        turbo_mutex_lock(&session->registry_lock);
+        pending = session->invocation_rows[index].state ==
+            SCXML_INVOCATION_PENDING;
+        turbo_mutex_unlock(&session->registry_lock);
+        if (pending && cflow_statechart_host_context_is_active(
+                           context,
+                           session->program->invocations[index].owner))
+            return true;
+    }
+    return false;
+}
+
+static cflow_statechart_host_result prepare_invocation_quiescence(
+    scxml_session_impl *session, cflow_statechart_host_context *context,
+    const char **out_error) {
+    cflow_statechart_stable_transaction_context legacy;
+    cflow_statechart_stable_transaction_result result;
+    void *staged_state;
+    if (!has_pending_active_invocation(session, context))
+        return CFLOW_STATECHART_HOST_CONTINUE;
+    staged_state = cflow_statechart_host_context_edit_state(
+        context, out_error);
+    if (staged_state == NULL) return CFLOW_STATECHART_HOST_FATAL;
+    legacy = (cflow_statechart_stable_transaction_context){
+        .published_state = cflow_statechart_host_context_state(context),
+        .staged_state = staged_state,
+        .configuration_version =
+            cflow_statechart_host_context_configuration_version(context),
+        .is_active = host_context_is_active,
+        .configuration_user = context,
+        .raise_internal = host_context_raise_internal,
+        .raise_user = context,
+        .stage_effect = host_context_stage_effect,
+        .effect_user = context};
+    result = scxml_runtime_start_stable_invocations_transaction(
+        session, &legacy, out_error);
+    return result == CFLOW_STATECHART_STABLE_TRANSACTION_FATAL
+        ? CFLOW_STATECHART_HOST_FATAL
+        : CFLOW_STATECHART_HOST_CONTINUE;
+}
+
+cflow_statechart_host_result scxml_runtime_host_transaction(
+    void *user, cflow_statechart_host_context *context,
+    const char **out_error) {
+    scxml_session_impl *session = (scxml_session_impl *)user;
+    cflow_statechart_host_phase phase;
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || context == NULL || out_error == NULL) {
+        if (out_error != NULL)
+            *out_error = "SCXML host transaction is invalid";
+        return CFLOW_STATECHART_HOST_FATAL;
+    }
+    phase = cflow_statechart_host_context_phase(context);
+    if (phase == CFLOW_STATECHART_HOST_PREPARE_TRIGGER) {
+        const cflow_statechart_observed_event *trigger =
+            cflow_statechart_host_context_trigger(context);
+        cflow_statechart_instance_hook_context evaluation;
+        if (trigger == NULL) {
+            *out_error = "SCXML host trigger is unavailable";
+            return CFLOW_STATECHART_HOST_FATAL;
+        }
+        evaluation = host_evaluation_context(
+            context, cflow_statechart_host_context_state(context));
+        if (!scxml_runtime_observe_event(
+                session, &evaluation, trigger, out_error))
+            return CFLOW_STATECHART_HOST_FATAL;
+        if (session->has_invoke &&
+            trigger->kind == CFLOW_STATECHART_OBSERVED_EXTERNAL) {
+            return preprocess_invocation_external(
+                session, context, trigger->event,
+                trigger->origin_token, out_error);
+        }
+        return CFLOW_STATECHART_HOST_CONTINUE;
+    }
+    if (phase == CFLOW_STATECHART_HOST_PREPARE_QUIESCENCE) {
+        return session->has_invoke
+            ? prepare_invocation_quiescence(session, context, out_error)
+            : CFLOW_STATECHART_HOST_CONTINUE;
+    }
+    *out_error = "SCXML host transaction phase is invalid";
+    return CFLOW_STATECHART_HOST_FATAL;
 }
 
 static scxml_execute_outcome raise_adapter_error(
@@ -2225,6 +2427,7 @@ static scxml_execute_outcome execute_scxml_range(
     const scxml_block *block,
     scxml_session_impl *session,
     const cflow_statechart_executable_context *context,
+    scxml_mutable_state *mutable_state,
     const scxml_expr_system_values *system_values,
     size_t begin, size_t end, size_t depth,
     bool abort_condition_error, const char **out_error) {
@@ -2278,14 +2481,17 @@ static scxml_execute_outcome execute_scxml_range(
                 tlog_peek_default(), "cflow.scxml", step->label);
         } else if (step->kind == SCXML_STEP_ASSIGN) {
             scxml_expr_diagnostic diagnostic = {0};
+            void *state;
             if (block->assignments == NULL ||
                 step->assignment >= block->assignment_storage_count) {
                 *out_error = "SCXML assignment descriptor is invalid";
                 return SCXML_EXECUTE_FATAL;
             }
+            state = mutable_state_get(mutable_state, out_error);
+            if (state == NULL) return SCXML_EXECUTE_FATAL;
             if (scxml_assign_apply_with_system(
                     &block->assignments[step->assignment],
-                    context->out_state, evaluate_cmeta_executable_active,
+                    state, evaluate_cmeta_executable_active,
                     (void *)context, system_values,
                     &diagnostic) !=
                 SCXML_EXPR_OK)
@@ -2294,6 +2500,7 @@ static scxml_execute_outcome execute_scxml_range(
             scxml_late_initializer_state *initializer;
             cflow_statechart_effect_ticket ticket;
             size_t assignment;
+            void *state;
             if (session == NULL || context->stage_effect == NULL ||
                 block->assignments == NULL ||
                 step->late_initializer >= session->late_initializer_count ||
@@ -2327,12 +2534,14 @@ static scxml_execute_outcome execute_scxml_range(
                     return SCXML_EXECUTE_FATAL;
                 }
             }
+            state = mutable_state_get(mutable_state, out_error);
+            if (state == NULL) return SCXML_EXECUTE_FATAL;
             for (assignment = 0u;
                  assignment < step->assignment_count; ++assignment) {
                 scxml_expr_diagnostic diagnostic = {0};
                 if (scxml_assign_apply_with_system(
                         &block->assignments[step->assignment + assignment],
-                        context->out_state, evaluate_cmeta_executable_active,
+                        state, evaluate_cmeta_executable_active,
                         (void *)context, system_values, &diagnostic) !=
                     SCXML_EXPR_OK) {
                     *out_error =
@@ -2347,6 +2556,7 @@ static scxml_execute_outcome execute_scxml_range(
             scxml_foreach_value value = {0};
             size_t iteration;
             size_t next_depth;
+            void *state;
             if (block->foreach_descriptors == NULL ||
                 step->foreach_descriptor >= block->foreach_storage_count) {
                 *out_error = "SCXML foreach descriptor is invalid";
@@ -2361,8 +2571,10 @@ static scxml_execute_outcome execute_scxml_range(
                 *out_error = "SCXML foreach step span is invalid";
                 return SCXML_EXECUTE_FATAL;
             }
+            state = mutable_state_get(mutable_state, out_error);
+            if (state == NULL) return SCXML_EXECUTE_FATAL;
             if (scxml_foreach_open(
-                    &descriptor->program, context->out_state,
+                    &descriptor->program, state,
                     &snapshot, &diagnostic) !=
                 SCXML_EXPR_OK)
                 return raise_block_execution_error(block, context, out_error);
@@ -2377,7 +2589,7 @@ static scxml_execute_outcome execute_scxml_range(
             for (iteration = 0u; iteration < snapshot.length; ++iteration) {
                 scxml_execute_outcome outcome;
                 if (scxml_foreach_next(
-                        &descriptor->program, context->out_state, &snapshot,
+                        &descriptor->program, state, &snapshot,
                         &value, iteration, &diagnostic) !=
                     SCXML_EXPR_OK) {
                     scxml_foreach_value_destroy(
@@ -2388,7 +2600,7 @@ static scxml_execute_outcome execute_scxml_range(
                         block, context, out_error);
                 }
                 outcome = execute_scxml_range(
-                    block, session, context, system_values,
+                    block, session, context, mutable_state, system_values,
                     descriptor->step_begin,
                     descriptor->step_end, next_depth, true, out_error);
                 if (outcome != SCXML_EXECUTE_CONTINUE) {
@@ -2436,7 +2648,8 @@ static scxml_execute_outcome execute_scxml_range(
                     scxml_expr_diagnostic diagnostic = {0};
                     bool enabled = false;
                     if (scxml_expr_evaluate_with_system(
-                            &candidate->condition, context->out_state,
+                            &candidate->condition,
+                            mutable_state_read(mutable_state, context),
                             evaluate_cmeta_executable_active, (void *)context,
                             system_values,
                             &enabled, &diagnostic) !=
@@ -2465,7 +2678,7 @@ static scxml_execute_outcome execute_scxml_range(
                 if (!scxml_analyze_checked_add(depth, 1u, &next_depth))
                     return SCXML_EXECUTE_FATAL;
                 outcome = execute_scxml_range(
-                    block, session, context, system_values,
+                    block, session, context, mutable_state, system_values,
                     selected->step_begin,
                     selected->step_end, next_depth,
                     abort_condition_error, out_error);
@@ -2487,6 +2700,7 @@ static bool execute_scxml_block_impl(
     const char **out_error) {
     scxml_execute_outcome outcome;
     scxml_expr_system_values system_values;
+    scxml_mutable_state mutable_state = {0};
     const bool trivial_state =
         cmeta_type_require_traits(
             block != NULL ? block->state_type : NULL,
@@ -2529,8 +2743,9 @@ static bool execute_scxml_block_impl(
         *out_error = "SCXML state copy construction failed";
         return false;
     }
+    mutable_state.value = context->out_state;
     outcome = execute_scxml_range(
-        block, session, context, &system_values,
+        block, session, context, &mutable_state, &system_values,
         block->step_begin, block->step_end,
         0u, false, out_error);
     if (outcome == SCXML_EXECUTE_FATAL) {

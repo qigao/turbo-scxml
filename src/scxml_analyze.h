@@ -29,14 +29,14 @@ scxml_status scxml_analyze_fail(
 bool scxml_analyze_is_xml_nmtoken(turbo_xml_string_view token);
 bool scxml_analyze_parse_null_in_condition(
     turbo_xml_string_view value, turbo_xml_string_view *out_state);
-scxml_element_kind scxml_analyze_element_kind(turbo_xml_node node);
+scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node);
 bool scxml_analyze_is_state_element(scxml_element_kind kind);
-turbo_xml_attribute scxml_analyze_find_attribute(
-    turbo_xml_node node, const char *local_name);
+scxml_syntax_attribute scxml_analyze_find_attribute(
+    scxml_syntax_node node, const char *local_name);
 scxml_status scxml_analyze_validate_element_attributes(
-    scxml_build *build, turbo_xml_node node, scxml_element_kind kind);
+    scxml_build *build, scxml_syntax_node node, scxml_element_kind kind);
 size_t scxml_analyze_element_child_count(
-    turbo_xml_node node, scxml_element_kind wanted);
+    scxml_syntax_node node, scxml_element_kind wanted);
 bool scxml_analyze_token_next(
     turbo_xml_string_view value, size_t *cursor,
     turbo_xml_string_view *token);
@@ -50,24 +50,24 @@ bool scxml_analyze_parse_delay_ms(
     turbo_xml_string_view value, uint64_t *out_ms);
 bool scxml_analyze_cmeta_content_kind_is_scalar(cmeta_data_kind kind);
 scxml_status scxml_analyze_inspect_inline_content(
-    scxml_build *build, turbo_xml_node content,
+    scxml_build *build, scxml_syntax_node content,
     scxml_content_kind *out_kind, size_t *out_size);
 scxml_status scxml_analyze_state(
-    scxml_build *build, turbo_xml_node node,
+    scxml_build *build, scxml_syntax_node node,
     scxml_element_kind kind, bool is_root, scxml_counts *counts);
 scxml_status scxml_analyze_emit_state(
-    scxml_build *build, turbo_xml_node node,
+    scxml_build *build, scxml_syntax_node node,
     cflow_machine_state_id parent, bool is_root);
 const scxml_name_ref *scxml_analyze_find_name_ref(
     const scxml_name_ref *names, size_t count,
     turbo_xml_string_view name);
 cflow_machine_state_id scxml_analyze_node_id(
-    const scxml_build *build, turbo_xml_node node, size_t node_count);
+    const scxml_build *build, scxml_syntax_node node, size_t node_count);
 scxml_status scxml_analyze_emit_invocation_declarations(
-    scxml_build *build, turbo_xml_node node, size_t node_count);
+    scxml_build *build, scxml_syntax_node node, size_t node_count);
 scxml_status scxml_analyze_resolve_invocation_events(scxml_build *build);
 scxml_status scxml_analyze_collect_transition_events(
-    scxml_build *build, turbo_xml_node node);
+    scxml_build *build, scxml_syntax_node node);
 void scxml_analyze_collect_reserved_error_events(
     scxml_build *build, turbo_xml_location location);
 scxml_status scxml_analyze_build_event_names(

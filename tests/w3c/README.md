@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 130
-local PASS transformations, records 38 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 132
+local PASS transformations, records 36 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -73,6 +73,8 @@ Status meanings are strict:
 | `test226.scxml` | [test226.txml](https://www.w3.org/Voice/2013/scxml-irp/226/test226.txml) | The strict host receives the canonical type, exact source URL, and named integer parameter before returning the child Event. |
 | `test228.scxml` | [test228.txml](https://www.w3.org/Voice/2013/scxml-irp/228/test228.txml) | The completion Event returned through a live token exposes that invocation's exact ID through `_event.invokeid`. |
 | `test232.scxml` | [test232.txml](https://www.w3.org/Voice/2013/scxml-irp/232/test232.txml) | The host reports two normal Events and completion in that order; the parent's three-state sequence observes the same FIFO order. |
+| `test233.scxml` | [test233.txml](https://www.w3.org/Voice/2013/scxml-irp/233/test233.txml) | The matching invocation's `finalize` assignment commits before the returned Event's transition guard is evaluated. |
+| `test234.scxml` | [test234.txml](https://www.w3.org/Voice/2013/scxml-irp/234/test234.txml) | A returned Event executes only the `finalize` belonging to its exact committed invocation token. |
 | `test235.scxml` | [test235.txml](https://www.w3.org/Voice/2013/scxml-irp/235/test235.txml) | Completion for explicit invocation ID `foo` passes only when the selected Event's `_event.name` is exactly `done.invoke.foo`. |
 | `test236.scxml` | [test236.txml](https://www.w3.org/Voice/2013/scxml-irp/236/test236.txml) | A normal return precedes completion; after completion is processed, the stale token is rejected and its late Event cannot reach selection. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
@@ -447,6 +449,16 @@ session from `test247-child.scxml`, observes that session's top-level-final
 `done` state, destroys it cleanly, and only then reports one completion through
 the parent token. The child remains host-owned; production code gains no child
 interpreter, cross-session registry, transport, or thread.
+
+Tests 233 and 234 use a bounded two-token-aware invoke host. Test 233 reports
+`childToParent` through its sole committed token and can pass only when that
+invocation's `finalize` assignment is visible to selection of the same Event.
+Test 234 starts two live invocations, reports through the first token, and uses
+distinct assignment results so running neither handler, the second handler, or
+both handlers cannot pass. The CFlow V4 host transaction stages the CMeta write,
+completion bookkeeping, and autoforward tickets together; rollback discards all
+of them. Session destruction then verifies cancellation cleanup for every
+invocation that remains active.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads
