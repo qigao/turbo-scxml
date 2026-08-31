@@ -305,11 +305,7 @@ static void commit_invocation_lifecycle(void *user) {
     if (!cancel) return;
     request = (scxml_invoke_cancel_request){
         .token = token, .id = cancel_id, .id_size = id_size};
-    status = (session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V3
-                  ? session->invoke_v3.prepare_cancel
-              : session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V2
-                  ? session->invoke_v2.prepare_cancel
-                  : session->invoke.prepare_cancel)(
+    status = session->invoke.prepare_cancel(
         session->invoke_user, &request, &adapter_ticket, &adapter_error);
     (void)adapter_error;
     if (status != SCXML_ADAPTER_ACCEPTED ||
@@ -487,6 +483,7 @@ static bool materialize_invocation_payload(
     const scxml_evaluation_context *context,
     scxml_payload_view *out) {
     size_t index;
+    scxml_payload_value scalar = {0};
     if (session == NULL || session->program == NULL ||
         invocation == NULL || context == NULL || out == NULL ||
         invocation->payload_first > session->program->payload_count ||
@@ -498,10 +495,20 @@ static bool materialize_invocation_payload(
           session->payload_scratch == NULL)))
         return false;
     *out = (scxml_payload_view){0};
-    if (invocation->content.kind == SCXML_CONTENT_SCALAR) {
+    if (invocation->content.kind != SCXML_CONTENT_INVALID &&
+        invocation->content.kind != SCXML_CONTENT_SCALAR) {
         out->kind = SCXML_PAYLOAD_CONTENT;
-        return evaluate_invocation_value(
-            &invocation->data_expr, session, context, &out->content);
+        return scxml_runtime_materialize_content_descriptor(
+            &invocation->content, context->state, &out->content);
+    }
+    if (invocation->content.kind == SCXML_CONTENT_SCALAR) {
+        if (!evaluate_invocation_value(
+                &invocation->data_expr, session, context, &scalar))
+            return false;
+        out->kind = SCXML_PAYLOAD_CONTENT;
+        out->content = (scxml_content_view){
+            .kind = SCXML_CONTENT_SCALAR, .scalar = scalar};
+        return true;
     }
     if (invocation->payload_count == 0u) return true;
     for (index = 0u; index < invocation->payload_count; ++index) {
@@ -512,36 +519,17 @@ static bool materialize_invocation_payload(
             &session->payload_scratch[index];
         if (!evaluate_invocation_value(
                 &descriptor->expression, session, context,
-                &entry->value))
+                &scalar))
             return false;
         entry->name = descriptor->name;
         entry->name_size = descriptor->name_size;
+        entry->value = (scxml_content_view){
+            .kind = SCXML_CONTENT_SCALAR, .scalar = scalar};
     }
     out->kind = SCXML_PAYLOAD_NAMED;
     out->entries = session->payload_scratch;
     out->entry_count = invocation->payload_count;
     return true;
-}
-
-static bool materialize_invocation_payload_v3(
-    scxml_session_impl *session,
-    const scxml_invocation_descriptor *invocation,
-    const scxml_evaluation_context *context,
-    scxml_payload_view_v3 *out) {
-    scxml_payload_view scalar = {0};
-    if (session == NULL || invocation == NULL || context == NULL ||
-        out == NULL)
-        return false;
-    *out = (scxml_payload_view_v3){0};
-    if (invocation->content.kind != SCXML_CONTENT_INVALID &&
-        invocation->content.kind != SCXML_CONTENT_SCALAR) {
-        out->kind = SCXML_PAYLOAD_CONTENT;
-        return scxml_runtime_materialize_content_descriptor(
-            &invocation->content, context->state, &out->content);
-    }
-    return materialize_invocation_payload(
-               session, invocation, context, &scalar) &&
-           scxml_runtime_payload_v2_to_v3(session, &scalar, out);
 }
 
 static bool restore_invocation_id_location(
@@ -791,10 +779,7 @@ scxml_runtime_start_pending_invocations(
         const scxml_invocation_descriptor *descriptor =
             &session->program->invocations[index];
         scxml_invoke_start_request request;
-        scxml_invoke_start_request_v2 request_v2 = {0};
-        scxml_invoke_start_request_v3 request_v3 = {0};
         scxml_payload_view payload = {0};
-        scxml_payload_view_v3 payload_v3 = {0};
         cflow_statechart_effect_ticket adapter_ticket = {0};
         scxml_adapter_status status;
         const char *adapter_error = NULL;
@@ -870,11 +855,8 @@ scxml_runtime_start_pending_invocations(
                  &dynamic_src, &dynamic_src_size)) ||
             ((descriptor->content.kind != SCXML_CONTENT_INVALID ||
               descriptor->payload_count != 0u) &&
-             !(session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V3
-                   ? materialize_invocation_payload_v3(
-                         session, descriptor, &evaluation, &payload_v3)
-                   : materialize_invocation_payload(
-                         session, descriptor, &evaluation, &payload)))) {
+             !materialize_invocation_payload(
+                 session, descriptor, &evaluation, &payload))) {
             if (!stage_invocation_result(
                     session, index, token, id, id_size,
                     descriptor->has_id_location,
@@ -894,28 +876,11 @@ scxml_runtime_start_pending_invocations(
             .type_size = dynamic_type_size,
             .src = dynamic_src,
             .src_size = dynamic_src_size,
-            .autoforward = descriptor->autoforward};
-        if (session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V3) {
-            request_v3.base = request;
-            request_v3.payload = payload_v3;
-            status = session->invoke_v3.prepare_start(
-                session->invoke_user, &request_v3, &adapter_ticket,
-                &adapter_error);
-        } else if (session->invoke_abi ==
-                   SCXML_INVOKE_ADAPTER_ABI_V2) {
-            request_v2.base = request;
-            request_v2.payload = payload;
-            status = session->invoke_v2.prepare_start(
-                session->invoke_user, &request_v2, &adapter_ticket,
-                &adapter_error);
-        } else if (payload.kind != SCXML_PAYLOAD_NONE) {
-            status = SCXML_ADAPTER_INVALID_CONTRACT;
-            adapter_error = "SCXML invocation payload requires a v2 adapter";
-        } else {
-            status = session->invoke.prepare_start(
-                session->invoke_user, &request, &adapter_ticket,
-                &adapter_error);
-        }
+            .autoforward = descriptor->autoforward,
+            .payload = payload};
+        status = session->invoke.prepare_start(
+            session->invoke_user, &request, &adapter_ticket,
+            &adapter_error);
         if (status == SCXML_ADAPTER_ACCEPTED &&
             adapter_ticket.commit != NULL && adapter_ticket.discard != NULL) {
             if (!stage_invocation_result(
@@ -1029,11 +994,7 @@ static bool forward_external_to_invocations(
             .id = request_id,
             .id_size = id_size,
             .event = event};
-        status = (session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V3
-                      ? session->invoke_v3.prepare_forward
-                  : session->invoke_abi == SCXML_INVOKE_ADAPTER_ABI_V2
-                      ? session->invoke_v2.prepare_forward
-                      : session->invoke.prepare_forward)(
+        status = session->invoke.prepare_forward(
             session->invoke_user, &request, &adapter_ticket, &adapter_error);
         if (status == SCXML_ADAPTER_ACCEPTED &&
             adapter_ticket.commit != NULL && adapter_ticket.discard != NULL) {
@@ -1634,6 +1595,8 @@ static scxml_execute_outcome send_failure_outcome(
         *out_error = "SCXML reserved adapter error event is unavailable";
         return SCXML_EXECUTE_FATAL;
     }
+    metadata.abi_version = SCXML_EVENT_METADATA_ABI;
+    metadata.struct_size = sizeof(metadata);
     metadata.send_id = request->id;
     metadata.send_id_size = request->id_size;
     metadata_row = scxml_runtime_reserve_event_metadata(
@@ -1689,8 +1652,7 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
         !scxml_runtime_metadata_field_valid(metadata->origin_type,
                                     metadata->origin_type_size) ||
         !scxml_runtime_metadata_field_valid(metadata->invoke_id,
-                                    metadata->invoke_id_size) ||
-        !scxml_runtime_metadata_field_valid(metadata->data, metadata->data_size))
+                                    metadata->invoke_id_size))
         return NULL;
     turbo_mutex_lock(&session->registry_lock);
     for (index = 0u; index < session->external_metadata_capacity; ++index) {
@@ -1726,7 +1688,6 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     SCXML_RETAIN_METADATA(origin);
     SCXML_RETAIN_METADATA(origin_type);
     SCXML_RETAIN_METADATA(invoke_id);
-    SCXML_RETAIN_METADATA(data);
 #undef SCXML_RETAIN_METADATA
     turbo_mutex_unlock(&session->registry_lock);
     *out_token = token;
@@ -1836,30 +1797,22 @@ static bool materialize_effect_named_payload(
         const scxml_payload_descriptor *descriptor =
             &block->payloads[effect->payload_first + index];
         scxml_expr_value value = {0};
+        scxml_payload_value scalar = {0};
         scxml_payload_entry *entry =
             &session->payload_scratch[index];
         if (!evaluate_effect_value(
                 &descriptor->expression, context, system_values, &value) ||
-            !scxml_runtime_payload_value_from_cmeta(&value, &entry->value))
+            !scxml_runtime_payload_value_from_cmeta(&value, &scalar))
             return false;
         entry->name = descriptor->name;
         entry->name_size = descriptor->name_size;
+        entry->value = (scxml_content_view){
+            .kind = SCXML_CONTENT_SCALAR,
+            .scalar = scalar};
     }
     out->kind = SCXML_PAYLOAD_NAMED;
     out->entries = session->payload_scratch;
     out->entry_count = effect->payload_count;
-    return true;
-}
-
-static bool scalar_content_from_payload_value(
-    const scxml_payload_value *value,
-    scxml_content_view *out) {
-    if (value == NULL || out == NULL ||
-        value->kind == SCXML_PAYLOAD_VALUE_INVALID)
-        return false;
-    *out = (scxml_content_view){
-        .kind = SCXML_CONTENT_SCALAR,
-        .scalar = *value};
     return true;
 }
 
@@ -1887,35 +1840,6 @@ bool scxml_runtime_materialize_content_descriptor(
         return true;
     }
     return false;
-}
-
-bool scxml_runtime_payload_v2_to_v3(
-    scxml_session_impl *session,
-    const scxml_payload_view *source,
-    scxml_payload_view_v3 *out) {
-    size_t index;
-    if (session == NULL || source == NULL || out == NULL ||
-        source->entry_count > session->payload_scratch_capacity ||
-        (source->entry_count != 0u && session->payload_scratch_v3 == NULL))
-        return false;
-    *out = (scxml_payload_view_v3){.kind = source->kind};
-    if (source->kind == SCXML_PAYLOAD_CONTENT)
-        return scalar_content_from_payload_value(
-            &source->content, &out->content);
-    if (source->kind == SCXML_PAYLOAD_NONE) return true;
-    if (source->kind != SCXML_PAYLOAD_NAMED) return false;
-    for (index = 0u; index < source->entry_count; ++index) {
-        scxml_payload_entry_v3 *entry =
-            &session->payload_scratch_v3[index];
-        entry->name = source->entries[index].name;
-        entry->name_size = source->entries[index].name_size;
-        if (!scalar_content_from_payload_value(
-                &source->entries[index].value, &entry->value))
-            return false;
-    }
-    out->entries = session->payload_scratch_v3;
-    out->entry_count = source->entry_count;
-    return true;
 }
 
 bool scxml_runtime_scalar_value_to_text(
@@ -1992,14 +1916,12 @@ static scxml_execute_outcome execute_send(
     const bool null_value = false;
     scxml_send_request materialized = descriptor->request.send;
     const scxml_send_request *request = &materialized;
-    scxml_send_request_v2 request_v2 = {0};
-    scxml_send_request_v3 request_v3 = {0};
     scxml_payload_view payload = {0};
-    scxml_payload_view_v3 payload_v3 = {0};
-    scxml_content_view internal_content = {0};
+    scxml_content_view content = {0};
     scxml_expr_value value = {0};
-    scxml_event_metadata metadata = {0};
-    char data_storage[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    scxml_event_metadata metadata = {
+        .abi_version = SCXML_EVENT_METADATA_ABI,
+        .struct_size = sizeof(metadata)};
     char id_storage[SCXML_EVENT_METADATA_CAPACITY + 1u];
     const scxml_program_name *dynamic_event = NULL;
     bool internal_target = descriptor->internal_target;
@@ -2066,47 +1988,25 @@ static scxml_execute_outcome execute_send(
                 ? value.data.uint : (uint64_t)value.data.sint;
     }
     if (descriptor->content.kind == SCXML_CONTENT_SCALAR) {
+        scxml_payload_value scalar = {0};
         if (!evaluate_effect_value(
-                &descriptor->data_expr, context, system_values, &value))
+                &descriptor->data_expr, context, system_values, &value) ||
+            !scxml_runtime_payload_value_from_cmeta(&value, &scalar))
             return raise_block_execution_error(block, context, out_error);
-        if (internal_target) {
-            if (!scxml_runtime_scalar_value_to_text(
-                    &value, data_storage, sizeof(data_storage),
-                    &metadata.data, &metadata.data_size))
-                return raise_block_execution_error(
-                    block, context, out_error);
-        } else {
-            payload.kind = SCXML_PAYLOAD_CONTENT;
-            if (!scxml_runtime_payload_value_from_cmeta(&value, &payload.content))
-                return raise_block_execution_error(
-                    block, context, out_error);
-        }
+        content = (scxml_content_view){
+            .kind = SCXML_CONTENT_SCALAR,
+            .scalar = scalar};
     } else if (descriptor->content.kind != SCXML_CONTENT_INVALID) {
-        if (internal_target) {
-            if (descriptor->content.kind == SCXML_CONTENT_CMETA) {
-                if (!scxml_runtime_materialize_content_descriptor(
-                        &descriptor->content, context->out_state,
-                        &internal_content))
-                    return raise_block_execution_error(
-                        block, context, out_error);
-            } else {
-                if ((descriptor->content.kind !=
-                         SCXML_CONTENT_TEXT_UTF8 &&
-                     descriptor->content.kind !=
-                         SCXML_CONTENT_XML_UTF8) ||
-                    descriptor->content.byte_count >
-                        SCXML_EVENT_METADATA_CAPACITY)
-                    return raise_block_execution_error(
-                        block, context, out_error);
-                metadata.data = descriptor->content.bytes;
-                metadata.data_size = descriptor->content.byte_count;
-            }
-        } else {
-            payload_v3.kind = SCXML_PAYLOAD_CONTENT;
-            if (!scxml_runtime_materialize_content_descriptor(
-                    &descriptor->content, context->out_state,
-                    &payload_v3.content))
-                return raise_block_execution_error(block, context, out_error);
+        if (!scxml_runtime_materialize_content_descriptor(
+                &descriptor->content, context->out_state, &content))
+            return raise_block_execution_error(block, context, out_error);
+    }
+    if (content.kind != SCXML_CONTENT_INVALID) {
+        if (internal_target)
+            metadata.data = content;
+        else {
+            payload.kind = SCXML_PAYLOAD_CONTENT;
+            payload.content = content;
         }
     }
     if (descriptor->payload_count != 0u) {
@@ -2145,9 +2045,9 @@ static scxml_execute_outcome execute_send(
             cflow_statechart_effect_ticket metadata_ticket;
             if (metadata_row == NULL)
                 return raise_block_execution_error(block, context, out_error);
-            if (internal_content.kind != SCXML_CONTENT_INVALID &&
+            if (metadata.data.kind != SCXML_CONTENT_INVALID &&
                 !scxml_analyze_attach_event_content(
-                    session, metadata_row, &internal_content)) {
+                    session, metadata_row, &metadata.data)) {
                 scxml_runtime_release_event_metadata(metadata_row);
                 return raise_block_execution_error(
                     block, context, out_error);
@@ -2172,16 +2072,7 @@ static scxml_execute_outcome execute_send(
         *out_error = "SCXML send requires an owning Event I/O session";
         return SCXML_EXECUTE_FATAL;
     }
-    if (payload.kind != SCXML_PAYLOAD_NONE &&
-        session->event_io_abi == SCXML_EVENT_IO_ADAPTER_ABI_V1)
-        return raise_block_execution_error(block, context, out_error);
-    if (payload_v3.kind != SCXML_PAYLOAD_NONE &&
-        session->event_io_abi != SCXML_EVENT_IO_ADAPTER_ABI_V3)
-        return raise_block_execution_error(block, context, out_error);
-    if (session->event_io_abi == SCXML_EVENT_IO_ADAPTER_ABI_V3 &&
-        payload_v3.kind == SCXML_PAYLOAD_NONE &&
-        !scxml_runtime_payload_v2_to_v3(session, &payload, &payload_v3))
-        return raise_block_execution_error(block, context, out_error);
+    materialized.payload = payload;
     turbo_mutex_lock(&session->registry_lock);
     prepared = acquire_prepared_effect_locked(session);
     if (prepared != NULL && request->delay_ms != 0u) {
@@ -2203,23 +2094,8 @@ static scxml_execute_outcome execute_send(
     prepared->registry_index = registry_index;
     turbo_mutex_unlock(&session->registry_lock);
 
-    if (session->event_io_abi == SCXML_EVENT_IO_ADAPTER_ABI_V3) {
-        request_v3.base = materialized;
-        request_v3.payload = payload_v3;
-        status = session->event_io_v3.prepare_send(
-            session->adapter_user, &request_v3, &adapter_ticket,
-            &adapter_error);
-    } else if (session->event_io_abi ==
-               SCXML_EVENT_IO_ADAPTER_ABI_V2) {
-        request_v2.base = materialized;
-        request_v2.payload = payload;
-        status = session->event_io_v2.prepare_send(
-            session->adapter_user, &request_v2, &adapter_ticket,
-            &adapter_error);
-    } else {
-        status = session->event_io.prepare_send(
-            session->adapter_user, request, &adapter_ticket, &adapter_error);
-    }
+    status = session->event_io.prepare_send(
+        session->adapter_user, request, &adapter_ticket, &adapter_error);
     if (status != SCXML_ADAPTER_ACCEPTED) {
         turbo_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
@@ -2297,11 +2173,7 @@ static scxml_execute_outcome execute_cancel(
     delayed->state = SCXML_DELAYED_CANCEL_RESERVED;
     turbo_mutex_unlock(&session->registry_lock);
 
-    status = (session->event_io_abi == SCXML_EVENT_IO_ADAPTER_ABI_V3
-                  ? session->event_io_v3.prepare_cancel
-              : session->event_io_abi == SCXML_EVENT_IO_ADAPTER_ABI_V2
-                  ? session->event_io_v2.prepare_cancel
-                  : session->event_io.prepare_cancel)(
+    status = session->event_io.prepare_cancel(
         session->adapter_user, request, &adapter_ticket, &adapter_error);
     if (status != SCXML_ADAPTER_ACCEPTED) {
         turbo_mutex_lock(&session->registry_lock);

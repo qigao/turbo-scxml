@@ -388,7 +388,7 @@ does not become a second expression or state fact source. Test 183 uses the
 same committed loopback but permits its event1 transition only after the
 generated ID has been published to the owned `send_id` location.
 
-Tests 176 and 205 use the versioned v2 payload boundary to require the exact
+Tests 176 and 205 use the single typed payload boundary to require the exact
 event name, payload name, scalar kind, and value evaluated by the inline block.
 Test 178 additionally requires both duplicate names in document order, proving
 that the callback-scoped payload remains an ordered entry sequence rather than
@@ -399,14 +399,14 @@ message and rejects a later delivery attempt. This follows the documented
 host-owned timer and session-owned lifecycle boundary without adding a second
 timer registry to TurboSCXML.
 
-Test 179 replaces upstream self-delivery with the versioned v3 host Event I/O
+Test 179 replaces upstream self-delivery with the single content-aware host Event I/O
 adapter. The fixture still evaluates literal `content` when `send` executes;
 the adapter is the external-service boundary and requires the exact UTF-8 bytes
 `123` before the only terminal path can complete. Test 185 replaces wall-clock
 delivery with ordered public admission: the host requires the delayed request
 to carry 1000 ms, admits the zero-delay Event first, and admits the delayed
 Event only after the session reaches its waiting state. Test 186 mutates the
-source CMeta field after a delayed send; the v2 host must already own scalar
+source CMeta field after a delayed send; the typed host must already own scalar
 payload 1 while the eventless terminal guard observes the new value 2. Tests
 208 and 210 retain two live delayed-send identities in the session registry.
 The strict host requires the cancellation to name the first identity, rejects
@@ -421,7 +421,7 @@ invocation token. The fixtures independently require the writable CMeta
 `idlocation` to be nonempty and exactly `s0.1`, so removing the generated child
 does not weaken either binding or `stateid.platformid` witness.
 
-Tests 215, 216, 220, 225, 226, 530, and 554 use one bounded v2 invoke host.
+Tests 215, 216, 220, 225, 226, 530, and 554 use one bounded invoke host.
 Tests 215 and 216 overwrite their initial CMeta strings in `onentry`; only the
 new type/source is accepted. Test 220 requires the canonical SCXML type before
 the host reports completion. Test 225 requires two committed requests to carry
@@ -509,7 +509,7 @@ no scalar string view.
 The selected Event remains current through all eventless microsteps in the
 same run-to-completion cycle. Initial eventless work has no current Event and
 therefore fails evaluation when it reads `_event`. Scalar/text/XML data is
-exposed as a bounded string. `scxml_session_try_send_v3()` additionally
+exposed as a bounded string. `scxml_session_try_send_with_metadata()` additionally
 copies structured CMeta data whose descriptor is exactly the compiled session
 root, allowing typed paths such as `_event.data.order.count`. The copy is owned
 by the session until the next Event is selected or the session is destroyed.
@@ -521,7 +521,7 @@ Event slot and row metadata.
 
 Format parsing remains outside the SCXML runtime. An embedding application may
 use CBind/CSerde to convert JSON, XML, YAML, or another format into the compiled
-root CMeta object, then admit that object through the v3 API. This keeps codecs
+root CMeta object, then admit that object through the metadata API. This keeps codecs
 and their errors out of transition selection. Invalid envelopes, unsupported
 content, schema mismatches, bare/unknown `_event` paths, and every write to an
 `_event` location fail fast without a compatibility fallback.

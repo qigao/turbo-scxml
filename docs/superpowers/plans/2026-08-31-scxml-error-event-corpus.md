@@ -39,7 +39,7 @@
 - Missing during RED: `tests/w3c/test402.scxml`
 
 **Interfaces:**
-- Consumes: `validate_w3c_manifest()`, `run_w3c_cmeta_fixture()`, `cflow_executor_try_post()`, and `scxml_session_try_send_v2()`.
+- Consumes: `validate_w3c_manifest()`, `run_w3c_cmeta_fixture()`, `cflow_executor_try_post()`, and `scxml_session_try_send_with_metadata()`.
 - Produces: strict inventory totals of 67 `PASS`, 101 `UNSUPPORTED`, and 34 `N/A`, plus deterministic ordered-external admission for test 401.
 
 - [x] **Step 1: Add the ordered-external test gate**

@@ -469,7 +469,7 @@ typedef struct payload_adapter_probe {
     char content_string[32];
 } payload_adapter_probe;
 
-typedef struct content_v3_probe {
+typedef struct content_probe {
     size_t sends;
     size_t starts;
     size_t commits;
@@ -480,7 +480,7 @@ typedef struct content_v3_probe {
     char bytes[256];
     const cmeta_data_desc *schema;
     scxml_nested_data nested;
-} content_v3_probe;
+} content_probe;
 
 typedef struct invoke_idlocation_probe invoke_idlocation_probe;
 
@@ -581,15 +581,6 @@ static scxml_adapter_status invoke_idlocation_prepare_start(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
-static scxml_adapter_status invoke_idlocation_prepare_start_v2(
-    void *user, const scxml_invoke_start_request_v2 *request,
-    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
-    if (request == NULL || request->payload.kind != SCXML_PAYLOAD_NONE)
-        return SCXML_ADAPTER_INVALID_CONTRACT;
-    return invoke_idlocation_prepare_start(
-        user, &request->base, out_ticket, out_error);
-}
-
 static scxml_adapter_status invoke_idlocation_prepare_cancel(
     void *user, const scxml_invoke_cancel_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
@@ -646,25 +637,27 @@ static bool copy_payload(payload_adapter_probe *probe,
     probe->kind = payload->kind;
     probe->entry_count = payload->entry_count;
     if (payload->kind == SCXML_PAYLOAD_CONTENT)
-        return copy_payload_value(
+        return payload->content.kind == SCXML_CONTENT_SCALAR &&
+        copy_payload_value(
             &probe->content, probe->content_string,
-            sizeof(probe->content_string), &payload->content);
+            sizeof(probe->content_string), &payload->content.scalar);
     for (index = 0u; index < payload->entry_count; ++index) {
         if (!copy_probe_text(
                 probe->names[index], sizeof(probe->names[index]),
                 payload->entries[index].name,
                 payload->entries[index].name_size) ||
+            payload->entries[index].value.kind != SCXML_CONTENT_SCALAR ||
             !copy_payload_value(
                 &probe->values[index], probe->strings[index],
                 sizeof(probe->strings[index]),
-                &payload->entries[index].value))
+                &payload->entries[index].value.scalar))
             return false;
     }
     return payload->kind == SCXML_PAYLOAD_NONE ||
            payload->kind == SCXML_PAYLOAD_NAMED;
 }
 
-static bool copy_content_v3(content_v3_probe *probe,
+static bool copy_content(content_probe *probe,
                             const scxml_content_view *content) {
     if (probe == NULL || content == NULL) return false;
     probe->kind = content->kind;
@@ -683,28 +676,28 @@ static bool copy_content_v3(content_v3_probe *probe,
     return content->kind == SCXML_CONTENT_SCALAR;
 }
 
-static void content_v3_ticket_commit(void *user) {
-    content_v3_probe *probe = (content_v3_probe *)user;
+static void content_ticket_commit(void *user) {
+    content_probe *probe = (content_probe *)user;
     if (probe != NULL) ++probe->commits;
 }
 
-static void content_v3_ticket_discard(void *user) {
-    content_v3_probe *probe = (content_v3_probe *)user;
+static void content_ticket_discard(void *user) {
+    content_probe *probe = (content_probe *)user;
     if (probe != NULL) ++probe->discards;
 }
 
-static scxml_adapter_status content_v3_prepare_send(
-    void *user, const scxml_send_request_v3 *request,
+static scxml_adapter_status content_prepare_send(
+    void *user, const scxml_send_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
-    content_v3_probe *probe = (content_v3_probe *)user;
+    content_probe *probe = (content_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
         out_error == NULL || request->payload.kind !=
             SCXML_PAYLOAD_CONTENT ||
-        !copy_content_v3(probe, &request->payload.content))
+        !copy_content(probe, &request->payload.content))
         return SCXML_ADAPTER_INVALID_CONTRACT;
     ++probe->sends;
     if (probe->send_status != SCXML_ADAPTER_ACCEPTED) {
-        *out_error = "content v3 send rejected by test adapter";
+        *out_error = "content-aware send rejected by test adapter";
         return probe->send_status;
     }
     if (probe->invalid_send_ticket) {
@@ -713,28 +706,28 @@ static scxml_adapter_status content_v3_prepare_send(
         return SCXML_ADAPTER_ACCEPTED;
     }
     *out_ticket = (cflow_statechart_effect_ticket){
-        content_v3_ticket_commit, content_v3_ticket_discard, probe};
+        content_ticket_commit, content_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
 
-static scxml_adapter_status content_v3_prepare_start(
-    void *user, const scxml_invoke_start_request_v3 *request,
+static scxml_adapter_status content_prepare_start(
+    void *user, const scxml_invoke_start_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
-    content_v3_probe *probe = (content_v3_probe *)user;
+    content_probe *probe = (content_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
         out_error == NULL || request->payload.kind !=
             SCXML_PAYLOAD_CONTENT ||
-        !copy_content_v3(probe, &request->payload.content))
+        !copy_content(probe, &request->payload.content))
         return SCXML_ADAPTER_INVALID_CONTRACT;
     ++probe->starts;
     *out_ticket = (cflow_statechart_effect_ticket){
-        content_v3_ticket_commit, content_v3_ticket_discard, probe};
+        content_ticket_commit, content_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
 
-static scxml_adapter_status content_v3_prepare_cancel(
+static scxml_adapter_status content_prepare_cancel(
     void *user, const scxml_invoke_cancel_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     if (user == NULL || request == NULL || out_ticket == NULL ||
@@ -747,7 +740,7 @@ static scxml_adapter_status content_v3_prepare_cancel(
 }
 
 static scxml_adapter_status payload_prepare_send(
-    void *user, const scxml_send_request_v2 *request,
+    void *user, const scxml_send_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     payload_adapter_probe *probe = (payload_adapter_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
@@ -770,20 +763,20 @@ static scxml_adapter_status payload_prepare_send(
 }
 
 static scxml_adapter_status payload_prepare_start(
-    void *user, const scxml_invoke_start_request_v2 *request,
+    void *user, const scxml_invoke_start_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     payload_adapter_probe *probe = (payload_adapter_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
-        out_error == NULL || request->base.token == 0u ||
+        out_error == NULL || request->token == 0u ||
         !copy_probe_text(probe->id, sizeof(probe->id),
-                         request->base.id, request->base.id_size) ||
+                         request->id, request->id_size) ||
         !copy_probe_text(probe->type, sizeof(probe->type),
-                         request->base.type, request->base.type_size) ||
+                         request->type, request->type_size) ||
         !copy_probe_text(probe->source, sizeof(probe->source),
-                         request->base.src, request->base.src_size) ||
+                         request->src, request->src_size) ||
         !copy_payload(probe, &request->payload))
         return SCXML_ADAPTER_INVALID_CONTRACT;
-    probe->token = request->base.token;
+    probe->token = request->token;
     ++probe->starts;
     if (probe->start_status != SCXML_ADAPTER_ACCEPTED) {
         *out_error = "payload invoke rejected by test adapter";
@@ -948,6 +941,15 @@ static bool run_guarded_transition(
 
 static cflow_statechart_instance_stats run_to_idle(
     const scxml_program *program, scxml_public_data initial) {
+    const scxml_event_io_adapter event_io = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_PAYLOAD | SCXML_EVENT_IO_CAP_CONTENT,
+        .prepare_send = dynamic_prepare_send,
+        .close = dynamic_adapter_close,
+        .is_quiescent = dynamic_adapter_quiescent};
+    dynamic_adapter_probe probe = {0};
     scxml_session session = {0};
     cflow_executor executor = {0};
     cflow_statechart_instance_stats stats = {0};
@@ -965,8 +967,15 @@ static cflow_statechart_instance_stats run_to_idle(
         .struct_size = sizeof(scxml_cmeta_session_options_v1),
         .initial_state = &initial
     };
+    uint32_t requirements = 0u;
 
     check_true(cflow_executor_serial_init(&executor));
+    check_true(scxml_program_requirements(program, &requirements));
+    if ((requirements & SCXML_REQUIREMENT_EVENT_IO) != 0u) {
+        config.adapter_internal_event_capacity = 2u;
+        config.event_io = &event_io;
+        config.adapter_user = &probe;
+    }
     check_equal(scxml_session_init_cmeta(&session, &config, &data),
                 CFLOW_STATECHART_INSTANCE_OK);
     check_true(cflow_executor_wait_idle(&executor));
@@ -1544,6 +1553,8 @@ spec("TurboSCXML public CMeta data model") {
             "&amp;&amp; _event.data == &quot;payload&quot;' target='done'/>"
             "</state><final id='done'/></scxml>";
         const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(metadata),
             .send_id = "send-7", .send_id_size = sizeof("send-7") - 1u,
             .origin = "https://origin.example",
             .origin_size = sizeof("https://origin.example") - 1u,
@@ -1551,7 +1562,10 @@ spec("TurboSCXML public CMeta data model") {
             .origin_type_size = sizeof("scxml") - 1u,
             .invoke_id = "worker",
             .invoke_id_size = sizeof("worker") - 1u,
-            .data = "payload", .data_size = sizeof("payload") - 1u};
+            .data = {
+                .kind = SCXML_CONTENT_TEXT_UTF8,
+                .bytes = "payload",
+                .byte_count = sizeof("payload") - 1u}};
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
@@ -1578,7 +1592,7 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(scxml_program_event(&program, "go", 2u, &go));
-        check_equal(scxml_session_try_send_v2(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
@@ -1591,7 +1605,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("owns structured v3 event data through eventless stabilization") {
+    it("owns structured event data through eventless stabilization") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -1603,8 +1617,8 @@ spec("TurboSCXML public CMeta data model") {
             "<final id='done'/></scxml>";
         scxml_public_data event_data = {
             true, 42, SCXML_PUBLIC_SOURCE_GOOD};
-        scxml_event_metadata_v3 metadata = {
-            .abi_version = SCXML_EVENT_METADATA_ABI_V3,
+        scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
             .struct_size = sizeof(metadata),
             .data = {
                 .kind = SCXML_CONTENT_CMETA,
@@ -1638,7 +1652,7 @@ spec("TurboSCXML public CMeta data model") {
         check_true(scxml_program_event(&program, "go", 2u, &go));
         copies_before_send = atomic_load_explicit(
             &public_data_copy_count, memory_order_relaxed);
-        check_equal(scxml_session_try_send_v3(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(atomic_load_explicit(
@@ -1663,8 +1677,8 @@ spec("TurboSCXML public CMeta data model") {
             "target='wrong'/></state><final id='wrong'/></scxml>";
         scxml_public_data event_data = {
             true, 42, SCXML_PUBLIC_SOURCE_GOOD};
-        scxml_event_metadata_v3 metadata = {
-            .abi_version = SCXML_EVENT_METADATA_ABI_V3,
+        scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
             .struct_size = sizeof(metadata),
             .data = {
                 .kind = SCXML_CONTENT_CMETA,
@@ -1694,7 +1708,7 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(scxml_program_event(&program, "go", 2u, &go));
-        check_equal(scxml_session_try_send_v3(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
@@ -1709,7 +1723,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("rejects invalid structured v3 event envelopes without consuming capacity") {
+    it("rejects invalid structured event envelopes without consuming capacity") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -1717,8 +1731,8 @@ spec("TurboSCXML public CMeta data model") {
             "<final id='done'/></scxml>";
         scxml_public_data event_data = {
             true, 42, SCXML_PUBLIC_SOURCE_GOOD};
-        scxml_event_metadata_v3 metadata = {
-            .abi_version = SCXML_EVENT_METADATA_ABI_V3,
+        scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
             .struct_size = sizeof(metadata),
             .data = {
                 .kind = SCXML_CONTENT_CMETA,
@@ -1748,25 +1762,23 @@ spec("TurboSCXML public CMeta data model") {
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(scxml_program_event(&program, "go", 2u, &go));
         metadata.abi_version = 0u;
-        check_equal(scxml_session_try_send_v3(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_INVALID_ARGUMENT);
-        metadata.abi_version = SCXML_EVENT_METADATA_ABI_V3;
-        metadata.base.data = "conflict";
-        metadata.base.data_size = sizeof("conflict") - 1u;
-        check_equal(scxml_session_try_send_v3(
+        metadata.abi_version = SCXML_EVENT_METADATA_ABI;
+        metadata.struct_size = sizeof(metadata) + 1u;
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_INVALID_ARGUMENT);
-        metadata.base.data = NULL;
-        metadata.base.data_size = 0u;
+        metadata.struct_size = sizeof(metadata);
         metadata.data.schema = &nested_data_desc;
         metadata.data.object = &event_data.nested;
-        check_equal(scxml_session_try_send_v3(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_INVALID_ARGUMENT);
         metadata.data.schema = &public_data_desc;
         metadata.data.object = &event_data;
-        check_equal(scxml_session_try_send_v3(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &go, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
@@ -1796,8 +1808,13 @@ spec("TurboSCXML public CMeta data model") {
             "_event.data == &quot;&quot;' target='done'/></state>"
             "<final id='done'/></scxml>";
         const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(metadata),
             .send_id = "s1", .send_id_size = sizeof("s1") - 1u,
-            .data = "payload", .data_size = sizeof("payload") - 1u};
+            .data = {
+                .kind = SCXML_CONTENT_TEXT_UTF8,
+                .bytes = "payload",
+                .byte_count = sizeof("payload") - 1u}};
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
@@ -1826,7 +1843,7 @@ spec("TurboSCXML public CMeta data model") {
             &program, "first", sizeof("first") - 1u, &first));
         check_true(scxml_program_event(
             &program, "second", sizeof("second") - 1u, &second));
-        check_equal(scxml_session_try_send_v2(
+        check_equal(scxml_session_try_send_with_metadata(
                         &session, &first, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
@@ -1873,7 +1890,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("rejects dynamically external content at execution with a v1 adapter") {
+    it("requires payload capability for a dynamically external scalar send") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'><onentry>"
@@ -1882,8 +1899,8 @@ spec("TurboSCXML public CMeta data model") {
             "<transition event='error.execution' target='done'/></state>"
             "<final id='done'/></scxml>";
         dynamic_adapter_probe probe = {0};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = dynamic_prepare_send,
@@ -1917,15 +1934,19 @@ spec("TurboSCXML public CMeta data model") {
                     SCXML_OK);
         check_true(scxml_program_requirements(
             &program, &requirements));
-        check_equal(requirements & SCXML_REQUIREMENT_PAYLOAD, 0u);
+        check_true((requirements & SCXML_REQUIREMENT_PAYLOAD) != 0u);
         check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(
+                        &session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        event_io.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
         check_equal(scxml_session_init_cmeta(
                         &session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
-        check_equal(probe.sends, (size_t)0u);
+        check_equal(probe.sends, (size_t)1u);
         check_true(scxml_session_get_stats(&session, &stats));
-        check_true(stats.done);
+        check_false(stats.done);
         check_false(stats.errored);
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
@@ -1946,9 +1967,9 @@ spec("TurboSCXML public CMeta data model") {
             "<transition event='finish' target='done'/></state>"
             "<final id='done'/></scxml>";
         dynamic_adapter_probe probe = {0};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_event_io_adapter_v1),
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
                 SCXML_EVENT_IO_CAP_CANCEL,
@@ -1956,9 +1977,9 @@ spec("TurboSCXML public CMeta data model") {
             .prepare_cancel = dynamic_prepare_cancel,
             .close = dynamic_adapter_close,
             .is_quiescent = dynamic_adapter_quiescent};
-        const scxml_invoke_adapter_v1 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
             .prepare_start = dynamic_prepare_start,
@@ -2078,8 +2099,8 @@ spec("TurboSCXML public CMeta data model") {
             "<transition event='finish' cond='send_id != &quot;&quot;' "
             "target='done'/></state><final id='done'/></scxml>";
         dynamic_adapter_probe probe = {0};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = dynamic_prepare_send,
@@ -2152,8 +2173,8 @@ spec("TurboSCXML public CMeta data model") {
             "</state><state id='failed'/><final id='done'/></scxml>";
         dynamic_adapter_probe probe = {
             .send_status = SCXML_ADAPTER_ERROR_COMMUNICATION};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = dynamic_prepare_send,
@@ -2206,8 +2227,8 @@ spec("TurboSCXML public CMeta data model") {
             "</onentry><transition cond='send_id != &quot;&quot;' "
             "target='done'/></state><final id='done'/></scxml>";
         dynamic_adapter_probe probe = {0};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
@@ -2273,8 +2294,8 @@ spec("TurboSCXML public CMeta data model") {
         dynamic_adapter_probe probe = {
             .cancel_status = SCXML_ADAPTER_ERROR_COMMUNICATION,
             .report_done_during_cancel = true};
-        const scxml_event_io_adapter_v1 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
@@ -2458,7 +2479,7 @@ spec("TurboSCXML public CMeta data model") {
         }
     }
 
-    it("transports ordered typed send payloads through a v2 adapter") {
+    it("transports ordered typed send payloads through the adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'><onentry>"
@@ -2467,9 +2488,9 @@ spec("TurboSCXML public CMeta data model") {
             "<param name='enabledCopy' expr='enabled'/>"
             "<param name='sourceCopy' location='source'/>"
             "</send></onentry></state></scxml>";
-        const scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
-            .struct_size = sizeof(scxml_event_io_adapter_v2),
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_PAYLOAD,
             .prepare_send = payload_prepare_send,
@@ -2495,17 +2516,12 @@ spec("TurboSCXML public CMeta data model") {
             .microstep_limit = 16u,
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .event_io = &event_io,
-            .event_io_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.event_io = &event_io;
+        config.adapter_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.sends, (size_t)1u);
@@ -2542,9 +2558,9 @@ spec("TurboSCXML public CMeta data model") {
             "<param name='sourceCopy' location='source'/>"
             "</send></onentry><transition event='error.execution' "
             "target='done'/></state><final id='done'/></scxml>";
-        const scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
-            .struct_size = sizeof(scxml_event_io_adapter_v2),
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_PAYLOAD,
             .prepare_send = payload_prepare_send,
@@ -2571,17 +2587,12 @@ spec("TurboSCXML public CMeta data model") {
             .microstep_limit = 16u,
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .event_io = &event_io,
-            .event_io_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.event_io = &event_io;
+        config.adapter_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.sends, (size_t)0u);
@@ -2601,9 +2612,9 @@ spec("TurboSCXML public CMeta data model") {
             "<send event='out' target='peer' namelist='count'/>"
             "</onentry><transition event='error.communication' "
             "target='done'/></state><final id='done'/></scxml>";
-        const scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
-            .struct_size = sizeof(scxml_event_io_adapter_v2),
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_PAYLOAD,
             .prepare_send = payload_prepare_send,
@@ -2637,17 +2648,13 @@ spec("TurboSCXML public CMeta data model") {
                 .microstep_limit = 16u,
                 .effect_capacity = 2u,
                 .adapter_internal_event_capacity = 2u};
-            const scxml_session_adapters_v2 adapters = {
-                .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-                .struct_size = sizeof(adapters),
-                .event_io = &event_io,
-                .event_io_user = &probe};
-
             check_equal(compile_cmeta(source, &program, &diagnostic),
                         SCXML_OK);
             check_true(cflow_executor_serial_init(&executor));
-            check_equal(scxml_session_init_cmeta_v2(
-                            &session, &config, &data, &adapters),
+            config.event_io = &event_io;
+            config.adapter_user = &probe;
+            check_equal(scxml_session_init_cmeta(
+                            &session, &config, &data),
                         index == 0u
                             ? CFLOW_STATECHART_INSTANCE_OK
                             : CFLOW_STATECHART_INSTANCE_ACTION_FAILED);
@@ -2667,23 +2674,15 @@ spec("TurboSCXML public CMeta data model") {
         }
     }
 
-    it("requires an exact payload-capable v2 session contract") {
+    it("requires an exact payload-capable session contract") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'><onentry>"
             "<send event='out' target='peer' namelist='count'/>"
             "</onentry></state></scxml>";
-        dynamic_adapter_probe legacy_probe = {0};
         payload_adapter_probe payload_probe = {0};
-        const scxml_event_io_adapter_v1 legacy = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-            .struct_size = sizeof(legacy),
-            .capabilities = SCXML_EVENT_IO_CAP_SEND,
-            .prepare_send = dynamic_prepare_send,
-            .close = dynamic_adapter_close,
-            .is_quiescent = dynamic_adapter_quiescent};
-        scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
+        scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = payload_prepare_send,
@@ -2708,13 +2707,8 @@ spec("TurboSCXML public CMeta data model") {
             .microstep_limit = 16u,
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u,
-            .event_io = &legacy,
-            .adapter_user = &legacy_probe};
-        scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
             .event_io = &event_io,
-            .event_io_user = &payload_probe};
+            .adapter_user = &payload_probe};
         uint32_t requirements = 0u;
 
         check_equal(compile_cmeta(source, &program, &diagnostic),
@@ -2726,21 +2720,26 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_session_init_cmeta(
                         &session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
-        config.event_io = NULL;
-        config.adapter_user = NULL;
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
-                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
         event_io.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
-        adapters.abi_version = SCXML_SESSION_ADAPTERS_ABI_V2 + 1u;
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        event_io.abi_version = SCXML_ADAPTER_ABI + 1u;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        event_io.abi_version = SCXML_ADAPTER_ABI;
+        event_io.struct_size = sizeof(event_io) + 1u;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        event_io.struct_size = sizeof(event_io);
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(payload_probe.sends, (size_t)1u);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
     }
 
-    it("transports invoke params through a v2 adapter") {
+    it("transports invoke params through the adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -2749,9 +2748,9 @@ spec("TurboSCXML public CMeta data model") {
             "name='countCopy' location='count'/></invoke>"
             "<transition event='finish' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v2 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
-            .struct_size = sizeof(scxml_invoke_adapter_v2),
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
                 SCXML_INVOKE_CAP_PAYLOAD,
@@ -2781,17 +2780,12 @@ spec("TurboSCXML public CMeta data model") {
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u,
             .invocation_capacity = 1u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .invoke = &invoke,
-            .invoke_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.invoke = &invoke;
+        config.invoke_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.starts, (size_t)1u);
@@ -2814,7 +2808,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("transports scalar invoke content through a v2 adapter") {
+    it("transports scalar invoke content through the adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -2822,8 +2816,8 @@ spec("TurboSCXML public CMeta data model") {
             "expr='&quot;markup&quot;'/></invoke>"
             "<transition event='finish' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v2 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(invoke),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
@@ -2854,17 +2848,12 @@ spec("TurboSCXML public CMeta data model") {
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u,
             .invocation_capacity = 1u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .invoke = &invoke,
-            .invoke_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.invoke = &invoke;
+        config.invoke_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.starts, (size_t)1u);
@@ -2901,8 +2890,8 @@ spec("TurboSCXML public CMeta data model") {
             "<content expr='count'/></invoke><transition event='finish' "
             "target='done'/></state><final id='done'/></scxml>";
         const char *sources[] = {dynamic_strings, dynamic_content};
-        const scxml_invoke_adapter_v2 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(invoke),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL | SCXML_INVOKE_CAP_PAYLOAD,
@@ -2934,11 +2923,6 @@ spec("TurboSCXML public CMeta data model") {
                 .effect_capacity = 2u,
                 .adapter_internal_event_capacity = 2u,
                 .invocation_capacity = 1u};
-            const scxml_session_adapters_v2 adapters = {
-                .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-                .struct_size = sizeof(adapters),
-                .invoke = &invoke,
-                .invoke_user = &probe};
             scxml_status compile_status;
 
             compile_status = compile_cmeta(
@@ -2947,8 +2931,10 @@ spec("TurboSCXML public CMeta data model") {
                 info("case=%zu diagnostic=%s", index, diagnostic.message);
             check_equal(compile_status, SCXML_OK);
             check_true(cflow_executor_serial_init(&executor));
-            check_equal(scxml_session_init_cmeta_v2(
-                            &session, &config, &data, &adapters),
+            config.invoke = &invoke;
+            config.invoke_user = &probe;
+            check_equal(scxml_session_init_cmeta(
+                            &session, &config, &data),
                         CFLOW_STATECHART_INSTANCE_OK);
             check_true(cflow_executor_wait_idle(&executor));
             check_equal(probe.starts, (size_t)1u);
@@ -2988,8 +2974,8 @@ spec("TurboSCXML public CMeta data model") {
             "<param name='sourceCopy' location='source'/></invoke>"
             "<transition event='error.execution' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v2 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(invoke),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
@@ -3029,17 +3015,13 @@ spec("TurboSCXML public CMeta data model") {
                 .effect_capacity = 2u,
                 .adapter_internal_event_capacity = 2u,
                 .invocation_capacity = 1u};
-            const scxml_session_adapters_v2 adapters = {
-                .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-                .struct_size = sizeof(adapters),
-                .invoke = &invoke,
-                .invoke_user = &probe};
-
             check_equal(compile_cmeta(source, &program, &diagnostic),
                         SCXML_OK);
             check_true(cflow_executor_serial_init(&executor));
-            check_equal(scxml_session_init_cmeta_v2(
-                            &session, &config, &data, &adapters),
+            config.invoke = &invoke;
+            config.invoke_user = &probe;
+            check_equal(scxml_session_init_cmeta(
+                            &session, &config, &data),
                         CFLOW_STATECHART_INSTANCE_OK);
             check_true(cflow_executor_wait_idle(&executor));
             check_equal(probe.starts, index);
@@ -3068,16 +3050,16 @@ spec("TurboSCXML public CMeta data model") {
             "<param name='sourceCopy' location='source'/></invoke>"
             "<transition event='error.execution' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_PAYLOAD,
             .prepare_send = payload_prepare_send,
             .close = dynamic_adapter_close,
             .is_quiescent = dynamic_adapter_quiescent};
-        const scxml_invoke_adapter_v2 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(invoke),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
@@ -3109,18 +3091,13 @@ spec("TurboSCXML public CMeta data model") {
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u,
             .invocation_capacity = 1u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .event_io = &event_io,
-            .event_io_user = &probe,
-            .invoke = &invoke,
-            .invoke_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.event_io = &event_io;
+        config.adapter_user = &probe;
+        config.invoke = &invoke;
+        config.invoke_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.sends, (size_t)1u);
@@ -3134,13 +3111,13 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("publishes a stable invoke idlocation before committing a v1 start") {
+    it("publishes a stable invoke idlocation before committing a start") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='send_id' typeexpr='send_id'/></state></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
+        const scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
@@ -3187,8 +3164,8 @@ spec("TurboSCXML public CMeta data model") {
             "datamodel='cmeta'><state id='transient'><invoke "
             "idlocation='send_id'/><transition target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3231,8 +3208,8 @@ spec("TurboSCXML public CMeta data model") {
             "idlocation='send_id'/><transition event='leave' target='idle'/>"
             "</state><state id='idle'><transition event='again' "
             "target='worker'/></state></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3285,8 +3262,8 @@ spec("TurboSCXML public CMeta data model") {
             "<invoke idlocation='send_id'/></state><state id='right'>"
             "<invoke idlocation='nested.invoke_id'/></state></parallel>"
             "</scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3322,17 +3299,17 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("starts invoke idlocation through an unchanged v2 adapter") {
+    it("starts invoke idlocation through the adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='send_id'/></state></scxml>";
-        const scxml_invoke_adapter_v2 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        const scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
-            .prepare_start = invoke_idlocation_prepare_start_v2,
+            .prepare_start = invoke_idlocation_prepare_start,
             .prepare_cancel = invoke_idlocation_prepare_cancel,
             .close = invoke_idlocation_close,
             .is_quiescent = invoke_idlocation_quiescent};
@@ -3350,15 +3327,12 @@ spec("TurboSCXML public CMeta data model") {
             .completion_capacity = 2u, .microstep_limit = 16u,
             .effect_capacity = 2u, .adapter_internal_event_capacity = 2u,
             .invocation_capacity = 1u};
-        const scxml_session_adapters_v2 adapters = {
-            SCXML_SESSION_ADAPTERS_ABI_V2, sizeof(adapters),
-            NULL, NULL, &adapter, &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.invoke = &adapter;
+        config.invoke_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(probe.prepare_starts, (size_t)1u);
         check_equal(probe.start_ids[0], "worker.1", sizeof("worker.1"));
@@ -3376,8 +3350,8 @@ spec("TurboSCXML public CMeta data model") {
             "idlocation='send_id'/><transition event='error.execution' "
             "cond='send_id == &quot;worker.1&quot;' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3429,8 +3403,8 @@ spec("TurboSCXML public CMeta data model") {
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='send_id'/><invoke "
             "idlocation='nested.invoke_id'/></state></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3473,8 +3447,8 @@ spec("TurboSCXML public CMeta data model") {
             "idlocation='failing_id'/><transition event='error.execution' "
             "cond='failing_id == &quot;old&quot;' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3519,8 +3493,8 @@ spec("TurboSCXML public CMeta data model") {
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='send_id'/><invoke "
             "idlocation='nested.invoke_id'/></state></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3562,8 +3536,8 @@ spec("TurboSCXML public CMeta data model") {
             "<assign location='send_id' expr='&quot;changed&quot;'/></transition>"
             "<transition event='leave' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3617,8 +3591,8 @@ spec("TurboSCXML public CMeta data model") {
             "<transition event='go' target='worker'/></state>"
             "<state id='worker'><invoke idlocation='send_id'/></state>"
             "</scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3668,8 +3642,8 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='send_id'/></state></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3719,8 +3693,8 @@ spec("TurboSCXML public CMeta data model") {
             "&amp;&amp; _event.invokeid == &quot;worker.1&quot; "
             "&amp;&amp; _event.data == &quot;&quot;' "
             "target='done'/></state><final id='done'/></scxml>";
-        const scxml_invoke_adapter_v1 adapter = {
-            SCXML_INVOKE_ADAPTER_ABI_V1, sizeof(adapter),
+        const scxml_invoke_adapter adapter = {
+            SCXML_ADAPTER_ABI, sizeof(adapter),
             SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
             invoke_idlocation_prepare_start,
             invoke_idlocation_prepare_cancel, NULL,
@@ -3778,9 +3752,9 @@ spec("TurboSCXML public CMeta data model") {
             "<send event='out' target='peer'>"
             "<content expr='&quot;payload&quot;'/></send>"
             "</onentry></state></scxml>";
-        const scxml_event_io_adapter_v2 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
-            .struct_size = sizeof(scxml_event_io_adapter_v2),
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_PAYLOAD,
             .prepare_send = payload_prepare_send,
@@ -3806,17 +3780,12 @@ spec("TurboSCXML public CMeta data model") {
             .microstep_limit = 16u,
             .effect_capacity = 2u,
             .adapter_internal_event_capacity = 2u};
-        const scxml_session_adapters_v2 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
-            .struct_size = sizeof(adapters),
-            .event_io = &event_io,
-            .event_io_user = &probe};
-
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v2(
-                        &session, &config, &data, &adapters),
+        config.event_io = &event_io;
+        config.adapter_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.sends, (size_t)1u);
@@ -3829,7 +3798,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("transports bounded mixed XML content through a v3 send adapter") {
+    it("transports bounded mixed XML content through the send adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'><onentry>"
@@ -3839,21 +3808,16 @@ spec("TurboSCXML public CMeta data model") {
             "</content></send></onentry></state></scxml>";
         static const char expected[] =
             " lead <p:item xmlns:p=\"urn:item\">x&lt;y</p:item><!--note-->";
-        content_v3_probe probe = {0};
-        const scxml_event_io_adapter_v3 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V3,
+        content_probe probe = {0};
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
-                SCXML_EVENT_IO_CAP_CONTENT_V3,
-            .prepare_send = content_v3_prepare_send,
+                SCXML_EVENT_IO_CAP_CONTENT,
+            .prepare_send = content_prepare_send,
             .close = dynamic_adapter_close,
             .is_quiescent = dynamic_adapter_quiescent};
-        const scxml_session_adapters_v3 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
-            .struct_size = sizeof(adapters),
-            .event_io = &event_io,
-            .event_io_user = &probe};
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
@@ -3869,20 +3833,19 @@ spec("TurboSCXML public CMeta data model") {
             .completion_capacity = 2u, .microstep_limit = 16u,
             .effect_capacity = 2u, .adapter_internal_event_capacity = 2u,
             .delayed_send_capacity = 1u};
-        scxml_event_io_adapter_v3 incomplete_event_io = event_io;
-        scxml_session_adapters_v3 incomplete_adapters = adapters;
+        scxml_event_io_adapter incomplete_event_io = event_io;
 
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
         incomplete_event_io.capabilities &=
-            ~SCXML_EVENT_IO_CAP_CONTENT_V3;
-        incomplete_adapters.event_io = &incomplete_event_io;
-        check_equal(scxml_session_init_cmeta_v3(
-                        &session, &config, &data, &incomplete_adapters),
+            ~SCXML_EVENT_IO_CAP_CONTENT;
+        config.event_io = &incomplete_event_io;
+        config.adapter_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
-        check_equal(scxml_session_init_cmeta_v3(
-                        &session, &config, &data, &adapters),
+        config.event_io = &event_io;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.sends, (size_t)1u);
@@ -3896,19 +3859,19 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("rolls back rejected v3 text sends and invalid tickets") {
+    it("rolls back rejected text sends and invalid tickets") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'><onentry>"
             "<send event='out' target='peer'><content>plain text</content>"
             "</send></onentry><transition event='error.communication' "
             "target='done'/></state><final id='done'/></scxml>";
-        const scxml_event_io_adapter_v3 event_io = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V3,
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(event_io),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
-                SCXML_EVENT_IO_CAP_CONTENT_V3,
-            .prepare_send = content_v3_prepare_send,
+                SCXML_EVENT_IO_CAP_CONTENT,
+            .prepare_send = content_prepare_send,
             .close = dynamic_adapter_close,
             .is_quiescent = dynamic_adapter_quiescent};
         const scxml_public_data initial = {
@@ -3916,16 +3879,11 @@ spec("TurboSCXML public CMeta data model") {
         size_t index;
 
         for (index = 0u; index < 2u; ++index) {
-            content_v3_probe probe = {
+            content_probe probe = {
                 .send_status = index == 0u
                     ? SCXML_ADAPTER_FULL
                     : SCXML_ADAPTER_ACCEPTED,
                 .invalid_send_ticket = index != 0u};
-            const scxml_session_adapters_v3 adapters = {
-                .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
-                .struct_size = sizeof(adapters),
-                .event_io = &event_io,
-                .event_io_user = &probe};
             scxml_program program = {0};
             scxml_diagnostic diagnostic = {0};
             scxml_session session = {0};
@@ -3944,8 +3902,10 @@ spec("TurboSCXML public CMeta data model") {
             check_equal(compile_cmeta(source, &program, &diagnostic),
                         SCXML_OK);
             check_true(cflow_executor_serial_init(&executor));
-            check_equal(scxml_session_init_cmeta_v3(
-                            &session, &config, &data, &adapters),
+            config.event_io = &event_io;
+            config.adapter_user = &probe;
+            check_equal(scxml_session_init_cmeta(
+                            &session, &config, &data),
                         index == 0u
                             ? CFLOW_STATECHART_INSTANCE_OK
                             : CFLOW_STATECHART_INSTANCE_ACTION_FAILED);
@@ -3968,7 +3928,7 @@ spec("TurboSCXML public CMeta data model") {
         }
     }
 
-    it("borrows structured CMeta content through a v3 invoke adapter") {
+    it("borrows structured CMeta content through the invoke adapter") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -3976,22 +3936,17 @@ spec("TurboSCXML public CMeta data model") {
             "<content expr='nested'/></invoke>"
             "<transition event='finish' target='done'/></state>"
             "<final id='done'/></scxml>";
-        const scxml_invoke_adapter_v3 invoke = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V3,
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(invoke),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
-                SCXML_INVOKE_CAP_CONTENT_V3,
-            .prepare_start = content_v3_prepare_start,
-            .prepare_cancel = content_v3_prepare_cancel,
+                SCXML_INVOKE_CAP_CONTENT,
+            .prepare_start = content_prepare_start,
+            .prepare_cancel = content_prepare_cancel,
             .close = dynamic_adapter_close,
             .is_quiescent = dynamic_adapter_quiescent};
-        content_v3_probe probe = {0};
-        const scxml_session_adapters_v3 adapters = {
-            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
-            .struct_size = sizeof(adapters),
-            .invoke = &invoke,
-            .invoke_user = &probe};
+        content_probe probe = {0};
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
@@ -4014,8 +3969,9 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(compile_cmeta(source, &program, &diagnostic),
                     SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(
-                        &session, &config, &data, &adapters),
+        config.invoke = &invoke;
+        config.invoke_user = &probe;
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.starts, (size_t)1u);

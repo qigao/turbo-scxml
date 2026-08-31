@@ -59,7 +59,7 @@ The expression evaluator never retains these views. They are valid only for
 the current evaluation call and may be replaced when the next Event is
 selected. Internal Events keep empty `origin`, `origintype`, `sendid`, and
 `invokeid` views. External admission owns the supplied metadata independently
-of the caller after `scxml_session_try_send_v2()` or `_v3()` succeeds.
+of the caller after `scxml_session_try_send_with_metadata()` succeeds.
 
 ## Host routing and transaction order
 

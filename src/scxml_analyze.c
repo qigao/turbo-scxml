@@ -766,7 +766,7 @@ scxml_status scxml_analyze_inspect_inline_content(
     return SCXML_OK;
 }
 
-static bool content_expression_requires_v3(
+static bool content_expression_is_rich(
     const scxml_build *build, scxml_syntax_attribute expression) {
     scxml_location location = {0};
     scxml_expr_diagnostic diagnostic = {0};
@@ -808,12 +808,12 @@ static scxml_status analyze_param(
 
 static scxml_status analyze_send_content(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    bool *out_has_data, bool *out_requires_v3,
+    bool *out_has_data, bool *out_is_rich_content,
     size_t *out_param_count) {
     size_t index;
     bool found = false;
     *out_has_data = false;
-    *out_requires_v3 = false;
+    *out_is_rich_content = false;
     *out_param_count = 0u;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
@@ -882,7 +882,7 @@ static scxml_status analyze_send_content(
                         scxml_syntax_node_location(child),
                         "content expr cannot have inline child content");
                 }
-                *out_requires_v3 = content_expression_requires_v3(
+                *out_is_rich_content = content_expression_is_rich(
                     build, expression);
             } else {
                 if (!scxml_analyze_checked_add(content_size, 1u, &retained) ||
@@ -893,7 +893,7 @@ static scxml_status analyze_send_content(
                         scxml_syntax_node_location(child),
                         "send inline content storage size overflow");
                 }
-                *out_requires_v3 = true;
+                *out_is_rich_content = true;
             }
         }
     }
@@ -948,7 +948,7 @@ static scxml_status analyze_done_data(
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                                   scxml_syntax_node_location(child),
                                   "donedata content expr cannot have inline children");
-            if (content_expression_requires_v3(build, expression))
+            if (content_expression_is_rich(build, expression))
                 return scxml_analyze_fail(
                     build, SCXML_UNSUPPORTED_FEATURE,
                     scxml_syntax_attribute_location(expression),
@@ -1033,7 +1033,7 @@ static scxml_status analyze_send(scxml_build *build,
     uint64_t delay_ms = 0u;
     bool internal_target;
     bool has_data = false;
-    bool content_requires_v3 = false;
+    bool rich_content = false;
     size_t payload_count = 0u;
     size_t param_count = 0u;
     size_t token_cursor = 0u;
@@ -1101,7 +1101,7 @@ static scxml_status analyze_send(scxml_build *build,
                           "delayed send requires id or idlocation");
     }
     status = analyze_send_content(
-        build, node, counts, &has_data, &content_requires_v3,
+        build, node, counts, &has_data, &rich_content,
         &param_count);
     if (status != SCXML_OK) return status;
     if (!has_data && event_attribute.impl == NULL &&
@@ -1196,17 +1196,17 @@ static scxml_status analyze_send(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                           scxml_syntax_node_location(node),
                           "send expression count overflow");
-    if ((target_expr_attribute.impl == NULL && !internal_target) ||
+    if (target_expr_attribute.impl != NULL || !internal_target ||
         delay_ms != 0u || delay_expr_attribute.impl != NULL ||
         payload_count != 0u)
         counts->requirements |= SCXML_REQUIREMENT_EVENT_IO;
     if (payload_count != 0u ||
-        (has_data && !content_requires_v3 &&
-         target_expr_attribute.impl == NULL && !internal_target))
+        (has_data && !rich_content &&
+         (target_expr_attribute.impl != NULL || !internal_target)))
         counts->requirements |= SCXML_REQUIREMENT_PAYLOAD;
-    if (content_requires_v3 &&
+    if (rich_content &&
         (target_expr_attribute.impl != NULL || !internal_target))
-        counts->requirements |= SCXML_REQUIREMENT_CONTENT_V3;
+        counts->requirements |= SCXML_REQUIREMENT_CONTENT;
     if (delay_ms != 0u || delay_expr_attribute.impl != NULL)
         counts->requirements |= SCXML_REQUIREMENT_DELAYED_SEND;
     return SCXML_OK;
@@ -1894,7 +1894,7 @@ static scxml_status analyze_invoke(
     size_t index;
     size_t finalize_count = 0u;
     size_t content_count = 0u;
-    bool content_requires_v3 = false;
+    bool rich_content = false;
     size_t param_count = 0u;
     size_t payload_count = 0u;
     size_t token_cursor = 0u;
@@ -2027,7 +2027,7 @@ static scxml_status analyze_invoke(
                         build, SCXML_INVALID_STRUCTURE,
                         scxml_syntax_node_location(child),
                         "invoke content expr cannot have inline children");
-                content_requires_v3 = content_expression_requires_v3(
+                rich_content = content_expression_is_rich(
                     build, expression);
             } else {
                 if (!scxml_analyze_checked_add(content_size, 1u, &retained) ||
@@ -2037,7 +2037,7 @@ static scxml_status analyze_invoke(
                         build, SCXML_LIMIT_EXCEEDED,
                         scxml_syntax_node_location(child),
                         "invoke inline content storage size overflow");
-                content_requires_v3 = true;
+                rich_content = true;
             }
             continue;
         }
@@ -2129,11 +2129,11 @@ static scxml_status analyze_invoke(
     counts->requirements |= SCXML_REQUIREMENT_INVOKE;
     if (idlocation_attribute.impl != NULL)
         counts->requirements |= SCXML_REQUIREMENT_INVOKE_IDLOCATION;
-    if ((content_count != 0u && !content_requires_v3) ||
+    if ((content_count != 0u && !rich_content) ||
         payload_count != 0u)
         counts->requirements |= SCXML_REQUIREMENT_INVOKE_PAYLOAD;
-    if (content_requires_v3)
-        counts->requirements |= SCXML_REQUIREMENT_INVOKE_CONTENT_V3;
+    if (rich_content)
+        counts->requirements |= SCXML_REQUIREMENT_INVOKE_CONTENT;
     return SCXML_OK;
 }
 

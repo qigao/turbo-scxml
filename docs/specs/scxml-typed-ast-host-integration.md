@@ -6,8 +6,8 @@ TurboSCXML currently parses an owning TurboXML DOM and then repeatedly maps
 element names, attributes, children, and source locations while analysis and
 emission traverse that generic tree. The runtime IR is sound, but the compiler
 boundary mixes XML mechanics with SCXML semantics and makes structural changes
-expensive. Runtime invocation preprocessing also composes Statechart V2/V3
-hooks because only the stable hook offers a mutable transaction.
+expensive. Runtime invocation preprocessing previously composed older
+Statechart hooks; the current runtime uses the stable V4 host transaction only.
 
 The local uSCXML implementation at `C:/projects/cpp/uscxml/scxml` is used as an
 algorithm and conformance reference, especially its document setup,
@@ -70,8 +70,9 @@ queue capacities, adapters, and serialized formats do not change.
 The migration is incremental and reversible: introduce and test AST ownership,
 switch compiler stages one family at a time, then remove DOM parameters only
 after no semantic/emission caller remains. Runtime migration occurs after the
-CFlow V4 package is available. Reverting either commit restores the previous
-compiler or V3 hooks without data migration.
+CFlow V4 package is available. Reverting the compiler migration restores the
+previous compiler without data migration; the removed hook compatibility layer
+is intentionally not restored.
 
 ## Alternatives and Tradeoffs
 

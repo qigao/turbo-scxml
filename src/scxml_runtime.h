@@ -33,10 +33,6 @@ bool scxml_runtime_payload_value_from_cmeta(
 bool scxml_runtime_materialize_content_descriptor(
     const scxml_content_descriptor *descriptor, const void *state,
     scxml_content_view *out);
-bool scxml_runtime_payload_v2_to_v3(
-    scxml_session_impl *session,
-    const scxml_payload_view *source,
-    scxml_payload_view_v3 *out);
 bool scxml_runtime_copy_event_data_object(
     const cmeta_data_desc *schema, void *destination,
     const void *source);

@@ -70,7 +70,7 @@
 - [x] **Step 1: Add bounded test-only external admission**
 
   Extend the CMeta fixture runner with an optional prequeued external Event.
-  Use `scxml_program_event` and `scxml_session_try_send_v2`; require exact
+  Use `scxml_program_event` and `scxml_session_try_send_with_metadata`; require exact
   admission status and preserve internal-before-external processing.
 
 - [x] **Step 2: Add a committed loopback adapter for test 342**
