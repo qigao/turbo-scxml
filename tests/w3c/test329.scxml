@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0"
+       name="machineName">
+  <state id="s0">
+    <onentry>
+      <assign location="send_id" expr="_sessionid"/>
+      <raise event="foo"/>
+    </onentry>
+    <transition event="foo" target="session"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="session">
+    <onentry>
+      <assign location="_sessionid" expr="&quot;invalidSessionID&quot;"/>
+      <assign location="sequence" expr="1"/>
+    </onentry>
+    <transition cond="sequence == 0 &amp;&amp; send_id == _sessionid"
+                target="event"/>
+    <transition target="fail"/>
+  </state>
+  <state id="event">
+    <onentry>
+      <assign location="_event" expr="27"/>
+      <assign location="sequence" expr="2"/>
+    </onentry>
+    <transition cond="sequence == 0 &amp;&amp; _event.name == &quot;foo&quot;"
+                target="name"/>
+    <transition target="fail"/>
+  </state>
+  <state id="name">
+    <onentry>
+      <assign location="_name" expr="27"/>
+      <assign location="sequence" expr="3"/>
+    </onentry>
+    <transition cond="sequence == 0 &amp;&amp; _name == &quot;machineName&quot;"
+                target="processors">
+      <assign location="invoke_id" expr="_ioprocessors.scxml.location"/>
+    </transition>
+    <transition target="fail"/>
+  </state>
+  <state id="processors">
+    <onentry>
+      <assign location="_ioprocessors" expr="27"/>
+      <assign location="sequence" expr="4"/>
+    </onentry>
+    <transition cond="sequence == 0 &amp;&amp; isBound(_ioprocessors)"
+                target="verifyProcessors"/>
+    <transition target="fail"/>
+  </state>
+  <state id="verifyProcessors">
+    <transition cond="invoke_id == _ioprocessors.scxml.location"
+                target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

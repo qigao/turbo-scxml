@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 58
-local PASS transformations, records 110 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 63
+local PASS transformations, records 105 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -45,8 +45,12 @@ Status meanings are strict:
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
 | `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
+| `test322.scxml` | [test322.txml](https://www.w3.org/Voice/2013/scxml-irp/322/test322.txml) | `_sessionid` remains bound to the same generated identifier after a failed write. |
 | `test323.scxml` | [test323.txml](https://www.w3.org/Voice/2013/scxml-irp/323/test323.txml) | `_name` is bound to the root `scxml/@name` value during initialization. |
+| `test324.scxml` | [test324.txml](https://www.w3.org/Voice/2013/scxml-irp/324/test324.txml) | `_name` remains bound to the root `scxml/@name` value after a failed write. |
 | `test325.scxml` | [test325.txml](https://www.w3.org/Voice/2013/scxml-irp/325/test325.txml) | `_ioprocessors` is bound to the supported Event I/O processor set during initialization. |
+| `test326.scxml` | [test326.txml](https://www.w3.org/Voice/2013/scxml-irp/326/test326.txml) | `_ioprocessors` retains the supported SCXML processor location after a failed write. |
+| `test329.scxml` | [test329.txml](https://www.w3.org/Voice/2013/scxml-irp/329/test329.txml) | Attempts to modify all four protected system variables fail without changing their values. |
 | `test330.scxml` | [test330.txml](https://www.w3.org/Voice/2013/scxml-irp/330/test330.txml) | Every internal and external Event exposes all seven required Event fields, including empty optional values. |
 | `test331.scxml` | [test331.txml](https://www.w3.org/Voice/2013/scxml-irp/331/test331.txml) | Raised, processor-generated, and externally admitted Events are classified as `internal`, `platform`, and `external`. |
 | `test332.scxml` | [test332.txml](https://www.w3.org/Voice/2013/scxml-irp/332/test332.txml) | A failed send's platform error exposes the same generated ID through its CMeta `idlocation` and `_event.sendid`. |
@@ -57,6 +61,7 @@ Status meanings are strict:
 | `test338.scxml` | [test338.txml](https://www.w3.org/Voice/2013/scxml-irp/338/test338.txml) | A normal Event reported by an invoked child exposes the same live invocation ID through CMeta `idlocation` and `_event.invokeid`. |
 | `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
 | `test342.scxml` | [test342.txml](https://www.w3.org/Voice/2013/scxml-irp/342/test342.txml) | The selected Event's `_event.name` equals the name produced by its evaluated send expression. |
+| `test346.scxml` | [test346.txml](https://www.w3.org/Voice/2013/scxml-irp/346/test346.txml) | Every attempted protected system-variable write raises a distinct internal `error.execution` Event. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
 | `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
 | `test372.scxml` | [test372.txml](https://www.w3.org/Voice/2013/scxml-irp/372/test372.txml) | A parent's `done.state` event is selected after its final child's `onentry` and before that child's `onexit`. |
@@ -141,7 +146,7 @@ a bounded test adapter so the owning CMeta session remains a black box. Test
 event hook observes transition-selection boundaries and requires the raise
 action to execute while `event1` is never selected before clean termination.
 
-Tests 318, 319, 321, 323, 325, 330, 331, 333, 335, 337, 339, 342, and 396 use
+Tests 318, 319, 321-326, 329, 330, 331, 333, 335, 337, 339, 342, 346, and 396 use
 the owning CMeta session so protected variables are observed through the
 public execution path. Test 318
 raises another Event before checking that `_event.name` still names the Event
@@ -149,7 +154,16 @@ whose transition is being processed. Test 319 maps the generator's
 `conf:systemVarIsBound` query to the finite CMeta expression
 `isBound(_event)`. Tests 321, 323, and 325 map the same generator predicate to
 `isBound(_sessionid)`, `isBound(_name)`, and `isBound(_ioprocessors)` during
-initial eventless processing. Test 330 checks the complete seven-field envelope
+initial eventless processing. Tests 322 and 326 snapshot the session ID and
+SCXML processor location respectively, require the protected write to raise
+`error.execution`, and compare the retained value. Test 324 observes `_name`
+before and after its failed write while a following staged assignment proves
+the block was aborted. Test 329 retains one selected `foo` Event while
+eventless transitions check all four protected values and four block-abort
+sentinels before queued processor errors can replace `_event`. Test 346
+advances only on four separate `error.execution` Events and retains four raised
+Events as unreachable suffix sentinels. Test 330 checks the complete
+seven-field envelope
 on a raised internal Event and a bounded host-admitted external Event. Test 331
 uses an internal raise, a processor-generated execution error, and an external
 admission to observe all three Event classifications. Tests 333, 335, and 337

@@ -10,6 +10,9 @@ typedef struct scxml_location {
     size_t storage_size;
 } scxml_location;
 
+bool scxml_location_is_read_only_system(
+    const char *path, size_t path_size, size_t max_depth);
+
 scxml_expr_status scxml_location_compile(
     scxml_location *out,
     const char *path, size_t path_size,

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0"
+       name="machineName">
+  <state id="s0">
+    <onentry>
+      <assign location="send_id" expr="_ioprocessors.scxml.location"/>
+    </onentry>
+    <transition cond="isBound(_ioprocessors)" target="s1"/>
+    <transition target="fail"/>
+  </state>
+  <state id="s1">
+    <onentry>
+      <assign location="_ioprocessors" expr="&quot;otherName&quot;"/>
+      <raise event="unexpected.after.processors.write"/>
+    </onentry>
+    <transition event="error.execution" target="s2"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="s2">
+    <transition cond="isBound(_ioprocessors)"
+                target="s3"/>
+    <transition target="fail"/>
+  </state>
+  <state id="s3">
+    <transition cond="send_id == _ioprocessors.scxml.location"
+                target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

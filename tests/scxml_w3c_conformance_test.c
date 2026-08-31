@@ -1316,8 +1316,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)58u);
-        check_equal(stats.unsupported, (size_t)110u);
+        check_equal(stats.passed, (size_t)63u);
+        check_equal(stats.unsupported, (size_t)105u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1432,12 +1432,28 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test321.scxml"));
     }
 
+    it("test 322 preserves the generated session ID after a write attempt") {
+        check_true(run_w3c_cmeta_fixture("test322.scxml"));
+    }
+
     it("test 323 binds the document name during initialization") {
         check_true(run_w3c_cmeta_fixture("test323.scxml"));
     }
 
+    it("test 324 preserves the document name after a write attempt") {
+        check_true(run_w3c_cmeta_fixture("test324.scxml"));
+    }
+
     it("test 325 binds the supported I/O processor set during initialization") {
         check_true(run_w3c_cmeta_fixture("test325.scxml"));
+    }
+
+    it("test 326 preserves the I/O processor set after a write attempt") {
+        check_true(run_w3c_cmeta_fixture("test326.scxml"));
+    }
+
+    it("test 329 rejects writes to every system variable") {
+        check_true(run_w3c_cmeta_fixture("test329.scxml"));
     }
 
     it("test 330 exposes every required field on internal and external Events") {
@@ -1482,6 +1498,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 342 binds an evaluated sent Event name") {
         check_true(run_w3c_cmeta_loopback_fixture("test342.scxml"));
+    }
+
+    it("test 346 raises one execution error for each system-variable write") {
+        check_true(run_w3c_cmeta_fixture("test346.scxml"));
     }
 
     it("test 355 selects the first root child when initial is omitted") {

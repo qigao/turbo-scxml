@@ -113,6 +113,39 @@ static bool location_path_valid(const char *path, size_t path_size,
     return true;
 }
 
+static bool location_path_has_root(
+    const char *path, size_t path_size, const char *root) {
+    const size_t root_size = strlen(root);
+    return path_size == root_size &&
+           memcmp(path, root, root_size) == 0;
+}
+
+static bool location_path_has_object_root(
+    const char *path, size_t path_size, const char *root) {
+    const size_t root_size = strlen(root);
+    return path_size >= root_size &&
+           memcmp(path, root, root_size) == 0 &&
+           (path_size == root_size || path[root_size] == '.');
+}
+
+bool scxml_location_is_read_only_system(
+    const char *path, size_t path_size, size_t max_depth) {
+    size_t lexical_error = 0u;
+    size_t depth = 1u;
+    size_t index;
+    if (path == NULL || path_size == 0u || max_depth == 0u ||
+        !location_path_valid(path, path_size, &lexical_error))
+        return false;
+    for (index = 0u; index < path_size; ++index) {
+        if (path[index] == '.' && ++depth > max_depth) return false;
+    }
+    return location_path_has_root(path, path_size, "_sessionid") ||
+           location_path_has_root(path, path_size, "_name") ||
+           location_path_has_object_root(path, path_size, "_event") ||
+           location_path_has_object_root(
+               path, path_size, "_ioprocessors");
+}
+
 static const cmeta_data_field_desc *location_find_field(
     const cmeta_data_struct_shape *shape,
     const char *name, size_t name_size) {

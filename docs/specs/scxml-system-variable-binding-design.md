@@ -49,12 +49,13 @@ public function, structure member, ABI tag, dependency, allocation, queue
 operation, or mutable state. Existing expression evaluation and output
 preservation on failure remain unchanged.
 
-System-variable assignment semantics do not change in this batch. TurboSCXML
-currently rejects `_sessionid`, `_name`, `_event`, and `_ioprocessors`
-assignment locations during program admission. W3C 322, 324, 326, 329, and
-346 require an executable attempt to fail and enqueue `error.execution`; they
-remain `UNSUPPORTED` until that public admission/runtime semantic is designed
-and approved separately.
+System-variable assignment semantics were completed by the follow-up
+[write-protection decision](scxml-system-variable-write-protection-design.md).
+Recognized `_sessionid`, `_name`, `_event[.<path>]`, and
+`_ioprocessors[.<path>]` assignment attempts now compile as executable content,
+fail before evaluation or mutation, and enqueue `error.execution` through the
+existing runtime boundary. Unknown underscore roots and malformed locations
+remain admission errors.
 
 ## W3C-derived transformations
 

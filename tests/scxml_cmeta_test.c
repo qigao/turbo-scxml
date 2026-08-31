@@ -3908,6 +3908,55 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("raises one runtime error for each protected system-variable write") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' name='machineName' initial='session'>"
+            "<state id='session'><onentry>"
+            "<assign location='_sessionid' expr='&quot;changed&quot;'/><assign "
+            "location='count' expr='99'/></onentry>"
+            "<transition event='error.execution' cond='count == 7 &amp;&amp; "
+            "isBound(_sessionid) &amp;&amp; _sessionid != &quot;changed&quot;' "
+            "target='currentEvent'/><transition event='error.execution' "
+            "target='failed'/></state>"
+            "<state id='currentEvent'><onentry>"
+            "<assign location='_event' expr='true'/><assign location='count' "
+            "expr='99'/></onentry><transition event='error.execution' "
+            "cond='count == 7 &amp;&amp; isBound(_event) &amp;&amp; "
+            "_event.name == &quot;error.execution&quot;' target='processors'/>"
+            "<transition event='error.execution' target='failed'/></state>"
+            "<state id='processors'><onentry>"
+            "<assign location='_ioprocessors' expr='true'/><assign "
+            "location='count' expr='99'/></onentry>"
+            "<transition event='error.execution' cond='count == 7 &amp;&amp; "
+            "isBound(_ioprocessors) &amp;&amp; "
+            "_ioprocessors.scxml.location != &quot;&quot;' target='name'/>"
+            "<transition event='error.execution' target='failed'/></state>"
+            "<state id='name'><onentry>"
+            "<assign location='_name' expr='&quot;changed&quot;'/><assign "
+            "location='count' expr='99'/></onentry>"
+            "<transition event='error.execution' cond='count == 7 &amp;&amp; "
+            "isBound(_name) &amp;&amp; _name == &quot;machineName&quot;' "
+            "target='passed'/><transition event='error.execution' "
+            "target='failed'/></state>"
+            "<state id='failed'/><final id='passed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+        scxml_status status;
+
+        status = compile_cmeta(source, &program, &diagnostic);
+        check_equal(status, SCXML_OK);
+        if (status == SCXML_OK) {
+            stats = run_to_idle(
+                &program,
+                (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+            check_true(stats.done);
+            check_false(stats.errored);
+            scxml_program_destroy(&program);
+        }
+    }
+
     it("classifies processor error events as platform events") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -4370,7 +4419,7 @@ spec("TurboSCXML public CMeta data model") {
         check_null(program.impl);
     }
 
-    it("rejects invalid and read-only assignment locations during admission") {
+    it("admits protected system locations and rejects unknown assignments") {
         static const char missing_location[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
@@ -4383,32 +4432,33 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
             "<assign location='missing' expr='2'/></onentry></state></scxml>";
-        static const char system_location[] =
+        static const char unknown_system_location[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
-            "<assign location='_event' expr='2'/></onentry></state></scxml>";
-        static const char name_location[] =
+            "<assign location='_missing' expr='2'/></onentry></state></scxml>";
+        static const char scalar_system_subpath[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
-            "<assign location='_name' expr='&quot;x&quot;'/></onentry>"
+            "<assign location='_name.value' expr='2'/></onentry>"
             "</state></scxml>";
-        static const char session_location[] =
+        static const char malformed_system_path[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
-            "<assign location='_sessionid' expr='&quot;x&quot;'/></onentry>"
+            "<assign location='_event..name' expr='2'/></onentry>"
             "</state></scxml>";
         static const char null_assignment[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='active'><onentry>"
             "<assign location='count' expr='2'/></onentry></state></scxml>";
         const char *invalid[] = {
-            missing_location, missing_expr, unknown_location, system_location,
-            name_location, session_location};
-        static const char *read_only_event_locations[] = {
-            "_event.name",       "_event.type",   "_event.sendid",
-            "_event.origin",     "_event.origintype",
-            "_event.invokeid",   "_event.data",   "_event.data.count"};
-        enum { READ_ONLY_ASSIGNMENT_SOURCE_CAPACITY = 256u };
+            missing_location, missing_expr, unknown_location,
+            unknown_system_location, scalar_system_subpath,
+            malformed_system_path};
+        static const char *read_only_system_locations[] = {
+            "_sessionid", "_name", "_event", "_event.name",
+            "_event.data.count", "_event.unknown", "_ioprocessors",
+            "_ioprocessors.scxml.location", "_ioprocessors.unknown"};
+        enum { ASSIGNMENT_SOURCE_CAPACITY = 256u };
         size_t index;
 
         for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
@@ -4419,10 +4469,10 @@ spec("TurboSCXML public CMeta data model") {
             check_null(program.impl);
         }
         for (index = 0u;
-             index < sizeof(read_only_event_locations) /
-                         sizeof(read_only_event_locations[0]);
+             index < sizeof(read_only_system_locations) /
+                         sizeof(read_only_system_locations[0]);
              ++index) {
-            char source[READ_ONLY_ASSIGNMENT_SOURCE_CAPACITY];
+            char source[ASSIGNMENT_SOURCE_CAPACITY];
             scxml_program program = {0};
             scxml_diagnostic diagnostic = {0};
             int written = snprintf(
@@ -4430,11 +4480,11 @@ spec("TurboSCXML public CMeta data model") {
                 "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
                 "datamodel='cmeta'><state id='active'><onentry>"
                 "<assign location='%s' expr='2'/></onentry></state></scxml>",
-                read_only_event_locations[index]);
+                read_only_system_locations[index]);
             check_true(written > 0 && (size_t)written < sizeof(source));
             check_equal(compile_cmeta(source, &program, &diagnostic),
-                        SCXML_INVALID_STRUCTURE);
-            check_null(program.impl);
+                        SCXML_OK);
+            scxml_program_destroy(&program);
         }
         {
             scxml_program program = {0};

@@ -785,15 +785,36 @@ spec("TurboSCXML private SCXML expressions") {
     scxml_assign_program_destroy(&program);
 
     check_equal(scxml_assign_compile(
-                    &program, "_event", 6u, "true", 4u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
-                SCXML_EXPR_UNKNOWN_LOCATION);
-    check_null(program.impl);
-    check_equal(scxml_assign_compile(
                     &program, "order.ready", 11u, "1", 1u,
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
                 SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
+  }
+
+  it("executes recognized system assignments as read-only failures") {
+    const scxml_expr_system_values system_values = {
+        .event_name = {"go", sizeof("go") - 1u},
+        .event_type = {"external", sizeof("external") - 1u}
+    };
+    const scxml_expr_root before = root;
+    scxml_assign_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+    scxml_expr_status status;
+
+    status = scxml_assign_compile(
+        &program, "_event", sizeof("_event") - 1u,
+        "true", sizeof("true") - 1u,
+        &root_data, resolve_state, NULL, NULL, &diagnostic);
+    check_equal(status, SCXML_EXPR_OK);
+    if (status == SCXML_EXPR_OK) {
+      check_equal(scxml_assign_apply_with_system(
+                      &program, &root, state_is_active, &states,
+                      &system_values, &diagnostic),
+                  SCXML_EXPR_EVALUATION_ERROR);
+      scxml_assign_program_destroy(&program);
+    }
+    check_equal(&root, &before, sizeof(root));
   }
 
   it("compares borrowed string locations with byte-exact semantics") {
