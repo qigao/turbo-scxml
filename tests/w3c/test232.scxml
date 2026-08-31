@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="invoking">
+  <state id="invoking" initial="waitingFirst">
+    <invoke type="http://www.w3.org/TR/scxml/" id="invoke232"/>
+    <state id="waitingFirst">
+      <transition event="childToParent1" target="waitingSecond"/>
+      <transition event="*" target="fail"/>
+    </state>
+    <state id="waitingSecond">
+      <transition event="childToParent2" target="waitingDone"/>
+      <transition event="*" target="fail"/>
+    </state>
+    <state id="waitingDone">
+      <transition event="done.invoke.invoke232" target="pass"/>
+      <transition event="*" target="fail"/>
+    </state>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>
