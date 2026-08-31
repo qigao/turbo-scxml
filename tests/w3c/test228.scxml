@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <state id="waiting">
+    <invoke type="http://www.w3.org/TR/scxml/" id="invoke228"/>
+    <transition event="child.returned"
+                cond="_event.invokeid == &quot;invoke228&quot; &amp;&amp; _event.type == &quot;external&quot;"
+                target="pass"/>
+    <transition event="child.returned" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

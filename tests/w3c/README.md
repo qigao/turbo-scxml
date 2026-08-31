@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 125
-local PASS transformations, records 43 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 130
+local PASS transformations, records 38 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -71,6 +71,11 @@ Status meanings are strict:
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
 | `test225.scxml` | [test225.txml](https://www.w3.org/Voice/2013/scxml-irp/225/test225.txml) | Two invocations in one session receive different nonzero tokens and generated IDs at both idlocations and the host boundary. |
 | `test226.scxml` | [test226.txml](https://www.w3.org/Voice/2013/scxml-irp/226/test226.txml) | The strict host receives the canonical type, exact source URL, and named integer parameter before returning the child Event. |
+| `test228.scxml` | [test228.txml](https://www.w3.org/Voice/2013/scxml-irp/228/test228.txml) | A normal Event returned through a live token exposes that invocation's exact ID through `_event.invokeid`. |
+| `test232.scxml` | [test232.txml](https://www.w3.org/Voice/2013/scxml-irp/232/test232.txml) | Two normal Events from one invocation remain FIFO and are selected before that invocation's completion. |
+| `test235.scxml` | [test235.txml](https://www.w3.org/Voice/2013/scxml-irp/235/test235.txml) | Completion for explicit invocation ID `foo` is selected as the exact Event `done.invoke.foo`. |
+| `test236.scxml` | [test236.txml](https://www.w3.org/Voice/2013/scxml-irp/236/test236.txml) | A normal return precedes completion; after completion is processed, the stale token is rejected and its late Event cannot reach selection. |
+| `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
@@ -426,6 +431,21 @@ uses a legal expression whose read from the unbound startup Event fails at
 execution; `error.execution` reaches `pass` while the host observes zero starts.
 These transformations exercise the public materialization/report boundary and
 do not claim that the core itself implements file loading or a child interpreter.
+
+Tests 228, 232, 235, 236, and 247 use one strict bounded invoke-completion host.
+Every case requires exactly one nonzero committed start token and exact start,
+cancel, result-effect, `returned_accepted`, `returned_rejected`, `completed`, and
+`active` counts. Test 228 returns a normal Event and compares its exact
+`_event.invokeid`. Test 232 admits two normal Events and completion before the
+parent consumes them; its three-state sequence is the FIFO witness. Test 235
+matches only `done.invoke.foo`. Test 236 admits a normal Event before completion,
+waits for token terminalization, requires a late report to return
+`INVALID_ARGUMENT`, and uses an independent `confirm` Event to prove the rejected
+return never reached selection. Test 247 creates a second actual TurboSCXML
+session from `test247-child.scxml`, observes that session's top-level-final
+`done` state, destroys it cleanly, and only then reports one completion through
+the parent token. The child remains host-owned; production code gains no child
+interpreter, cross-session registry, transport, or thread.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads
