@@ -1366,8 +1366,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)71u);
-        check_equal(stats.unsupported, (size_t)97u);
+        check_equal(stats.passed, (size_t)73u);
+        check_equal(stats.unsupported, (size_t)95u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1468,6 +1468,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 224 generates invoke IDs in stateid.platformid form") {
         check_true(run_w3c_invoke_idlocation_fixture(
             "test224.scxml", "s0.1", NULL));
+    }
+
+    it("test 287 assigns a legal value to a valid location") {
+        check_true(run_w3c_cmeta_fixture("test287.scxml"));
+    }
+
+    it("test 487 raises error.execution for an unrepresentable value") {
+        check_true(run_w3c_cmeta_fixture("test487.scxml"));
     }
 
     it("test 310 exposes In through the CMeta data model") {

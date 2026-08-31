@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 71
-local PASS transformations, records 97 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 73
+local PASS transformations, records 95 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -42,6 +42,8 @@ Status meanings are strict:
 | `test179.scxml` | [test179.txml](https://www.w3.org/Voice/2013/scxml-irp/179/test179.txml) | Evaluated `send/content` bytes reach the host Event I/O boundary unmodified. |
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
+| `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
+| `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
 | `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
@@ -227,6 +229,17 @@ maps the generated quoted expression to `expr="&quot;foo&quot;"`; test 529
 keeps the inline text child `21`. Test 528 remains `UNSUPPORTED`: its separate
 error-before-completion and empty-data requirements are not claimed by these
 successful content witnesses.
+
+Test 287 maps the generated data ID to the CMeta integer `sequence`, assigns
+the literal value `1`, and observes that committed value from the following
+eventless guard. Test 487 keeps a valid integer location but maps the generated
+illegal value to `1e100`: this is a finite floating expression accepted by the
+numeric assignment compiler, while exact integer conversion fails only when
+the assignment executes. Its following `foo` raise and a FIFO confirmation
+Event distinguish block abortion from merely queuing `error.execution`. Test
+286 remains `UNSUPPORTED` because unknown CMeta locations are currently
+rejected during document compilation rather than admitted as runtime-failing
+assignments.
 
 Tests 312 and 314 map the generated illegal value expression to the legal
 CMeta expression `_event.data.sequence` while `_event` is unbound. Compilation
