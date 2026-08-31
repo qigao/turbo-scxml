@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <datamodel>
+    <data id="sequence" expr="0"/>
+  </datamodel>
+  <state id="s0" initial="p0">
+    <onentry><raise event="event1"/></onentry>
+    <transition event="event2" target="fail"/>
+    <parallel id="p0">
+      <state id="p0s1">
+        <transition event="event1"/>
+        <transition event="event2">
+          <raise event="targetless.two"/>
+        </transition>
+      </state>
+      <state id="p0s2">
+        <transition event="event1" target="p0s1">
+          <raise event="event2"/>
+        </transition>
+      </state>
+      <state id="p0s3">
+        <transition event="event1" target="fail"/>
+        <transition event="event2" target="s1">
+          <raise event="descendant.two"/>
+        </transition>
+      </state>
+      <state id="p0s4">
+        <transition event="*">
+          <if cond="_event.name == &quot;event1&quot;">
+            <assign location="sequence" expr="1"/>
+            <raise event="wildcard.one"/>
+            <else/>
+            <assign location="sequence" expr="3"/>
+            <raise event="wildcard.two"/>
+          </if>
+        </transition>
+      </state>
+    </parallel>
+  </state>
+  <state id="s1">
+    <transition event="wildcard.one" target="after-wildcard-one"/>
+    <transition event="targetless.two descendant.two wildcard.two" target="fail"/>
+  </state>
+  <state id="after-wildcard-one">
+    <transition event="targetless.two" target="after-targetless-two"/>
+    <transition event="descendant.two wildcard.two" target="fail"/>
+  </state>
+  <state id="after-targetless-two">
+    <transition event="descendant.two" target="after-descendant-two"/>
+    <transition event="wildcard.two" target="fail"/>
+  </state>
+  <state id="after-descendant-two">
+    <transition event="wildcard.two" cond="sequence == 3" target="pass"/>
+    <transition event="wildcard.two" target="fail"/>
+  </state>
+  <final id="pass">
+    <onentry><send event="result.pass"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send event="result.fail"/></onentry>
+  </final>
+</scxml>

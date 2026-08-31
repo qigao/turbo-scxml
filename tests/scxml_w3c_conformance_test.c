@@ -2818,8 +2818,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)114u);
-        check_equal(stats.unsupported, (size_t)54u);
+        check_equal(stats.passed, (size_t)116u);
+        check_equal(stats.unsupported, (size_t)52u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -3261,6 +3261,34 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 403a applies source priority, document order, and guards") {
         check_w3c_fixture("test403a.scxml");
+    }
+
+    it("test 403b de-duplicates an ancestor transition selected by parallel leaves") {
+        check_true(run_w3c_cmeta_fixture("test403b.scxml"));
+    }
+
+    it("test 403c retains compatible transitions while preempting conflicts") {
+        check_true(run_w3c_cmeta_fixture("test403c.scxml"));
+    }
+
+    it("test 403c keeps one wildcard transition across selection rounds") {
+        static const char wildcard_transition[] = "<transition event=\"*\"";
+        char path[W3C_FIXTURE_PATH_CAPACITY];
+        char *source = NULL;
+        size_t source_size = 0u;
+        int path_size = snprintf(path, sizeof(path), "%s/%s",
+                                 SCXML_W3C_FIXTURE_DIR, "test403c.scxml");
+
+        check_true(path_size >= 0 && (size_t)path_size < sizeof(path));
+        source = tt_read_file(path, &source_size);
+        check_not_null(source);
+        if (source != NULL) {
+            const char *first = strstr(source, wildcard_transition);
+            check_not_null(first);
+            if (first != NULL)
+                check_null(strstr(first + 1u, wildcard_transition));
+        }
+        free(source);
     }
 
     it("test 404 executes exits in exit order before transition content") {
