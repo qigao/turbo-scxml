@@ -1366,8 +1366,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)69u);
-        check_equal(stats.unsupported, (size_t)99u);
+        check_equal(stats.passed, (size_t)71u);
+        check_equal(stats.unsupported, (size_t)97u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1472,6 +1472,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 310 exposes In through the CMeta data model") {
         check_true(run_w3c_cmeta_fixture("test310.scxml"));
+    }
+
+    it("test 312 raises error.execution for an illegal value expression") {
+        check_true(run_w3c_cmeta_fixture("test312.scxml"));
+    }
+
+    it("test 314 raises a value-expression error only when evaluated") {
+        check_true(run_w3c_cmeta_fixture("test314.scxml"));
     }
 
     it("test 318 retains the selected event through state entry") {

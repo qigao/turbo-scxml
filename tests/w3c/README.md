@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 69
-local PASS transformations, records 99 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 71
+local PASS transformations, records 97 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -43,6 +43,8 @@ Status meanings are strict:
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
+| `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
+| `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
 | `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
@@ -225,6 +227,17 @@ maps the generated quoted expression to `expr="&quot;foo&quot;"`; test 529
 keeps the inline text child `21`. Test 528 remains `UNSUPPORTED`: its separate
 error-before-completion and empty-data requirements are not claimed by these
 successful content witnesses.
+
+Tests 312 and 314 map the generated illegal value expression to the legal
+CMeta expression `_event.data.sequence` while `_event` is unbound. Compilation
+therefore succeeds, but evaluation fails at the same executable-content point
+as the upstream assertion. Each fixture keeps the following `raise event="foo"`
+as a block-abort sentinel, then queues a confirmation Event after selecting
+`error.execution`; FIFO ordering exposes any incorrectly retained `foo` before
+the fixture can pass. Test 314 advances through `s01` and `s02` with internal
+Events, while the compound parent's `error.execution` transition rejects any
+premature evaluation before `s03`. This does not claim support for syntactically
+invalid documents or recoverable transition-guard failures.
 
 Test 179 replaces upstream self-delivery with the versioned v3 host Event I/O
 adapter. The fixture still evaluates literal `content` when `send` executes;
