@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboUtils currently executes 42
-local PASS transformations, records 126 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 46
+local PASS transformations, records 122 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -26,9 +26,9 @@ Status meanings are strict:
   its `pass` terminal, or the equivalent single-pass terminal checked by a
   specialized strict adapter harness.
 - `UNSUPPORTED` means a mandatory upstream document remains outside the
-  implemented or testable TurboUtils profile. The row states the missing
+  implemented or testable TurboSCXML profile. The row states the missing
   assertion rather than silently omitting it.
-- `N/A` is reserved for optional profiles that TurboUtils does not claim,
+- `N/A` is reserved for optional profiles that TurboSCXML does not claim,
   currently ECMAScript, XPath, and BasicHTTP-specific behavior.
 
 | Local fixture | Upstream source | Assertion preserved |
@@ -42,6 +42,9 @@ Status meanings are strict:
 | `test179.scxml` | [test179.txml](https://www.w3.org/Voice/2013/scxml-irp/179/test179.txml) | Evaluated `send/content` bytes reach the host Event I/O boundary unmodified. |
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
+| `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
+| `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
+| `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
 | `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
 | `test372.scxml` | [test372.txml](https://www.w3.org/Voice/2013/scxml-irp/372/test372.txml) | A parent's `done.state` event is selected after its final child's `onentry` and before that child's `onexit`. |
@@ -52,6 +55,7 @@ Status meanings are strict:
 | `test378.scxml` | [test378.txml](https://www.w3.org/Voice/2013/scxml-irp/378/test378.txml) | An execution error aborts only its `onexit` block; a later independent handler still executes. |
 | `test387.scxml` | [test387.txml](https://www.w3.org/Voice/2013/scxml-irp/387/test387.txml) | An unset shallow or deep history slot enters its declared default stored configuration. |
 | `test388.scxml` | [test388.txml](https://www.w3.org/Voice/2013/scxml-irp/388/test388.txml) | A visited compound restores its stored deep leaf and its stored shallow child with default descent. |
+| `test396.scxml` | [test396.txml](https://www.w3.org/Voice/2013/scxml-irp/396/test396.txml) | `_event.name` equals the Event name used to select the matching transition. |
 | `test399.scxml` | [test399.txml](https://www.w3.org/Voice/2013/scxml-irp/399/test399.txml) | Event descriptor unions, token prefixes, token boundaries, `.*`, and `*` select exactly the intended transitions. |
 | `test579.scxml` | [test579.txml](https://www.w3.org/Voice/2013/scxml-irp/579/test579.txml) | Unset history transition content executes after the parent's `onentry` and initial-transition content. |
 | `test580.scxml` | [test580.txml](https://www.w3.org/Voice/2013/scxml-irp/580/test580.txml) | A history pseudo-state never appears in the active configuration. |
@@ -79,8 +83,8 @@ Status meanings are strict:
 The upstream `.txml` files use a `conf:` vocabulary consumed by the W3C test
 generation pipeline. Every local transformation replaces `conf:pass` and
 `conf:fail` with ordinary SCXML `final` states named `pass` and `fail`, removes
-test-generation metadata, selects the null datamodel, and keeps the executable
-structure that observes the assertion.
+test-generation metadata, selects the null or CMeta datamodel required by the
+local witness, and keeps the executable structure that observes the assertion.
 
 Tests 144, 147, 148, 149, 158, 375, 377, 404, 405, 406, and 412 replace wildcard
 failure transitions with finite exact events so the local `pass`/`fail` finals
@@ -125,6 +129,15 @@ a bounded test adapter so the owning CMeta session remains a black box. Test
 event hook observes transition-selection boundaries and requires the raise
 action to execute while `event1` is never selected before clean termination.
 
+Tests 318, 319, 339, and 396 use the owning CMeta session so the complete
+current-Event envelope is observed through the public execution path. Test 318
+raises another Event before checking that `_event.name` still names the Event
+whose transition is being processed. Test 319 maps the generator's
+`conf:systemVarIsBound` query to the finite CMeta expression
+`isBound(_event)`. Tests 339 and 396 compare the empty non-invoke `invokeid`
+and the selected Event name directly. Their terminal states use the same
+bounded `result.pass`/`result.fail` adapter probe as the completion fixtures.
+
 Tests 376 and 378 replace the generator counter with a `second.block` event.
 Their test-only owning sessions inject `SCXML_ADAPTER_ERROR_EXECUTION`
 for the first handler's `send`, then require `error.execution` followed by the
@@ -165,7 +178,7 @@ invocation token. The fixtures independently require the writable CMeta
 does not weaken either binding or `stateid.platformid` witness.
 
 The late-binding implementation does not justify weakening upstream test 280:
-TurboUtils uses caller-supplied typed CMeta storage, so a declared field exists
+TurboSCXML uses caller-supplied typed CMeta storage, so a declared field exists
 before its state-local initializer runs. Reads before first entry therefore
 observe the caller value instead of the upstream generated datamodel's
 unbound-location error. Test 280 remains explicitly `UNSUPPORTED`; the local

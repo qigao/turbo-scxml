@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <state id="s0">
+    <onentry><raise event="foo"/></onentry>
+    <transition event="foo" target="s1"/>
+  </state>
+  <state id="s1">
+    <onentry>
+      <raise event="bar"/>
+      <if cond="_event.name == &quot;foo&quot;">
+        <raise event="event.retained"/>
+        <else/>
+        <raise event="event.changed"/>
+      </if>
+    </onentry>
+    <transition event="event.retained" target="pass"/>
+    <transition event="event.changed" target="fail"/>
+  </state>
+  <final id="pass">
+    <onentry><send event="result.pass"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send event="result.fail"/></onentry>
+  </final>
+</scxml>

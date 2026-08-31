@@ -563,6 +563,37 @@ spec("TurboSCXML private SCXML expressions") {
     check_null(program.impl);
   }
 
+  it("reports whether the current event is bound") {
+    const scxml_expr_system_values unbound_event = {0};
+    const scxml_expr_system_values bound_event = {
+        .event_name = {"go", 2u}
+    };
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+    bool result = true;
+
+    check_equal(compile_expression(
+                    &program, "isBound(_event)", NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &unbound_event, &result, &diagnostic),
+                SCXML_EXPR_OK);
+    check_false(result);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &bound_event, &result, &diagnostic),
+                SCXML_EXPR_OK);
+    check_true(result);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    NULL, &result, &diagnostic),
+                SCXML_EXPR_EVALUATION_ERROR);
+    check_true(result);
+    scxml_expr_program_destroy(&program);
+  }
+
   it("reads structured current event data through the compiled CMeta schema") {
     scxml_expr_root event_data = root;
     scxml_expr_system_values system_values = {
@@ -765,14 +796,18 @@ spec("TurboSCXML private SCXML expressions") {
   it("rejects unknown paths nonboolean conditions and malformed syntax") {
     static const char *const invalid[] = {
         "order.missing == 1", "order.count", "true &&", "In(active)",
-        "In(\"missing\")", "label == 1"};
+        "In(\"missing\")", "label == 1", "isBound()",
+        "isBound(_event.name)", "isBound(other)"};
     static const scxml_expr_status expected[] = {
         SCXML_EXPR_UNKNOWN_LOCATION,
         SCXML_EXPR_TYPE_MISMATCH,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_UNKNOWN_LOCATION,
-        SCXML_EXPR_TYPE_MISMATCH};
+        SCXML_EXPR_TYPE_MISMATCH,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_SYNTAX_ERROR,
+        SCXML_EXPR_SYNTAX_ERROR};
     size_t index;
     for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
         scxml_expr_program program = {0};

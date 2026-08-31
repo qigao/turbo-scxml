@@ -55,6 +55,7 @@ typedef enum expr_operand_kind {
     EXPR_OPERAND_FLOAT,
     EXPR_OPERAND_STRING,
     EXPR_OPERAND_STATE,
+    EXPR_OPERAND_SYSTEM_EVENT_BOUND,
     EXPR_OPERAND_SYSTEM_NAME,
     EXPR_OPERAND_SYSTEM_SESSION_ID,
     EXPR_OPERAND_SYSTEM_EVENT_NAME,
@@ -638,6 +639,36 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
         return parser_add_operand(parser, operand, &operand_index) &&
                parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target,
                                        0u, operand_index, 0u);
+    }
+    if (token_text_equal(parser, "isBound")) {
+        expr_operand operand = {
+            .kind = EXPR_OPERAND_SYSTEM_EVENT_BOUND,
+            .value_kind = EXPR_VALUE_BOOL};
+        uint32_t operand_index;
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_LPAREN)
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "isBound requires '('");
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_IDENT ||
+            !token_text_equal(parser, "_event"))
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "isBound requires the _event variable");
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_RPAREN)
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "isBound accepts only the _event variable");
+        parser_next(parser);
+        if (!parser_add_operand(parser, operand, &operand_index) ||
+            !parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target, 0u,
+                                     operand_index, 0u))
+            return false;
+        out->reg = target;
+        out->kind = EXPR_VALUE_BOOL;
+        return true;
     }
     if (token_text_equal(parser, "_event")) {
         const size_t event_offset = parser->token.offset;
@@ -1273,6 +1304,15 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             }
             make_value(out, EXPR_VALUE_BOOL);
             out->boolean = active;
+            return 1;
+        case EXPR_OPERAND_SYSTEM_EVENT_BOUND:
+            if (context->system_values == NULL) {
+                context->failed = true;
+                return 0;
+            }
+            make_value(out, EXPR_VALUE_BOOL);
+            out->boolean =
+                context->system_values->event_name.data != NULL;
             return 1;
         case EXPR_OPERAND_SYSTEM_NAME:
         case EXPR_OPERAND_SYSTEM_SESSION_ID:

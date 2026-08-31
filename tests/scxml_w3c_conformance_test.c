@@ -1101,8 +1101,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)42u);
-        check_equal(stats.unsupported, (size_t)126u);
+        check_equal(stats.passed, (size_t)46u);
+        check_equal(stats.unsupported, (size_t)122u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1205,6 +1205,18 @@ suite("SCXML W3C-derived conformance regression corpus") {
             "test224.scxml", "s0.1"));
     }
 
+    it("test 318 retains the selected event through state entry") {
+        check_true(run_w3c_cmeta_fixture("test318.scxml"));
+    }
+
+    it("test 319 leaves the current event unbound during initialization") {
+        check_true(run_w3c_cmeta_fixture("test319.scxml"));
+    }
+
+    it("test 339 leaves invokeid empty for a raised event") {
+        check_true(run_w3c_cmeta_fixture("test339.scxml"));
+    }
+
     it("test 355 selects the first root child when initial is omitted") {
         check_w3c_fixture("test355.scxml");
     }
@@ -1241,6 +1253,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
     }
     it("test 388 restores stored shallow and deep configurations") {
         check_w3c_fixture("test388.scxml");
+    }
+
+    it("test 396 uses the selected event name for transition matching") {
+        check_true(run_w3c_cmeta_fixture("test396.scxml"));
     }
 
     it("test 399 applies unions prefixes boundaries and wildcards") {
