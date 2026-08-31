@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 65
-local PASS transformations, records 103 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 67
+local PASS transformations, records 101 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -75,6 +75,8 @@ Status meanings are strict:
 | `test388.scxml` | [test388.txml](https://www.w3.org/Voice/2013/scxml-irp/388/test388.txml) | A visited compound restores its stored deep leaf and its stored shallow child with default descent. |
 | `test396.scxml` | [test396.txml](https://www.w3.org/Voice/2013/scxml-irp/396/test396.txml) | `_event.name` equals the Event name used to select the matching transition. |
 | `test399.scxml` | [test399.txml](https://www.w3.org/Voice/2013/scxml-irp/399/test399.txml) | Event descriptor unions, token prefixes, token boundaries, `.*`, and `*` select exactly the intended transitions. |
+| `test401.scxml` | [test401.txml](https://www.w3.org/Voice/2013/scxml-irp/401/test401.txml) | A processor-generated `error.execution` Event is selected before an already-queued external Event. |
+| `test402.scxml` | [test402.txml](https://www.w3.org/Voice/2013/scxml-irp/402/test402.txml) | A processor-generated error retains FIFO position in the internal queue and participates in ordinary event-descriptor matching. |
 | `test579.scxml` | [test579.txml](https://www.w3.org/Voice/2013/scxml-irp/579/test579.txml) | Unset history transition content executes after the parent's `onentry` and initial-transition content. |
 | `test580.scxml` | [test580.txml](https://www.w3.org/Voice/2013/scxml-irp/580/test580.txml) | A history pseudo-state never appears in the active configuration. |
 | `test576.scxml` | [test576.txml](https://www.w3.org/Voice/2013/scxml-irp/576/test576.txml) | Root `initial` IDREFS enter both deeply nested non-default siblings of one parallel state. |
@@ -126,6 +128,15 @@ changing which active configuration advances each stage.
 Test 419 keeps the queued internal event as the failure witness, replaces the
 wildcard with that exact event, and omits the additional external `send`; the
 retained event is sufficient to distinguish eventless-transition precedence.
+Test 401 replaces the upstream self-send with two host admissions while the
+serial executor is held: `start` enters the assertion state and `foo` is already
+in the external queue before its protected `_name` write generates
+`error.execution`. Reaching `pass` therefore observes internal-over-external
+priority rather than host delivery timing. Test 402 replaces the generator's
+invalid data-model operation with the same runtime-failing protected `_name`
+write. It preserves the upstream `event1`, processor error, and `event2` trace;
+the `error` descriptor deliberately matches the generated `error.execution`
+Event through ordinary prefix semantics.
 Test 403a replaces generator counters with two queued events: the first checks
 descendant and document-order priority, and the second checks condition
 fallthrough to an ancestor. Tests 409 and 411 retain their `In(state)` timing

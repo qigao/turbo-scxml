@@ -7,8 +7,10 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <turbo/thread.h>
 
 #define W3C_FIXTURE_PATH_CAPACITY 512u
 #define W3C_MANIFEST_ROW_CAPACITY 256u
@@ -87,10 +89,17 @@ typedef struct w3c_cmeta_probe {
 
 typedef struct w3c_cmeta_fixture_options {
     const char *external_event;
+    const char *following_external_event;
+    bool hold_executor_during_external_admission;
     size_t loopback_count;
     bool routable_loopback;
     scxml_adapter_status send_rejection;
 } w3c_cmeta_fixture_options;
+
+typedef struct w3c_executor_blocker {
+    atomic_bool entered;
+    atomic_bool release;
+} w3c_executor_blocker;
 
 typedef struct w3c_event_probe {
     cflow_event_id expected_internal;
@@ -553,6 +562,24 @@ static scxml_adapter_status w3c_capture_cmeta_send(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static void w3c_block_executor(void *user) {
+    w3c_executor_blocker *blocker = (w3c_executor_blocker *)user;
+    atomic_store(&blocker->entered, true);
+    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+}
+
+static bool w3c_admit_external_event(
+    scxml_session *session, const scxml_program *program,
+    const char *event_name) {
+    cflow_event_view event = {0};
+    scxml_event_metadata metadata = {0};
+    const size_t event_size = event_name != NULL ? strlen(event_name) : 0u;
+    return event_size != 0u &&
+        scxml_program_event(program, event_name, event_size, &event) &&
+        scxml_session_try_send_v2(session, &event, &metadata) ==
+            CFLOW_MAILBOX_OK;
+}
+
 static void w3c_invoke_commit(void *user) {
     w3c_invoke_probe *probe = (w3c_invoke_probe *)user;
     if (probe != NULL) ++probe->commits;
@@ -959,8 +986,9 @@ static bool run_w3c_cmeta_fixture_with_options(
     bool executor_initialized = false;
     bool session_initialized = false;
     bool succeeded = false;
+    bool blocker_initialized = false;
+    w3c_executor_blocker blocker;
     cflow_event_view admitted_event = {0};
-    scxml_event_metadata empty_metadata = {0};
     int path_size;
 
     if (fixture_name == NULL) return false;
@@ -1003,16 +1031,27 @@ static bool run_w3c_cmeta_fixture_with_options(
                 &required) != SCXML_LOCATION_OK)
             goto cleanup;
     }
+    if (options != NULL &&
+        options->hold_executor_during_external_admission) {
+        atomic_init(&blocker.entered, false);
+        atomic_init(&blocker.release, false);
+        blocker_initialized = true;
+        if (cflow_executor_try_post(
+                &executor, w3c_block_executor, &blocker) !=
+            CFLOW_ADMISSION_ACCEPTED)
+            goto cleanup;
+        while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+    }
     if (options != NULL && options->external_event != NULL) {
-        const size_t event_size = strlen(options->external_event);
-        if (!scxml_program_event(
-                &program, options->external_event, event_size,
-                &admitted_event) ||
-            scxml_session_try_send_v2(
-                &session, &admitted_event, &empty_metadata) !=
-                CFLOW_MAILBOX_OK)
+        if (!w3c_admit_external_event(
+                &session, &program, options->external_event))
             goto cleanup;
     }
+    if (options != NULL && options->following_external_event != NULL &&
+        !w3c_admit_external_event(
+            &session, &program, options->following_external_event))
+        goto cleanup;
+    if (blocker_initialized) atomic_store(&blocker.release, true);
     if (!cflow_executor_wait_idle(&executor)) goto cleanup;
     while (probe.loopback_delivered_count < probe.loopback_limit) {
         const size_t index = probe.loopback_delivered_count;
@@ -1064,6 +1103,7 @@ static bool run_w3c_cmeta_fixture_with_options(
              scxml_session_error(&session));
 
 cleanup:
+    if (blocker_initialized) atomic_store(&blocker.release, true);
     if (session_initialized &&
         scxml_session_destroy(&session) !=
             CFLOW_STATECHART_INSTANCE_OK)
@@ -1082,6 +1122,16 @@ static bool run_w3c_cmeta_external_fixture(
     const char *fixture_name, const char *external_event) {
     const w3c_cmeta_fixture_options options = {
         .external_event = external_event};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
+static bool run_w3c_cmeta_ordered_external_fixture(
+    const char *fixture_name, const char *first_event,
+    const char *second_event) {
+    const w3c_cmeta_fixture_options options = {
+        .external_event = first_event,
+        .following_external_event = second_event,
+        .hold_executor_during_external_admission = true};
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
@@ -1316,8 +1366,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)65u);
-        check_equal(stats.unsupported, (size_t)103u);
+        check_equal(stats.passed, (size_t)67u);
+        check_equal(stats.unsupported, (size_t)101u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1552,6 +1602,15 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 399 applies unions prefixes boundaries and wildcards") {
         check_w3c_fixture("test399.scxml");
+    }
+
+    it("test 401 prioritizes a processor error over queued external events") {
+        check_true(run_w3c_cmeta_ordered_external_fixture(
+            "test401.scxml", "start", "foo"));
+    }
+
+    it("test 402 processes processor errors as ordinary internal events") {
+        check_true(run_w3c_cmeta_fixture("test402.scxml"));
     }
 
     it("test 579 orders initial and default history content") {
