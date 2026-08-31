@@ -2947,6 +2947,83 @@ spec("TurboSCXML public CMeta data model") {
         }
     }
 
+    it("clears provenance when an invoke error reuses an internal slot") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='sending'><onentry>"
+            "<send event='out' target='peer' id='sent'/></onentry>"
+            "<transition event='error.communication' target='invoking'/>"
+            "</state><state id='invoking'>"
+            "<invoke id='worker' type='urn:test'>"
+            "<param name='sourceCopy' location='source'/></invoke>"
+            "<transition event='error.execution' target='done'/></state>"
+            "<final id='done'/></scxml>";
+        const scxml_event_io_adapter_v2 event_io = {
+            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
+            .struct_size = sizeof(event_io),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND |
+                SCXML_EVENT_IO_CAP_PAYLOAD,
+            .prepare_send = payload_prepare_send,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        const scxml_invoke_adapter_v2 invoke = {
+            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+            .struct_size = sizeof(invoke),
+            .capabilities = SCXML_INVOKE_CAP_START |
+                SCXML_INVOKE_CAP_CANCEL |
+                SCXML_INVOKE_CAP_PAYLOAD,
+            .prepare_start = payload_prepare_start,
+            .prepare_cancel = payload_prepare_invoke_cancel,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        payload_adapter_probe probe = {
+            .send_status = SCXML_ADAPTER_ERROR_COMMUNICATION};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_public_data initial = {
+            true, 0, SCXML_PUBLIC_SOURCE_FAIL};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 2u,
+            .microstep_limit = 16u,
+            .effect_capacity = 2u,
+            .adapter_internal_event_capacity = 2u,
+            .invocation_capacity = 1u};
+        const scxml_session_adapters_v2 adapters = {
+            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
+            .struct_size = sizeof(adapters),
+            .event_io = &event_io,
+            .event_io_user = &probe,
+            .invoke = &invoke,
+            .invoke_user = &probe};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v2(
+                        &session, &config, &data, &adapters),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(probe.sends, (size_t)1u);
+        check_equal(probe.starts, (size_t)0u);
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("publishes a stable invoke idlocation before committing a v1 start") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "

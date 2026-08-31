@@ -594,22 +594,14 @@ static cflow_statechart_instance_status scxml_session_init_model(
     atomic_init(&impl->adapter_close_called, false);
     atomic_init(&impl->invoke_close_called, false);
     instance_hooks = (cflow_statechart_instance_hooks){
-        .abi_version =
-            (program->requirements &
-             SCXML_REQUIREMENT_INVOKE_IDLOCATION) != 0u
-                ? CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V3
-                : CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V2,
+        .abi_version = impl->has_invoke
+            ? CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V3
+            : CFLOW_STATECHART_INSTANCE_HOOKS_ABI_V2,
         .struct_size = sizeof(instance_hooks),
-        .on_stable = impl->has_invoke &&
-                (program->requirements &
-                 SCXML_REQUIREMENT_INVOKE_IDLOCATION) == 0u
-            ? scxml_runtime_start_stable_invocations : NULL,
         .preprocess_external =
             impl->has_invoke ? scxml_runtime_preprocess_invocation_external : NULL,
         .on_event = scxml_runtime_observe_event,
-        .on_stable_transaction = impl->has_invoke &&
-                (program->requirements &
-                 SCXML_REQUIREMENT_INVOKE_IDLOCATION) != 0u
+        .on_stable_transaction = impl->has_invoke
             ? scxml_runtime_start_stable_invocations_transaction : NULL};
     if (data_model == SCXML_DATA_MODEL_CMETA &&
         program->data_initializer_count != 0u) {

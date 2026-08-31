@@ -7,9 +7,6 @@ scxml_delayed_send *scxml_runtime_find_delayed_send_locked(
     scxml_session_impl *session, const char *id,
     size_t id_size, size_t *out_index);
 void scxml_runtime_increment_u64(uint64_t *value);
-bool scxml_runtime_start_stable_invocations(
-    void *user, const cflow_statechart_instance_hook_context *context,
-    const char **out_error);
 cflow_statechart_stable_transaction_result
 scxml_runtime_start_stable_invocations_transaction(
     void *user,
