@@ -164,6 +164,7 @@ typedef struct w3c_cmeta_fixture_options {
     const char *third_external_event;
     size_t external_event_capacity;
     bool hold_executor_during_external_admission;
+    bool require_three_external_events_drained;
     size_t loopback_count;
     bool routable_loopback;
     bool require_scxml_type;
@@ -2066,18 +2067,29 @@ static bool run_w3c_cmeta_fixture_with_schema(
         ((probe.send_rejection == SCXML_ADAPTER_ACCEPTED &&
           probe.rejected_sends == 0u) ||
          (probe.send_rejection != SCXML_ADAPTER_ACCEPTED &&
-          probe.rejected_sends == 1u));
+          probe.rejected_sends == 1u)) &&
+        (options == NULL ||
+         !options->require_three_external_events_drained ||
+         (stats.external_accepted == W3C_MACROSTEP_EXTERNAL_EVENT_CAPACITY &&
+          stats.external_completed == W3C_MACROSTEP_EXTERNAL_EVENT_CAPACITY &&
+          stats.external_pending == 0u &&
+          stats.external_in_flight == 0u));
     if (!succeeded)
         info("fixture=%s done=%d errored=%d result_sends=%zu "
              "result_commits=%zu result_discards=%zu result=%s "
              "loopback_sends=%zu loopback_commits=%zu "
-             "loopback_discards=%zu delivered=%zu rejected=%zu error=%s",
+             "loopback_discards=%zu delivered=%zu rejected=%zu "
+             "external_accepted=%llu external_completed=%llu "
+             "external_pending=%zu external_in_flight=%zu error=%s",
              fixture_name, stats.done ? 1 : 0, stats.errored ? 1 : 0,
              probe.result.prepare_send_calls, probe.result.commits,
              probe.result.discards, probe.result.event,
              probe.loopback_prepare_calls, probe.loopback_commits,
              probe.loopback_discards, probe.loopback_delivered_count,
              probe.rejected_sends,
+             (unsigned long long)stats.external_accepted,
+             (unsigned long long)stats.external_completed,
+             stats.external_pending, stats.external_in_flight,
              scxml_session_error(&session));
 
 cleanup:
@@ -2217,7 +2229,8 @@ static bool run_w3c_cmeta_three_external_fixture(
         .following_external_event = second_event,
         .third_external_event = third_event,
         .external_event_capacity = W3C_MACROSTEP_EXTERNAL_EVENT_CAPACITY,
-        .hold_executor_during_external_admission = true};
+        .hold_executor_during_external_admission = true,
+        .require_three_external_events_drained = true};
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
