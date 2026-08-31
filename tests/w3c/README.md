@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 63
-local PASS transformations, records 105 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 65
+local PASS transformations, records 103 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -42,6 +42,7 @@ Status meanings are strict:
 | `test179.scxml` | [test179.txml](https://www.w3.org/Voice/2013/scxml-irp/179/test179.txml) | Evaluated `send/content` bytes reach the host Event I/O boundary unmodified. |
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
+| `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
 | `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
@@ -96,6 +97,7 @@ Status meanings are strict:
 | `test505.scxml` | [test505.txml](https://www.w3.org/Voice/2013/scxml-irp/505/test505.txml) | An internal transition from a compound state to a proper descendant retains the source state. |
 | `test506.scxml` | [test506.txml](https://www.w3.org/Voice/2013/scxml-irp/506/test506.txml) | An internal transition whose target is not a proper descendant uses external transition-domain semantics. |
 | `test533.scxml` | [test533.txml](https://www.w3.org/Voice/2013/scxml-irp/533/test533.txml) | An internal transition from a non-compound source uses external transition-domain semantics. |
+| `test436.scxml` | [test436.txml](https://www.w3.org/Voice/2013/scxml-irp/436/test436.txml) | The null data model reports an inactive state as false and an active parallel sibling as true through `In(stateID)`. |
 
 The upstream `.txml` files use a `conf:` vocabulary consumed by the W3C test
 generation pipeline. Every local transformation replaces `conf:pass` and
@@ -229,6 +231,13 @@ including history pseudo-states. The W3C `<initial>` element has no attributes
 and cannot be named. The native Statechart active configuration remains the
 single fact source: pseudo-states are never active, so a declared history query
 evaluates to false. Unknown IDs still fail program admission.
+
+Tests 310 and 436 cover the complete TurboSCXML data-model set. Test 310 maps
+the generator predicate to CMeta `In("s1")` while `s1` is active in a parallel
+region. Test 436 retains the upstream null-model order: it first requires
+inactive root sibling `s1` to evaluate false, then requires active parallel
+sibling `ps1` to evaluate true. Both paths read the same native active
+configuration rather than maintaining a data-model-specific state mirror.
 
 ## Current CMeta system-event profile
 

@@ -1316,8 +1316,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)63u);
-        check_equal(stats.unsupported, (size_t)105u);
+        check_equal(stats.passed, (size_t)65u);
+        check_equal(stats.unsupported, (size_t)103u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1418,6 +1418,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 224 generates invoke IDs in stateid.platformid form") {
         check_true(run_w3c_invoke_idlocation_fixture(
             "test224.scxml", "s0.1", NULL));
+    }
+
+    it("test 310 exposes In through the CMeta data model") {
+        check_true(run_w3c_cmeta_fixture("test310.scxml"));
     }
 
     it("test 318 retains the selected event through state entry") {
@@ -1628,6 +1632,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 533 treats an internal transition from parallel as external") {
         check_w3c_fixture("test533.scxml");
+    }
+
+    it("test 436 exposes exact In membership in the null data model") {
+        check_w3c_fixture("test436.scxml");
     }
 
     it("test 576 enters both non-default root initial targets") {
