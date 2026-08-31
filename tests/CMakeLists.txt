@@ -34,7 +34,7 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
-  LIBS TurboUtils::Core
+  LIBS TurboUtils::Core TurboUtils::STL
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 

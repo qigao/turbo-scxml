@@ -2,6 +2,7 @@
 #include <scxml/scxml.h>
 #include <cflow/statechart_instance.h>
 #include <turbo_cmeta_data.h>
+#include <turbostl/typed.h>
 
 #include "tinytest.h"
 
@@ -173,6 +174,97 @@ static const cmeta_data_desc w3c_cmeta_state_desc = {
     .kind = CMETA_DATA_STRUCT,
     .storage_type = &w3c_cmeta_state_type,
     .shape = &w3c_cmeta_state_shape};
+
+Struct(w3c_foreach_state,
+    (TYPE(Vec, int), values),
+    (int, item),
+    (size_t, index),
+    (int, previous),
+    (int, stage),
+    (int, total),
+    (int, valid)
+);
+
+static bool w3c_foreach_state_copy(void *destination_, const void *source_) {
+    w3c_foreach_state *destination = (w3c_foreach_state *)destination_;
+    const w3c_foreach_state *source =
+        (const w3c_foreach_state *)source_;
+    size_t index;
+    if (destination == NULL || source == NULL) return false;
+    memset(destination, 0, sizeof(*destination));
+    destination->values = VecOf(int);
+    if (vec_init(&destination->values, source->values.element_limit) != STL_OK)
+        return false;
+    for (index = 0u; index < vec_size(&source->values); ++index) {
+        const int *value = (const int *)vec_at_const(&source->values, index);
+        if (value == NULL || vec_push(&destination->values, value) != STL_OK) {
+            vec_destroy(&destination->values);
+            memset(destination, 0, sizeof(*destination));
+            return false;
+        }
+    }
+    destination->item = source->item;
+    destination->index = source->index;
+    destination->previous = source->previous;
+    destination->stage = source->stage;
+    destination->total = source->total;
+    destination->valid = source->valid;
+    return true;
+}
+
+static void w3c_foreach_state_move(void *destination_, void *source_) {
+    w3c_foreach_state *destination = (w3c_foreach_state *)destination_;
+    w3c_foreach_state *source = (w3c_foreach_state *)source_;
+    if (destination == NULL || source == NULL) return;
+    *destination = *source;
+    memset(source, 0, sizeof(*source));
+}
+
+static void w3c_foreach_state_destroy(void *value_) {
+    w3c_foreach_state *value = (w3c_foreach_state *)value_;
+    if (value != NULL && value->values.initialized)
+        vec_destroy(&value->values);
+}
+
+static const cmeta_type_traits w3c_foreach_state_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = w3c_foreach_state_copy,
+    .move_construct = w3c_foreach_state_move,
+    .destroy = w3c_foreach_state_destroy};
+static const cmeta_type_desc w3c_foreach_state_type = {
+    .name = "w3c_foreach_state",
+    .size = sizeof(w3c_foreach_state),
+    .align = _Alignof(w3c_foreach_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &w3c_foreach_state_traits};
+static const cmeta_data_field_desc w3c_foreach_state_fields[] = {
+    {"test.scxml.w3c.foreach.values", "values",
+     offsetof(w3c_foreach_state, values), &cmeta_data_sequence},
+    {"test.scxml.w3c.foreach.item", "item",
+     offsetof(w3c_foreach_state, item), &cmeta_data_int},
+    {"test.scxml.w3c.foreach.index", "index",
+     offsetof(w3c_foreach_state, index), &cmeta_data_size},
+    {"test.scxml.w3c.foreach.previous", "previous",
+     offsetof(w3c_foreach_state, previous), &cmeta_data_int},
+    {"test.scxml.w3c.foreach.stage", "stage",
+     offsetof(w3c_foreach_state, stage), &cmeta_data_int},
+    {"test.scxml.w3c.foreach.total", "total",
+     offsetof(w3c_foreach_state, total), &cmeta_data_int},
+    {"test.scxml.w3c.foreach.valid", "valid",
+     offsetof(w3c_foreach_state, valid), &cmeta_data_int}};
+static const cmeta_data_struct_shape w3c_foreach_state_shape = {
+    .layout = StructMeta(w3c_foreach_state),
+    .fields = w3c_foreach_state_fields,
+    .field_count = sizeof(w3c_foreach_state_fields) /
+                   sizeof(w3c_foreach_state_fields[0])};
+static const cmeta_data_desc w3c_foreach_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.w3c.foreach.state",
+    .display_name = "W3C CMeta foreach state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &w3c_foreach_state_type,
+    .shape = &w3c_foreach_state_shape};
 
 typedef struct w3c_invoke_probe {
     size_t starts;
@@ -951,8 +1043,9 @@ cleanup:
     return succeeded;
 }
 
-static bool run_w3c_cmeta_fixture_with_options(
-    const char *fixture_name, const w3c_cmeta_fixture_options *options) {
+static bool run_w3c_cmeta_fixture_with_schema(
+    const char *fixture_name, const w3c_cmeta_fixture_options *options,
+    const cmeta_data_desc *root, const void *initial_state) {
     char path[W3C_FIXTURE_PATH_CAPACITY];
     char *source = NULL;
     size_t source_size = 0u;
@@ -975,13 +1068,12 @@ static bool run_w3c_cmeta_fixture_with_options(
         .prepare_send = w3c_capture_cmeta_send,
         .close = w3c_adapter_close,
         .is_quiescent = w3c_adapter_is_quiescent};
-    const w3c_cmeta_state initial = {0};
     const scxml_cmeta_session_options_v1 data = {
         .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
         .struct_size = sizeof(data),
-        .initial_state = &initial};
+        .initial_state = initial_state};
     const scxml_cmeta_compile_options_v1 compile_options =
-        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+        scxml_cmeta_default_compile_options(root);
     scxml_session_config config = {0};
     bool executor_initialized = false;
     bool session_initialized = false;
@@ -991,7 +1083,9 @@ static bool run_w3c_cmeta_fixture_with_options(
     cflow_event_view admitted_event = {0};
     int path_size;
 
-    if (fixture_name == NULL) return false;
+    if (fixture_name == NULL || !cmeta_data_desc_valid(root) ||
+        initial_state == NULL)
+        return false;
     path_size = snprintf(path, sizeof(path), "%s/%s",
                          SCXML_W3C_FIXTURE_DIR, fixture_name);
     if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
@@ -1114,8 +1208,39 @@ cleanup:
     return succeeded;
 }
 
+static bool run_w3c_cmeta_fixture_with_options(
+    const char *fixture_name, const w3c_cmeta_fixture_options *options) {
+    const w3c_cmeta_state initial = {0};
+    return run_w3c_cmeta_fixture_with_schema(
+        fixture_name, options, &w3c_cmeta_state_desc, &initial);
+}
+
 static bool run_w3c_cmeta_fixture(const char *fixture_name) {
     return run_w3c_cmeta_fixture_with_options(fixture_name, NULL);
+}
+
+static bool run_w3c_foreach_fixture(const char *fixture_name) {
+    static const int values[] = {1, 2, 3};
+    w3c_foreach_state initial = {
+        .values = VecOf(int),
+        .valid = 1};
+    bool succeeded = false;
+    size_t index;
+
+    if (fixture_name == NULL ||
+        vec_init(&initial.values,
+                 sizeof(values) / sizeof(values[0])) != STL_OK)
+        return false;
+    for (index = 0u; index < sizeof(values) / sizeof(values[0]); ++index) {
+        if (vec_push(&initial.values, &values[index]) != STL_OK)
+            goto cleanup;
+    }
+    succeeded = run_w3c_cmeta_fixture_with_schema(
+        fixture_name, NULL, &w3c_foreach_state_desc, &initial);
+
+cleanup:
+    vec_destroy(&initial.values);
+    return succeeded;
 }
 
 static bool run_w3c_cmeta_external_fixture(
@@ -1366,8 +1491,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)73u);
-        check_equal(stats.unsupported, (size_t)95u);
+        check_equal(stats.passed, (size_t)76u);
+        check_equal(stats.unsupported, (size_t)92u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1454,6 +1579,18 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 159 aborts the remainder of a failing content block") {
         check_w3c_adapter_error_fixture("test159.scxml");
+    }
+
+    it("test 153 assigns foreach items from first to last") {
+        check_true(run_w3c_foreach_fixture("test153.scxml"));
+    }
+
+    it("test 155 executes foreach content after each item assignment") {
+        check_true(run_w3c_foreach_fixture("test155.scxml"));
+    }
+
+    it("test 156 stops foreach and its content block after a child error") {
+        check_true(run_w3c_foreach_fixture("test156.scxml"));
     }
 
     it("test 179 delivers evaluated content bytes without alteration") {

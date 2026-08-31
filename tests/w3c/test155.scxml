@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <state id="s0">
+    <onentry>
+      <foreach array="values" item="item" index="index">
+        <if cond="stage == 0 &amp;&amp; item == 1 &amp;&amp; index == 0">
+          <assign location="stage" expr="1"/>
+          <elseif cond="stage == 1 &amp;&amp; item == 2 &amp;&amp; index == 1"/>
+          <assign location="stage" expr="2"/>
+          <elseif cond="stage == 2 &amp;&amp; item == 3 &amp;&amp; index == 2"/>
+          <assign location="stage" expr="3"/>
+          <else/>
+          <assign location="stage" expr="-1"/>
+        </if>
+      </foreach>
+    </onentry>
+    <transition cond="stage == 3" target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

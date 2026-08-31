@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 73
-local PASS transformations, records 95 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 76
+local PASS transformations, records 92 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -37,6 +37,9 @@ Status meanings are strict:
 | `test147.scxml` | [test147.txml](https://www.w3.org/Voice/2013/scxml-irp/147/test147.txml) | An `if` executes only the first partition whose condition is true. |
 | `test148.scxml` | [test148.txml](https://www.w3.org/Voice/2013/scxml-irp/148/test148.txml) | An `if` executes its `else` partition when every condition is false. |
 | `test149.scxml` | [test149.txml](https://www.w3.org/Voice/2013/scxml-irp/149/test149.txml) | An `if` executes no partition when every condition is false and no `else` exists. |
+| `test153.scxml` | [test153.txml](https://www.w3.org/Voice/2013/scxml-irp/153/test153.txml) | A `foreach` assigns ordered collection items from first to last together with their zero-based indexes. |
+| `test155.scxml` | [test155.txml](https://www.w3.org/Voice/2013/scxml-irp/155/test155.txml) | A `foreach` executes its child content after assigning each item and before advancing. |
+| `test156.scxml` | [test156.txml](https://www.w3.org/Voice/2013/scxml-irp/156/test156.txml) | A child execution error stops the `foreach` and aborts its containing executable-content block. |
 | `test158.scxml` | [test158.txml](https://www.w3.org/Voice/2013/scxml-irp/158/test158.txml) | Elements in one executable-content block execute in document order. |
 | `test159.scxml` | [test159.txml](https://www.w3.org/Voice/2013/scxml-irp/159/test159.txml) | An execution error prevents the remaining elements of the same block from executing. |
 | `test179.scxml` | [test179.txml](https://www.w3.org/Voice/2013/scxml-irp/179/test179.txml) | Evaluated `send/content` bytes reach the host Event I/O boundary unmodified. |
@@ -153,6 +156,22 @@ missing, extra, or misordered exit either reaches `fail` or prevents the harness
 from observing completion. Their upstream timeout sends are omitted because the
 local harness already requires each run to terminate in `pass` without a runtime
 error.
+
+Tests 153, 155, and 156 map the generated array to a test-owned bounded CMeta
+`Vec<int>` containing `1`, `2`, and `3`. Test 153 requires every assigned item
+to exceed the preceding value and observes the final item/index pair `3`/`2`.
+Test 155 replaces the generated sum helper with a three-stage witness: each
+child can advance the stage only after observing its exact assigned item and
+zero-based index. Test 156 makes the second item's child perform a legal
+expression whose value cannot be represented by its CMeta integer destination.
+Its error transition first checks transaction rollback, then queues a
+confirmation Event behind any incorrectly executed third-item or containing-
+block suffix sentinel. FIFO selection sends either sentinel to `fail` before
+the confirmation can reach `pass`. Tests 150 and 151 remain `UNSUPPORTED`
+because CMeta variables are declared by the caller's static schema; test 152
+remains `UNSUPPORTED` because illegal array and item locations are rejected at
+document compilation; test 525 remains `UNSUPPORTED` until iteration is backed
+by a bounded shallow snapshot rather than a borrowed container Range.
 
 Tests 372 and 570 replace the generator's anonymous integer slot with the
 test-only CMeta `sequence` field. Test 372 accepts the parent completion only
