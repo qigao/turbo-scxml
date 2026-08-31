@@ -33,11 +33,24 @@ enum {
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
     W3C_EVENT_TEXT_CAPACITY = 32,
-    W3C_MACROSTEP_INVOKE_CAPACITY = 3
+    W3C_MACROSTEP_INVOKE_CAPACITY = 3,
+    W3C_MATERIALIZATION_INVOKE_CAPACITY = 2
 };
 
 static const char W3C_SCXML_EVENT_PROCESSOR[] =
     "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+static const char W3C_SCXML_INVOKE_PROCESSOR[] =
+    "http://www.w3.org/TR/scxml/";
+
+typedef enum w3c_invoke_materialization_kind {
+    W3C_INVOKE_TYPE_EXPR = 0,
+    W3C_INVOKE_SRC_EXPR,
+    W3C_INVOKE_CANONICAL_TYPE,
+    W3C_INVOKE_UNIQUE_IDS,
+    W3C_INVOKE_NAMED_PAYLOAD,
+    W3C_INVOKE_CONTENT,
+    W3C_INVOKE_ARGUMENT_ERROR
+} w3c_invoke_materialization_kind;
 
 typedef enum w3c_manifest_column {
     W3C_MANIFEST_ID = 0,
@@ -460,6 +473,27 @@ typedef struct w3c_invoke_probe {
     uint64_t token;
     char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
 } w3c_invoke_probe;
+
+typedef struct w3c_materialized_invoke_start {
+    uint64_t token;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char type[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char src[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    scxml_payload_kind payload_kind;
+    size_t payload_entry_count;
+    char payload_name[W3C_EVENT_TEXT_CAPACITY];
+    scxml_payload_value payload_value;
+} w3c_materialized_invoke_start;
+
+typedef struct w3c_invoke_materialization_probe {
+    w3c_materialized_invoke_start
+        starts[W3C_MATERIALIZATION_INVOKE_CAPACITY];
+    size_t start_count;
+    size_t start_commits;
+    size_t start_discards;
+    size_t cancel_commits;
+    size_t cancel_discards;
+} w3c_invoke_materialization_probe;
 
 typedef struct w3c_macrostep_invoke_start {
     uint64_t token;
@@ -1216,6 +1250,162 @@ static bool w3c_invoke_text_is(
         memcmp(text, expected, expected_size) == 0;
 }
 
+static void w3c_materialized_invoke_start_commit(void *user) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    if (probe != NULL) ++probe->start_commits;
+}
+
+static void w3c_materialized_invoke_start_discard(void *user) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    if (probe != NULL) ++probe->start_discards;
+}
+
+static void w3c_materialized_invoke_cancel_commit(void *user) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    if (probe != NULL) ++probe->cancel_commits;
+}
+
+static void w3c_materialized_invoke_cancel_discard(void *user) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    if (probe != NULL) ++probe->cancel_discards;
+}
+
+static scxml_adapter_status w3c_capture_materialized_invoke_start(
+    void *user, const scxml_invoke_start_request_v2 *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    w3c_materialized_invoke_start *start;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->base.token == 0u ||
+        probe->start_count >= W3C_MATERIALIZATION_INVOKE_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    start = &probe->starts[probe->start_count];
+    if (!w3c_copy_request_text(
+            start->id, sizeof(start->id), request->base.id,
+            request->base.id_size) ||
+        !w3c_copy_request_text(
+            start->type, sizeof(start->type), request->base.type,
+            request->base.type_size) ||
+        !w3c_copy_request_text(
+            start->src, sizeof(start->src), request->base.src,
+            request->base.src_size))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    start->token = request->base.token;
+    start->payload_kind = request->payload.kind;
+    start->payload_entry_count = request->payload.entry_count;
+    if (request->payload.kind == SCXML_PAYLOAD_CONTENT) {
+        start->payload_value = request->payload.content;
+    } else if (request->payload.kind == SCXML_PAYLOAD_NAMED) {
+        const scxml_payload_entry *entry;
+        if (request->payload.entry_count != 1u ||
+            request->payload.entries == NULL)
+            return SCXML_ADAPTER_INVALID_CONTRACT;
+        entry = &request->payload.entries[0];
+        if (!w3c_copy_request_text(
+                start->payload_name, sizeof(start->payload_name),
+                entry->name, entry->name_size))
+            return SCXML_ADAPTER_INVALID_CONTRACT;
+        start->payload_value = entry->value;
+    } else if (request->payload.kind != SCXML_PAYLOAD_NONE) {
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    ++probe->start_count;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_materialized_invoke_start_commit,
+        w3c_materialized_invoke_start_discard,
+        probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status w3c_accept_materialized_invoke_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_materialization_probe *probe =
+        (w3c_invoke_materialization_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->token == 0u || request->id == NULL ||
+        request->id_size == 0u)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_materialized_invoke_cancel_commit,
+        w3c_materialized_invoke_cancel_discard,
+        probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static bool w3c_materialized_invoke_start_is(
+    const w3c_materialized_invoke_start *start,
+    const char *type, const char *src, scxml_payload_kind payload_kind) {
+    return start != NULL && start->token != 0u && start->id[0] != '\0' &&
+        strcmp(start->type, type) == 0 && strcmp(start->src, src) == 0 &&
+        start->payload_kind == payload_kind;
+}
+
+static bool w3c_materialized_invokes_match(
+    const w3c_invoke_materialization_probe *probe,
+    w3c_invoke_materialization_kind kind) {
+    const w3c_materialized_invoke_start *first;
+    if (probe == NULL) return false;
+    if (kind == W3C_INVOKE_ARGUMENT_ERROR)
+        return probe->start_count == 0u && probe->start_commits == 0u &&
+            probe->start_discards == 0u;
+    if (probe->start_count == 0u ||
+        probe->start_commits != probe->start_count ||
+        probe->start_discards != 0u)
+        return false;
+    first = &probe->starts[0];
+    switch (kind) {
+        case W3C_INVOKE_TYPE_EXPR:
+        case W3C_INVOKE_CANONICAL_TYPE:
+            return probe->start_count == 1u &&
+                w3c_materialized_invoke_start_is(
+                    first, W3C_SCXML_INVOKE_PROCESSOR, "",
+                    SCXML_PAYLOAD_NONE);
+        case W3C_INVOKE_SRC_EXPR:
+            return probe->start_count == 1u &&
+                w3c_materialized_invoke_start_is(
+                    first, W3C_SCXML_INVOKE_PROCESSOR,
+                    "file:test216sub1.scxml", SCXML_PAYLOAD_NONE);
+        case W3C_INVOKE_UNIQUE_IDS:
+            return probe->start_count == 2u &&
+                w3c_materialized_invoke_start_is(
+                    first, W3C_SCXML_INVOKE_PROCESSOR, "",
+                    SCXML_PAYLOAD_NONE) &&
+                w3c_materialized_invoke_start_is(
+                    &probe->starts[1], W3C_SCXML_INVOKE_PROCESSOR, "",
+                    SCXML_PAYLOAD_NONE) &&
+                first->token < probe->starts[1].token &&
+                strcmp(first->id, "s0.1") == 0 &&
+                strcmp(probe->starts[1].id, "s0.2") == 0;
+        case W3C_INVOKE_NAMED_PAYLOAD:
+            return probe->start_count == 1u &&
+                w3c_materialized_invoke_start_is(
+                    first, W3C_SCXML_INVOKE_PROCESSOR,
+                    "file:test226sub1.scxml", SCXML_PAYLOAD_NAMED) &&
+                first->payload_entry_count == 1u &&
+                strcmp(first->payload_name, "aParam") == 0 &&
+                first->payload_value.kind == SCXML_PAYLOAD_VALUE_SINT &&
+                first->payload_value.data.sint == INT64_C(1);
+        case W3C_INVOKE_CONTENT:
+            return probe->start_count == 1u &&
+                w3c_materialized_invoke_start_is(
+                    first, W3C_SCXML_INVOKE_PROCESSOR, "",
+                    SCXML_PAYLOAD_CONTENT) &&
+                first->payload_value.kind == SCXML_PAYLOAD_VALUE_SINT &&
+                first->payload_value.data.sint == INT64_C(7);
+        case W3C_INVOKE_ARGUMENT_ERROR:
+            break;
+    }
+    return false;
+}
+
 static void w3c_macrostep_invoke_commit(void *user) {
     w3c_macrostep_invoke_probe *probe =
         (w3c_macrostep_invoke_probe *)user;
@@ -1768,6 +1958,132 @@ static bool run_w3c_invoke_idlocation_fixture(
         info("fixture=%s done=%d errored=%d error=%s", fixture_name,
              stats.done ? 1 : 0, stats.errored ? 1 : 0,
              scxml_session_error(&session));
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_invoke_materialization_fixture(
+    const char *fixture_name, w3c_invoke_materialization_kind kind) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    w3c_invoke_materialization_probe probe = {0};
+    w3c_result_probe result = {0};
+    const scxml_event_io_adapter_v1 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND,
+        .prepare_send = w3c_capture_result_send,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_invoke_adapter_v2 invoke = {
+        .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+        .struct_size = sizeof(invoke),
+        .capabilities = SCXML_INVOKE_CAP_START |
+            SCXML_INVOKE_CAP_CANCEL | SCXML_INVOKE_CAP_PAYLOAD,
+        .prepare_start = w3c_capture_materialized_invoke_start,
+        .prepare_cancel = w3c_accept_materialized_invoke_cancel,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_session_adapters_v2 adapters = {
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
+        .struct_size = sizeof(adapters),
+        .invoke = &invoke,
+        .invoke_user = &probe};
+    const w3c_cmeta_state initial = {0};
+    const scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(data),
+        .initial_state = &initial};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) goto cleanup;
+    if (scxml_compile_cmeta(
+            &program, source, source_size, NULL, &compile_options,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 4u,
+        .adapter_internal_event_capacity = 2u,
+        .invocation_capacity = W3C_MATERIALIZATION_INVOKE_CAPACITY,
+        .event_io = &event_io,
+        .adapter_user = &result};
+    if (scxml_session_init_cmeta_v2(
+            &session, &config, &data, &adapters) !=
+        CFLOW_STATECHART_INSTANCE_OK) {
+        info("fixture=%s session init error=%s", fixture_name,
+             scxml_session_error(&session));
+        goto cleanup;
+    }
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) ||
+        !w3c_materialized_invokes_match(&probe, kind)) {
+        info("fixture=%s kind=%d starts=%zu commits=%zu discards=%zu",
+             fixture_name, (int)kind, probe.start_count,
+             probe.start_commits, probe.start_discards);
+        goto cleanup;
+    }
+    if (kind != W3C_INVOKE_ARGUMENT_ERROR) {
+        if (kind == W3C_INVOKE_NAMED_PAYLOAD) {
+            cflow_event_view event = {0};
+            if (!scxml_program_event(
+                    &program, "varBound", sizeof("varBound") - 1u,
+                    &event) ||
+                scxml_session_report_invoke_event(
+                    &session, probe.starts[0].token, &event) !=
+                    CFLOW_MAILBOX_OK)
+                goto cleanup;
+        } else if (scxml_session_report_invoke_done(
+                       &session, probe.starts[0].token) !=
+                   CFLOW_MAILBOX_OK) {
+            goto cleanup;
+        }
+    }
+    if (!cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats))
+        goto cleanup;
+    succeeded = stats.done && !stats.errored &&
+        result.prepare_send_calls == 1u && result.commits == 1u &&
+        result.discards == 0u && strcmp(result.event, "result.pass") == 0;
+    if (!succeeded)
+        info("fixture=%s done=%d errored=%d result=%s error=%s",
+             fixture_name, stats.done ? 1 : 0, stats.errored ? 1 : 0,
+             result.event, scxml_session_error(&session));
 
 cleanup:
     if (session_initialized &&
@@ -3076,8 +3392,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)118u);
-        check_equal(stats.unsupported, (size_t)50u);
+        check_equal(stats.passed, (size_t)125u);
+        check_equal(stats.unsupported, (size_t)43u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -3332,6 +3648,21 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test553.scxml"));
     }
 
+    it("test 215 evaluates invoke typeexpr when invoke executes") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test215.scxml", W3C_INVOKE_TYPE_EXPR));
+    }
+
+    it("test 216 evaluates invoke srcexpr when invoke executes") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test216.scxml", W3C_INVOKE_SRC_EXPR));
+    }
+
+    it("test 220 routes the canonical SCXML invocation type") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test220.scxml", W3C_INVOKE_CANONICAL_TYPE));
+    }
+
     it("test 223 binds an automatically generated invoke ID") {
         check_true(run_w3c_invoke_idlocation_fixture(
             "test223.scxml", NULL, NULL));
@@ -3340,6 +3671,26 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 224 generates invoke IDs in stateid.platformid form") {
         check_true(run_w3c_invoke_idlocation_fixture(
             "test224.scxml", "s0.1", NULL));
+    }
+
+    it("test 225 generates unique invoke IDs within one session") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test225.scxml", W3C_INVOKE_UNIQUE_IDS));
+    }
+
+    it("test 226 starts a typed service with src and named data") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test226.scxml", W3C_INVOKE_NAMED_PAYLOAD));
+    }
+
+    it("test 530 evaluates invoke content when invoke executes") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test530.scxml", W3C_INVOKE_CONTENT));
+    }
+
+    it("test 554 does not start after invoke argument evaluation fails") {
+        check_true(run_w3c_invoke_materialization_fixture(
+            "test554.scxml", W3C_INVOKE_ARGUMENT_ERROR));
     }
 
     it("test 287 assigns a legal value to a valid location") {

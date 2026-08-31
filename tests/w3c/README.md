@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 118
-local PASS transformations, records 50 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 125
+local PASS transformations, records 43 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -64,8 +64,15 @@ Status meanings are strict:
 | `test207.scxml` | [test207.txml](https://www.w3.org/Voice/2013/scxml-irp/207/test207.txml) | A cancel in one session cannot observe or remove a same-named delayed send owned by another session. |
 | `test208.scxml` | [test208.txml](https://www.w3.org/Voice/2013/scxml-irp/208/test208.txml) | A literal `cancel/@sendid` removes the matching delayed send from the same session. |
 | `test210.scxml` | [test210.txml](https://www.w3.org/Voice/2013/scxml-irp/210/test210.txml) | `cancel/@sendidexpr` is evaluated when the cancel element executes and resolves the generated delayed-send ID. |
+| `test215.scxml` | [test215.txml](https://www.w3.org/Voice/2013/scxml-irp/215/test215.txml) | `invoke/@typeexpr` reads the value assigned during `onentry`, and the strict host receives the canonical SCXML type. |
+| `test216.scxml` | [test216.txml](https://www.w3.org/Voice/2013/scxml-irp/216/test216.txml) | `invoke/@srcexpr` reads the source assigned during `onentry`, and the strict host receives the updated URL. |
+| `test220.scxml` | [test220.txml](https://www.w3.org/Voice/2013/scxml-irp/220/test220.txml) | The platform host accepts and commits the canonical SCXML invocation type before returning completion. |
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
+| `test225.scxml` | [test225.txml](https://www.w3.org/Voice/2013/scxml-irp/225/test225.txml) | Two invocations in one session receive different nonzero tokens and generated IDs at both idlocations and the host boundary. |
+| `test226.scxml` | [test226.txml](https://www.w3.org/Voice/2013/scxml-irp/226/test226.txml) | The strict host receives the canonical type, exact source URL, and named integer parameter before returning the child Event. |
+| `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
+| `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
@@ -406,6 +413,19 @@ observes the committed generated ID and reports completion through that same
 invocation token. The fixtures independently require the writable CMeta
 `idlocation` to be nonempty and exactly `s0.1`, so removing the generated child
 does not weaken either binding or `stateid.platformid` witness.
+
+Tests 215, 216, 220, 225, 226, 530, and 554 use one bounded v2 invoke host.
+Tests 215 and 216 overwrite their initial CMeta strings in `onentry`; only the
+new type/source is accepted. Test 220 requires the canonical SCXML type before
+the host reports completion. Test 225 requires two committed requests to carry
+different session tokens and generated IDs, while the fixture independently
+compares both `idlocation` values. Test 226 requires the exact type, source, and
+named scalar parameter before the host returns `varBound`. Test 530 changes its
+content operand from 1 to 7 during entry and requires 7 at the adapter. Test 554
+uses a legal expression whose read from the unbound startup Event fails at
+execution; `error.execution` reaches `pass` while the host observes zero starts.
+These transformations exercise the public materialization/report boundary and
+do not claim that the core itself implements file loading or a child interpreter.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads

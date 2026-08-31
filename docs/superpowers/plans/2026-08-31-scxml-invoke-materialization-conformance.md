@@ -32,19 +32,19 @@
 - Create: `docs/specs/scxml-invoke-materialization-design.md`
 - Test: `tests/scxml_cmeta_test.c`
 
-- [ ] Commit the focused design and this executable plan before changing tests.
-- [ ] Add or strengthen one strict adapter characterization that observes runtime type/src, canonical type, unique IDs, named payload/content, commit/discard counts, and zero starts after an invocation argument error.
-- [ ] Run only `scxml_cmeta_test`; if RED, preserve the exact output before changing production.
-- [ ] If and only if RED proves a semantic gap, make the smallest change in `src/scxml_analyze.c` or `src/scxml_runtime.c`, then rerun the direct test.
+- [x] Commit the focused design and this executable plan before changing tests.
+- [x] Add or strengthen one strict adapter characterization that observes runtime type/src, canonical type, unique IDs, named payload/content, commit/discard counts, and zero starts after an invocation argument error.
+- [x] Run only `scxml_cmeta_test`; if RED, preserve the exact output before changing production.
+- [x] If and only if RED proves a semantic gap, make the smallest change in `src/scxml_analyze.c` or `src/scxml_runtime.c`, then rerun the direct test.
 
 ### Task 2: Register the seven conformance cases and capture RED
 
 **Files:**
 - Modify: `tests/scxml_w3c_conformance_test.c`
 
-- [ ] Add named TinyTest registrations for 215, 216, 220, 225, 226, 530, and 554 before creating fixtures.
-- [ ] Reuse or add bounded strict invoke adapter helpers; do not simulate success before the prepared start ticket commits.
-- [ ] Build and run the W3C executable, recording that missing fixture files cause the expected RED.
+- [x] Add named TinyTest registrations for 215, 216, 220, 225, 226, 530, and 554 before creating fixtures.
+- [x] Reuse or add bounded strict invoke adapter helpers; do not simulate success before the prepared start ticket commits.
+- [x] Build and run the W3C executable, recording that missing fixture files cause the expected RED.
 
 ### Task 3: Add faithful bounded W3C transformations
 
@@ -58,13 +58,13 @@
 - Create: `tests/w3c/test554.scxml`
 - Test: `tests/scxml_w3c_conformance_test.c`
 
-- [ ] Preserve each normative assertion while removing only generator metadata, timeouts, and `conf:pass`/`conf:fail` extensions.
-- [ ] For 215/216, change the CMeta value in `onentry` and require the adapter to see only the runtime type/src.
-- [ ] For 220/226, require canonical type and have the committed host adapter report the child result; for 226 also require exact src and named param data.
-- [ ] For 225, require two starts with distinct generated IDs/tokens in document order.
-- [ ] For 530, mutate the value in `onentry` and require the materialized content to contain the new value.
-- [ ] For 554, use a compile-valid expression that fails only at execution, require zero start callbacks, and terminate by consuming `error.execution`.
-- [ ] Run focused W3C filters and the complete W3C executable until GREEN.
+- [x] Preserve each normative assertion while removing only generator metadata, timeouts, and `conf:pass`/`conf:fail` extensions.
+- [x] For 215/216, change the CMeta value in `onentry` and require the adapter to see only the runtime type/src.
+- [x] For 220/226, require canonical type and have the committed host adapter report the child result; for 226 also require exact src and named param data.
+- [x] For 225, require two starts with distinct generated IDs/tokens in document order.
+- [x] For 530, mutate the value in `onentry` and require the materialized content to contain the new value.
+- [x] For 554, use a compile-valid expression that fails only at execution, require zero start callbacks, and terminate by consuming `error.execution`.
+- [x] Run focused W3C filters and the complete W3C executable until GREEN.
 
 ### Task 4: Promote corpus facts and verify
 
@@ -73,7 +73,7 @@
 - Modify: `tests/w3c/README.md`
 - Modify: `docs/superpowers/plans/2026-08-31-scxml-invoke-materialization-conformance.md`
 
-- [ ] Promote only the seven proven rows to `PASS/TERMINAL_PASS` and update prose counts from 118/50 to 125/43 without changing 202 total or 168/34 classification.
-- [ ] Mark completed plan checkboxes only after their evidence exists.
-- [ ] Run fresh Release configure/build, all 8 CTest targets, manifest accounting, CodeGraph sync/affected, and `git diff --check`.
-- [ ] Review public-boundary compatibility, error behavior, fixture provenance, and remaining risks before committing the implementation batch.
+- [x] Promote only the seven proven rows to `PASS/TERMINAL_PASS` and update prose counts from 118/50 to 125/43 without changing 202 total or 168/34 classification.
+- [x] Mark completed plan checkboxes only after their evidence exists.
+- [x] Run fresh Release configure/build, all 8 CTest targets, manifest accounting, CodeGraph sync/affected, and `git diff --check`.
+- [x] Review public-boundary compatibility, error behavior, fixture provenance, and remaining risks before committing the implementation batch.
