@@ -1366,8 +1366,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)67u);
-        check_equal(stats.unsupported, (size_t)101u);
+        check_equal(stats.passed, (size_t)69u);
+        check_equal(stats.unsupported, (size_t)99u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1687,6 +1687,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 506 treats a non-descendant internal target as external") {
         check_w3c_fixture("test506.scxml");
+    }
+
+    it("test 527 evaluates expression content for completion data") {
+        check_true(run_w3c_cmeta_fixture("test527.scxml"));
+    }
+
+    it("test 529 preserves inline completion content") {
+        check_true(run_w3c_cmeta_fixture("test529.scxml"));
     }
 
     it("test 533 treats an internal transition from parallel as external") {

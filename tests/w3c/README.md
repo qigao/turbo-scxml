@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 67
-local PASS transformations, records 101 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 69
+local PASS transformations, records 99 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -98,6 +98,8 @@ Status meanings are strict:
 | `test504.scxml` | [test504.txml](https://www.w3.org/Voice/2013/scxml-irp/504/test504.txml) | An external transition exits every active proper descendant of the source/target LCCA. |
 | `test505.scxml` | [test505.txml](https://www.w3.org/Voice/2013/scxml-irp/505/test505.txml) | An internal transition from a compound state to a proper descendant retains the source state. |
 | `test506.scxml` | [test506.txml](https://www.w3.org/Voice/2013/scxml-irp/506/test506.txml) | An internal transition whose target is not a proper descendant uses external transition-domain semantics. |
+| `test527.scxml` | [test527.txml](https://www.w3.org/Voice/2013/scxml-irp/527/test527.txml) | A `content/@expr` string value becomes the selected completion Event's `_event.data`. |
+| `test529.scxml` | [test529.txml](https://www.w3.org/Voice/2013/scxml-irp/529/test529.txml) | Inline text children become the selected completion Event's `_event.data` without alteration. |
 | `test533.scxml` | [test533.txml](https://www.w3.org/Voice/2013/scxml-irp/533/test533.txml) | An internal transition from a non-compound source uses external transition-domain semantics. |
 | `test436.scxml` | [test436.txml](https://www.w3.org/Voice/2013/scxml-irp/436/test436.txml) | The null data model reports an inactive state as false and an active parallel sibling as true through `In(stateID)`. |
 
@@ -216,6 +218,13 @@ external-send failure witness is outside that assertion and is omitted. Test
 produced by its external transitions. Exact observers require both parallel
 regions and their parallel parent to exit twice, and the containing state to
 exit once.
+
+Tests 527 and 529 retain the upstream `donedata/content` completion path and
+replace generator predicates with exact CMeta `_event.data` guards. Test 527
+maps the generated quoted expression to `expr="&quot;foo&quot;"`; test 529
+keeps the inline text child `21`. Test 528 remains `UNSUPPORTED`: its separate
+error-before-completion and empty-data requirements are not claimed by these
+successful content witnesses.
 
 Test 179 replaces upstream self-delivery with the versioned v3 host Event I/O
 adapter. The fixture still evaluates literal `content` when `send` executes;
