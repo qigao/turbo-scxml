@@ -453,9 +453,13 @@ typedef struct payload_adapter_probe {
     size_t sends;
     size_t starts;
     size_t invoke_cancels;
+    uint64_t token;
     scxml_adapter_status send_status;
     scxml_adapter_status start_status;
     bool invalid_send_ticket;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char type[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char source[SCXML_EVENT_METADATA_CAPACITY + 1u];
     scxml_payload_kind kind;
     size_t entry_count;
     char names[8][32];
@@ -770,8 +774,16 @@ static scxml_adapter_status payload_prepare_start(
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     payload_adapter_probe *probe = (payload_adapter_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
-        out_error == NULL || !copy_payload(probe, &request->payload))
+        out_error == NULL || request->base.token == 0u ||
+        !copy_probe_text(probe->id, sizeof(probe->id),
+                         request->base.id, request->base.id_size) ||
+        !copy_probe_text(probe->type, sizeof(probe->type),
+                         request->base.type, request->base.type_size) ||
+        !copy_probe_text(probe->source, sizeof(probe->source),
+                         request->base.src, request->base.src_size) ||
+        !copy_payload(probe, &request->payload))
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    probe->token = request->base.token;
     ++probe->starts;
     if (probe->start_status != SCXML_ADAPTER_ACCEPTED) {
         *out_error = "payload invoke rejected by test adapter";
@@ -2868,6 +2880,104 @@ spec("TurboSCXML public CMeta data model") {
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
+    }
+
+    it("materializes invoke arguments from staged onentry data before start") {
+        static const char dynamic_strings[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='armed'><onentry>"
+            "<assign location='send_id' "
+            "expr='&quot;http://www.w3.org/TR/scxml/&quot;'/><assign "
+            "location='nested.invoke_id' "
+            "expr='&quot;worker://runtime&quot;'/></onentry>"
+            "<invoke typeexpr='send_id' "
+            "srcexpr='nested.invoke_id'/><transition event='finish' "
+            "target='done'/></state><final id='done'/></scxml>";
+        static const char dynamic_content[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='armed'><onentry>"
+            "<assign location='count' expr='7'/></onentry>"
+            "<invoke id='worker' type='http://www.w3.org/TR/scxml/'>"
+            "<content expr='count'/></invoke><transition event='finish' "
+            "target='done'/></state><final id='done'/></scxml>";
+        const char *sources[] = {dynamic_strings, dynamic_content};
+        const scxml_invoke_adapter_v2 invoke = {
+            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V2,
+            .struct_size = sizeof(invoke),
+            .capabilities = SCXML_INVOKE_CAP_START |
+                SCXML_INVOKE_CAP_CANCEL | SCXML_INVOKE_CAP_PAYLOAD,
+            .prepare_start = payload_prepare_start,
+            .prepare_cancel = payload_prepare_invoke_cancel,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        size_t index;
+
+        for (index = 0u; index < 2u; ++index) {
+            payload_adapter_probe probe = {0};
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            scxml_session session = {0};
+            cflow_executor executor = {0};
+            cflow_event_view finish = {0};
+            const scxml_public_data initial = {0};
+            const scxml_cmeta_session_options_v1 data = {
+                .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+                .struct_size = sizeof(data),
+                .initial_state = &initial};
+            scxml_session_config config = {
+                .program = &program,
+                .executor = &executor,
+                .external_event_capacity = 2u,
+                .internal_event_capacity = 4u,
+                .completion_capacity = 2u,
+                .microstep_limit = 16u,
+                .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invocation_capacity = 1u};
+            const scxml_session_adapters_v2 adapters = {
+                .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
+                .struct_size = sizeof(adapters),
+                .invoke = &invoke,
+                .invoke_user = &probe};
+            scxml_status compile_status;
+
+            compile_status = compile_cmeta(
+                sources[index], &program, &diagnostic);
+            if (compile_status != SCXML_OK)
+                info("case=%zu diagnostic=%s", index, diagnostic.message);
+            check_equal(compile_status, SCXML_OK);
+            check_true(cflow_executor_serial_init(&executor));
+            check_equal(scxml_session_init_cmeta_v2(
+                            &session, &config, &data, &adapters),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            check_true(cflow_executor_wait_idle(&executor));
+            check_equal(probe.starts, (size_t)1u);
+            check_not_equal(probe.token, UINT64_C(0));
+            check_equal(probe.type, "http://www.w3.org/TR/scxml/",
+                        sizeof("http://www.w3.org/TR/scxml/"));
+            if (index == 0u) {
+                check_equal(probe.id, "armed.invoke.1",
+                            sizeof("armed.invoke.1"));
+                check_equal(probe.source, "worker://runtime",
+                            sizeof("worker://runtime"));
+                check_equal(probe.kind, SCXML_PAYLOAD_NONE);
+            } else {
+                check_equal(probe.id, "worker", sizeof("worker"));
+                check_equal(probe.source, "", sizeof(""));
+                check_equal(probe.kind, SCXML_PAYLOAD_CONTENT);
+                check_equal(probe.content.kind, SCXML_PAYLOAD_VALUE_SINT);
+                check_equal(probe.content.data.sint, INT64_C(7));
+            }
+            check_true(scxml_program_event(
+                &program, "finish", sizeof("finish") - 1u, &finish));
+            check_equal(scxml_session_try_send(&session, &finish),
+                        CFLOW_MAILBOX_OK);
+            check_true(cflow_executor_wait_idle(&executor));
+            check_equal(scxml_session_destroy(&session),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            cflow_executor_destroy(&executor);
+            scxml_program_destroy(&program);
+        }
     }
 
     it("maps invoke payload evaluation and adapter failures to error.execution") {
