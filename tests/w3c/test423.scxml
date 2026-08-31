@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="gate">
+  <state id="gate">
+    <transition event="start" target="s0"/>
+    <transition event="externalEvent1 externalEvent2" target="fail"/>
+  </state>
+  <state id="s0">
+    <onentry><raise event="internalEvent"/></onentry>
+    <transition event="internalEvent" target="s1"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="s1">
+    <transition event="externalEvent2" target="pass"/>
+    <transition event="internalEvent" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>
