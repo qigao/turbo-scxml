@@ -594,6 +594,60 @@ spec("TurboSCXML private SCXML expressions") {
     scxml_expr_program_destroy(&program);
   }
 
+  it("reports startup system-variable bindings") {
+    static const char *const expressions[] = {
+        "isBound(_name)",
+        "isBound(_sessionid)",
+        "isBound(_ioprocessors)"};
+    const scxml_expr_system_values unbound = {0};
+    const scxml_expr_system_values bound = {
+        .name = {"", 0u},
+        .session_id = {"session", sizeof("session") - 1u},
+        .scxml_location = {
+            "#_scxml_session", sizeof("#_scxml_session") - 1u}
+    };
+    state_fixture states = {false};
+    size_t index;
+
+    for (index = 0u;
+         index < sizeof(expressions) / sizeof(expressions[0]); ++index) {
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
+      bool result = true;
+
+      check_equal(compile_expression(
+                      &program, expressions[index], NULL, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_equal(scxml_expr_evaluate_with_system(
+                      &program, &root, state_is_active, &states,
+                      &unbound, &result, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_false(result);
+      check_equal(scxml_expr_evaluate_with_system(
+                      &program, &root, state_is_active, &states,
+                      &bound, &result, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_true(result);
+      scxml_expr_program_destroy(&program);
+    }
+
+    {
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
+      bool result = true;
+
+      check_equal(compile_expression(
+                      &program, "isBound(_sessionid)", NULL, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_equal(scxml_expr_evaluate_with_system(
+                      &program, &root, state_is_active, &states,
+                      NULL, &result, &diagnostic),
+                  SCXML_EXPR_EVALUATION_ERROR);
+      check_true(result);
+      scxml_expr_program_destroy(&program);
+    }
+  }
+
   it("reads structured current event data through the compiled CMeta schema") {
     scxml_expr_root event_data = root;
     scxml_expr_system_values system_values = {
@@ -797,7 +851,8 @@ spec("TurboSCXML private SCXML expressions") {
     static const char *const invalid[] = {
         "order.missing == 1", "order.count", "true &&", "In(active)",
         "In(\"missing\")", "label == 1", "isBound()",
-        "isBound(_event.name)", "isBound(other)"};
+        "isBound(_event.name)", "isBound(other)",
+        "isBound(_ioprocessors.scxml)"};
     static const scxml_expr_status expected[] = {
         SCXML_EXPR_UNKNOWN_LOCATION,
         SCXML_EXPR_TYPE_MISMATCH,
@@ -805,6 +860,7 @@ spec("TurboSCXML private SCXML expressions") {
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_UNKNOWN_LOCATION,
         SCXML_EXPR_TYPE_MISMATCH,
+        SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR,
         SCXML_EXPR_SYNTAX_ERROR};

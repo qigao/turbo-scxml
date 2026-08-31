@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 46
-local PASS transformations, records 122 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 49
+local PASS transformations, records 119 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -44,6 +44,9 @@ Status meanings are strict:
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
+| `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
+| `test323.scxml` | [test323.txml](https://www.w3.org/Voice/2013/scxml-irp/323/test323.txml) | `_name` is bound to the root `scxml/@name` value during initialization. |
+| `test325.scxml` | [test325.txml](https://www.w3.org/Voice/2013/scxml-irp/325/test325.txml) | `_ioprocessors` is bound to the supported Event I/O processor set during initialization. |
 | `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |
 | `test364.scxml` | [test364.txml](https://www.w3.org/Voice/2013/scxml-irp/364/test364.txml) | Root, compound-IDREFS, explicit-transition, and document-order default initial selections are all entered. |
@@ -129,14 +132,17 @@ a bounded test adapter so the owning CMeta session remains a black box. Test
 event hook observes transition-selection boundaries and requires the raise
 action to execute while `event1` is never selected before clean termination.
 
-Tests 318, 319, 339, and 396 use the owning CMeta session so the complete
-current-Event envelope is observed through the public execution path. Test 318
+Tests 318, 319, 321, 323, 325, 339, and 396 use the owning CMeta session so
+protected variables are observed through the public execution path. Test 318
 raises another Event before checking that `_event.name` still names the Event
 whose transition is being processed. Test 319 maps the generator's
 `conf:systemVarIsBound` query to the finite CMeta expression
-`isBound(_event)`. Tests 339 and 396 compare the empty non-invoke `invokeid`
-and the selected Event name directly. Their terminal states use the same
-bounded `result.pass`/`result.fail` adapter probe as the completion fixtures.
+`isBound(_event)`. Tests 321, 323, and 325 map the same generator predicate to
+`isBound(_sessionid)`, `isBound(_name)`, and `isBound(_ioprocessors)` during
+initial eventless processing. Tests 339 and 396 compare the empty non-invoke
+`invokeid` and the selected Event name directly. Their terminal states use the
+same bounded `result.pass`/`result.fail` adapter probe as the completion
+fixtures.
 
 Tests 376 and 378 replace the generator counter with a `second.block` event.
 Their test-only owning sessions inject `SCXML_ADAPTER_ERROR_EXECUTION`

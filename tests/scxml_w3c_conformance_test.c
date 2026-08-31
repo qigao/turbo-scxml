@@ -1101,8 +1101,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)46u);
-        check_equal(stats.unsupported, (size_t)122u);
+        check_equal(stats.passed, (size_t)49u);
+        check_equal(stats.unsupported, (size_t)119u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1211,6 +1211,18 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 319 leaves the current event unbound during initialization") {
         check_true(run_w3c_cmeta_fixture("test319.scxml"));
+    }
+
+    it("test 321 binds the generated session ID during initialization") {
+        check_true(run_w3c_cmeta_fixture("test321.scxml"));
+    }
+
+    it("test 323 binds the document name during initialization") {
+        check_true(run_w3c_cmeta_fixture("test323.scxml"));
+    }
+
+    it("test 325 binds the supported I/O processor set during initialization") {
+        check_true(run_w3c_cmeta_fixture("test325.scxml"));
     }
 
     it("test 339 leaves invokeid empty for a raised event") {

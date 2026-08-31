@@ -56,6 +56,9 @@ typedef enum expr_operand_kind {
     EXPR_OPERAND_STRING,
     EXPR_OPERAND_STATE,
     EXPR_OPERAND_SYSTEM_EVENT_BOUND,
+    EXPR_OPERAND_SYSTEM_NAME_BOUND,
+    EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND,
+    EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND,
     EXPR_OPERAND_SYSTEM_NAME,
     EXPR_OPERAND_SYSTEM_SESSION_ID,
     EXPR_OPERAND_SYSTEM_EVENT_NAME,
@@ -642,7 +645,6 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
     }
     if (token_text_equal(parser, "isBound")) {
         expr_operand operand = {
-            .kind = EXPR_OPERAND_SYSTEM_EVENT_BOUND,
             .value_kind = EXPR_VALUE_BOOL};
         uint32_t operand_index;
         parser_next(parser);
@@ -651,16 +653,27 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                                parser->token.offset,
                                "isBound requires '('");
         parser_next(parser);
-        if (parser->token.kind != EXPR_TOKEN_IDENT ||
-            !token_text_equal(parser, "_event"))
+        if (parser->token.kind != EXPR_TOKEN_IDENT)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
                                parser->token.offset,
-                               "isBound requires the _event variable");
+                               "isBound requires a supported system variable");
+        if (token_text_equal(parser, "_event"))
+            operand.kind = EXPR_OPERAND_SYSTEM_EVENT_BOUND;
+        else if (token_text_equal(parser, "_name"))
+            operand.kind = EXPR_OPERAND_SYSTEM_NAME_BOUND;
+        else if (token_text_equal(parser, "_sessionid"))
+            operand.kind = EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND;
+        else if (token_text_equal(parser, "_ioprocessors"))
+            operand.kind = EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND;
+        else
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "isBound requires a supported system variable");
         parser_next(parser);
         if (parser->token.kind != EXPR_TOKEN_RPAREN)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
                                parser->token.offset,
-                               "isBound accepts only the _event variable");
+                               "isBound accepts only one system variable");
         parser_next(parser);
         if (!parser_add_operand(parser, operand, &operand_index) ||
             !parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target, 0u,
@@ -1306,14 +1319,26 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             out->boolean = active;
             return 1;
         case EXPR_OPERAND_SYSTEM_EVENT_BOUND:
+        case EXPR_OPERAND_SYSTEM_NAME_BOUND:
+        case EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND:
+        case EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND: {
+            const scxml_expr_string_view *view;
             if (context->system_values == NULL) {
                 context->failed = true;
                 return 0;
             }
+            if (operand->kind == EXPR_OPERAND_SYSTEM_EVENT_BOUND)
+                view = &context->system_values->event_name;
+            else if (operand->kind == EXPR_OPERAND_SYSTEM_NAME_BOUND)
+                view = &context->system_values->name;
+            else if (operand->kind == EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND)
+                view = &context->system_values->session_id;
+            else
+                view = &context->system_values->scxml_location;
             make_value(out, EXPR_VALUE_BOOL);
-            out->boolean =
-                context->system_values->event_name.data != NULL;
+            out->boolean = view->data != NULL;
             return 1;
+        }
         case EXPR_OPERAND_SYSTEM_NAME:
         case EXPR_OPERAND_SYSTEM_SESSION_ID:
         case EXPR_OPERAND_SYSTEM_EVENT_NAME:
