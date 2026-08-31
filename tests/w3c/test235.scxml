@@ -3,7 +3,10 @@
        version="1.0" datamodel="cmeta" initial="waiting">
   <state id="waiting">
     <invoke type="http://www.w3.org/TR/scxml/" id="foo"/>
-    <transition event="done.invoke.foo" target="pass"/>
+    <transition event="done.invoke.foo"
+                cond="_event.name == &quot;done.invoke.foo&quot;"
+                target="pass"/>
+    <transition event="done.invoke.foo" target="fail"/>
     <transition event="*" target="fail"/>
   </state>
   <final id="pass"><onentry><send event="result.pass"/></onentry></final>

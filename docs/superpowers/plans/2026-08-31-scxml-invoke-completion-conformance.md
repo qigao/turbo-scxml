@@ -54,7 +54,7 @@
 
 - [x] Test 228: explicit invoke ID `invoke228`; one completion Event returned by `scxml_session_report_invoke_done()`; CMeta guard requires `_event.invokeid == \"invoke228\"` and external type.
 - [x] Test 232: states accept `childToParent1`, then `childToParent2`, then `done.invoke`; any out-of-order Event reaches fail.
-- [x] Test 235: only `done.invoke.foo` reaches pass.
+- [x] Test 235: `done.invoke.foo` reaches pass only when `_event.name` is exactly `done.invoke.foo`; a same-event fallback reaches fail.
 - [x] Test 236: accept normal child Event, then done, then only host `confirm`; any late returned Event reaches fail. The helper waits for completion, requires a later same-token report to be `INVALID_ARGUMENT`, then admits `confirm`.
 - [x] Test 247: parent accepts done from its invoke; separate child fixture is a real top-level final document with no embedded interpreter in core.
 - [x] Run each focused filter and then the full W3C executable. If a public-path semantic assertion fails, make only the smallest owning runtime correction and rerun the exact RED test before expanding.
