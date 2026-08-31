@@ -52,7 +52,7 @@
 - Consumes: the strict helper from Task 1.
 - Produces: deterministic terminal witnesses for all five normative assertions.
 
-- [x] Test 228: explicit invoke ID `invoke228`; one normal returned Event; CMeta guard requires `_event.invokeid == \"invoke228\"` and external type.
+- [x] Test 228: explicit invoke ID `invoke228`; one completion Event returned by `scxml_session_report_invoke_done()`; CMeta guard requires `_event.invokeid == \"invoke228\"` and external type.
 - [x] Test 232: states accept `childToParent1`, then `childToParent2`, then `done.invoke`; any out-of-order Event reaches fail.
 - [x] Test 235: only `done.invoke.foo` reaches pass.
 - [x] Test 236: accept normal child Event, then done, then only host `confirm`; any late returned Event reaches fail. The helper waits for completion, requires a later same-token report to be `INVALID_ARGUMENT`, then admits `confirm`.

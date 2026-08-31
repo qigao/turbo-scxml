@@ -2175,8 +2175,7 @@ static bool run_w3c_invoke_completion_fixture(
         case W3C_INVOKE_RETURN_PROVENANCE:
             expected_id = "invoke228";
             expected_returned_accepted = 1u;
-            expected_cancelled = 1u;
-            expected_cancel_prepares = 1u;
+            expected_completed = 1u;
             break;
         case W3C_INVOKE_MULTIPLE_RETURN:
             expected_id = "invoke232";
@@ -2251,12 +2250,8 @@ static bool run_w3c_invoke_completion_fixture(
     }
 
     if (test_case == W3C_INVOKE_RETURN_PROVENANCE) {
-        cflow_event_view event = {0};
-        if (!scxml_program_event(
-                &program, "child.returned", sizeof("child.returned") - 1u,
-                &event) ||
-            scxml_session_report_invoke_event(
-                &session, probe.token, &event) != CFLOW_MAILBOX_OK)
+        if (scxml_session_report_invoke_done(&session, probe.token) !=
+            CFLOW_MAILBOX_OK)
             goto cleanup;
     } else if (test_case == W3C_INVOKE_MULTIPLE_RETURN) {
         static const char *const event_names[] = {
@@ -4057,7 +4052,7 @@ suite("SCXML W3C-derived conformance regression corpus") {
             "test226.scxml", W3C_INVOKE_NAMED_PAYLOAD));
     }
 
-    it("test 228 binds every returned Event to its exact invocation ID") {
+    it("test 228 binds completion to its exact invocation ID") {
         check_true(run_w3c_invoke_completion_fixture(
             "test228.scxml", W3C_INVOKE_RETURN_PROVENANCE));
     }

@@ -3,8 +3,8 @@
 ## 背景与范围
 
 本设计覆盖 W3C SCXML 1.0 强制测试 228、232、235、236 和 247。范围只包括
-TurboSCXML 已有公开 invoke adapter 返回路径的严格见证：活动 invocation 返回的
-普通 Event 带有精确 `invokeid`，多个返回 Event 保持 FIFO，完成 Event 暴露为
+TurboSCXML 已有公开 invoke adapter 返回路径的严格见证：活动 invocation 的完成
+Event 带有精确 `invokeid`，多个返回 Event 保持 FIFO，完成 Event 暴露为
 `done.invoke.<exact-id>`，完成被消费后 token 失效，以及 host 拥有的真实子 session
 到达顶层 final 后向真实父 session 报告一次完成。
 
@@ -16,7 +16,7 @@ TurboSCXML 已有公开 invoke adapter 返回路径的严格见证：活动 invo
 
 | IRP | 完整断言的本地保留方式 | 生成变体 | 只读 uSCXML 比较 | 采用/拒绝 | 所有者 | 验证 |
 |---|---|---|---|---|---|---|
-| 228 | 显式 ID `foo` 的 live token 返回普通 Event；父 CMeta guard 比较 `_event.invokeid == \"foo\"` | `namespace/test228.scxml` | `BasicContentExecutor::processSend()` 把 child invoke ID 放入返回 Event | 采用精确来源；不复制代码 | session invocation row | `test228.scxml` + 严格 host 状态/计数 |
+| 228 | 显式 ID `invoke228` 的 live token 返回 completion Event；父 CMeta guard 比较 `_event.invokeid == \"invoke228\"` | `namespace/test228.scxml` | child completion Event 携带创建服务的 invoke ID | 采用精确 completion 来源；不复制代码 | session invocation row | `test228.scxml` + `report_invoke_done()` + 严格 host 状态/计数 |
 | 232 | 同一 token 连续返回 `childToParent1`、`childToParent2`，再返回完成；父状态序列要求 FIFO | `namespace/test232.scxml` | `ParentQueueImpl::enqueue()` 将子 Event 转交 parent external queue | 采用 FIFO；拒绝内建 parent queue/线程 | CFlow external mailbox | `test232.scxml` + 三次 `CFLOW_MAILBOX_OK` |
 | 235 | ID `foo` 的完成只匹配 `done.invoke.foo` | `namespace/test235.scxml` | `SCXMLInvoker::run()` 构造 `done.invoke.` + child invoke ID | 采用动态可见名称；核心仍用 descriptor 的有限 compiled Event ID | descriptor + live row | `test235.scxml` + 完成统计 |
 | 236 | `childToParent` 先于完成；完成被消费后同 token 的普通 Event 明确拒绝，随后独立确认 Event 才能到达 pass | `namespace/test236.scxml` | `SCXMLInvoker::run()` 在 child step 完成后才 enqueue done；inactive parent queue 拒绝后续 child Event | 采用 terminal token；拒绝静默接受/丢弃 host 报告 | invocation row lifecycle | `test236.scxml` + `INVALID_ARGUMENT` + selection sentinel |
