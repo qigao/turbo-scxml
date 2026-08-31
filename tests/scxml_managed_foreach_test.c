@@ -1,5 +1,6 @@
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,6 +18,7 @@ typedef struct scxml_foreach_managed_value {
 #include <scxml/scxml.h>
 #include <turbostl/typed.h>
 
+#include "scxml_foreach.h"
 #include "tinytest.h"
 
 #define MANAGED_FOREACH_MAX_STORAGE_BYTES (1024u * 1024u)
@@ -24,6 +26,7 @@ typedef struct scxml_foreach_managed_value {
 static size_t managed_foreach_live_resources;
 static size_t managed_foreach_copy_count;
 static size_t managed_foreach_move_count;
+static size_t managed_foreach_copy_fail_after = SIZE_MAX;
 
 static scxml_foreach_managed_value managed_foreach_make(int value) {
     scxml_foreach_managed_value result = {0};
@@ -44,6 +47,8 @@ static bool managed_foreach_copy(void *destination_, const void *source_) {
     if (destination == NULL || source == NULL) return false;
     memset(destination, 0, sizeof(*destination));
     if (source->resource == NULL) return true;
+    if (managed_foreach_copy_count >= managed_foreach_copy_fail_after)
+        return false;
     *destination = managed_foreach_make(source->observed);
     if (destination->resource == NULL) return false;
     ++managed_foreach_copy_count;
@@ -283,6 +288,100 @@ static cflow_statechart_instance_stats run_managed_foreach(
 }
 
 spec("TurboSCXML CMeta managed foreach") {
+  it("releases a partially constructed snapshot when an element copy fails") {
+    const int inputs[] = {7, 11};
+    scxml_managed_foreach_root root = {
+        .values = VecOf(scxml_foreach_managed_value),
+        .item = {0}};
+    scxml_foreach_program program = {0};
+    scxml_foreach_snapshot snapshot = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    size_t index;
+
+    managed_foreach_live_resources = 0u;
+    managed_foreach_copy_count = 0u;
+    managed_foreach_move_count = 0u;
+    managed_foreach_copy_fail_after = SIZE_MAX;
+    root.item = managed_foreach_make(41);
+    check_not_null(root.item.resource);
+    check_equal(vec_init(&root.values, 2u), STL_OK);
+    for (index = 0u; index < 2u; ++index) {
+        scxml_foreach_managed_value value = managed_foreach_make(inputs[index]);
+        check_not_null(value.resource);
+        check_equal(vec_push(&root.values, &value), STL_OK);
+        managed_foreach_destroy(&value);
+    }
+    check_equal(scxml_foreach_compile(
+                    &program, "values", strlen("values"),
+                    "item", strlen("item"), "index", strlen("index"),
+                    &managed_root_data, 8u, 8u, &diagnostic),
+                SCXML_EXPR_OK);
+
+    managed_foreach_copy_fail_after = managed_foreach_copy_count + 1u;
+    check_equal(scxml_foreach_open(
+                    &program, &root, &snapshot, &diagnostic),
+                SCXML_EXPR_EVALUATION_ERROR);
+    check_null(snapshot.allocation);
+    check_null(snapshot.storage);
+    check_equal(snapshot.length, (size_t)0u);
+    check_equal(managed_foreach_live_resources, (size_t)3u);
+
+    managed_foreach_copy_fail_after = SIZE_MAX;
+    managed_root_destroy(&root);
+    check_equal(managed_foreach_live_resources, (size_t)0u);
+  }
+
+  it("preserves the managed item when a snapshot value copy fails") {
+    const int input = 7;
+    scxml_managed_foreach_root root = {
+        .values = VecOf(scxml_foreach_managed_value),
+        .item = {0}};
+    scxml_foreach_program program = {0};
+    scxml_foreach_snapshot snapshot = {0};
+    scxml_foreach_value value = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_foreach_managed_value source;
+    int *original_item_resource;
+
+    managed_foreach_live_resources = 0u;
+    managed_foreach_copy_count = 0u;
+    managed_foreach_move_count = 0u;
+    managed_foreach_copy_fail_after = SIZE_MAX;
+    root.item = managed_foreach_make(41);
+    check_not_null(root.item.resource);
+    check_equal(vec_init(&root.values, 1u), STL_OK);
+    source = managed_foreach_make(input);
+    check_not_null(source.resource);
+    check_equal(vec_push(&root.values, &source), STL_OK);
+    managed_foreach_destroy(&source);
+    check_equal(scxml_foreach_compile(
+                    &program, "values", strlen("values"),
+                    "item", strlen("item"), "index", strlen("index"),
+                    &managed_root_data, 8u, 8u, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_open(
+                    &program, &root, &snapshot, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_value_init(
+                    &program, &value, &diagnostic),
+                SCXML_EXPR_OK);
+
+    original_item_resource = root.item.resource;
+    managed_foreach_copy_fail_after = managed_foreach_copy_count;
+    check_equal(scxml_foreach_next(
+                    &program, &root, &snapshot, &value, 0u, &diagnostic),
+                SCXML_EXPR_EVALUATION_ERROR);
+    check_equal(root.item.observed, 41);
+    check_true(root.item.resource == original_item_resource);
+    check_false(value.live);
+
+    managed_foreach_copy_fail_after = SIZE_MAX;
+    scxml_foreach_value_destroy(&program, &value);
+    scxml_foreach_snapshot_destroy(&program, &snapshot);
+    managed_root_destroy(&root);
+    check_equal(managed_foreach_live_resources, (size_t)0u);
+  }
+
   it("moves independently owned Range values into the staged item") {
     static const char source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -302,6 +401,7 @@ spec("TurboSCXML CMeta managed foreach") {
     managed_foreach_live_resources = 0u;
     managed_foreach_copy_count = 0u;
     managed_foreach_move_count = 0u;
+    managed_foreach_copy_fail_after = SIZE_MAX;
     {
         const scxml_status status = scxml_compile_cmeta(
             &program, source, strlen(source), NULL, &options, &diagnostic);
@@ -336,6 +436,7 @@ spec("TurboSCXML CMeta managed foreach") {
     managed_foreach_live_resources = 0u;
     managed_foreach_copy_count = 0u;
     managed_foreach_move_count = 0u;
+    managed_foreach_copy_fail_after = SIZE_MAX;
     check_equal(scxml_compile_cmeta(
                     &program, source, strlen(source), NULL, &options,
                     &diagnostic), SCXML_OK);

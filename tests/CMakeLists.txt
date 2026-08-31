@@ -29,7 +29,9 @@ turboscxml_add_test(scxml_test scxml_test.c
 turboscxml_add_test(
   scxml_event_io_contract_test
   scxml_event_io_contract_test.c
-  LIBS TurboUtils::Core)
+  LIBS TurboUtils::Core
+  DEFINITIONS
+    SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 turboscxml_add_test(
   scxml_w3c_conformance_test
@@ -57,9 +59,11 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_foreach_test
   scxml_foreach_test.c
-  LIBS TurboUtils::STL)
+  LIBS TurboUtils::STL
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_managed_foreach_test
   scxml_managed_foreach_test.c
-  LIBS TurboUtils::STL)
+  LIBS TurboUtils::STL
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)

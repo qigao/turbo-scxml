@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 76
-local PASS transformations, records 92 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 114
+local PASS transformations, records 54 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -40,13 +40,36 @@ Status meanings are strict:
 | `test153.scxml` | [test153.txml](https://www.w3.org/Voice/2013/scxml-irp/153/test153.txml) | A `foreach` assigns ordered collection items from first to last together with their zero-based indexes. |
 | `test155.scxml` | [test155.txml](https://www.w3.org/Voice/2013/scxml-irp/155/test155.txml) | A `foreach` executes its child content after assigning each item and before advancing. |
 | `test156.scxml` | [test156.txml](https://www.w3.org/Voice/2013/scxml-irp/156/test156.txml) | A child execution error stops the `foreach` and aborts its containing executable-content block. |
+| `test525.scxml` | [test525.txml](https://www.w3.org/Voice/2013/scxml-irp/525/test525.txml) | Modifying the source collection during the first `foreach` body does not change the captured iteration values, order, or count. |
 | `test158.scxml` | [test158.txml](https://www.w3.org/Voice/2013/scxml-irp/158/test158.txml) | Elements in one executable-content block execute in document order. |
 | `test159.scxml` | [test159.txml](https://www.w3.org/Voice/2013/scxml-irp/159/test159.txml) | An execution error prevents the remaining elements of the same block from executing. |
+| `test172.scxml` | [test172.txml](https://www.w3.org/Voice/2013/scxml-irp/172/test172.txml) | `send/@eventexpr` reads the value assigned immediately before the send executes. |
+| `test173.scxml` | [test173.txml](https://www.w3.org/Voice/2013/scxml-irp/173/test173.txml) | `send/@targetexpr` reads the current value and routes through `#_internal`. |
+| `test174.scxml` | [test174.txml](https://www.w3.org/Voice/2013/scxml-irp/174/test174.txml) | `send/@typeexpr` reads the current canonical SCXML Event Processor URI. |
+| `test175.scxml` | [test175.txml](https://www.w3.org/Voice/2013/scxml-irp/175/test175.txml) | `send/@delayexpr` reads the current interval before the delayed request is committed. |
+| `test176.scxml` | [test176.txml](https://www.w3.org/Voice/2013/scxml-irp/176/test176.txml) | A send parameter reads its current CMeta value and reaches the host unchanged. |
+| `test178.scxml` | [test178.txml](https://www.w3.org/Voice/2013/scxml-irp/178/test178.txml) | Duplicate send payload names retain document order and both distinct values. |
 | `test179.scxml` | [test179.txml](https://www.w3.org/Voice/2013/scxml-irp/179/test179.txml) | Evaluated `send/content` bytes reach the host Event I/O boundary unmodified. |
+| `test183.scxml` | [test183.txml](https://www.w3.org/Voice/2013/scxml-irp/183/test183.txml) | `send/@idlocation` contains the generated ID before the sent Event is selected. |
+| `test185.scxml` | [test185.txml](https://www.w3.org/Voice/2013/scxml-irp/185/test185.txml) | A delayed send retains its parsed interval and cannot overtake an immediate send. |
+| `test186.scxml` | [test186.txml](https://www.w3.org/Voice/2013/scxml-irp/186/test186.txml) | Delayed-send arguments are materialized when `send` executes rather than when the host later dispatches them. |
+| `test187.scxml` | [test187.txml](https://www.w3.org/Voice/2013/scxml-irp/187/test187.txml) | Session destruction closes the host and cancels a committed delayed message before delivery. |
+| `test194.scxml` | [test194.txml](https://www.w3.org/Voice/2013/scxml-irp/194/test194.txml) | An unsupported or invalid send target raises `error.execution`. |
+| `test198.scxml` | [test198.txml](https://www.w3.org/Voice/2013/scxml-irp/198/test198.txml) | A `send` with neither `type` nor `typeexpr` uses the canonical SCXML Event Processor and the received Event identifies that processor. |
+| `test199.scxml` | [test199.txml](https://www.w3.org/Voice/2013/scxml-irp/199/test199.txml) | An unsupported Event Processor type raises `error.execution`. |
+| `test200.scxml` | [test200.txml](https://www.w3.org/Voice/2013/scxml-irp/200/test200.txml) | The required explicit SCXML Event Processor type is accepted and delivers the Event. |
+| `test205.scxml` | [test205.txml](https://www.w3.org/Voice/2013/scxml-irp/205/test205.txml) | The host receives the exact sent Event name and named scalar payload. |
+| `test521.scxml` | [test521.txml](https://www.w3.org/Voice/2013/scxml-irp/521/test521.txml) | A send that cannot be dispatched raises `error.communication`. |
+| `test553.scxml` | [test553.txml](https://www.w3.org/Voice/2013/scxml-irp/553/test553.txml) | A send whose arguments fail evaluation is discarded before host delivery. |
+| `test207.scxml` | [test207.txml](https://www.w3.org/Voice/2013/scxml-irp/207/test207.txml) | A cancel in one session cannot observe or remove a same-named delayed send owned by another session. |
+| `test208.scxml` | [test208.txml](https://www.w3.org/Voice/2013/scxml-irp/208/test208.txml) | A literal `cancel/@sendid` removes the matching delayed send from the same session. |
+| `test210.scxml` | [test210.txml](https://www.w3.org/Voice/2013/scxml-irp/210/test210.txml) | `cancel/@sendidexpr` is evaluated when the cancel element executes and resolves the generated delayed-send ID. |
 | `test223.scxml` | [test223.txml](https://www.w3.org/Voice/2013/scxml-irp/223/test223.txml) | `invoke/@idlocation` receives the generated invocation ID before completion is processed. |
 | `test224.scxml` | [test224.txml](https://www.w3.org/Voice/2013/scxml-irp/224/test224.txml) | The generated invocation ID has `stateid.platformid` form at both the CMeta location and adapter boundary. |
+| `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
+| `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
 | `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
@@ -65,6 +88,21 @@ Status meanings are strict:
 | `test333.scxml` | [test333.txml](https://www.w3.org/Voice/2013/scxml-irp/333/test333.txml) | An ordinary external Event admitted without a send ID exposes an empty `sendid`. |
 | `test335.scxml` | [test335.txml](https://www.w3.org/Voice/2013/scxml-irp/335/test335.txml) | An internally raised Event exposes an empty `origin`. |
 | `test336.scxml` | [test336.txml](https://www.w3.org/Voice/2013/scxml-irp/336/test336.txml) | A committed external Event's `origin` and `origintype` are evaluated as the exact target and type of a committed reply. |
+| `test189.scxml` | [test189.txml](https://www.w3.org/Voice/2013/scxml-irp/189/test189.txml) | A `#_internal` send is selected from the sending session's internal queue before an earlier external send is dispatched. |
+| `test190.scxml` | [test190.txml](https://www.w3.org/Voice/2013/scxml-irp/190/test190.txml) | A send to the current `#_scxml_sessionid` is admitted to that session's external queue after internal work. |
+| `test191.scxml` | [test191.txml](https://www.w3.org/Voice/2013/scxml-irp/191/test191.txml) | A child's initial `#_parent` send reaches the invoking parent's external queue through a pre-reserved host endpoint. |
+| `test192.scxml` | [test192.txml](https://www.w3.org/Voice/2013/scxml-irp/192/test192.txml) | A parent routes through its child's invoke-id alias and receives the child's `#_parent` reply. |
+| `test347.scxml` | [test347.txml](https://www.w3.org/Voice/2013/scxml-irp/347/test347.txml) | Two independent sessions exchange three Events through host-owned external queues. |
+| `test348.scxml` | [test348.txml](https://www.w3.org/Voice/2013/scxml-irp/348/test348.txml) | The sent event name becomes the exact receiving `_event.name`. |
+| `test349.scxml` | [test349.txml](https://www.w3.org/Voice/2013/scxml-irp/349/test349.txml) | The receiving Event origin is the sender address and can route a reply. |
+| `test350.scxml` | [test350.txml](https://www.w3.org/Voice/2013/scxml-irp/350/test350.txml) | The copied target selects the current published session endpoint for delivery. |
+| `test351.scxml` | [test351.txml](https://www.w3.org/Voice/2013/scxml-irp/351/test351.txml) | An explicit send ID is copied to `_event.sendid`, while a send without `id` or `idlocation` leaves it empty. |
+| `test352.scxml` | [test352.txml](https://www.w3.org/Voice/2013/scxml-irp/352/test352.txml) | The SCXML processor source type becomes the canonical receiving `_event.origintype`. |
+| `test354.scxml` | [test354.txml](https://www.w3.org/Voice/2013/scxml-irp/354/test354.txml) | Structured CMeta Event data is copied across sender, host, and receiver ownership boundaries. |
+| `test496.scxml` | [test496.txml](https://www.w3.org/Voice/2013/scxml-irp/496/test496.txml) | An inaccessible session target raises internal `error.communication`. |
+| `test500.scxml` | [test500.txml](https://www.w3.org/Voice/2013/scxml-irp/500/test500.txml) | `_ioprocessors.scxml.location` exists and is nonempty without implying BasicHTTP support. |
+| `test501.scxml` | [test501.txml](https://www.w3.org/Voice/2013/scxml-irp/501/test501.txml) | The startup SCXML location can be reserved as a send target and matches the public post-initialization session address. |
+| `test495.scxml` | [test495.txml](https://www.w3.org/Voice/2013/scxml-irp/495/test495.txml) | The processor converts and admits a default send externally after a `#_internal` send has been selected internally. |
 | `test337.scxml` | [test337.txml](https://www.w3.org/Voice/2013/scxml-irp/337/test337.txml) | Internal and platform Events expose an empty `origintype`. |
 | `test338.scxml` | [test338.txml](https://www.w3.org/Voice/2013/scxml-irp/338/test338.txml) | A normal Event reported by an invoked child exposes the same live invocation ID through CMeta `idlocation` and `_event.invokeid`. |
 | `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
@@ -167,11 +205,32 @@ expression whose value cannot be represented by its CMeta integer destination.
 Its error transition first checks transaction rollback, then queues a
 confirmation Event behind any incorrectly executed third-item or containing-
 block suffix sentinel. FIFO selection sends either sentinel to `fail` before
-the confirmation can reach `pass`. Tests 150 and 151 remain `UNSUPPORTED`
+the confirmation can reach `pass`. Test 525 maps the upstream collection-
+extension function to a strict host `send` effect that appends a fourth value
+to the staged CMeta Vec during the first child body. The terminal witness
+requires the loop to finish at the original third value and zero-based index
+two; the host probe also requires the mutation effect to prepare and commit
+exactly once. Tests 150 and 151 remain `UNSUPPORTED`
 because CMeta variables are declared by the caller's static schema; test 152
 remains `UNSUPPORTED` because illegal array and item locations are rejected at
-document compilation; test 525 remains `UNSUPPORTED` until iteration is backed
-by a bounded shallow snapshot rather than a borrowed container Range.
+document compilation.
+
+Tests 198 and 200 replace the generator's pass/fail vocabulary with strict
+result Events and omit the one-second timeout, which is only a liveness safety
+net because the local harness fails synchronously if loopback delivery does not
+complete. The bounded host accepts the first send only when its materialized
+type is the canonical SCXML Event Processor URI. Test 198 additionally exposes
+that same URI as the received Event's `origintype`, preserving the upstream
+observable witness rather than checking only the outgoing request.
+
+Tests 194, 199, and 521 use a strict bounded Event I/O host that validates the
+exact outgoing target and processor type before returning the failure class
+specified by the assertion. Their fixtures can reach `pass` only through the
+corresponding internal `error.execution` or `error.communication` Event. Test
+553 replaces the generator's invalid namelist with an initialization-time
+`targetexpr` over the unbound `_event.name`. Its adapter accepts only the final
+result Event, so any attempted `event1` delivery fails the test; an additional
+same-block sentinel proves argument failure also aborts the remaining content.
 
 Tests 372 and 570 replace the generator's anonymous integer slot with the
 test-only CMeta `sequence` field. Test 372 accepts the parent completion only
@@ -271,15 +330,52 @@ Events, while the compound parent's `error.execution` transition rejects any
 premature evaluation before `s03`. This does not claim support for syntactically
 invalid documents or recoverable transition-guard failures.
 
+Tests 172-175 preserve the upstream mutation-before-send witness with the
+owned CMeta `send_id` and integer `sequence` fields. Tests 172 and 174 use a
+bounded committed loopback, test 173 selects the native `#_internal` path, and
+test 175 inspects both materialized delay values before admitting event1 then
+event2. Thus the adapter observes only transactionally committed effects; it
+does not become a second expression or state fact source. Test 183 uses the
+same committed loopback but permits its event1 transition only after the
+generated ID has been published to the owned `send_id` location.
+
+Tests 176 and 205 use the versioned v2 payload boundary to require the exact
+event name, payload name, scalar kind, and value evaluated by the inline block.
+Test 178 additionally requires both duplicate names in document order, proving
+that the callback-scoped payload remains an ordered entry sequence rather than
+a collapsing map. Test 187 replaces the invoked child with one owning session.
+That session commits a delayed parent request, reaches its top-level final, and
+is then destroyed; the strict host's mandatory close path cancels its pending
+message and rejects a later delivery attempt. This follows the documented
+host-owned timer and session-owned lifecycle boundary without adding a second
+timer registry to TurboSCXML.
+
 Test 179 replaces upstream self-delivery with the versioned v3 host Event I/O
 adapter. The fixture still evaluates literal `content` when `send` executes;
 the adapter is the external-service boundary and requires the exact UTF-8 bytes
-`123` before the only terminal path can complete. Tests 223 and 224 replace the
+`123` before the only terminal path can complete. Test 185 replaces wall-clock
+delivery with ordered public admission: the host requires the delayed request
+to carry 1000 ms, admits the zero-delay Event first, and admits the delayed
+Event only after the session reaches its waiting state. Test 186 mutates the
+source CMeta field after a delayed send; the v2 host must already own scalar
+payload 1 while the eventless terminal guard observes the new value 2. Tests
+208 and 210 retain two live delayed-send identities in the session registry.
+The strict host requires the cancellation to name the first identity, rejects
+completion reporting for that cancelled identity, and admits only the second
+Event. Test 210 obtains the first identity from `idlocation`, so its exact host
+comparison also witnesses execution-time `sendidexpr` evaluation.
+
+Tests 223 and 224 replace the
 invoked child processor with the versioned host invoke adapter. The adapter
 observes the committed generated ID and reports completion through that same
 invocation token. The fixtures independently require the writable CMeta
 `idlocation` to be nonempty and exactly `s0.1`, so removing the generated child
 does not weaken either binding or `stateid.platformid` witness.
+
+Tests 279 and 550 retain the upstream early-binding witness: each declaration
+belongs to a state that is never entered, while the initial state's guard reads
+the initialized CMeta field. Test 279 exercises the default binding and test 550
+spells out `binding="early"` while requiring the exact `expr` result.
 
 The late-binding implementation does not justify weakening upstream test 280:
 TurboSCXML uses caller-supplied typed CMeta storage, so a declared field exists
@@ -349,10 +445,10 @@ bundling a cross-session registry or transport. The public location-copy API
 lets a host register the exact address exposed through
 `_ioprocessors.scxml.location`, and
 `scxml_event_io_contract_test` demonstrates bounded routing and delivery
-through only public APIs. This evidence validates the adapter contract; it does
-not make the library alone a standalone SCXML Event I/O Processor. Accordingly,
-tests 189-192, 347-354, 495-496, and 500-501 remain `UNSUPPORTED` until the W3C
-fixtures are executed with a selected conforming host implementation.
+through only public APIs. Tests 189-192, 347-354, 495-496, and 500-501 therefore
+exercise the logical SCXML Event Processor contract with that strict local host.
+This evidence does not make the library alone a standalone network service and
+does not claim the optional BasicHTTP Event Processor profile.
 
 The upstream suite page offers the tests under the
 [W3C Test Suite License](https://www.w3.org/copyright/test-suite/) or the

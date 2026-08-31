@@ -28,7 +28,10 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_LOOPBACK_CAPACITY = 2
+    W3C_LOOPBACK_CAPACITY = 2,
+    W3C_DELAYED_MESSAGE_CAPACITY = 2,
+    W3C_NAMED_PAYLOAD_CAPACITY = 2,
+    W3C_EVENT_TEXT_CAPACITY = 32
 };
 
 static const char W3C_SCXML_EVENT_PROCESSOR[] =
@@ -56,6 +59,9 @@ typedef struct w3c_run_result {
 
 typedef struct w3c_adapter_probe {
     size_t prepare_send_calls;
+    scxml_adapter_status send_status;
+    const char *expected_target;
+    const char *expected_type;
 } w3c_adapter_probe;
 
 typedef struct w3c_content_probe {
@@ -73,9 +79,66 @@ typedef struct w3c_result_probe {
     char event[32];
 } w3c_result_probe;
 
+typedef struct w3c_delayed_message {
+    char event[W3C_EVENT_TEXT_CAPACITY];
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    uint64_t delay_ms;
+} w3c_delayed_message;
+
+typedef struct w3c_delayed_probe {
+    w3c_delayed_message messages[W3C_DELAYED_MESSAGE_CAPACITY];
+    size_t send_count;
+    size_t cancel_count;
+    size_t commits;
+    size_t discards;
+    char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    bool payload_seen;
+    int64_t payload_sint;
+} w3c_delayed_probe;
+
+typedef struct w3c_cancel_isolation_probe {
+    w3c_delayed_probe delayed;
+    w3c_result_probe result;
+    size_t cancel_prepare_calls;
+} w3c_cancel_isolation_probe;
+
+typedef struct w3c_named_payload_probe {
+    const char *expected_event;
+    const char *expected_names[W3C_NAMED_PAYLOAD_CAPACITY];
+    int64_t expected_values[W3C_NAMED_PAYLOAD_CAPACITY];
+    size_t expected_count;
+    size_t sends;
+    size_t commits;
+    size_t discards;
+} w3c_named_payload_probe;
+
+typedef struct w3c_termination_probe {
+    size_t sends;
+    size_t commits;
+    size_t discards;
+    size_t closes;
+    size_t cancellations;
+    size_t deliveries;
+    bool pending;
+} w3c_termination_probe;
+
+typedef enum w3c_delayed_fixture_kind {
+    W3C_DELAY_ORDER = 0,
+    W3C_DYNAMIC_DELAY,
+    W3C_LITERAL_CANCEL,
+    W3C_DYNAMIC_CANCEL
+} w3c_delayed_fixture_kind;
+
+typedef scxml_adapter_status (*w3c_send_extension_fn)(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error);
+
 typedef struct w3c_cmeta_probe {
     w3c_result_probe result;
     bool routable_loopback;
+    bool require_scxml_type;
+    bool require_route_target;
+    bool hold_loopback_delivery;
     size_t loopback_limit;
     size_t loopback_ready_count;
     size_t loopback_delivered_count;
@@ -84,8 +147,13 @@ typedef struct w3c_cmeta_probe {
     size_t loopback_discards;
     scxml_adapter_status send_rejection;
     size_t rejected_sends;
+    w3c_send_extension_fn send_extension;
+    void *send_extension_user;
     char route_origin[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char initial_route_target[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char loopback_events[W3C_LOOPBACK_CAPACITY][32];
+    char loopback_send_ids[W3C_LOOPBACK_CAPACITY]
+                          [SCXML_EVENT_METADATA_CAPACITY + 1u];
 } w3c_cmeta_probe;
 
 typedef struct w3c_cmeta_fixture_options {
@@ -94,7 +162,12 @@ typedef struct w3c_cmeta_fixture_options {
     bool hold_executor_during_external_admission;
     size_t loopback_count;
     bool routable_loopback;
+    bool require_scxml_type;
+    bool require_route_target;
+    bool hold_loopback_delivery;
     scxml_adapter_status send_rejection;
+    w3c_send_extension_fn send_extension;
+    void *send_extension_user;
 } w3c_cmeta_fixture_options;
 
 typedef struct w3c_executor_blocker {
@@ -175,6 +248,112 @@ static const cmeta_data_desc w3c_cmeta_state_desc = {
     .storage_type = &w3c_cmeta_state_type,
     .shape = &w3c_cmeta_state_shape};
 
+Struct(w3c_copy_payload,
+    (int, first),
+    (int, second)
+);
+
+static bool w3c_copy_payload_copy(void *destination, const void *source) {
+    if (destination == NULL || source == NULL) return false;
+    memcpy(destination, source, sizeof(w3c_copy_payload));
+    return true;
+}
+
+static void w3c_copy_payload_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(w3c_copy_payload));
+    memset(source, 0, sizeof(w3c_copy_payload));
+}
+
+static void w3c_copy_payload_destroy(void *value) {
+    (void)value;
+}
+
+static const cmeta_type_traits w3c_copy_payload_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = w3c_copy_payload_copy,
+    .move_construct = w3c_copy_payload_move,
+    .destroy = w3c_copy_payload_destroy};
+static const cmeta_type_desc w3c_copy_payload_type = {
+    .name = "w3c_copy_payload",
+    .size = sizeof(w3c_copy_payload),
+    .align = _Alignof(w3c_copy_payload),
+    .kind = CMETA_T_OBJECT,
+    .traits = &w3c_copy_payload_traits};
+static const cmeta_data_field_desc w3c_copy_payload_fields[] = {
+    {"test.scxml.w3c.copy.first", "first",
+     offsetof(w3c_copy_payload, first), &cmeta_data_int},
+    {"test.scxml.w3c.copy.second", "second",
+     offsetof(w3c_copy_payload, second), &cmeta_data_int}};
+static const cmeta_data_struct_shape w3c_copy_payload_shape = {
+    .layout = StructMeta(w3c_copy_payload),
+    .fields = w3c_copy_payload_fields,
+    .field_count = sizeof(w3c_copy_payload_fields) /
+                   sizeof(w3c_copy_payload_fields[0])};
+static const cmeta_data_desc w3c_copy_payload_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.w3c.copy.payload",
+    .display_name = "W3C copied payload",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &w3c_copy_payload_type,
+    .shape = &w3c_copy_payload_shape};
+
+Struct(w3c_copy_state,
+    (w3c_copy_payload, payload)
+);
+
+static bool w3c_copy_state_copy(void *destination, const void *source) {
+    if (destination == NULL || source == NULL) return false;
+    memcpy(destination, source, sizeof(w3c_copy_state));
+    return true;
+}
+
+static void w3c_copy_state_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(w3c_copy_state));
+    memset(source, 0, sizeof(w3c_copy_state));
+}
+
+static void w3c_copy_state_destroy(void *value) {
+    (void)value;
+}
+
+static const cmeta_type_traits w3c_copy_state_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = w3c_copy_state_copy,
+    .move_construct = w3c_copy_state_move,
+    .destroy = w3c_copy_state_destroy};
+static const cmeta_type_desc w3c_copy_state_type = {
+    .name = "w3c_copy_state",
+    .size = sizeof(w3c_copy_state),
+    .align = _Alignof(w3c_copy_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &w3c_copy_state_traits};
+static const cmeta_data_field_desc w3c_copy_state_fields[] = {
+    {"test.scxml.w3c.copy.state.payload", "payload",
+     offsetof(w3c_copy_state, payload), &w3c_copy_payload_desc}};
+static const cmeta_data_struct_shape w3c_copy_state_shape = {
+    .layout = StructMeta(w3c_copy_state),
+    .fields = w3c_copy_state_fields,
+    .field_count = sizeof(w3c_copy_state_fields) /
+                   sizeof(w3c_copy_state_fields[0])};
+static const cmeta_data_desc w3c_copy_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.w3c.copy.state",
+    .display_name = "W3C copy sender state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &w3c_copy_state_type,
+    .shape = &w3c_copy_state_shape};
+
+typedef struct w3c_copy_probe {
+    w3c_copy_payload message;
+    size_t sends;
+    size_t commits;
+    size_t discards;
+} w3c_copy_probe;
+
 Struct(w3c_foreach_state,
     (TYPE(Vec, int), values),
     (int, item),
@@ -184,6 +363,8 @@ Struct(w3c_foreach_state,
     (int, total),
     (int, valid)
 );
+
+static _Atomic(w3c_foreach_state *) w3c_foreach_staged_state;
 
 static bool w3c_foreach_state_copy(void *destination_, const void *source_) {
     w3c_foreach_state *destination = (w3c_foreach_state *)destination_;
@@ -209,6 +390,7 @@ static bool w3c_foreach_state_copy(void *destination_, const void *source_) {
     destination->stage = source->stage;
     destination->total = source->total;
     destination->valid = source->valid;
+    atomic_store(&w3c_foreach_staged_state, destination);
     return true;
 }
 
@@ -507,12 +689,27 @@ static scxml_adapter_status w3c_reject_send(
     const char **out_error) {
     w3c_adapter_probe *probe = (w3c_adapter_probe *)user;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
-        out_error == NULL) {
+        out_error == NULL ||
+        (probe->send_status != SCXML_ADAPTER_ERROR_EXECUTION &&
+         probe->send_status != SCXML_ADAPTER_ERROR_COMMUNICATION) ||
+        (probe->expected_target != NULL &&
+         (request->target == NULL ||
+          request->target_size != strlen(probe->expected_target) ||
+          memcmp(request->target, probe->expected_target,
+                 request->target_size) != 0)) ||
+        (probe->expected_type != NULL &&
+         (request->type == NULL ||
+          request->type_size != strlen(probe->expected_type) ||
+          memcmp(request->type, probe->expected_type,
+                 request->type_size) != 0))) {
         return SCXML_ADAPTER_INVALID_CONTRACT;
     }
     ++probe->prepare_send_calls;
-    *out_error = "injected W3C send execution error";
-    return SCXML_ADAPTER_ERROR_EXECUTION;
+    *out_ticket = (cflow_statechart_effect_ticket){0};
+    *out_error = probe->send_status == SCXML_ADAPTER_ERROR_EXECUTION
+        ? "injected W3C send execution error"
+        : "injected W3C send communication error";
+    return probe->send_status;
 }
 
 static void w3c_adapter_close(void *user) {
@@ -521,6 +718,204 @@ static void w3c_adapter_close(void *user) {
 
 static bool w3c_adapter_is_quiescent(void *user) {
     return user != NULL;
+}
+
+static bool w3c_copy_request_text(char *destination, size_t capacity,
+                                  const char *source, size_t size) {
+    if (destination == NULL || capacity == 0u || size >= capacity ||
+        (source == NULL && size != 0u))
+        return false;
+    if (size != 0u) memcpy(destination, source, size);
+    destination[size] = '\0';
+    return true;
+}
+
+static void w3c_delayed_commit(void *user) {
+    w3c_delayed_probe *probe = (w3c_delayed_probe *)user;
+    if (probe != NULL) ++probe->commits;
+}
+
+static void w3c_delayed_discard(void *user) {
+    w3c_delayed_probe *probe = (w3c_delayed_probe *)user;
+    if (probe != NULL) ++probe->discards;
+}
+
+static scxml_adapter_status w3c_capture_delayed_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_delayed_probe *probe = (w3c_delayed_probe *)user;
+    w3c_delayed_message *message;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->event == NULL ||
+        request->event_size == 0u ||
+        probe->send_count >= W3C_DELAYED_MESSAGE_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    message = &probe->messages[probe->send_count];
+    if (!w3c_copy_request_text(
+            message->event, sizeof(message->event), request->event,
+            request->event_size) ||
+        !w3c_copy_request_text(
+            message->id, sizeof(message->id), request->id,
+            request->id_size) ||
+        request->type == NULL ||
+        request->type_size != sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u ||
+        memcmp(request->type, W3C_SCXML_EVENT_PROCESSOR,
+               request->type_size) != 0)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    message->delay_ms = request->delay_ms;
+    ++probe->send_count;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_delayed_commit, w3c_delayed_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status w3c_capture_delayed_send_v2(
+    void *user, const scxml_send_request_v2 *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_delayed_probe *probe = (w3c_delayed_probe *)user;
+    scxml_adapter_status status;
+    if (probe == NULL || request == NULL ||
+        request->payload.kind != SCXML_PAYLOAD_CONTENT ||
+        request->payload.content.kind != SCXML_PAYLOAD_VALUE_SINT)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    status = w3c_capture_delayed_send(
+        user, &request->base, out_ticket, out_error);
+    if (status == SCXML_ADAPTER_ACCEPTED) {
+        probe->payload_seen = true;
+        probe->payload_sint = request->payload.content.data.sint;
+    }
+    return status;
+}
+
+static scxml_adapter_status w3c_capture_delayed_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_delayed_probe *probe = (w3c_delayed_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->cancel_count != 0u ||
+        request->send_id == NULL || request->send_id_size == 0u ||
+        !w3c_copy_request_text(
+            probe->cancel_id, sizeof(probe->cancel_id), request->send_id,
+            request->send_id_size))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->cancel_count;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_delayed_commit, w3c_delayed_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_named_payload_commit(void *user) {
+    w3c_named_payload_probe *probe = (w3c_named_payload_probe *)user;
+    if (probe != NULL) ++probe->commits;
+}
+
+static void w3c_named_payload_discard(void *user) {
+    w3c_named_payload_probe *probe = (w3c_named_payload_probe *)user;
+    if (probe != NULL) ++probe->discards;
+}
+
+static scxml_adapter_status w3c_capture_named_payload_send(
+    void *user, const scxml_send_request_v2 *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_named_payload_probe *probe = (w3c_named_payload_probe *)user;
+    size_t index;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->expected_event == NULL ||
+        probe->expected_count == 0u ||
+        probe->expected_count > W3C_NAMED_PAYLOAD_CAPACITY ||
+        probe->sends != 0u || request->base.event == NULL ||
+        request->base.event_size != strlen(probe->expected_event) ||
+        memcmp(request->base.event, probe->expected_event,
+               request->base.event_size) != 0 ||
+        request->base.type == NULL ||
+        request->base.type_size != sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u ||
+        memcmp(request->base.type, W3C_SCXML_EVENT_PROCESSOR,
+               request->base.type_size) != 0 ||
+        request->payload.kind != SCXML_PAYLOAD_NAMED ||
+        request->payload.entry_count != probe->expected_count)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    for (index = 0u; index < probe->expected_count; ++index) {
+        const scxml_payload_entry *entry = &request->payload.entries[index];
+        if (probe->expected_names[index] == NULL || entry->name == NULL ||
+            entry->name_size != strlen(probe->expected_names[index]) ||
+            memcmp(entry->name, probe->expected_names[index],
+                   entry->name_size) != 0 ||
+            entry->value.kind != SCXML_PAYLOAD_VALUE_SINT ||
+            entry->value.data.sint != probe->expected_values[index])
+            return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    ++probe->sends;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_named_payload_commit, w3c_named_payload_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_termination_commit(void *user) {
+    w3c_termination_probe *probe = (w3c_termination_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commits;
+    probe->pending = true;
+}
+
+static void w3c_termination_discard(void *user) {
+    w3c_termination_probe *probe = (w3c_termination_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discards;
+    probe->pending = false;
+}
+
+static scxml_adapter_status w3c_capture_terminating_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    static const char event[] = "childToParent";
+    static const char target[] = "#_parent";
+    static const char id[] = "child.delayed";
+    w3c_termination_probe *probe = (w3c_termination_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->sends != 0u || request->event == NULL ||
+        request->event_size != sizeof(event) - 1u ||
+        memcmp(request->event, event, sizeof(event) - 1u) != 0 ||
+        request->target == NULL || request->target_size != sizeof(target) - 1u ||
+        memcmp(request->target, target, sizeof(target) - 1u) != 0 ||
+        request->type == NULL ||
+        request->type_size != sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u ||
+        memcmp(request->type, W3C_SCXML_EVENT_PROCESSOR,
+               request->type_size) != 0 || request->id == NULL ||
+        request->id_size != sizeof(id) - 1u ||
+        memcmp(request->id, id, sizeof(id) - 1u) != 0 ||
+        request->delay_ms != UINT64_C(500))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->sends;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_termination_commit, w3c_termination_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_termination_close(void *user) {
+    w3c_termination_probe *probe = (w3c_termination_probe *)user;
+    if (probe == NULL) return;
+    ++probe->closes;
+    if (probe->pending) {
+        probe->pending = false;
+        ++probe->cancellations;
+    }
+}
+
+static bool w3c_termination_is_quiescent(void *user) {
+    const w3c_termination_probe *probe =
+        (const w3c_termination_probe *)user;
+    return probe != NULL && probe->closes == 1u && !probe->pending;
+}
+
+static bool w3c_termination_try_deliver(w3c_termination_probe *probe) {
+    if (probe == NULL || !probe->pending) return false;
+    probe->pending = false;
+    ++probe->deliveries;
+    return true;
 }
 
 static void w3c_content_commit(void *user) {
@@ -555,6 +950,42 @@ static scxml_adapter_status w3c_capture_content_send(
     ++probe->prepare_send_calls;
     *out_ticket = (cflow_statechart_effect_ticket){
         w3c_content_commit, w3c_content_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_copy_commit(void *user) {
+    w3c_copy_probe *probe = (w3c_copy_probe *)user;
+    if (probe != NULL) ++probe->commits;
+}
+
+static void w3c_copy_discard(void *user) {
+    w3c_copy_probe *probe = (w3c_copy_probe *)user;
+    if (probe != NULL) ++probe->discards;
+}
+
+static scxml_adapter_status w3c_capture_copy_send(
+    void *user, const scxml_send_request_v3 *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    static const char event[] = "event1";
+    w3c_copy_probe *probe = (w3c_copy_probe *)user;
+    const scxml_content_view *content;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->sends != 0u ||
+        request->base.event == NULL ||
+        request->base.event_size != sizeof(event) - 1u ||
+        memcmp(request->base.event, event, sizeof(event) - 1u) != 0 ||
+        request->payload.kind != SCXML_PAYLOAD_CONTENT)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    content = &request->payload.content;
+    if (content->kind != SCXML_CONTENT_CMETA ||
+        content->schema != &w3c_copy_payload_desc ||
+        content->object == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    probe->message = *(const w3c_copy_payload *)content->object;
+    ++probe->sends;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_copy_commit, w3c_copy_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -598,6 +1029,30 @@ static bool w3c_send_is_result(const scxml_send_request *request) {
             memcmp(request->event, fail, sizeof(fail) - 1u) == 0);
 }
 
+static scxml_adapter_status w3c_capture_isolated_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_cancel_isolation_probe *probe =
+        (w3c_cancel_isolation_probe *)user;
+    if (probe == NULL) return SCXML_ADAPTER_INVALID_CONTRACT;
+    return w3c_send_is_result(request)
+        ? w3c_capture_result_send(
+              &probe->result, request, out_ticket, out_error)
+        : w3c_capture_delayed_send(
+              &probe->delayed, request, out_ticket, out_error);
+}
+
+static scxml_adapter_status w3c_capture_isolated_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_cancel_isolation_probe *probe =
+        (w3c_cancel_isolation_probe *)user;
+    if (probe == NULL) return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->cancel_prepare_calls;
+    return w3c_capture_delayed_cancel(
+        &probe->delayed, request, out_ticket, out_error);
+}
+
 static void w3c_loopback_commit(void *user) {
     w3c_cmeta_probe *probe = (w3c_cmeta_probe *)user;
     if (probe == NULL) return;
@@ -622,6 +1077,9 @@ static scxml_adapter_status w3c_capture_cmeta_send(
     if (w3c_send_is_result(request))
         return w3c_capture_result_send(
             &probe->result, request, out_ticket, out_error);
+    if (probe->send_extension != NULL)
+        return probe->send_extension(
+            probe->send_extension_user, request, out_ticket, out_error);
     if (probe->send_rejection != SCXML_ADAPTER_ACCEPTED &&
         probe->rejected_sends == 0u) {
         ++probe->rejected_sends;
@@ -632,8 +1090,24 @@ static scxml_adapter_status w3c_capture_cmeta_send(
     index = probe->loopback_prepare_calls;
     if (request->event == NULL || request->event_size == 0u ||
         index >= probe->loopback_limit || index >= W3C_LOOPBACK_CAPACITY ||
-        request->event_size >= sizeof(probe->loopback_events[index]))
+        request->event_size >= sizeof(probe->loopback_events[index]) ||
+        request->id_size > SCXML_EVENT_METADATA_CAPACITY ||
+        (request->id_size != 0u && request->id == NULL))
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (probe->require_scxml_type &&
+        (request->type == NULL ||
+         request->type_size != sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u ||
+         memcmp(request->type, W3C_SCXML_EVENT_PROCESSOR,
+                request->type_size) != 0))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (probe->require_route_target) {
+        if (request->target == NULL || request->target_size == 0u ||
+            request->target_size > SCXML_EVENT_METADATA_CAPACITY)
+            return SCXML_ADAPTER_INVALID_CONTRACT;
+        memcpy(probe->initial_route_target, request->target,
+               request->target_size);
+        probe->initial_route_target[request->target_size] = '\0';
+    }
     if (probe->routable_loopback && index == 1u &&
         (request->target == NULL ||
          request->target_size != strlen(probe->route_origin) ||
@@ -647,6 +1121,10 @@ static scxml_adapter_status w3c_capture_cmeta_send(
     memcpy(probe->loopback_events[index], request->event,
            request->event_size);
     probe->loopback_events[index][request->event_size] = '\0';
+    if (request->id_size != 0u)
+        memcpy(probe->loopback_send_ids[index], request->id,
+               request->id_size);
+    probe->loopback_send_ids[index][request->id_size] = '\0';
     ++probe->loopback_prepare_calls;
     *out_ticket = (cflow_statechart_effect_ticket){
         w3c_loopback_commit, w3c_loopback_discard, probe};
@@ -898,6 +1376,159 @@ cleanup:
     return succeeded;
 }
 
+static bool run_w3c_copy_fixture(const char *fixture_name) {
+    static const char receiver_source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "datamodel='cmeta'><state id='waiting'>"
+        "<transition event='event1' cond='_event.data.first == 1 &amp;&amp; "
+        "_event.data.second == 2' target='pass'/>"
+        "<transition event='*' target='fail'/></state>"
+        "<final id='pass'/><state id='fail'/></scxml>";
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program sender_program = {0};
+    scxml_program receiver_program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor sender_executor = {0};
+    cflow_executor receiver_executor = {0};
+    scxml_session sender = {0};
+    scxml_session receiver = {0};
+    cflow_statechart_instance_stats sender_stats = {0};
+    cflow_statechart_instance_stats receiver_stats = {0};
+    cflow_event_view event = {0};
+    w3c_copy_probe probe = {0};
+    w3c_executor_blocker blocker;
+    const scxml_event_io_adapter_v3 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V3,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_CONTENT_V3,
+        .prepare_send = w3c_capture_copy_send,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_session_adapters_v3 adapters = {
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
+        .struct_size = sizeof(adapters),
+        .event_io = &event_io,
+        .event_io_user = &probe};
+    const w3c_copy_state sender_initial = {
+        .payload = {.first = 1, .second = 2}};
+    const w3c_copy_payload receiver_initial = {0};
+    const scxml_cmeta_session_options_v1 sender_data = {
+        SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        sizeof(sender_data), &sender_initial};
+    const scxml_cmeta_session_options_v1 receiver_data = {
+        SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        sizeof(receiver_data), &receiver_initial};
+    const scxml_cmeta_compile_options_v1 sender_compile_options =
+        scxml_cmeta_default_compile_options(&w3c_copy_state_desc);
+    const scxml_cmeta_compile_options_v1 receiver_compile_options =
+        scxml_cmeta_default_compile_options(&w3c_copy_payload_desc);
+    scxml_session_config sender_config = {0};
+    scxml_session_config receiver_config = {0};
+    scxml_event_metadata_v3 metadata = {
+        .abi_version = SCXML_EVENT_METADATA_ABI_V3,
+        .struct_size = sizeof(metadata)};
+    bool sender_executor_initialized = false;
+    bool receiver_executor_initialized = false;
+    bool sender_initialized = false;
+    bool receiver_initialized = false;
+    bool blocker_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) goto cleanup;
+    if (scxml_compile_cmeta(
+            &sender_program, source, source_size, NULL,
+            &sender_compile_options, &diagnostic) != SCXML_OK ||
+        scxml_compile_cmeta(
+            &receiver_program, receiver_source,
+            sizeof(receiver_source) - 1u, NULL,
+            &receiver_compile_options, &diagnostic) != SCXML_OK ||
+        !cflow_executor_serial_init(&sender_executor))
+        goto cleanup;
+    sender_executor_initialized = true;
+    if (!cflow_executor_serial_init(&receiver_executor)) goto cleanup;
+    receiver_executor_initialized = true;
+    sender_config = (scxml_session_config){
+        .program = &sender_program,
+        .executor = &sender_executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 1u};
+    receiver_config = sender_config;
+    receiver_config.program = &receiver_program;
+    receiver_config.executor = &receiver_executor;
+    receiver_config.effect_capacity = 0u;
+    receiver_config.adapter_internal_event_capacity = 0u;
+    if (scxml_session_init_cmeta(
+            &receiver, &receiver_config, &receiver_data) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    receiver_initialized = true;
+    if (scxml_session_init_cmeta_v3(
+            &sender, &sender_config, &sender_data, &adapters) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    sender_initialized = true;
+    if (!cflow_executor_wait_idle(&sender_executor) ||
+        !scxml_session_get_stats(&sender, &sender_stats) ||
+        !sender_stats.done || sender_stats.errored || probe.sends != 1u ||
+        probe.commits != 1u || probe.discards != 0u ||
+        probe.message.first != 1 || probe.message.second != 2 ||
+        !scxml_program_event(
+            &receiver_program, "event1", sizeof("event1") - 1u, &event))
+        goto cleanup;
+    atomic_init(&blocker.entered, false);
+    atomic_init(&blocker.release, false);
+    blocker_initialized = true;
+    if (cflow_executor_try_post(
+            &receiver_executor, w3c_block_executor, &blocker) !=
+        CFLOW_ADMISSION_ACCEPTED)
+        goto cleanup;
+    while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+    metadata.data = (scxml_content_view){
+        .kind = SCXML_CONTENT_CMETA,
+        .schema = &w3c_copy_payload_desc,
+        .object = &probe.message};
+    if (scxml_session_try_send_v3(&receiver, &event, &metadata) !=
+        CFLOW_MAILBOX_OK)
+        goto cleanup;
+    probe.message.first = 7;
+    probe.message.second = 8;
+    atomic_store(&blocker.release, true);
+    if (!cflow_executor_wait_idle(&receiver_executor) ||
+        !scxml_session_get_stats(&receiver, &receiver_stats))
+        goto cleanup;
+    succeeded = receiver_stats.done && !receiver_stats.errored;
+
+cleanup:
+    if (blocker_initialized) atomic_store(&blocker.release, true);
+    if (sender_initialized &&
+        scxml_session_destroy(&sender) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (receiver_initialized &&
+        scxml_session_destroy(&receiver) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (receiver_executor_initialized)
+        cflow_executor_destroy(&receiver_executor);
+    if (sender_executor_initialized)
+        cflow_executor_destroy(&sender_executor);
+    scxml_program_destroy(&receiver_program);
+    scxml_program_destroy(&sender_program);
+    free(source);
+    return succeeded;
+}
+
 static bool run_w3c_invoke_idlocation_fixture(
     const char *fixture_name, const char *expected_id,
     const char *returned_event) {
@@ -1057,10 +1688,20 @@ static bool run_w3c_cmeta_fixture_with_schema(
     w3c_cmeta_probe probe = {
         .routable_loopback =
             options != NULL && options->routable_loopback,
+        .require_scxml_type =
+            options != NULL && options->require_scxml_type,
+        .require_route_target =
+            options != NULL && options->require_route_target,
+        .hold_loopback_delivery =
+            options != NULL && options->hold_loopback_delivery,
         .loopback_limit =
             options != NULL ? options->loopback_count : 0u,
         .send_rejection = options != NULL
-            ? options->send_rejection : SCXML_ADAPTER_ACCEPTED};
+            ? options->send_rejection : SCXML_ADAPTER_ACCEPTED,
+        .send_extension = options != NULL
+            ? options->send_extension : NULL,
+        .send_extension_user = options != NULL
+            ? options->send_extension_user : NULL};
     const scxml_event_io_adapter_v1 event_io = {
         .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
         .struct_size = sizeof(event_io),
@@ -1111,11 +1752,14 @@ static bool run_w3c_cmeta_fixture_with_schema(
         .adapter_internal_event_capacity = 1u,
         .event_io = &event_io,
         .adapter_user = &probe};
-    if (scxml_session_init_cmeta(&session, &config, &data) !=
-        CFLOW_STATECHART_INSTANCE_OK) {
-        info("fixture=%s session init error=%s", fixture_name,
-             scxml_session_error(&session));
-        goto cleanup;
+    {
+        const cflow_statechart_instance_status init_status =
+            scxml_session_init_cmeta(&session, &config, &data);
+        if (init_status != CFLOW_STATECHART_INSTANCE_OK) {
+            info("fixture=%s session init status=%d error=%s", fixture_name,
+                 (int)init_status, scxml_session_error(&session));
+            goto cleanup;
+        }
     }
     session_initialized = true;
     if (probe.routable_loopback) {
@@ -1123,6 +1767,9 @@ static bool run_w3c_cmeta_fixture_with_schema(
         if (scxml_session_copy_location(
                 &session, probe.route_origin, sizeof(probe.route_origin),
                 &required) != SCXML_LOCATION_OK)
+            goto cleanup;
+        if (probe.require_route_target &&
+            strcmp(probe.initial_route_target, probe.route_origin) != 0)
             goto cleanup;
     }
     if (options != NULL &&
@@ -1147,10 +1794,13 @@ static bool run_w3c_cmeta_fixture_with_schema(
         goto cleanup;
     if (blocker_initialized) atomic_store(&blocker.release, true);
     if (!cflow_executor_wait_idle(&executor)) goto cleanup;
-    while (probe.loopback_delivered_count < probe.loopback_limit) {
+    while (!probe.hold_loopback_delivery &&
+           probe.loopback_delivered_count < probe.loopback_limit) {
         const size_t index = probe.loopback_delivered_count;
         const size_t event_size = strlen(probe.loopback_events[index]);
         scxml_event_metadata metadata = {0};
+        metadata.send_id = probe.loopback_send_ids[index];
+        metadata.send_id_size = strlen(probe.loopback_send_ids[index]);
         if (probe.loopback_ready_count <= index) goto cleanup;
         if (probe.routable_loopback) {
             metadata.origin = probe.route_origin;
@@ -1177,7 +1827,8 @@ static bool run_w3c_cmeta_fixture_with_schema(
         probe.loopback_prepare_calls == probe.loopback_limit &&
         probe.loopback_commits == probe.loopback_limit &&
         probe.loopback_discards == 0u &&
-        probe.loopback_delivered_count == probe.loopback_limit &&
+        probe.loopback_delivered_count ==
+            (probe.hold_loopback_delivery ? 0u : probe.loopback_limit) &&
         probe.loopback_ready_count == probe.loopback_limit &&
         ((probe.send_rejection == SCXML_ADAPTER_ACCEPTED &&
           probe.rejected_sends == 0u) ||
@@ -1219,7 +1870,52 @@ static bool run_w3c_cmeta_fixture(const char *fixture_name) {
     return run_w3c_cmeta_fixture_with_options(fixture_name, NULL);
 }
 
-static bool run_w3c_foreach_fixture(const char *fixture_name) {
+typedef struct w3c_foreach_mutation_probe {
+    size_t prepares;
+    size_t commits;
+    size_t discards;
+} w3c_foreach_mutation_probe;
+
+static void w3c_foreach_mutation_commit(void *user) {
+    w3c_foreach_mutation_probe *probe =
+        (w3c_foreach_mutation_probe *)user;
+    if (probe != NULL) ++probe->commits;
+}
+
+static void w3c_foreach_mutation_discard(void *user) {
+    w3c_foreach_mutation_probe *probe =
+        (w3c_foreach_mutation_probe *)user;
+    if (probe != NULL) ++probe->discards;
+}
+
+static scxml_adapter_status w3c_mutate_foreach_collection(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    static const char event[] = "mutate.collection";
+    const int appended = 4;
+    w3c_foreach_mutation_probe *probe =
+        (w3c_foreach_mutation_probe *)user;
+    w3c_foreach_state *staged =
+        atomic_load(&w3c_foreach_staged_state);
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || staged == NULL || request->event == NULL ||
+        request->event_size != sizeof(event) - 1u ||
+        memcmp(request->event, event, sizeof(event) - 1u) != 0 ||
+        probe->prepares != 0u || vec_size(&staged->values) != 3u ||
+        vec_push(&staged->values, &appended) != STL_OK)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_foreach_mutation_commit,
+        w3c_foreach_mutation_discard,
+        probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static bool run_w3c_foreach_fixture_with_options(
+    const char *fixture_name, const w3c_cmeta_fixture_options *options,
+    size_t element_limit) {
     static const int values[] = {1, 2, 3};
     w3c_foreach_state initial = {
         .values = VecOf(int),
@@ -1228,19 +1924,39 @@ static bool run_w3c_foreach_fixture(const char *fixture_name) {
     size_t index;
 
     if (fixture_name == NULL ||
-        vec_init(&initial.values,
-                 sizeof(values) / sizeof(values[0])) != STL_OK)
+        element_limit < sizeof(values) / sizeof(values[0]) ||
+        vec_init(&initial.values, element_limit) != STL_OK)
         return false;
     for (index = 0u; index < sizeof(values) / sizeof(values[0]); ++index) {
         if (vec_push(&initial.values, &values[index]) != STL_OK)
             goto cleanup;
     }
     succeeded = run_w3c_cmeta_fixture_with_schema(
-        fixture_name, NULL, &w3c_foreach_state_desc, &initial);
+        fixture_name, options, &w3c_foreach_state_desc, &initial);
 
 cleanup:
     vec_destroy(&initial.values);
     return succeeded;
+}
+
+static bool run_w3c_foreach_fixture(const char *fixture_name) {
+    return run_w3c_foreach_fixture_with_options(
+        fixture_name, NULL, 3u);
+}
+
+static bool run_w3c_foreach_snapshot_fixture(const char *fixture_name) {
+    w3c_foreach_mutation_probe mutation = {0};
+    const w3c_cmeta_fixture_options options = {
+        .send_extension = w3c_mutate_foreach_collection,
+        .send_extension_user = &mutation};
+    bool succeeded;
+
+    atomic_store(&w3c_foreach_staged_state, NULL);
+    succeeded = run_w3c_foreach_fixture_with_options(
+        fixture_name, &options, 4u);
+    atomic_store(&w3c_foreach_staged_state, NULL);
+    return succeeded && mutation.prepares == 1u &&
+           mutation.commits == 1u && mutation.discards == 0u;
 }
 
 static bool run_w3c_cmeta_external_fixture(
@@ -1265,11 +1981,43 @@ static bool run_w3c_cmeta_loopback_fixture(const char *fixture_name) {
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
+static bool run_w3c_cmeta_held_loopback_fixture(
+    const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {
+        .loopback_count = 1u,
+        .hold_loopback_delivery = true};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
+static bool run_w3c_cmeta_double_loopback_fixture(
+    const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {.loopback_count = 2u};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
+static bool run_w3c_cmeta_scxml_loopback_fixture(
+    const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {
+        .loopback_count = 1u,
+        .routable_loopback = true,
+        .require_scxml_type = true};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
 static bool run_w3c_cmeta_routable_loopback_fixture(
     const char *fixture_name) {
     const w3c_cmeta_fixture_options options = {
         .loopback_count = 2u,
         .routable_loopback = true};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
+static bool run_w3c_cmeta_location_loopback_fixture(
+    const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {
+        .loopback_count = 1u,
+        .routable_loopback = true,
+        .require_route_target = true};
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
@@ -1379,7 +2127,9 @@ cleanup:
 }
 
 static bool run_w3c_adapter_error_fixture(
-    const char *fixture_name, cflow_statechart_instance_stats *out_stats,
+    const char *fixture_name, scxml_adapter_status send_status,
+    const char *expected_target, const char *expected_type,
+    cflow_statechart_instance_stats *out_stats,
     size_t *out_prepare_send_calls) {
     char path[W3C_FIXTURE_PATH_CAPACITY];
     char *source = NULL;
@@ -1388,7 +2138,10 @@ static bool run_w3c_adapter_error_fixture(
     scxml_diagnostic diagnostic = {0};
     cflow_executor executor = {0};
     scxml_session session = {0};
-    w3c_adapter_probe probe = {0};
+    w3c_adapter_probe probe = {
+        .send_status = send_status,
+        .expected_target = expected_target,
+        .expected_type = expected_type};
     scxml_event_io_adapter_v1 adapter = {
         .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
         .struct_size = sizeof(scxml_event_io_adapter_v1),
@@ -1475,10 +2228,584 @@ static void check_w3c_adapter_error_fixture(const char *fixture_name) {
     size_t prepare_send_calls = 0u;
 
     check_true(run_w3c_adapter_error_fixture(
-        fixture_name, &stats, &prepare_send_calls));
+        fixture_name, SCXML_ADAPTER_ERROR_EXECUTION, "peer",
+        W3C_SCXML_EVENT_PROCESSOR, &stats, &prepare_send_calls));
     check_true(stats.done);
     check_false(stats.errored);
     check_equal(prepare_send_calls, (size_t)1u);
+}
+
+static void check_w3c_send_error_fixture(
+    const char *fixture_name, scxml_adapter_status send_status,
+    const char *expected_target, const char *expected_type) {
+    cflow_statechart_instance_stats stats = {0};
+    size_t prepare_send_calls = 0u;
+
+    check_true(run_w3c_adapter_error_fixture(
+        fixture_name, send_status, expected_target, expected_type,
+        &stats, &prepare_send_calls));
+    check_true(stats.done);
+    check_false(stats.errored);
+    check_equal(prepare_send_calls, (size_t)1u);
+}
+
+static bool w3c_delayed_message_is(
+    const w3c_delayed_message *message, const char *event,
+    const char *id, uint64_t delay_ms) {
+    return message != NULL && event != NULL &&
+        strcmp(message->event, event) == 0 &&
+        (id == NULL || strcmp(message->id, id) == 0) &&
+        message->delay_ms == delay_ms;
+}
+
+static bool run_w3c_delayed_fixture(
+    const char *fixture_name, w3c_delayed_fixture_kind kind) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    w3c_delayed_probe probe = {0};
+    const scxml_event_io_adapter_v1 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
+        .prepare_send = w3c_capture_delayed_send,
+        .prepare_cancel = w3c_capture_delayed_cancel,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const w3c_cmeta_state initial = {0};
+    const scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(data),
+        .initial_state = &initial};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) {
+        info("fixture=%s read failed", fixture_name);
+        goto cleanup;
+    }
+    if (kind == W3C_DYNAMIC_CANCEL || kind == W3C_DYNAMIC_DELAY) {
+        if (scxml_compile_cmeta(
+                &program, source, source_size, NULL, &compile_options,
+                &diagnostic) != SCXML_OK) {
+            info("fixture=%s compile diagnostic=%s", fixture_name,
+                 diagnostic.message);
+            goto cleanup;
+        }
+    } else if (scxml_compile(
+                   &program, source, source_size, NULL, &diagnostic) !=
+               SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 3u,
+        .adapter_internal_event_capacity = 2u,
+        .delayed_send_capacity = W3C_DELAYED_MESSAGE_CAPACITY,
+        .event_io = &event_io,
+        .adapter_user = &probe};
+    {
+        const cflow_statechart_instance_status init_status =
+            (kind == W3C_DYNAMIC_CANCEL || kind == W3C_DYNAMIC_DELAY)
+                ? scxml_session_init_cmeta(&session, &config, &data)
+                : scxml_session_init(&session, &config);
+        if (init_status != CFLOW_STATECHART_INSTANCE_OK) {
+            info("fixture=%s session init status=%d", fixture_name,
+                 (int)init_status);
+            goto cleanup;
+        }
+    }
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) || probe.send_count != 2u ||
+        probe.discards != 0u)
+        goto cleanup;
+    if (kind == W3C_DELAY_ORDER) {
+        if (probe.cancel_count != 0u || probe.commits != 2u ||
+            !w3c_delayed_message_is(
+                &probe.messages[0], "event2", "later", UINT64_C(1000)) ||
+            !w3c_delayed_message_is(
+                &probe.messages[1], "event1", NULL, UINT64_C(0)) ||
+            !w3c_admit_external_event(&session, &program, "event1") ||
+            !cflow_executor_wait_idle(&executor) ||
+            !w3c_admit_external_event(&session, &program, "event2") ||
+            !cflow_executor_wait_idle(&executor) ||
+            !scxml_session_report_send_done(
+                &session, probe.messages[0].id,
+                strlen(probe.messages[0].id)))
+            goto cleanup;
+    } else if (kind == W3C_DYNAMIC_DELAY) {
+        if (probe.cancel_count != 0u || probe.commits != 2u ||
+            !w3c_delayed_message_is(
+                &probe.messages[0], "event2", "later", UINT64_C(1000)) ||
+            !w3c_delayed_message_is(
+                &probe.messages[1], "event1", "sooner", UINT64_C(500)) ||
+            !w3c_admit_external_event(&session, &program, "event1") ||
+            !cflow_executor_wait_idle(&executor) ||
+            !scxml_session_report_send_done(
+                &session, probe.messages[1].id,
+                strlen(probe.messages[1].id)) ||
+            !w3c_admit_external_event(&session, &program, "event2") ||
+            !cflow_executor_wait_idle(&executor) ||
+            !scxml_session_report_send_done(
+                &session, probe.messages[0].id,
+                strlen(probe.messages[0].id)))
+            goto cleanup;
+    } else {
+        const char *expected_first_id = kind == W3C_LITERAL_CANCEL
+            ? "foo" : probe.messages[0].id;
+        if (probe.cancel_count != 1u || probe.commits != 3u ||
+            probe.messages[0].id[0] == '\0' ||
+            !w3c_delayed_message_is(
+                &probe.messages[0], "event1", expected_first_id,
+                UINT64_C(1000)) ||
+            !w3c_delayed_message_is(
+                &probe.messages[1], "event2", "bar", UINT64_C(1500)) ||
+            strcmp(probe.cancel_id, probe.messages[0].id) != 0 ||
+            scxml_session_report_send_done(
+                &session, probe.messages[0].id,
+                strlen(probe.messages[0].id)) ||
+            !w3c_admit_external_event(&session, &program, "event2") ||
+            !cflow_executor_wait_idle(&executor) ||
+            !scxml_session_report_send_done(
+                &session, probe.messages[1].id,
+                strlen(probe.messages[1].id)))
+            goto cleanup;
+    }
+    if (!scxml_session_get_stats(&session, &stats)) goto cleanup;
+    succeeded = stats.done && !stats.errored;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_cancel_isolation_fixture(const char *fixture_name) {
+    static const char delayed_id[] = "foo";
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor victim_executor = {0};
+    cflow_executor attacker_executor = {0};
+    scxml_session victim = {0};
+    scxml_session attacker = {0};
+    cflow_statechart_instance_stats victim_stats = {0};
+    cflow_statechart_instance_stats attacker_stats = {0};
+    w3c_cancel_isolation_probe victim_probe = {0};
+    w3c_cancel_isolation_probe attacker_probe = {0};
+    const scxml_event_io_adapter_v1 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
+        .prepare_send = w3c_capture_isolated_send,
+        .prepare_cancel = w3c_capture_isolated_cancel,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const w3c_cmeta_state victim_initial = {.sequence = 1};
+    const w3c_cmeta_state attacker_initial = {0};
+    const scxml_cmeta_session_options_v1 victim_data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(victim_data),
+        .initial_state = &victim_initial};
+    const scxml_cmeta_session_options_v1 attacker_data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(attacker_data),
+        .initial_state = &attacker_initial};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_session_config victim_config = {0};
+    scxml_session_config attacker_config = {0};
+    bool victim_executor_initialized = false;
+    bool attacker_executor_initialized = false;
+    bool victim_initialized = false;
+    bool attacker_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) goto cleanup;
+    if (scxml_compile_cmeta(
+            &program, source, source_size, NULL, &compile_options,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&victim_executor)) goto cleanup;
+    victim_executor_initialized = true;
+    if (!cflow_executor_serial_init(&attacker_executor)) goto cleanup;
+    attacker_executor_initialized = true;
+    victim_config = (scxml_session_config){
+        .program = &program,
+        .executor = &victim_executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 1u,
+        .delayed_send_capacity = 1u,
+        .event_io = &event_io,
+        .adapter_user = &victim_probe};
+    attacker_config = victim_config;
+    attacker_config.executor = &attacker_executor;
+    attacker_config.adapter_user = &attacker_probe;
+    if (scxml_session_init_cmeta(
+            &victim, &victim_config, &victim_data) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    victim_initialized = true;
+    if (!cflow_executor_wait_idle(&victim_executor) ||
+        victim_probe.delayed.send_count != 1u ||
+        victim_probe.delayed.commits != 1u ||
+        victim_probe.delayed.discards != 0u ||
+        !w3c_delayed_message_is(
+            &victim_probe.delayed.messages[0], "event1", delayed_id,
+            UINT64_C(1000)))
+        goto cleanup;
+    if (scxml_session_init_cmeta(
+            &attacker, &attacker_config, &attacker_data) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    attacker_initialized = true;
+    if (!cflow_executor_wait_idle(&attacker_executor) ||
+        !scxml_session_get_stats(&attacker, &attacker_stats) ||
+        !attacker_stats.done || attacker_stats.errored ||
+        attacker_probe.cancel_prepare_calls != 0u ||
+        attacker_probe.delayed.send_count != 0u ||
+        attacker_probe.result.prepare_send_calls != 1u ||
+        attacker_probe.result.commits != 1u ||
+        attacker_probe.result.discards != 0u ||
+        strcmp(attacker_probe.result.event, "result.pass") != 0 ||
+        scxml_session_report_send_done(
+            &attacker, delayed_id, sizeof(delayed_id) - 1u) ||
+        !scxml_session_report_send_done(
+            &victim, delayed_id, sizeof(delayed_id) - 1u) ||
+        scxml_session_report_send_done(
+            &victim, delayed_id, sizeof(delayed_id) - 1u) ||
+        !w3c_admit_external_event(&victim, &program, "event1") ||
+        !cflow_executor_wait_idle(&victim_executor) ||
+        !scxml_session_get_stats(&victim, &victim_stats))
+        goto cleanup;
+    succeeded = victim_stats.done && !victim_stats.errored &&
+        victim_probe.cancel_prepare_calls == 0u &&
+        victim_probe.result.prepare_send_calls == 1u &&
+        victim_probe.result.commits == 1u &&
+        victim_probe.result.discards == 0u &&
+        strcmp(victim_probe.result.event, "result.pass") == 0;
+
+cleanup:
+    if (attacker_initialized &&
+        scxml_session_destroy(&attacker) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (victim_initialized &&
+        scxml_session_destroy(&victim) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (attacker_executor_initialized)
+        cflow_executor_destroy(&attacker_executor);
+    if (victim_executor_initialized)
+        cflow_executor_destroy(&victim_executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_frozen_payload_fixture(const char *fixture_name) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    w3c_delayed_probe probe = {0};
+    const scxml_event_io_adapter_v2 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_PAYLOAD,
+        .prepare_send = w3c_capture_delayed_send_v2,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_session_adapters_v2 adapters = {
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
+        .struct_size = sizeof(adapters),
+        .event_io = &event_io,
+        .event_io_user = &probe};
+    const w3c_cmeta_state initial = {.sequence = 1};
+    const scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(data),
+        .initial_state = &initial};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) {
+        info("fixture=%s read failed", fixture_name);
+        goto cleanup;
+    }
+    if (scxml_compile_cmeta(
+            &program, source, source_size, NULL, &compile_options,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 1u,
+        .delayed_send_capacity = 1u};
+    if (scxml_session_init_cmeta_v2(
+            &session, &config, &data, &adapters) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats) ||
+        probe.send_count != 1u || probe.commits != 1u ||
+        probe.discards != 0u || !probe.payload_seen ||
+        probe.payload_sint != INT64_C(1) ||
+        !w3c_delayed_message_is(
+            &probe.messages[0], "event1", "frozen", UINT64_C(1000)) ||
+        !scxml_session_report_send_done(
+            &session, probe.messages[0].id,
+            strlen(probe.messages[0].id)))
+        goto cleanup;
+    succeeded = stats.done && !stats.errored;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_named_payload_fixture(
+    const char *fixture_name, const char *event,
+    const char *first_name, int64_t first_value,
+    const char *second_name, int64_t second_value) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    w3c_named_payload_probe probe = {
+        .expected_event = event,
+        .expected_names = {first_name, second_name},
+        .expected_values = {first_value, second_value},
+        .expected_count = second_name != NULL ? 2u : 1u};
+    const scxml_event_io_adapter_v2 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V2,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_PAYLOAD,
+        .prepare_send = w3c_capture_named_payload_send,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_session_adapters_v2 adapters = {
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V2,
+        .struct_size = sizeof(adapters),
+        .event_io = &event_io,
+        .event_io_user = &probe};
+    const w3c_cmeta_state initial = {.sequence = 1};
+    const scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(data),
+        .initial_state = &initial};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL || event == NULL || first_name == NULL)
+        return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) goto cleanup;
+    if (scxml_compile_cmeta(
+            &program, source, source_size, NULL, &compile_options,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 1u,
+        .adapter_internal_event_capacity = 1u};
+    if (scxml_session_init_cmeta_v2(
+            &session, &config, &data, &adapters) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) || probe.sends != 1u ||
+        probe.commits != 1u || probe.discards != 0u ||
+        !w3c_admit_external_event(&session, &program, event) ||
+        !cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats))
+        goto cleanup;
+    succeeded = stats.done && !stats.errored;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_terminating_send_fixture(const char *fixture_name) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    w3c_termination_probe probe = {0};
+    const scxml_event_io_adapter_v1 event_io = {
+        .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND |
+            SCXML_EVENT_IO_CAP_DELAYED_SEND,
+        .prepare_send = w3c_capture_terminating_send,
+        .close = w3c_termination_close,
+        .is_quiescent = w3c_termination_is_quiescent};
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) goto cleanup;
+    if (scxml_compile(
+            &program, source, source_size, NULL, &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 1u,
+        .adapter_internal_event_capacity = 1u,
+        .delayed_send_capacity = 1u,
+        .event_io = &event_io,
+        .adapter_user = &probe};
+    if (scxml_session_init(&session, &config) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats) ||
+        !stats.done || stats.errored || probe.sends != 1u ||
+        probe.commits != 1u || probe.discards != 0u || !probe.pending)
+        goto cleanup;
+    if (scxml_session_destroy(&session) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = false;
+    succeeded = probe.closes == 1u && probe.cancellations == 1u &&
+        !probe.pending && !w3c_termination_try_deliver(&probe) &&
+        probe.deliveries == 0u;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
 }
 
 suite("SCXML W3C-derived conformance regression corpus") {
@@ -1491,8 +2818,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)76u);
-        check_equal(stats.unsupported, (size_t)92u);
+        check_equal(stats.passed, (size_t)114u);
+        check_equal(stats.unsupported, (size_t)54u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -1593,8 +2920,158 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_foreach_fixture("test156.scxml"));
     }
 
+    it("test 525 isolates foreach iteration from source mutations") {
+        check_true(run_w3c_foreach_snapshot_fixture("test525.scxml"));
+    }
+
     it("test 179 delivers evaluated content bytes without alteration") {
         check_true(run_w3c_content_fixture("test179.scxml", "123"));
+    }
+
+    it("test 172 evaluates eventexpr when send executes") {
+        check_true(run_w3c_cmeta_loopback_fixture("test172.scxml"));
+    }
+
+    it("test 173 evaluates targetexpr when send executes") {
+        check_true(run_w3c_cmeta_fixture("test173.scxml"));
+    }
+
+    it("test 174 evaluates typeexpr when send executes") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test174.scxml"));
+    }
+
+    it("test 175 evaluates delayexpr when send executes") {
+        check_true(run_w3c_delayed_fixture(
+            "test175.scxml", W3C_DYNAMIC_DELAY));
+    }
+
+    it("test 176 evaluates param when send executes") {
+        check_true(run_w3c_named_payload_fixture(
+            "test176.scxml", "event1", "aParam", INT64_C(2),
+            NULL, INT64_C(0)));
+    }
+
+    it("test 178 preserves duplicate send payload names") {
+        check_true(run_w3c_named_payload_fixture(
+            "test178.scxml", "event1", "duplicate", INT64_C(2),
+            "duplicate", INT64_C(3)));
+    }
+
+    it("test 183 stores the generated send ID in idlocation") {
+        check_true(run_w3c_cmeta_loopback_fixture("test183.scxml"));
+    }
+
+    it("test 185 preserves delayed send ordering") {
+        check_true(run_w3c_delayed_fixture(
+            "test185.scxml", W3C_DELAY_ORDER));
+    }
+
+    it("test 186 freezes send arguments before delayed dispatch") {
+        check_true(run_w3c_frozen_payload_fixture("test186.scxml"));
+    }
+
+    it("test 187 discards delayed sends when their session terminates") {
+        check_true(run_w3c_terminating_send_fixture("test187.scxml"));
+    }
+
+    it("test 205 preserves the sent Event and payload") {
+        check_true(run_w3c_named_payload_fixture(
+            "test205.scxml", "event1", "aParam", INT64_C(1),
+            NULL, INT64_C(0)));
+    }
+
+    it("test 207 cannot cancel a delayed send owned by another session") {
+        check_true(run_w3c_cancel_isolation_fixture("test207.scxml"));
+    }
+
+    it("test 208 cancels a delayed send from the same session") {
+        check_true(run_w3c_delayed_fixture(
+            "test208.scxml", W3C_LITERAL_CANCEL));
+    }
+
+    it("test 210 evaluates sendidexpr when cancel executes") {
+        check_true(run_w3c_delayed_fixture(
+            "test210.scxml", W3C_DYNAMIC_CANCEL));
+    }
+
+    it("test 198 defaults send to the SCXML Event Processor") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test198.scxml"));
+    }
+
+    it("test 200 supports the explicit SCXML Event Processor type") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test200.scxml"));
+    }
+
+    it("test 194 maps an unsupported send target to error.execution") {
+        check_w3c_send_error_fixture(
+            "test194.scxml", SCXML_ADAPTER_ERROR_EXECUTION,
+            "#_invalid", W3C_SCXML_EVENT_PROCESSOR);
+    }
+
+    it("test 199 maps an unsupported send type to error.execution") {
+        check_w3c_send_error_fixture(
+            "test199.scxml", SCXML_ADAPTER_ERROR_EXECUTION,
+            NULL, "urn:unsupported:event-processor");
+    }
+
+    it("test 521 maps an unreachable target to error.communication") {
+        check_w3c_send_error_fixture(
+            "test521.scxml", SCXML_ADAPTER_ERROR_COMMUNICATION,
+            "#_scxml_missing", W3C_SCXML_EVENT_PROCESSOR);
+    }
+
+    it("test 348 maps send event to the received Event name") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test348.scxml"));
+    }
+
+    it("test 349 exposes a routable sender origin") {
+        check_true(run_w3c_cmeta_routable_loopback_fixture("test349.scxml"));
+    }
+
+    it("test 352 maps the SCXML source type to Event origintype") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test352.scxml"));
+    }
+
+    it("test 496 maps an inaccessible session to error.communication") {
+        check_w3c_send_error_fixture(
+            "test496.scxml", SCXML_ADAPTER_ERROR_COMMUNICATION,
+            "#_scxml_missing", W3C_SCXML_EVENT_PROCESSOR);
+    }
+
+    it("test 500 exposes the SCXML Event Processor location") {
+        check_true(run_w3c_cmeta_fixture("test500.scxml"));
+    }
+
+    it("test 189 prioritizes a #_internal send over an external send") {
+        check_true(run_w3c_cmeta_held_loopback_fixture("test189.scxml"));
+    }
+
+    it("test 351 maps explicit and absent send IDs") {
+        check_true(run_w3c_cmeta_double_loopback_fixture("test351.scxml"));
+    }
+
+    it("test 501 routes through the published SCXML location") {
+        check_true(run_w3c_cmeta_location_loopback_fixture("test501.scxml"));
+    }
+
+    it("test 190 routes #_scxml_sessionid to its external queue") {
+        check_true(run_w3c_cmeta_location_loopback_fixture("test190.scxml"));
+    }
+
+    it("test 350 uses the target to select the receiving session") {
+        check_true(run_w3c_cmeta_location_loopback_fixture("test350.scxml"));
+    }
+
+    it("test 495 inserts internal and external sends into their queues") {
+        check_true(run_w3c_cmeta_scxml_loopback_fixture("test495.scxml"));
+    }
+
+    it("test 354 copies structured Event data across sessions") {
+        check_true(run_w3c_copy_fixture("test354.scxml"));
+    }
+
+    it("test 553 discards a send whose argument evaluation fails") {
+        check_true(run_w3c_cmeta_fixture("test553.scxml"));
     }
 
     it("test 223 binds an automatically generated invoke ID") {
@@ -1609,6 +3086,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 287 assigns a legal value to a valid location") {
         check_true(run_w3c_cmeta_fixture("test287.scxml"));
+    }
+
+    it("test 279 initializes all data before the initial state") {
+        check_true(run_w3c_cmeta_fixture("test279.scxml"));
+    }
+
+    it("test 550 evaluates a data expression at early binding time") {
+        check_true(run_w3c_cmeta_fixture("test550.scxml"));
     }
 
     it("test 487 raises error.execution for an unrepresentable value") {

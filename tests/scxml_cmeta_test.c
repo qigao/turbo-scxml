@@ -436,7 +436,7 @@ typedef struct dynamic_adapter_probe {
     size_t invoke_cancels;
     char event[32];
     char target[32];
-    char type[32];
+    char type[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char source[32];
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];

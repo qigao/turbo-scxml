@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <state id="waiting">
+    <onentry>
+      <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
+            event="request"/>
+    </onentry>
+    <transition event="request"
+                cond="_event.origin != &quot;&quot;"
+                target="reply"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="reply">
+    <onentry>
+      <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
+            targetexpr="_event.origin" event="response"/>
+    </onentry>
+    <transition event="response" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

@@ -883,6 +883,57 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
+    it("materializes the SCXML Event Processor type for an untyped send") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='active'><onentry>"
+            "<send event='loopback'/></onentry></state></scxml>";
+        static const char event_processor[] =
+            "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+        scxml_program program = {0};
+        scxml_session session = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executor = {0};
+        scxml_adapter_probe probe = {.quiescent = true};
+        const scxml_event_io_adapter_v1 adapter = {
+            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+            .struct_size = sizeof(adapter),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND,
+            .prepare_send = scxml_adapter_prepare_send,
+            .close = scxml_adapter_close,
+            .is_quiescent = scxml_adapter_is_quiescent};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 8u,
+            .effect_capacity = 1u,
+            .adapter_internal_event_capacity = 1u,
+            .event_io = &adapter,
+            .adapter_user = &probe};
+
+        check_equal(compile_status(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(probe.prepare_send_calls, (size_t)1u);
+        check_not_null(probe.last_send.type);
+        check_equal(probe.last_send.type_size,
+                    sizeof(event_processor) - 1u);
+        check_equal(memcmp(probe.last_send.type, event_processor,
+                           sizeof(event_processor) - 1u),
+                    0);
+        check_equal(probe.commit_calls, (size_t)1u);
+
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("turns synchronous adapter failures into recoverable error events") {
         static const char execution_source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"

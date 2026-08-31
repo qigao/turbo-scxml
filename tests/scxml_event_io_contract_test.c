@@ -4,6 +4,7 @@
 #include "tinytest.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <turbo/thread.h>
 
@@ -30,6 +31,7 @@ typedef struct host_adapter_context host_adapter_context;
 
 typedef struct host_endpoint {
     bool in_use;
+    bool active;
     bool accessible;
     scxml_session *session;
     const scxml_program *program;
@@ -130,45 +132,100 @@ static void host_adapter_init(host_adapter_context *adapter,
         .router = router, .endpoint = SIZE_MAX};
 }
 
-static bool host_router_register(
-    host_router *router, scxml_session *session,
-    const scxml_program *program, bool accessible,
+static bool host_router_reserve(
+    host_router *router, bool accessible,
     host_adapter_context *adapter, size_t *out_endpoint) {
-    char location[HOST_LOCATION_CAPACITY];
-    size_t required = 0u;
     size_t index;
-    if (router == NULL || session == NULL || program == NULL ||
-        out_endpoint == NULL ||
-        scxml_session_copy_location(
-            session, location, sizeof(location), &required) !=
-            SCXML_LOCATION_OK)
+    if (router == NULL || adapter == NULL || out_endpoint == NULL)
         return false;
     turbo_mutex_lock(&router->lock);
-    for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
-        if (router->endpoints[index].in_use &&
-            strcmp(router->endpoints[index].location, location) == 0) {
-            turbo_mutex_unlock(&router->lock);
-            return false;
-        }
+    if (adapter->router != router || adapter->endpoint != SIZE_MAX ||
+        adapter->closed) {
+        turbo_mutex_unlock(&router->lock);
+        return false;
     }
     for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
         host_endpoint *endpoint = &router->endpoints[index];
         if (endpoint->in_use) continue;
-        endpoint->in_use = true;
-        endpoint->accessible = accessible;
-        endpoint->session = session;
-        endpoint->program = program;
-        endpoint->adapter = adapter;
-        endpoint->parent = SIZE_MAX;
-        endpoint->invoke_target = SIZE_MAX;
-        memcpy(endpoint->location, location, required);
-        if (adapter != NULL) adapter->endpoint = index;
+        *endpoint = (host_endpoint){
+            .in_use = true,
+            .accessible = accessible,
+            .adapter = adapter,
+            .parent = SIZE_MAX,
+            .invoke_target = SIZE_MAX};
+        adapter->endpoint = index;
         *out_endpoint = index;
         turbo_mutex_unlock(&router->lock);
         return true;
     }
     turbo_mutex_unlock(&router->lock);
     return false;
+}
+
+static bool host_router_activate(
+    host_router *router, size_t endpoint_index,
+    scxml_session *session, const scxml_program *program) {
+    char location[HOST_LOCATION_CAPACITY];
+    size_t required = 0u;
+    size_t index;
+    host_endpoint *endpoint;
+    if (router == NULL || endpoint_index >= HOST_ENDPOINT_CAPACITY ||
+        session == NULL || program == NULL ||
+        scxml_session_copy_location(
+            session, location, sizeof(location), &required) !=
+            SCXML_LOCATION_OK)
+        return false;
+    turbo_mutex_lock(&router->lock);
+    endpoint = &router->endpoints[endpoint_index];
+    if (!endpoint->in_use || endpoint->active) {
+        turbo_mutex_unlock(&router->lock);
+        return false;
+    }
+    for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
+        if (index != endpoint_index && router->endpoints[index].active &&
+            strcmp(router->endpoints[index].location, location) == 0) {
+            turbo_mutex_unlock(&router->lock);
+            return false;
+        }
+    }
+    endpoint->session = session;
+    endpoint->program = program;
+    memcpy(endpoint->location, location, required);
+    endpoint->active = true;
+    turbo_mutex_unlock(&router->lock);
+    return true;
+}
+
+static bool host_router_unregister(host_router *router, size_t endpoint);
+
+static bool host_router_register(
+    host_router *router, scxml_session *session,
+    const scxml_program *program, bool accessible,
+    host_adapter_context *adapter, size_t *out_endpoint) {
+    host_adapter_context local_adapter;
+    host_adapter_context *endpoint_adapter = adapter;
+    size_t endpoint;
+    if (router == NULL || session == NULL || program == NULL ||
+        out_endpoint == NULL)
+        return false;
+    if (endpoint_adapter == NULL) {
+        host_adapter_init(&local_adapter, router);
+        endpoint_adapter = &local_adapter;
+    }
+    if (!host_router_reserve(
+            router, accessible, endpoint_adapter, &endpoint))
+        return false;
+    if (!host_router_activate(router, endpoint, session, program)) {
+        (void)host_router_unregister(router, endpoint);
+        return false;
+    }
+    if (adapter == NULL) {
+        turbo_mutex_lock(&router->lock);
+        router->endpoints[endpoint].adapter = NULL;
+        turbo_mutex_unlock(&router->lock);
+    }
+    *out_endpoint = endpoint;
+    return true;
 }
 
 static bool host_router_unregister(host_router *router, size_t endpoint) {
@@ -436,7 +493,7 @@ static host_pump_status host_router_pump(host_router *router) {
         .origin_size = strlen(source.location),
         .origin_type = HOST_ORIGIN_TYPE,
         .origin_type_size = sizeof(HOST_ORIGIN_TYPE) - 1u};
-    if (source.in_use && target.in_use && target.accessible &&
+    if (source.active && target.active && target.accessible &&
         scxml_program_event(
             target.program, snapshot.event, strlen(snapshot.event), &event)) {
         mailbox_status = scxml_session_try_send_v2(
@@ -486,6 +543,28 @@ static scxml_status host_compile(
         program, source, strlen(source), NULL, diagnostic);
 }
 
+static scxml_status host_compile_fixture(
+    const char *fixture_name, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    char path[512];
+    char *source = NULL;
+    size_t source_size = 0u;
+    int path_size;
+    scxml_status status;
+    if (fixture_name == NULL || program == NULL || diagnostic == NULL)
+        return SCXML_INVALID_ARGUMENT;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path))
+        return SCXML_LIMIT_EXCEEDED;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) return SCXML_XML_ERROR;
+    status = scxml_compile(
+        program, source, source_size, NULL, diagnostic);
+    free(source);
+    return status;
+}
+
 static scxml_session_config host_session_config(
     const scxml_program *program, cflow_executor *executor) {
     return (scxml_session_config){
@@ -499,7 +578,230 @@ static scxml_session_config host_session_config(
         .adapter_internal_event_capacity = 4u};
 }
 
+typedef enum host_w3c_route_kind {
+    HOST_W3C_INVOKE_TARGET = 0,
+    HOST_W3C_BIDIRECTIONAL
+} host_w3c_route_kind;
+
+static bool host_run_w3c_route_fixture(
+    const char *fixture_name, host_w3c_route_kind kind) {
+    static const char invoke_child_source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+        "<state id='waiting'><transition event='parentToChild' "
+        "target='done'><send target='#_parent' event='eventReceived'/>"
+        "</transition></state><final id='done'/></scxml>";
+    static const char roundtrip_child_source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+        "<state id='waiting'><onentry><send target='#_parent' "
+        "event='childToParent'/></onentry><transition "
+        "event='parentToChild' target='done'><send target='#_parent' "
+        "event='eventReceived'/></transition></state>"
+        "<final id='done'/></scxml>";
+    const char *child_source = kind == HOST_W3C_INVOKE_TARGET
+        ? invoke_child_source : roundtrip_child_source;
+    const char *alias = kind == HOST_W3C_INVOKE_TARGET
+        ? "#_invokedChild" : "#_child";
+    const size_t expected_deliveries = kind == HOST_W3C_INVOKE_TARGET
+        ? 2u : 3u;
+    host_router router;
+    host_adapter_context parent_adapter;
+    host_adapter_context child_adapter;
+    scxml_program parent_program = {0};
+    scxml_program child_program = {0};
+    scxml_diagnostic diagnostic = {0};
+    scxml_session parent = {0};
+    scxml_session child = {0};
+    cflow_executor parent_executor = {0};
+    cflow_executor child_executor = {0};
+    scxml_session_config parent_config;
+    scxml_session_config child_config;
+    scxml_session_adapters_v3 parent_adapters;
+    scxml_session_adapters_v3 child_adapters;
+    cflow_statechart_instance_stats parent_stats = {0};
+    cflow_statechart_instance_stats child_stats = {0};
+    size_t parent_endpoint = SIZE_MAX;
+    size_t child_endpoint = SIZE_MAX;
+    size_t delivery;
+    bool router_initialized = false;
+    bool parent_executor_initialized = false;
+    bool child_executor_initialized = false;
+    bool parent_initialized = false;
+    bool child_initialized = false;
+    bool succeeded = false;
+
+    if (fixture_name == NULL ||
+        (kind != HOST_W3C_INVOKE_TARGET &&
+         kind != HOST_W3C_BIDIRECTIONAL))
+        return false;
+    if (!host_router_init(&router, HOST_MESSAGE_CAPACITY)) goto cleanup;
+    router_initialized = true;
+    host_adapter_init(&parent_adapter, &router);
+    host_adapter_init(&child_adapter, &router);
+    if (host_compile_fixture(
+            fixture_name, &parent_program, &diagnostic) != SCXML_OK ||
+        host_compile(child_source, &child_program, &diagnostic) != SCXML_OK ||
+        !cflow_executor_serial_init(&parent_executor))
+        goto cleanup;
+    parent_executor_initialized = true;
+    if (!cflow_executor_serial_init(&child_executor)) goto cleanup;
+    child_executor_initialized = true;
+    parent_config = host_session_config(&parent_program, &parent_executor);
+    child_config = host_session_config(&child_program, &child_executor);
+    parent_adapters = (scxml_session_adapters_v3){
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
+        .struct_size = sizeof(parent_adapters),
+        .event_io = &HOST_ADAPTER,
+        .event_io_user = &parent_adapter};
+    child_adapters = (scxml_session_adapters_v3){
+        .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
+        .struct_size = sizeof(child_adapters),
+        .event_io = &HOST_ADAPTER,
+        .event_io_user = &child_adapter};
+    if (!host_router_reserve(
+            &router, true, &parent_adapter, &parent_endpoint) ||
+        !host_router_reserve(
+            &router, true, &child_adapter, &child_endpoint) ||
+        !host_router_set_parent(
+            &router, child_endpoint, parent_endpoint) ||
+        !host_router_set_invoke_alias(
+            &router, parent_endpoint, alias, child_endpoint) ||
+        scxml_session_init_v3(
+            &parent, &parent_config, &parent_adapters) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    parent_initialized = true;
+    if (!host_router_activate(
+            &router, parent_endpoint, &parent, &parent_program) ||
+        scxml_session_init_v3(
+            &child, &child_config, &child_adapters) !=
+            CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    child_initialized = true;
+    if (!host_router_activate(
+            &router, child_endpoint, &child, &child_program) ||
+        !cflow_executor_wait_idle(&parent_executor) ||
+        !cflow_executor_wait_idle(&child_executor))
+        goto cleanup;
+    for (delivery = 0u; delivery < expected_deliveries; ++delivery) {
+        if (host_router_ready_count(&router) != 1u ||
+            host_router_pump(&router) != HOST_PUMP_DELIVERED ||
+            !cflow_executor_wait_idle(&parent_executor) ||
+            !cflow_executor_wait_idle(&child_executor))
+            goto cleanup;
+    }
+    if (host_router_ready_count(&router) != 0u ||
+        router.last_delivery.count != expected_deliveries ||
+        strcmp(router.last_delivery.event, "eventReceived") != 0 ||
+        !scxml_session_get_stats(&parent, &parent_stats) ||
+        !scxml_session_get_stats(&child, &child_stats))
+        goto cleanup;
+    succeeded = parent_stats.done && !parent_stats.errored &&
+        child_stats.done && !child_stats.errored;
+
+cleanup:
+    if (child_initialized &&
+        scxml_session_destroy(&child) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (parent_initialized &&
+        scxml_session_destroy(&parent) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (router_initialized && child_endpoint != SIZE_MAX)
+        (void)host_router_unregister(&router, child_endpoint);
+    if (router_initialized && parent_endpoint != SIZE_MAX)
+        (void)host_router_unregister(&router, parent_endpoint);
+    if (child_executor_initialized)
+        cflow_executor_destroy(&child_executor);
+    if (parent_executor_initialized)
+        cflow_executor_destroy(&parent_executor);
+    scxml_program_destroy(&child_program);
+    scxml_program_destroy(&parent_program);
+    if (router_initialized) host_router_destroy(&router);
+    return succeeded;
+}
+
 spec("SCXML host Event I/O adapter contract") {
+    it("routes an initial child send through #_parent") {
+        static const char parent_source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='childToParent' "
+            "target='pass'/></state><final id='pass'/></scxml>";
+        host_router router;
+        host_adapter_context child_adapter;
+        scxml_program parent_program = {0};
+        scxml_program child_program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session parent = {0};
+        scxml_session child = {0};
+        cflow_executor parent_executor = {0};
+        cflow_executor child_executor = {0};
+        scxml_session_config parent_config;
+        scxml_session_config child_config;
+        scxml_session_adapters_v3 child_adapters;
+        cflow_statechart_instance_stats stats = {0};
+        size_t parent_endpoint = SIZE_MAX;
+        size_t child_endpoint = SIZE_MAX;
+
+        check_true(host_router_init(&router, HOST_MESSAGE_CAPACITY));
+        host_adapter_init(&child_adapter, &router);
+        check_equal(host_compile(parent_source, &parent_program,
+                                 &diagnostic), SCXML_OK);
+        check_equal(host_compile_fixture(
+                        "test191.scxml", &child_program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&parent_executor));
+        check_true(cflow_executor_serial_init(&child_executor));
+        parent_config = host_session_config(
+            &parent_program, &parent_executor);
+        child_config = host_session_config(
+            &child_program, &child_executor);
+        child_adapters = (scxml_session_adapters_v3){
+            .abi_version = SCXML_SESSION_ADAPTERS_ABI_V3,
+            .struct_size = sizeof(child_adapters),
+            .event_io = &HOST_ADAPTER,
+            .event_io_user = &child_adapter};
+        check_equal(scxml_session_init(&parent, &parent_config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(host_router_register(
+            &router, &parent, &parent_program, true, NULL,
+            &parent_endpoint));
+        check_true(host_router_reserve(
+            &router, true, &child_adapter, &child_endpoint));
+        check_true(host_router_set_parent(
+            &router, child_endpoint, parent_endpoint));
+        check_equal(scxml_session_init_v3(
+                        &child, &child_config, &child_adapters),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(host_router_activate(
+            &router, child_endpoint, &child, &child_program));
+        check_true(cflow_executor_wait_idle(&child_executor));
+        check_equal(host_router_pump(&router), HOST_PUMP_DELIVERED);
+        check_true(cflow_executor_wait_idle(&parent_executor));
+        check_true(scxml_session_get_stats(&parent, &stats));
+        check_true(stats.done);
+
+        check_equal(scxml_session_destroy(&child),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(host_router_unregister(&router, child_endpoint));
+        check_true(host_router_unregister(&router, parent_endpoint));
+        check_equal(scxml_session_destroy(&parent),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&child_executor);
+        cflow_executor_destroy(&parent_executor);
+        scxml_program_destroy(&child_program);
+        scxml_program_destroy(&parent_program);
+        host_router_destroy(&router);
+    }
+
+    it("routes a parent send through #_invokeid") {
+        check_true(host_run_w3c_route_fixture(
+            "test192.scxml", HOST_W3C_INVOKE_TARGET));
+    }
+
+    it("exchanges SCXML Events between parent and child sessions") {
+        check_true(host_run_w3c_route_fixture(
+            "test347.scxml", HOST_W3C_BIDIRECTIONAL));
+    }
+
     it("publishes committed cross-session sends with SCXML field mapping") {
         static const char receiver_source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"

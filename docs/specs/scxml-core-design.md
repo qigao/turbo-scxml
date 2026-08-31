@@ -4,9 +4,35 @@
 
 **Date:** 2026-08-29
 
+**Status:** Accepted architecture; the feature list under "Original phase
+scope" records the initial Core milestone and is not the current admission
+profile.
+
 **Reference semantics:** [W3C SCXML 1.0](https://www.w3.org/TR/scxml/)
 
-## Scope
+## Evolution status
+
+TurboSCXML is now an independent repository exposing
+`TurboSCXML::SCXML` and consuming an installed TurboUtils package. The
+following decisions remain normative:
+
+- dependency direction is `TurboSCXML -> TurboUtils CFlow/CMeta/XmlParser`;
+- one owning SCXML session is the sole mutable session-state owner;
+- external effects cross bounded, versioned prepare/commit/discard adapters;
+- cross-session routing, timers after adapter commit, transport, authorization,
+  HTTP, QuickJS, persistence, and deployment remain host responsibilities; and
+- unsupported semantics fail admission or execution explicitly, without an
+  interpreter or transport fallback.
+
+The current accepted syntax and runtime behavior are defined by the installed
+public header, the focused designs in this directory, and executable tests.
+The W3C-derived corpus inventory in `tests/w3c/manifest.tsv` is the conformance
+fact source. Later CMeta, executable-content, Event I/O, invocation, payload,
+and system-variable work supersedes only the original feature cutoff below;
+it does not supersede the dependency, ownership, transaction, limit, or error
+decisions in this document.
+
+## Original phase scope
 
 This phase adds two independently linkable TurboUtils libraries:
 

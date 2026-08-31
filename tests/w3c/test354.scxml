@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="sending">
+  <state id="sending">
+    <onentry>
+      <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
+            event="event1">
+        <content expr="payload"/>
+      </send>
+      <assign location="payload.first" expr="9"/>
+      <assign location="payload.second" expr="10"/>
+    </onentry>
+    <transition cond="payload.first == 9 &amp;&amp; payload.second == 10"
+                target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"/>
+  <state id="fail"/>
+</scxml>

@@ -1,6 +1,7 @@
 #include <scxml/scxml.h>
 #include <turbostl/typed.h>
 
+#include "scxml_foreach.h"
 #include "tinytest.h"
 
 #include <stddef.h>
@@ -181,6 +182,49 @@ static cflow_statechart_instance_stats run_foreach(
 }
 
 spec("TurboSCXML CMeta foreach") {
+  it("iterates the entry snapshot after the source sequence changes") {
+    const int initial_values[] = {1, 2};
+    const int appended = 3;
+    scxml_foreach_root root = {.values = VecOf(int)};
+    scxml_foreach_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_foreach_snapshot snapshot = {0};
+    scxml_foreach_value value = {0};
+
+    check_equal(vec_init(&root.values, 3u), STL_OK);
+    check_equal(vec_push(&root.values, &initial_values[0]), STL_OK);
+    check_equal(vec_push(&root.values, &initial_values[1]), STL_OK);
+    check_equal(scxml_foreach_compile(
+                    &program, "values", strlen("values"),
+                    "item", strlen("item"), "index", strlen("index"),
+                    &foreach_root_data, 8u, 8u, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_open(
+                    &program, &root, &snapshot, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(snapshot.length, (size_t)2u);
+    check_equal(scxml_foreach_value_init(&program, &value, &diagnostic),
+                SCXML_EXPR_OK);
+
+    check_equal(scxml_foreach_next(
+                    &program, &root, &snapshot, &value, 0u, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(root.item, 1);
+    check_equal(root.index, (size_t)0u);
+
+    check_equal(vec_push(&root.values, &appended), STL_OK);
+    check_equal(scxml_foreach_next(
+                    &program, &root, &snapshot, &value, 1u, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(root.item, 2);
+    check_equal(root.index, (size_t)1u);
+    check_equal(vec_size(&root.values), (size_t)3u);
+
+    scxml_foreach_value_destroy(&program, &value);
+    scxml_foreach_snapshot_destroy(&program, &snapshot);
+    vec_destroy(&root.values);
+  }
+
   it("assigns items and zero-based indexes in declared sequence order") {
     static const char source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "

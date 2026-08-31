@@ -1809,6 +1809,8 @@ static scxml_execute_outcome execute_send(
     const cflow_statechart_executable_context *context,
     const scxml_expr_system_values *system_values,
     const char **out_error) {
+    static const char default_type[] =
+        "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
     const bool null_value = false;
     scxml_send_request materialized = descriptor->request.send;
     const scxml_send_request *request = &materialized;
@@ -1831,6 +1833,10 @@ static scxml_execute_outcome execute_send(
     scxml_adapter_status status;
     size_t registry_index = SIZE_MAX;
     bool duplicate = false;
+    if (!descriptor->has_type_expr && materialized.type_size == 0u) {
+        materialized.type = default_type;
+        materialized.type_size = sizeof(default_type) - 1u;
+    }
     if (descriptor->has_event_expr) {
         if (session == NULL || !evaluate_effect_value(
                 &descriptor->event_expr, context, system_values, &value) ||
@@ -2337,10 +2343,8 @@ static scxml_execute_outcome execute_scxml_range(
         } else if (step->kind == SCXML_STEP_FOREACH) {
             const scxml_foreach_descriptor *descriptor;
             scxml_expr_diagnostic diagnostic = {0};
-            cmeta_range range = {0};
-            cmeta_range_cursor cursor = {0};
+            scxml_foreach_snapshot snapshot = {0};
             scxml_foreach_value value = {0};
-            size_t length = 0u;
             size_t iteration;
             size_t next_depth;
             if (block->foreach_descriptors == NULL ||
@@ -2359,22 +2363,27 @@ static scxml_execute_outcome execute_scxml_range(
             }
             if (scxml_foreach_open(
                     &descriptor->program, context->out_state,
-                    &range, &length, &diagnostic) !=
+                    &snapshot, &diagnostic) !=
                 SCXML_EXPR_OK)
                 return raise_block_execution_error(block, context, out_error);
-            if (length != 0u &&
+            if (snapshot.length != 0u &&
                 scxml_foreach_value_init(
                     &descriptor->program, &value, &diagnostic) !=
-                    SCXML_EXPR_OK)
+                    SCXML_EXPR_OK) {
+                scxml_foreach_snapshot_destroy(
+                    &descriptor->program, &snapshot);
                 return raise_block_execution_error(block, context, out_error);
-            for (iteration = 0u; iteration < length; ++iteration) {
+            }
+            for (iteration = 0u; iteration < snapshot.length; ++iteration) {
                 scxml_execute_outcome outcome;
                 if (scxml_foreach_next(
-                        &descriptor->program, context->out_state, &range,
-                        &cursor, &value, iteration, length, &diagnostic) !=
+                        &descriptor->program, context->out_state, &snapshot,
+                        &value, iteration, &diagnostic) !=
                     SCXML_EXPR_OK) {
                     scxml_foreach_value_destroy(
                         &descriptor->program, &value);
+                    scxml_foreach_snapshot_destroy(
+                        &descriptor->program, &snapshot);
                     return raise_block_execution_error(
                         block, context, out_error);
                 }
@@ -2385,11 +2394,15 @@ static scxml_execute_outcome execute_scxml_range(
                 if (outcome != SCXML_EXECUTE_CONTINUE) {
                     scxml_foreach_value_destroy(
                         &descriptor->program, &value);
+                    scxml_foreach_snapshot_destroy(
+                        &descriptor->program, &snapshot);
                     return outcome;
                 }
             }
             scxml_foreach_value_destroy(
                 &descriptor->program, &value);
+            scxml_foreach_snapshot_destroy(
+                &descriptor->program, &snapshot);
         } else if (step->kind == SCXML_STEP_IF) {
             size_t branch;
             const scxml_branch *selected = NULL;

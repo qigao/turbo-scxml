@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="null" initial="waiting">
+  <state id="waiting">
+    <transition event="childToParent" target="reply"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="reply">
+    <onentry>
+      <send type="http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
+            target="#_child" event="parentToChild"/>
+    </onentry>
+    <transition event="eventReceived" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"/>
+  <state id="fail"/>
+</scxml>
