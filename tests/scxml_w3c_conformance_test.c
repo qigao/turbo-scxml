@@ -2818,8 +2818,8 @@ suite("SCXML W3C-derived conformance regression corpus") {
                     (size_t)W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT);
         check_equal(stats.optional,
                     (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
-        check_equal(stats.passed, (size_t)114u);
-        check_equal(stats.unsupported, (size_t)54u);
+        check_equal(stats.passed, (size_t)116u);
+        check_equal(stats.unsupported, (size_t)52u);
         check_equal(stats.not_applicable, (size_t)34u);
     }
 
@@ -3261,6 +3261,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 403a applies source priority, document order, and guards") {
         check_w3c_fixture("test403a.scxml");
+    }
+
+    it("test 403b de-duplicates an ancestor transition selected by parallel leaves") {
+        check_true(run_w3c_cmeta_fixture("test403b.scxml"));
+    }
+
+    it("test 403c retains compatible transitions while preempting conflicts") {
+        check_true(run_w3c_cmeta_fixture("test403c.scxml"));
     }
 
     it("test 404 executes exits in exit order before transition content") {

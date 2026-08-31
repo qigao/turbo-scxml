@@ -127,6 +127,8 @@ Status meanings are strict:
 | `test576.scxml` | [test576.txml](https://www.w3.org/Voice/2013/scxml-irp/576/test576.txml) | Root `initial` IDREFS enter both deeply nested non-default siblings of one parallel state. |
 | `test413.scxml` | [test413.txml](https://www.w3.org/Voice/2013/scxml-irp/413/test413.txml) | Startup enters both non-default leaves selected by the root `initial` IDREFS. |
 | `test403a.scxml` | [test403a.txml](https://www.w3.org/Voice/2013/scxml-irp/403/test403a.txml) | Transition selection prefers descendant sources, then document order, and falls through disabled conditions. |
+| `test403b.scxml` | [test403b.txml](https://www.w3.org/Voice/2013/scxml-irp/403/test403b.txml) | A transition inherited by two parallel leaves is selected once, and its lower source preempts the root ancestor. |
+| `test403c.scxml` | [test403c.txml](https://www.w3.org/Voice/2013/scxml-irp/403/test403c.txml) | A conflicting descendant preempts its ancestor while targetless and wildcard transitions remain in the optimal set in document order. |
 | `test404.scxml` | [test404.txml](https://www.w3.org/Voice/2013/scxml-irp/404/test404.txml) | States execute `onexit` content in exit order before transition content. |
 | `test405.scxml` | [test405.txml](https://www.w3.org/Voice/2013/scxml-irp/405/test405.txml) | Selected transition content executes in document order after all required exits. |
 | `test406.scxml` | [test406.txml](https://www.w3.org/Voice/2013/scxml-irp/406/test406.txml) | Transition content executes before states enter in parent-before-child, document order. |
@@ -194,6 +196,23 @@ missing, extra, or misordered exit either reaches `fail` or prevents the harness
 from observing completion. Their upstream timeout sends are omitted because the
 local harness already requires each run to terminate in `pass` without a runtime
 error.
+
+Tests 403b and 403c are derived from the W3C 403 sources linked above. They
+replace only the generator-specific `conf:` counter/pass/fail vocabulary with
+the test-owned CMeta `sequence` field, finite ordered internal marker Events,
+and the existing terminal `result.pass`/`result.fail` adapter probe. Test 403b
+requires the parallel ancestor transition to set `sequence` once and rejects
+both the root-ancestor action and any duplicate selected marker. Test 403c
+requires the exact `wildcard.one`, `targetless.two`, `descendant.two`,
+`wildcard.two` trace, so a dropped compatible transition, retained conflicting
+transition, or reordered selected action reaches `fail` or cannot complete.
+The only omitted mechanism is 403c's one-second generator liveness timeout;
+the bounded local harness rejects non-terminal execution synchronously. These
+fixtures retain the assertion witness; they do not certify the full W3C suite.
+
+The behavioral comparison used qigao/scxml@c80cedfa43b559861a054e992137685cdd29af16
+(`test/w3c/txml/test403b.txml` and `test/w3c/txml/test403c.txml`) as read-only
+reference material. No uSCXML source code or runtime dependency is included.
 
 Tests 153, 155, and 156 map the generated array to a test-owned bounded CMeta
 `Vec<int>` containing `1`, `2`, and `3`. Test 153 requires every assigned item

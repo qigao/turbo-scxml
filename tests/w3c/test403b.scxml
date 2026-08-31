@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <datamodel>
+    <data id="sequence" expr="0"/>
+  </datamodel>
+  <state id="s0" initial="p0">
+    <transition event="event1">
+      <assign location="sequence" expr="2"/>
+      <raise event="ancestor.selected"/>
+    </transition>
+    <parallel id="p0">
+      <onentry>
+        <raise event="event1"/>
+        <raise event="event2"/>
+      </onentry>
+      <transition event="event1">
+        <assign location="sequence" expr="1"/>
+        <raise event="parallel.selected"/>
+        <raise event="parallel.confirm"/>
+      </transition>
+      <state id="p0s1">
+        <transition event="event2" target="waiting">
+          <raise event="parallel.final"/>
+        </transition>
+      </state>
+      <state id="p0s2"/>
+    </parallel>
+  </state>
+  <state id="waiting">
+    <transition event="ancestor.selected" target="fail"/>
+    <transition event="parallel.selected" cond="sequence == 1"
+                target="observed"/>
+    <transition event="parallel.selected" target="fail"/>
+    <transition event="parallel.confirm parallel.final" target="fail"/>
+  </state>
+  <state id="observed">
+    <transition event="ancestor.selected parallel.selected" target="fail"/>
+    <transition event="parallel.confirm" target="after-first"/>
+    <transition event="parallel.final" target="fail"/>
+  </state>
+  <state id="after-first">
+    <transition event="ancestor.selected parallel.selected" target="fail"/>
+    <transition event="parallel.confirm" target="fail"/>
+    <transition event="parallel.final" target="pass"/>
+  </state>
+  <final id="pass">
+    <onentry><send event="result.pass"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send event="result.fail"/></onentry>
+  </final>
+</scxml>
