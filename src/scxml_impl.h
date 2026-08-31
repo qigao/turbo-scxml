@@ -536,6 +536,10 @@ struct scxml_session_impl {
     scxml_invoke_stats invoke_stats;
     uint64_t next_send_token;
     uint64_t next_invocation_token;
+    bool failed_send_id_restore_live;
+    scxml_location failed_send_id_location;
+    size_t failed_send_id_size;
+    char failed_send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     scxml_external_event_metadata_row *external_metadata_rows;
     size_t external_metadata_capacity;
     scxml_payload_entry *payload_scratch;

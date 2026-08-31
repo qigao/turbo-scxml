@@ -1557,6 +1557,87 @@ static scxml_execute_outcome adapter_failure_outcome(
     return SCXML_EXECUTE_FATAL;
 }
 
+static void commit_event_metadata(void *user);
+
+static scxml_execute_outcome send_failure_outcome(
+    scxml_session_impl *session,
+    const scxml_effect_descriptor *descriptor,
+    const scxml_send_request *request,
+    const cflow_statechart_executable_context *context,
+    scxml_adapter_status status, const char *adapter_error,
+    const char **out_error) {
+    const bool null_value = false;
+    scxml_adapter_error_kind kind;
+    cflow_event_id event;
+    cflow_event_view raised;
+    scxml_event_metadata metadata = {0};
+    scxml_external_event_metadata_row *metadata_row;
+    cflow_statechart_effect_ticket metadata_ticket;
+    uint64_t token = 0u;
+
+    switch (status) {
+        case SCXML_ADAPTER_ERROR_EXECUTION:
+            kind = SCXML_ADAPTER_ERROR_KIND_EXECUTION;
+            break;
+        case SCXML_ADAPTER_ERROR_COMMUNICATION:
+        case SCXML_ADAPTER_FULL:
+        case SCXML_ADAPTER_CLOSED:
+            kind = SCXML_ADAPTER_ERROR_KIND_COMMUNICATION;
+            break;
+        case SCXML_ADAPTER_INVALID_CONTRACT:
+        case SCXML_ADAPTER_ACCEPTED:
+        default:
+            return adapter_failure_outcome(
+                session, context, status, adapter_error, out_error);
+    }
+    if (request == NULL || request->id_size == 0u)
+        return raise_adapter_error(session, context, kind, out_error);
+    if (session == NULL || descriptor == NULL || request->id == NULL ||
+        context->raise_internal_tagged == NULL ||
+        context->stage_effect == NULL) {
+        *out_error = "SCXML failed send metadata context is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
+
+    event = kind == SCXML_ADAPTER_ERROR_KIND_EXECUTION
+        ? session->program->execution_error_event
+        : session->program->communication_error_event;
+    if (event == 0u) {
+        *out_error = "SCXML reserved adapter error event is unavailable";
+        return SCXML_EXECUTE_FATAL;
+    }
+    metadata.send_id = request->id;
+    metadata.send_id_size = request->id_size;
+    metadata_row = scxml_runtime_reserve_event_metadata(
+        session, &metadata, &token);
+    if (metadata_row == NULL) {
+        *out_error = "SCXML failed send metadata capacity is exhausted";
+        return SCXML_EXECUTE_FATAL;
+    }
+    raised = (cflow_event_view){event, &cmeta_type_bool, &null_value};
+    if (!context->raise_internal_tagged(
+            context->raise_user, &raised, token, out_error)) {
+        scxml_runtime_release_event_metadata(metadata_row);
+        return SCXML_EXECUTE_FATAL;
+    }
+    metadata_ticket = (cflow_statechart_effect_ticket){
+        commit_event_metadata, scxml_runtime_release_event_metadata,
+        metadata_row};
+    if (!context->stage_effect(
+            context->effect_user, &metadata_ticket, out_error)) {
+        scxml_runtime_release_event_metadata(metadata_row);
+        return SCXML_EXECUTE_FATAL;
+    }
+    if (descriptor->has_id_location) {
+        session->failed_send_id_location = descriptor->id_location;
+        session->failed_send_id_size = request->id_size;
+        memcpy(session->failed_send_id, request->id, request->id_size);
+        session->failed_send_id[request->id_size] = '\0';
+        session->failed_send_id_restore_live = true;
+    }
+    return SCXML_EXECUTE_BLOCK_ABORTED;
+}
+
 static bool evaluate_cmeta_executable_active(
     void *user, cflow_machine_state_id state, bool *out_active);
 
@@ -2109,8 +2190,9 @@ static scxml_execute_outcome execute_send(
         turbo_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
         turbo_mutex_unlock(&session->registry_lock);
-        return adapter_failure_outcome(
-            session, context, status, adapter_error, out_error);
+        return send_failure_outcome(
+            session, descriptor, request, context, status, adapter_error,
+            out_error);
     }
     if (adapter_ticket.commit == NULL || adapter_ticket.discard == NULL) {
         turbo_mutex_lock(&session->registry_lock);
@@ -2572,6 +2654,7 @@ static bool execute_scxml_block_impl(
     }
     if (session != NULL)
         system_values.event_name = session->system_values.event_name;
+    if (session != NULL) session->failed_send_id_restore_live = false;
     if (trivial_state) {
         memcpy(context->out_state, context->state, block->state_type->size);
     } else if (cmeta_type_require_traits(
@@ -2588,12 +2671,14 @@ static bool execute_scxml_block_impl(
         block->step_begin, block->step_end,
         0u, false, out_error);
     if (outcome == SCXML_EXECUTE_FATAL) {
+        if (session != NULL) session->failed_send_id_restore_live = false;
         if (!trivial_state) {
             block->state_type->traits->destroy(context->out_state);
         }
         return false;
     }
     if (outcome == SCXML_EXECUTE_BLOCK_ABORTED) {
+        scxml_expr_diagnostic diagnostic = {0};
         if (trivial_state) {
             memcpy(context->out_state, context->state,
                    block->state_type->size);
@@ -2605,7 +2690,17 @@ static bool execute_scxml_block_impl(
                 return false;
             }
         }
+        if (session != NULL && session->failed_send_id_restore_live &&
+            scxml_location_assign_owned_string(
+                &session->failed_send_id_location, context->out_state,
+                session->failed_send_id, session->failed_send_id_size,
+                SCXML_EVENT_METADATA_CAPACITY, &diagnostic) != SCXML_EXPR_OK) {
+            session->failed_send_id_restore_live = false;
+            *out_error = "SCXML failed send idlocation restore failed";
+            return false;
+        }
     }
+    if (session != NULL) session->failed_send_id_restore_live = false;
     return true;
 }
 

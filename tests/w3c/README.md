@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 55
-local PASS transformations, records 113 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 58
+local PASS transformations, records 110 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -49,9 +49,12 @@ Status meanings are strict:
 | `test325.scxml` | [test325.txml](https://www.w3.org/Voice/2013/scxml-irp/325/test325.txml) | `_ioprocessors` is bound to the supported Event I/O processor set during initialization. |
 | `test330.scxml` | [test330.txml](https://www.w3.org/Voice/2013/scxml-irp/330/test330.txml) | Every internal and external Event exposes all seven required Event fields, including empty optional values. |
 | `test331.scxml` | [test331.txml](https://www.w3.org/Voice/2013/scxml-irp/331/test331.txml) | Raised, processor-generated, and externally admitted Events are classified as `internal`, `platform`, and `external`. |
+| `test332.scxml` | [test332.txml](https://www.w3.org/Voice/2013/scxml-irp/332/test332.txml) | A failed send's platform error exposes the same generated ID through its CMeta `idlocation` and `_event.sendid`. |
 | `test333.scxml` | [test333.txml](https://www.w3.org/Voice/2013/scxml-irp/333/test333.txml) | An ordinary external Event admitted without a send ID exposes an empty `sendid`. |
 | `test335.scxml` | [test335.txml](https://www.w3.org/Voice/2013/scxml-irp/335/test335.txml) | An internally raised Event exposes an empty `origin`. |
+| `test336.scxml` | [test336.txml](https://www.w3.org/Voice/2013/scxml-irp/336/test336.txml) | A committed external Event's `origin` and `origintype` are evaluated as the exact target and type of a committed reply. |
 | `test337.scxml` | [test337.txml](https://www.w3.org/Voice/2013/scxml-irp/337/test337.txml) | Internal and platform Events expose an empty `origintype`. |
+| `test338.scxml` | [test338.txml](https://www.w3.org/Voice/2013/scxml-irp/338/test338.txml) | A normal Event reported by an invoked child exposes the same live invocation ID through CMeta `idlocation` and `_event.invokeid`. |
 | `test339.scxml` | [test339.txml](https://www.w3.org/Voice/2013/scxml-irp/339/test339.txml) | An internally raised Event that did not originate from an invoked child exposes an empty `invokeid`. |
 | `test342.scxml` | [test342.txml](https://www.w3.org/Voice/2013/scxml-irp/342/test342.txml) | The selected Event's `_event.name` equals the name produced by its evaluated send expression. |
 | `test355.scxml` | [test355.txml](https://www.w3.org/Voice/2013/scxml-irp/355/test355.txml) | With no root `initial`, the first child state in document order is selected. |

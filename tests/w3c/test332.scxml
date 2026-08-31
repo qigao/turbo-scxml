@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <state id="waiting">
+    <onentry>
+      <send event="out" target="unavailable" idlocation="send_id"/>
+    </onentry>
+    <transition event="error.communication"
+                cond="send_id != &quot;&quot; &amp;&amp; _event.sendid == send_id &amp;&amp; _event.type == &quot;platform&quot;"
+                target="pass"/>
+    <transition event="error.communication" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

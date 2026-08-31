@@ -443,6 +443,7 @@ typedef struct dynamic_adapter_probe {
     char generated_send_ids[4][SCXML_EVENT_METADATA_CAPACITY + 1u];
     uint64_t delay_ms;
     scxml_session *session;
+    scxml_adapter_status send_status;
     scxml_adapter_status cancel_status;
     bool report_done_during_cancel;
     bool report_done_result;
@@ -818,6 +819,11 @@ static scxml_adapter_status dynamic_prepare_send(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     ++probe->sends;
     probe->delay_ms = request->delay_ms;
+    if (probe->send_status != SCXML_ADAPTER_ACCEPTED) {
+        *out_ticket = (cflow_statechart_effect_ticket){0};
+        *out_error = "configured send rejection";
+        return probe->send_status;
+    }
     *out_ticket = (cflow_statechart_effect_ticket){
         dynamic_ticket_done, dynamic_ticket_done, probe};
     *out_error = NULL;
@@ -2111,6 +2117,65 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_session_try_send(&session, &finish),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("preserves generated failed-send identity in platform error metadata") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='active'><onentry>"
+            "<assign location='count' expr='99'/>"
+            "<send event='out' target='peer' idlocation='send_id'/>"
+            "</onentry><transition event='error.communication' "
+            "cond='count == 7 &amp;&amp; send_id != &quot;&quot; &amp;&amp; "
+            "_event.sendid == send_id &amp;&amp; "
+            "_event.type == &quot;platform&quot;' target='done'/>"
+            "<transition event='error.communication' target='failed'/>"
+            "</state><state id='failed'/><final id='done'/></scxml>";
+        dynamic_adapter_probe probe = {
+            .send_status = SCXML_ADAPTER_ERROR_COMMUNICATION};
+        const scxml_event_io_adapter_v1 event_io = {
+            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+            .struct_size = sizeof(event_io),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND,
+            .prepare_send = dynamic_prepare_send,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_public_data initial = {
+            .count = 7};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 2u,
+            .microstep_limit = 16u,
+            .effect_capacity = 2u,
+            .adapter_internal_event_capacity = 2u,
+            .event_io = &event_io,
+            .adapter_user = &probe};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(probe.sends, (size_t)1u);
         check_true(scxml_session_get_stats(&session, &stats));
         check_true(stats.done);
         check_false(stats.errored);
