@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 155
-local PASS transformations, records 13 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 157
+local PASS transformations, records 11 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -48,6 +48,7 @@ mixed completion-data outcomes.
 | `test147.scxml` | [test147.txml](https://www.w3.org/Voice/2013/scxml-irp/147/test147.txml) | An `if` executes only the first partition whose condition is true. |
 | `test148.scxml` | [test148.txml](https://www.w3.org/Voice/2013/scxml-irp/148/test148.txml) | An `if` executes its `else` partition when every condition is false. |
 | `test149.scxml` | [test149.txml](https://www.w3.org/Voice/2013/scxml-irp/149/test149.txml) | An `if` executes no partition when every condition is false and no `else` exists. |
+| `test152.scxml` | [test152.txml](https://www.w3.org/Voice/2013/scxml-irp/152/test152.txml) | Invalid iterable admission or an invalid item location raises `error.execution` and aborts the containing executable-content block. |
 | `test153.scxml` | [test153.txml](https://www.w3.org/Voice/2013/scxml-irp/153/test153.txml) | A `foreach` assigns ordered collection items from first to last together with their zero-based indexes. |
 | `test155.scxml` | [test155.txml](https://www.w3.org/Voice/2013/scxml-irp/155/test155.txml) | A `foreach` executes its child content after assigning each item and before advancing. |
 | `test156.scxml` | [test156.txml](https://www.w3.org/Voice/2013/scxml-irp/156/test156.txml) | A child execution error stops the `foreach` and aborts its containing executable-content block. |
@@ -104,6 +105,7 @@ mixed completion-data outcomes.
 | `test253.scxml` | [test253.txml](https://www.w3.org/Voice/2013/scxml-irp/253/test253.txml) | One active canonical SCXML invocation exchanges `childRunning`, `parentToChild`, and `success` through `#_parent`/`#_foo`; both receivers require the SCXML Event I/O `origintype`. |
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
+| `test276.scxml` | [test276.txml](https://www.w3.org/Voice/2013/scxml-irp/276/test276.txml) | A V2 host environment value replaces the contained initializer of its exact top-level data declaration. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
 | `test286.scxml` | [test286.txml](https://www.w3.org/Voice/2013/scxml-irp/286/test286.txml) | An unknown assignment location raises internal `error.execution` and aborts the remaining executable-content block. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
@@ -266,8 +268,13 @@ The behavioral comparison used qigao/scxml@c80cedfa43b559861a054e992137685cdd29a
 (`test/w3c/txml/test403b.txml` and `test/w3c/txml/test403c.txml`) as read-only
 reference material. No uSCXML source code or runtime dependency is included.
 
-Tests 153, 155, and 156 map the generated array to a test-owned bounded CMeta
-`Vec<int>` containing `1`, `2`, and `3`. Test 153 requires every assigned item
+Tests 152, 153, 155, and 156 map the generated array to a test-owned bounded
+CMeta `Vec<int>` containing `1`, `2`, and `3`. Test 152 admits only two
+iterations, so the three-element collection fails before a body can run; its
+second state uses the lexically valid but unresolved CMeta item location
+`total.missing`. Both paths must select `error.execution`, preserve the zero
+item/index/body values, and suppress their containing block's suffix Event.
+Test 153 requires every assigned item
 to exceed the preceding value and observes the final item/index pair `3`/`2`.
 Test 155 replaces the generated sum helper with a three-stage witness: each
 child can advance the stage only after observing its exact assigned item and
@@ -571,6 +578,14 @@ both handlers cannot pass. The CFlow V4 host transaction stages the CMeta write,
 completion bookkeeping, and autoforward tickets together; rollback discards all
 of them. Session destruction then verifies cancellation cleanup for every
 invocation that remains active.
+
+Test 276 maps the parent invocation parameter to the V2 CMeta session boundary:
+the host initial object contains `sequence=1` and identifies `sequence` as an
+environment override, while the child document contains `sequence=0`. The
+interpreter validates that location against the compiled root data declarations
+and skips only that initializer. The initial guard therefore reaches pass only
+when the host value wins, preserving the upstream parent-to-child instantiation
+witness without embedding host invocation ownership in the interpreter.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads

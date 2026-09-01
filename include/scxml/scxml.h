@@ -21,6 +21,7 @@ extern "C" {
 #define SCXML_EVENT_ENVELOPE_ABI 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
+#define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_DEFAULT_MAX_ITERATIONS 65536u
 
 #ifndef SCXML_PAYLOAD_MAX_ENTRIES
@@ -93,6 +94,32 @@ typedef struct scxml_cmeta_session_options_v1 {
     size_t struct_size;
     const void *initial_state;
 } scxml_cmeta_session_options_v1;
+
+/**
+ * Borrowed name of one top-level `<data>` value supplied by the environment.
+ * The location is a byte-exact CMeta path view valid until session
+ * initialization returns.
+ */
+typedef struct scxml_cmeta_environment_override {
+    const char *location;
+    size_t location_size;
+} scxml_cmeta_environment_override;
+
+/**
+ * Versioned CMeta session provider with explicit environment presence.
+ *
+ * `initial_state` owns all values. Override rows only suppress the matching
+ * top-level document initializer and are borrowed until initialization
+ * returns. Rows must be unique, writable, and match declared root `<data>`
+ * locations exactly.
+ */
+typedef struct scxml_cmeta_session_options_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const void *initial_state;
+    const scxml_cmeta_environment_override *environment_overrides;
+    size_t environment_override_count;
+} scxml_cmeta_session_options_v2;
 
 typedef enum scxml_program_requirement {
     SCXML_REQUIREMENT_NONE = 0u,
@@ -574,6 +601,19 @@ cflow_statechart_instance_status scxml_session_init_cmeta(
     scxml_session *session,
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v1 *options);
+
+/**
+ * Initialize a CMeta session and preserve explicitly supplied top-level data.
+ *
+ * Returns `CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT` for an invalid V2
+ * contract, unknown/non-root location, or duplicate row, and
+ * `CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED` when retained index storage
+ * cannot be allocated. On failure, `session` remains empty.
+ */
+cflow_statechart_instance_status scxml_session_init_cmeta_v2(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v2 *options);
 
 cflow_mailbox_status scxml_session_try_send(
     scxml_session *session, const cflow_event_view *event);

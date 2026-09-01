@@ -450,6 +450,20 @@ scxml_expr_status scxml_assign_apply_from_with_system(
                         active_user, system_values, diagnostic);
 }
 
+bool scxml_assign_destination_matches(
+    const scxml_assign_program *program,
+    const scxml_location *location) {
+    const scxml_assign_program_impl *impl = program != NULL
+        ? (const scxml_assign_program_impl *)program->impl : NULL;
+    return impl != NULL && location != NULL &&
+           impl->destination_kind == SCXML_ASSIGN_DESTINATION_MUTABLE &&
+           impl->destination == location->value &&
+           impl->destination_offset == location->offset &&
+           impl->destination != NULL &&
+           impl->destination->storage_type != NULL &&
+           impl->destination->storage_type->size == location->storage_size;
+}
+
 void scxml_assign_program_destroy(
     scxml_assign_program *program) {
     scxml_assign_program_impl *impl;

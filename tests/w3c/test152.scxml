@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="invalidArray">
+  <state id="invalidArray">
+    <onentry>
+      <foreach array="values" item="item" index="index">
+        <assign location="total" expr="1"/>
+      </foreach>
+      <raise event="array.continued"/>
+    </onentry>
+    <transition event="error.execution" target="invalidItem"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="invalidItem">
+    <onentry>
+      <foreach array="values" item="total.missing" index="index">
+        <assign location="total" expr="1"/>
+      </foreach>
+      <raise event="item.continued"/>
+    </onentry>
+    <transition event="error.execution" target="verify"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="verify">
+    <onentry><raise event="check.152"/></onentry>
+    <transition event="array.continued item.continued" target="fail"/>
+    <transition event="check.152"
+                cond="total == 0 &amp;&amp; item == 0 &amp;&amp; index == 0"
+                target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

@@ -253,6 +253,7 @@ typedef struct scxml_counts {
     size_t dynamic_expression_rows;
     size_t assignment_rows;
     size_t data_initializer_rows;
+    size_t top_level_data_initializer_rows;
     size_t late_initializer_rows;
     size_t done_data_rows;
     size_t foreach_rows;
@@ -342,6 +343,8 @@ typedef struct scxml_build {
     size_t done_data_index;
     size_t done_data_capacity;
     size_t late_initializer_index;
+    size_t top_level_data_initializer_first;
+    size_t top_level_data_initializer_count;
     uint32_t requirements;
     bool late_binding;
     cflow_event_id execution_error_event;
@@ -373,7 +376,11 @@ typedef struct scxml_program_impl {
     scxml_assign_program *assignments;
     size_t assignment_count;
     size_t data_initializer_count;
+    size_t top_level_data_initializer_first;
+    size_t top_level_data_initializer_count;
     size_t late_initializer_count;
+    size_t cmeta_max_source_bytes;
+    size_t cmeta_max_path_depth;
     scxml_foreach_descriptor *foreach_descriptors;
     size_t foreach_count;
     scxml_invocation_descriptor *invocations;
@@ -544,6 +551,8 @@ struct scxml_session_impl {
     size_t guard_binding_count;
     scxml_late_initializer_state *late_initializers;
     size_t late_initializer_count;
+    size_t *environment_override_assignments;
+    size_t environment_override_count;
     bool late_initializer_ticket_pending;
     char *system_name;
     char session_id[TURBO_UUID_STRING_SIZE];

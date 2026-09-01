@@ -107,6 +107,7 @@ static void session_free_storage(scxml_session_impl *impl) {
         }
     }
     free(impl->late_initializers);
+    free(impl->environment_override_assignments);
     free(impl->prepared_effects);
     free(impl->external_metadata_rows);
     free(impl->completion_projection_stable_ids);
@@ -132,10 +133,83 @@ static bool initialization_state_is_active(
     return true;
 }
 
+bool scxml_session_data_initializer_is_overridden(
+    const scxml_session_impl *session, size_t assignment) {
+    size_t index;
+    if (session == NULL) return false;
+    for (index = 0u; index < session->environment_override_count; ++index) {
+        if (session->environment_override_assignments[index] == assignment)
+            return true;
+    }
+    return false;
+}
+
+static cflow_statechart_instance_status retain_environment_overrides(
+    scxml_session_impl *session,
+    const scxml_cmeta_environment_override *overrides,
+    size_t override_count) {
+    const scxml_program_impl *program;
+    size_t row;
+    if (session == NULL || session->program == NULL)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    program = session->program;
+    if (override_count == 0u) return CFLOW_STATECHART_INSTANCE_OK;
+    if (overrides == NULL ||
+        override_count > program->top_level_data_initializer_count ||
+        program->assignments == NULL ||
+        program->cmeta_max_source_bytes == 0u ||
+        program->cmeta_max_path_depth == 0u)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    session->environment_override_assignments =
+        (size_t *)scxml_emit_allocate_rows(
+            override_count,
+            sizeof(*session->environment_override_assignments));
+    if (session->environment_override_assignments == NULL)
+        return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
+    for (row = 0u; row < override_count; ++row) {
+        const scxml_cmeta_environment_override *override = &overrides[row];
+        scxml_location location = {0};
+        scxml_expr_diagnostic diagnostic = {0};
+        size_t assignment;
+        size_t matched_assignment = SIZE_MAX;
+        size_t prior;
+        if (override->location == NULL || override->location_size == 0u ||
+            override->location_size > program->cmeta_max_source_bytes ||
+            scxml_location_compile(
+                &location, override->location, override->location_size,
+                program->cmeta_root, program->cmeta_max_path_depth, true,
+                &diagnostic) != SCXML_EXPR_OK)
+            return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        for (assignment = program->top_level_data_initializer_first;
+             assignment < program->top_level_data_initializer_first +
+                              program->top_level_data_initializer_count;
+             ++assignment) {
+            if (scxml_assign_destination_matches(
+                    &program->assignments[assignment], &location)) {
+                if (matched_assignment != SIZE_MAX)
+                    return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+                matched_assignment = assignment;
+            }
+        }
+        if (matched_assignment == SIZE_MAX)
+            return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        for (prior = 0u; prior < row; ++prior) {
+            if (session->environment_override_assignments[prior] ==
+                matched_assignment)
+                return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        }
+        session->environment_override_assignments[row] = matched_assignment;
+    }
+    session->environment_override_count = override_count;
+    return CFLOW_STATECHART_INSTANCE_OK;
+}
+
 static cflow_statechart_instance_status initialize_cmeta_state(
-    const scxml_program_impl *program, const void *initial_state,
+    const scxml_session_impl *session, const void *initial_state,
     const scxml_expr_system_values *system_values,
     void **out_state, bool *out_managed) {
+    const scxml_program_impl *program =
+        session != NULL ? session->program : NULL;
     const cmeta_type_desc *type;
     void *state;
     bool managed;
@@ -163,6 +237,8 @@ static cflow_statechart_instance_status initialize_cmeta_state(
     }
     for (index = 0u; index < program->data_initializer_count; ++index) {
         scxml_expr_diagnostic diagnostic = {0};
+        if (scxml_session_data_initializer_is_overridden(session, index))
+            continue;
         if (scxml_assign_apply_with_system(
                 &program->assignments[index], state,
                 initialization_state_is_active, NULL, system_values,
@@ -225,7 +301,9 @@ static cflow_statechart_instance_status completion_projection_limits(
 static cflow_statechart_instance_status scxml_session_init_model(
     scxml_session *session,
     const scxml_session_config *config,
-    scxml_data_model data_model, const void *cmeta_initial_state) {
+    scxml_data_model data_model, const void *cmeta_initial_state,
+    const scxml_cmeta_environment_override *environment_overrides,
+    size_t environment_override_count) {
     scxml_session_impl *impl;
     const scxml_program_impl *program;
     cflow_statechart_instance_config native_config;
@@ -375,6 +453,13 @@ static cflow_statechart_instance_status scxml_session_init_model(
             (scxml_expr_string_view){
                 program->document_name_size != 0u ? impl->system_name : "",
                 program->document_name_size};
+        status = retain_environment_overrides(
+            impl, environment_overrides, environment_override_count);
+        if (status != CFLOW_STATECHART_INSTANCE_OK) {
+            session_free_storage(impl);
+            free(impl);
+            return status;
+        }
         impl->guard_binding_count = program->guard_binding_count;
         impl->guard_bindings =
             (cflow_statechart_guard_binding *)scxml_emit_allocate_rows(
@@ -531,7 +616,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     if (data_model == SCXML_DATA_MODEL_CMETA &&
         program->data_initializer_count != 0u) {
         status = initialize_cmeta_state(
-            program, cmeta_initial_state, &impl->system_values,
+            impl, cmeta_initial_state, &impl->system_values,
             &initialized_cmeta_state, &initialized_cmeta_state_managed);
         if (status != CFLOW_STATECHART_INSTANCE_OK) {
             session_close_adapter(impl);
@@ -586,7 +671,7 @@ cflow_statechart_instance_status scxml_session_init(
     scxml_session *session,
     const scxml_session_config *config) {
     return scxml_session_init_model(
-        session, config, SCXML_DATA_MODEL_NULL, NULL);
+        session, config, SCXML_DATA_MODEL_NULL, NULL, NULL, 0u);
 }
 
 cflow_statechart_instance_status scxml_session_init_cmeta(
@@ -602,7 +687,24 @@ cflow_statechart_instance_status scxml_session_init_cmeta(
     }
     return scxml_session_init_model(
         session, config, SCXML_DATA_MODEL_CMETA,
-        options->initial_state);
+        options->initial_state, NULL, 0u);
+}
+
+cflow_statechart_instance_status scxml_session_init_cmeta_v2(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v2 *options) {
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_SESSION_OPTIONS_ABI_V2 ||
+        options->struct_size < sizeof(*options) ||
+        options->initial_state == NULL ||
+        (options->environment_override_count != 0u &&
+         options->environment_overrides == NULL))
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    return scxml_session_init_model(
+        session, config, SCXML_DATA_MODEL_CMETA,
+        options->initial_state, options->environment_overrides,
+        options->environment_override_count);
 }
 
 cflow_mailbox_status scxml_session_try_send(

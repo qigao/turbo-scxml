@@ -2,6 +2,7 @@
 #define SCXML_ASSIGN_H
 
 #include "scxml_expr.h"
+#include "scxml_location.h"
 
 typedef struct scxml_assign_program {
     void *impl;
@@ -48,6 +49,10 @@ scxml_expr_status scxml_assign_apply_from_with_system(
     void *active_user,
     const scxml_expr_system_values *system_values,
     scxml_expr_diagnostic *diagnostic);
+
+bool scxml_assign_destination_matches(
+    const scxml_assign_program *program,
+    const scxml_location *location);
 
 void scxml_assign_program_destroy(
     scxml_assign_program *program);

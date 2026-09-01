@@ -435,11 +435,12 @@ static scxml_status compile_scxml_model(
     }
     status = scxml_analyze_resolve_invocation_events(&build);
     if (status != SCXML_OK) goto cleanup;
-    status = scxml_emit_data_initializers(&build, root);
+    status = scxml_emit_data_initializers(&build, root, true);
     if (status != SCXML_OK) goto cleanup;
     status = scxml_emit_done_data(&build, root, build.node_ref_index, 0u);
     if (status != SCXML_OK) goto cleanup;
-    status = scxml_emit_state_executables(&build, root, build.node_ref_index);
+    status = scxml_emit_state_executables(
+        &build, root, build.node_ref_index, true);
     if (status != SCXML_OK) goto cleanup;
     status = scxml_emit_transitions(&build, root, build.node_ref_index,
                               build.synthetic_index);
@@ -455,7 +456,13 @@ static scxml_status compile_scxml_model(
         build.late_initializer_index != counts.late_initializer_rows ||
         build.block_index != counts.block_rows ||
         build.invocation_storage_index !=
-            counts.invocation_string_bytes) {
+            counts.invocation_string_bytes ||
+        build.top_level_data_initializer_count !=
+            counts.top_level_data_initializer_rows ||
+        build.top_level_data_initializer_first > build.assignment_index ||
+        build.top_level_data_initializer_count >
+            build.assignment_index -
+                build.top_level_data_initializer_first) {
         status = scxml_analyze_fail(&build, SCXML_NATIVE_IR_REJECTED,
                             scxml_syntax_node_location(root),
                             "effect descriptor emission mismatched admission");
@@ -622,7 +629,13 @@ static scxml_status compile_scxml_model(
     impl->assignment_count = build.assignment_index;
     impl->data_initializer_count = counts.late_initializer_rows != 0u
         ? 0u : counts.data_initializer_rows;
+    impl->top_level_data_initializer_first =
+        build.top_level_data_initializer_first;
+    impl->top_level_data_initializer_count =
+        build.top_level_data_initializer_count;
     impl->late_initializer_count = counts.late_initializer_rows;
+    impl->cmeta_max_source_bytes = build.expression_limits.max_source_bytes;
+    impl->cmeta_max_path_depth = build.expression_limits.max_path_depth;
     impl->foreach_descriptors = build.foreach_descriptors;
     impl->foreach_count = build.foreach_index;
     impl->invocations = build.invocations;

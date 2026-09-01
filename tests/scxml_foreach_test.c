@@ -399,6 +399,33 @@ spec("TurboSCXML CMeta foreach") {
     scxml_program_destroy(&program);
   }
 
+  it("raises error.execution and aborts the block for an invalid item location") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='work' datamodel='cmeta'><state id='work'><onentry>"
+        "<foreach array='values' item='total.missing' index='index'>"
+        "<assign location='total' expr='item'/></foreach>"
+        "<raise event='continued'/></onentry>"
+        "<transition event='error.execution' "
+        "cond='total == 0 &amp;&amp; item == 9 &amp;&amp; index == 7' "
+        "target='done'/><transition event='continued' target='failed'/>"
+        "</state><final id='done'/><state id='failed'/></scxml>";
+    const int values[] = {1};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    check_equal(compile_foreach(source, &program, &diagnostic),
+                SCXML_OK);
+    stats = run_foreach(&program, values, 1u, 9, 7u, 0);
+    check_true(stats.done);
+    check_false(stats.errored);
+    stats = run_foreach(&program, NULL, 0u, 9, 7u, 0);
+    check_true(stats.done);
+    check_false(stats.errored);
+    scxml_program_destroy(&program);
+  }
+
   it("rejects unresolved or mismatched foreach locations and empty bodies") {
     static const char *const invalid[] = {
         "<foreach item='item'><assign location='total' expr='item'/></foreach>",

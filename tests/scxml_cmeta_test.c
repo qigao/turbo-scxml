@@ -4203,6 +4203,254 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("preserves explicit root data environment values through V2 init") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='early' initial='armed'>"
+            "<datamodel><data id='count' expr='2'/></datamodel>"
+            "<state id='armed'><transition cond='count == 9' target='done'/>"
+            "<transition target='stuck'/></state><state id='stuck'/>"
+            "<final id='done'/></scxml>";
+        static const scxml_cmeta_environment_override overrides[] = {
+            {"count", sizeof("count") - 1u}};
+        const scxml_public_data initial = {
+            false, 9, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v2 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V2,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .environment_overrides = overrides,
+            .environment_override_count =
+                sizeof(overrides) / sizeof(overrides[0])};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v2(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(initial.count, 9);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("preserves explicit root data environment values with late binding") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='late' initial='armed'>"
+            "<datamodel><data id='count' expr='2'/></datamodel>"
+            "<state id='armed'><transition cond='count == 9' target='done'/>"
+            "<transition target='stuck'/></state><state id='stuck'/>"
+            "<final id='done'/></scxml>";
+        static const scxml_cmeta_environment_override overrides[] = {
+            {"count", sizeof("count") - 1u}};
+        const scxml_public_data initial = {
+            false, 9, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u,
+            .effect_capacity = 1u};
+        const scxml_cmeta_session_options_v2 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V2,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .environment_overrides = overrides,
+            .environment_override_count =
+                sizeof(overrides) / sizeof(overrides[0])};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v2(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(initial.count, 9);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects malformed duplicate and non-root environment overrides") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<datamodel><data id='count' expr='2'/>"
+            "<data id='total' expr='3'/></datamodel>"
+            "<state id='active'><datamodel>"
+            "<data id='enabled' expr='true'/></datamodel></state></scxml>";
+        static const scxml_cmeta_environment_override null_location[] = {
+            {NULL, sizeof("count") - 1u}};
+        static const scxml_cmeta_environment_override empty_location[] = {
+            {"count", 0u}};
+        static const scxml_cmeta_environment_override unknown_location[] = {
+            {"missing", sizeof("missing") - 1u}};
+        static const scxml_cmeta_environment_override non_root_location[] = {
+            {"enabled", sizeof("enabled") - 1u}};
+        static const scxml_cmeta_environment_override duplicate_location[] = {
+            {"count", sizeof("count") - 1u},
+            {"count", sizeof("count") - 1u}};
+        static const scxml_cmeta_environment_override excessive_locations[] = {
+            {"count", sizeof("count") - 1u},
+            {"total", sizeof("total") - 1u},
+            {"count", sizeof("count") - 1u}};
+        const struct {
+            const scxml_cmeta_environment_override *rows;
+            size_t count;
+        } invalid[] = {
+            {null_location, 1u},
+            {empty_location, 1u},
+            {unknown_location, 1u},
+            {non_root_location, 1u},
+            {duplicate_location, 2u},
+            {excessive_locations, 3u}};
+        const scxml_public_data initial = {
+            false, 9, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        size_t index;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]);
+             ++index) {
+            const scxml_cmeta_session_options_v2 data = {
+                .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V2,
+                .struct_size = sizeof(data),
+                .initial_state = &initial,
+                .environment_overrides = invalid[index].rows,
+                .environment_override_count = invalid[index].count};
+            check_equal(
+                scxml_session_init_cmeta_v2(&session, &config, &data),
+                CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+            check_null(session.impl);
+        }
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("tracks root environment declarations independently of child order") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='armed'>"
+            "<state id='inactive'><datamodel>"
+            "<data id='enabled' expr='true'/></datamodel></state>"
+            "<datamodel><data id='count' expr='2'/></datamodel>"
+            "<state id='armed'><transition cond='count == 9' target='done'/>"
+            "<transition target='stuck'/></state><state id='stuck'/>"
+            "<final id='done'/></scxml>";
+        static const scxml_cmeta_environment_override overrides[] = {
+            {"count", sizeof("count") - 1u}};
+        const scxml_public_data initial = {
+            false, 9, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v2 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V2,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .environment_overrides = overrides,
+            .environment_override_count = 1u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v2(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects an environment override with ambiguous root declarations") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'><datamodel>"
+            "<data id='count' expr='2'/><data id='count' expr='3'/>"
+            "</datamodel><state id='active'/></scxml>";
+        static const scxml_cmeta_environment_override overrides[] = {
+            {"count", sizeof("count") - 1u}};
+        const scxml_public_data initial = {
+            false, 9, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v2 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V2,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .environment_overrides = overrides,
+            .environment_override_count = 1u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v2(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        check_null(session.impl);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("admits late binding while rejecting unknown binding and external data") {
         static const char late[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
