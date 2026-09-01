@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 145,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 23,
+    W3C_PASS_DOCUMENT_COUNT = 146,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 22,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -3758,13 +3758,18 @@ static bool run_w3c_cmeta_fixture_with_schema(
           stats.external_pending == 0u &&
           stats.external_in_flight == 0u));
     if (!succeeded)
-        info("fixture=%s done=%d errored=%d result_sends=%zu "
+        info("fixture=%s done=%d errored=%d active=%zu leaves=%zu "
+             "macrosteps=%llu microsteps=%llu actions=%llu result_sends=%zu "
              "result_commits=%zu result_discards=%zu result=%s "
              "loopback_sends=%zu loopback_commits=%zu "
              "loopback_discards=%zu delivered=%zu rejected=%zu "
              "external_accepted=%llu external_completed=%llu "
              "external_pending=%zu external_in_flight=%zu error=%s",
              fixture_name, stats.done ? 1 : 0, stats.errored ? 1 : 0,
+             stats.active_state_count, stats.active_leaf_count,
+             (unsigned long long)stats.macrosteps,
+             (unsigned long long)stats.microsteps,
+             (unsigned long long)stats.actions,
              probe.result.prepare_send_calls, probe.result.commits,
              probe.result.discards, probe.result.event,
              probe.loopback_prepare_calls, probe.loopback_commits,
@@ -5122,6 +5127,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 287 assigns a legal value to a valid location") {
         check_true(run_w3c_cmeta_fixture("test287.scxml"));
+    }
+
+    it("test 294 places param and content values in completion data") {
+        check_true(run_w3c_cmeta_fixture("test294.scxml"));
     }
 
     it("test 279 initializes all data before the initial state") {

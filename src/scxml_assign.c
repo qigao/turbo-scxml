@@ -323,7 +323,8 @@ static scxml_expr_status assign_string(
 
 static scxml_expr_status assign_apply(
     const scxml_assign_program *program,
-    void *staged_root,
+    const void *source_root,
+    void *destination_root,
     scxml_expr_is_active_fn is_active,
     void *active_user,
     const scxml_expr_system_values *system_values,
@@ -338,7 +339,8 @@ static scxml_expr_status assign_apply(
     int64_t sint;
     uint64_t uint;
     double number;
-    if (impl == NULL || staged_root == NULL || is_active == NULL)
+    if (impl == NULL || source_root == NULL || destination_root == NULL ||
+        is_active == NULL)
         return assign_report(diagnostic,
                              SCXML_EXPR_INVALID_ARGUMENT, 0u,
                              "invalid CMeta assignment evaluation arguments");
@@ -347,10 +349,10 @@ static scxml_expr_status assign_apply(
                              SCXML_EXPR_EVALUATION_ERROR, 0u,
                              "CMeta system locations are read-only");
     status = scxml_expr_evaluate_value_with_system(
-        &impl->expression, staged_root, is_active, active_user,
+        &impl->expression, source_root, is_active, active_user,
         system_values, &source, diagnostic);
     if (status != SCXML_EXPR_OK) return status;
-    destination = (unsigned char *)staged_root + impl->destination_offset;
+    destination = (unsigned char *)destination_root + impl->destination_offset;
     switch (impl->destination->kind) {
         case CMETA_DATA_BOOL:
             memcpy(destination, &source.data.boolean, sizeof(bool));
@@ -400,8 +402,8 @@ scxml_expr_status scxml_assign_apply(
     scxml_expr_is_active_fn is_active,
     void *active_user,
     scxml_expr_diagnostic *diagnostic) {
-    return assign_apply(program, staged_root, is_active, active_user, NULL,
-                        diagnostic);
+    return assign_apply(program, staged_root, staged_root, is_active,
+                        active_user, NULL, diagnostic);
 }
 
 scxml_expr_status scxml_assign_apply_with_system(
@@ -411,8 +413,20 @@ scxml_expr_status scxml_assign_apply_with_system(
     void *active_user,
     const scxml_expr_system_values *system_values,
     scxml_expr_diagnostic *diagnostic) {
-    return assign_apply(program, staged_root, is_active, active_user,
-                        system_values, diagnostic);
+    return assign_apply(program, staged_root, staged_root, is_active,
+                        active_user, system_values, diagnostic);
+}
+
+scxml_expr_status scxml_assign_apply_from_with_system(
+    const scxml_assign_program *program,
+    const void *source_root,
+    void *destination_root,
+    scxml_expr_is_active_fn is_active,
+    void *active_user,
+    const scxml_expr_system_values *system_values,
+    scxml_expr_diagnostic *diagnostic) {
+    return assign_apply(program, source_root, destination_root, is_active,
+                        active_user, system_values, diagnostic);
 }
 
 void scxml_assign_program_destroy(

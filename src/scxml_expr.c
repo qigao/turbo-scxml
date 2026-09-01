@@ -83,6 +83,7 @@ typedef struct expr_operand {
     expr_operand_kind kind;
     expr_value_kind value_kind;
     const cmeta_data_desc *data;
+    const cmeta_data_field_desc *root_field;
     size_t offset;
     union {
         int64_t sint;
@@ -513,6 +514,7 @@ static bool parser_parse_location_kind(expr_parser *parser, uint16_t target,
                                parser->token.offset,
                                "SCXML location exceeds root storage");
         offset = next_offset;
+        if (depth == 0u) operand.root_field = field;
         desc = field->value;
         ++depth;
         parser_next(parser);
@@ -1303,6 +1305,26 @@ static const scxml_expr_string_view *system_event_field_view(
     }
 }
 
+static bool event_schema_admits_operand(
+    const cmeta_data_desc *event_schema,
+    const cmeta_data_desc *compiled_root,
+    const expr_operand *operand) {
+    const cmeta_data_struct_shape *shape;
+    const cmeta_data_field_desc *field;
+    if (!cmeta_data_desc_valid(event_schema) ||
+        !cmeta_data_desc_valid(compiled_root) ||
+        event_schema->kind != CMETA_DATA_STRUCT ||
+        compiled_root->kind != CMETA_DATA_STRUCT ||
+        event_schema->storage_type != compiled_root->storage_type ||
+        operand == NULL || operand->root_field == NULL)
+        return false;
+    shape = (const cmeta_data_struct_shape *)event_schema->shape;
+    field = cmeta_data_struct_find_field(
+        shape, operand->root_field->name);
+    return field != NULL && field->offset == operand->root_field->offset &&
+           field->value == operand->root_field->value;
+}
+
 static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
     expr_eval_context *context = (expr_eval_context *)user;
     const expr_operand *operand;
@@ -1322,8 +1344,12 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             return 1;
         case EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION:
             if (context->system_values == NULL ||
-                context->system_values->event_data_schema !=
-                    context->program->root ||
+                context->system_values->event_data_object == NULL ||
+                (context->system_values->event_data_schema !=
+                     context->program->root &&
+                 !event_schema_admits_operand(
+                     context->system_values->event_data_schema,
+                     context->program->root, operand)) ||
                 !read_location_at(
                     context, operand,
                     (const unsigned char *)

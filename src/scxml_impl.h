@@ -204,8 +204,14 @@ typedef struct scxml_invocation_descriptor {
 typedef struct scxml_done_data_descriptor {
     cflow_machine_state_id parent;
     cflow_machine_state_id final_state;
+    size_t assignment_first;
+    size_t assignment_count;
     scxml_expr_program expression;
     scxml_content_descriptor content;
+    cmeta_data_field_desc *fields;
+    cmeta_data_struct_shape shape;
+    cmeta_data_desc schema;
+    char *schema_stable_id;
 } scxml_done_data_descriptor;
 
 typedef struct scxml_guard_user {

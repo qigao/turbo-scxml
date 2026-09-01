@@ -904,6 +904,7 @@ static scxml_status analyze_send_content(
 static scxml_status analyze_done_data(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
     size_t index;
+    size_t param_count = 0u;
     bool found_content = false;
     bool has_expression = false;
     scxml_status status = scxml_analyze_validate_element_attributes(
@@ -911,7 +912,8 @@ static scxml_status analyze_done_data(
     if (status != SCXML_OK) return status;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        scxml_syntax_attribute expression;
+        scxml_syntax_attribute expression = {0};
+        scxml_element_kind child_kind;
         size_t content_size = 0u;
         size_t retained = 0u;
         scxml_content_kind content_kind;
@@ -919,16 +921,38 @@ static scxml_status analyze_done_data(
             (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
-            scxml_analyze_element_kind(child) != SCXML_ELEMENT_CONTENT)
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
-                              "donedata admits exactly one content child");
+                              "donedata admits only param or content children");
+        child_kind = scxml_analyze_element_kind(child);
+        if (child_kind == SCXML_ELEMENT_PARAM) {
+            if (found_content)
+                return scxml_analyze_fail(
+                    build, SCXML_INVALID_STRUCTURE,
+                    scxml_syntax_node_location(child),
+                    "donedata content is mutually exclusive with param");
+            status = analyze_param(build, child);
+            if (status != SCXML_OK) return status;
+            if (!scxml_analyze_checked_add(param_count, 1u, &param_count) ||
+                param_count > SCXML_PAYLOAD_MAX_ENTRIES)
+                return scxml_analyze_fail(
+                    build, SCXML_LIMIT_EXCEEDED,
+                    scxml_syntax_node_location(child),
+                    "donedata param count exceeds the payload bound");
+            continue;
+        }
+        if (child_kind != SCXML_ELEMENT_CONTENT)
+            return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
+                              scxml_syntax_node_location(child),
+                              "donedata admits only param or content children");
         expression = scxml_analyze_find_attribute(child, "expr");
-        if (found_content)
+        if (found_content || param_count != 0u)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
-                              "donedata accepts exactly one content child");
+                              param_count != 0u
+                                  ? "donedata content is mutually exclusive with param"
+                                  : "donedata accepts exactly one content child");
         found_content = true;
         status = scxml_analyze_validate_element_attributes(
             build, child, SCXML_ELEMENT_CONTENT);
@@ -964,12 +988,25 @@ static scxml_status analyze_done_data(
                     "donedata inline content exceeds the Event metadata bound");
         }
     }
-    if (!found_content)
+    if (!found_content && param_count == 0u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_node_location(node),
-                          "donedata requires one content child");
+                          "donedata requires content or at least one param");
+    if (param_count != 0u) {
+        const cmeta_type_desc *type =
+            build->cmeta_root != NULL ? build->cmeta_root->storage_type : NULL;
+        if (build->data_model != SCXML_DATA_MODEL_CMETA || type == NULL ||
+            type->size > SCXML_EVENT_DATA_CAPACITY ||
+            type->align > _Alignof(scxml_event_data_storage))
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED,
+                scxml_syntax_node_location(node),
+                "donedata param object exceeds the bounded Event storage");
+    }
     if (!scxml_analyze_checked_add(counts->done_data_rows, 1u,
                      &counts->done_data_rows) ||
+        !scxml_analyze_checked_add(counts->assignment_rows, param_count,
+                     &counts->assignment_rows) ||
         (has_expression &&
          !scxml_analyze_checked_add(counts->dynamic_expression_rows, 1u,
                       &counts->dynamic_expression_rows)))
