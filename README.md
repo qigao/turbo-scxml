@@ -59,6 +59,37 @@ target_link_libraries(app PRIVATE TurboSCXML::SCXML)
 
 `TurboSCXMLConfig.cmake` 会从 `TURBOUTILS_ROOT` 精确解析 TurboUtils；缺少变量、目录或 package config 时直接失败，不回退到系统路径。
 
+## CMeta 表达式
+
+`datamodel="cmeta"` 使用 TurboSCXML 内置的有限、强类型表达式语言。CMeta
+提供字段与标量类型描述，TurboSCXML 负责语法解析和 SCXML 错误语义；它不是
+完整 ECMAScript，也不会隐式调用 QuickJS。
+
+表达式支持 reflected location、标量字面量、`In()`、SCXML system values、
+比较、`!`、`&&`、`||`，以及以下算术优先级：
+
+```text
+unary + -
+* / %
++ -
+< <= == != >= >
+&&
+||
+```
+
+同型 signed/unsigned integer 运算保持原类型并检查溢出；任一操作数为
+floating 时结果为 `double`。signed 与 unsigned integer 不能直接混合运算，
+`%` 只接受同型整数，unsigned subtraction 不允许下溢。整数溢出、除零、
+remainder by zero 或非有限浮点结果都会 fail fast，并由已有 executable
+content 边界转换为 `error.execution`。
+
+例如：
+
+```xml
+<assign location="invoice.total" expr="invoice.subtotal + invoice.tax"/>
+<transition cond="attempts + 1 &lt; maxAttempts" target="retry"/>
+```
+
 ## 提取来源与回滚
 
 初始源码从 TurboUtils HEAD `3b0c77a707ff8c5062f333c6f6208fee2510821f` 的 `cflow-scxml/` 提取；该目录最近一次内容变更来自提交 `f4bc1ea571ca0b7e5d989a5122c177e22cb474a3`。在 TurboUtils 完成依赖切换并通过独立安装消费验证前，原目录保留为回滚副本。

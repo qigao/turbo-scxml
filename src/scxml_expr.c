@@ -29,6 +29,11 @@ typedef enum expr_token_kind {
     EXPR_TOKEN_RPAREN,
     EXPR_TOKEN_DOT,
     EXPR_TOKEN_NOT,
+    EXPR_TOKEN_PLUS,
+    EXPR_TOKEN_MINUS,
+    EXPR_TOKEN_STAR,
+    EXPR_TOKEN_SLASH,
+    EXPR_TOKEN_PERCENT,
     EXPR_TOKEN_EQ,
     EXPR_TOKEN_NE,
     EXPR_TOKEN_LT,
@@ -244,10 +249,7 @@ static void parser_next(expr_parser *parser) {
                expr_ident_continue(parser->source[parser->cursor]))
             ++parser->cursor;
         parser->token.kind = EXPR_TOKEN_IDENT;
-    } else if ((value >= '0' && value <= '9') ||
-               (value == '-' && parser->cursor < parser->source_size &&
-                parser->source[parser->cursor] >= '0' &&
-                parser->source[parser->cursor] <= '9')) {
+    } else if (value >= '0' && value <= '9') {
         bool exponent = false;
         while (parser->cursor < parser->source_size) {
             const char next = parser->source[parser->cursor];
@@ -295,6 +297,11 @@ static void parser_next(expr_parser *parser) {
             case '(': parser->token.kind = EXPR_TOKEN_LPAREN; break;
             case ')': parser->token.kind = EXPR_TOKEN_RPAREN; break;
             case '.': parser->token.kind = EXPR_TOKEN_DOT; break;
+            case '+': parser->token.kind = EXPR_TOKEN_PLUS; break;
+            case '-': parser->token.kind = EXPR_TOKEN_MINUS; break;
+            case '*': parser->token.kind = EXPR_TOKEN_STAR; break;
+            case '/': parser->token.kind = EXPR_TOKEN_SLASH; break;
+            case '%': parser->token.kind = EXPR_TOKEN_PERCENT; break;
             case '!':
                 if (parser->cursor < parser->source_size &&
                     parser->source[parser->cursor] == '=') {
@@ -850,17 +857,49 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
     return parser_parse_location(parser, target, out);
 }
 
+static bool value_is_numeric(expr_value_kind kind);
+
 static bool parser_parse_unary(expr_parser *parser, uint16_t target,
                                expr_node *out) {
-    bool negate = false;
+    expr_token_kind operation = EXPR_TOKEN_END;
+    if (target >= QVM_MAX_REGISTERS)
+        return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
+                           parser->token.offset,
+                           "SCXML expression register limit exceeded");
     if (parser->expression_depth >= parser->limits.max_expression_depth)
         return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
                            parser->token.offset,
                            "SCXML expression depth limit exceeded");
     ++parser->expression_depth;
-    if (parser->token.kind == EXPR_TOKEN_NOT) {
-        negate = true;
+    if (parser->token.kind == EXPR_TOKEN_NOT ||
+        parser->token.kind == EXPR_TOKEN_PLUS ||
+        parser->token.kind == EXPR_TOKEN_MINUS) {
+        operation = parser->token.kind;
         parser_next(parser);
+        if (operation == EXPR_TOKEN_MINUS &&
+            parser->token.kind == EXPR_TOKEN_NUMBER &&
+            parser->token.size == sizeof("9223372036854775808") - 1u &&
+            memcmp(parser->source + parser->token.offset,
+                   "9223372036854775808",
+                   sizeof("9223372036854775808") - 1u) == 0) {
+            expr_operand operand = {
+                .kind = EXPR_OPERAND_SINT,
+                .value_kind = EXPR_VALUE_SINT,
+                .value.sint = INT64_MIN};
+            uint32_t operand_index;
+            if (!parser_add_literal_bytes(parser, parser->token.size) ||
+                !parser_add_operand(parser, operand, &operand_index) ||
+                !parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target,
+                                         0u, operand_index, 0u)) {
+                --parser->expression_depth;
+                return false;
+            }
+            out->reg = target;
+            out->kind = EXPR_VALUE_SINT;
+            parser_next(parser);
+            --parser->expression_depth;
+            return true;
+        }
         if (!parser_parse_unary(parser, target, out)) {
             --parser->expression_depth;
             return false;
@@ -870,12 +909,28 @@ static bool parser_parse_unary(expr_parser *parser, uint16_t target,
         return false;
     }
     --parser->expression_depth;
-    if (negate) {
+    if (operation == EXPR_TOKEN_NOT) {
         if (out->kind != EXPR_VALUE_BOOL)
             return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
                                parser->token.offset,
                                "logical not requires a Boolean operand");
         return parser_emit_instruction(parser, QVM_OP_NOT, target, 0u,
+                                       target, 0u);
+    }
+    if (operation == EXPR_TOKEN_PLUS) {
+        if (!value_is_numeric(out->kind))
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "unary plus requires a numeric operand");
+        return true;
+    }
+    if (operation == EXPR_TOKEN_MINUS) {
+        if (out->kind != EXPR_VALUE_SINT &&
+            out->kind != EXPR_VALUE_FLOAT)
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "unary minus requires a signed or floating operand");
+        return parser_emit_instruction(parser, QVM_OP_NEG, target, 0u,
                                        target, 0u);
     }
     return true;
@@ -886,16 +941,92 @@ static bool value_is_numeric(expr_value_kind kind) {
            kind == EXPR_VALUE_FLOAT;
 }
 
+static bool parser_arithmetic_result_kind(
+    expr_parser *parser, expr_token_kind operation,
+    expr_value_kind left, expr_value_kind right,
+    expr_value_kind *out_kind) {
+    if (!value_is_numeric(left) || !value_is_numeric(right))
+        return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                           parser->token.offset,
+                           "arithmetic requires numeric operands");
+    if (operation == EXPR_TOKEN_PERCENT) {
+        if (left != right ||
+            (left != EXPR_VALUE_SINT && left != EXPR_VALUE_UINT))
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "remainder requires matching integral operands");
+        *out_kind = left;
+        return true;
+    }
+    if (left == EXPR_VALUE_FLOAT || right == EXPR_VALUE_FLOAT) {
+        *out_kind = EXPR_VALUE_FLOAT;
+        return true;
+    }
+    if (left != right)
+        return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                           parser->token.offset,
+                           "signed and unsigned arithmetic cannot be mixed");
+    *out_kind = left;
+    return true;
+}
+
+static bool parser_parse_multiplicative(
+    expr_parser *parser, uint16_t target, expr_node *out) {
+    if (!parser_parse_unary(parser, target, out)) return false;
+    while (parser->token.kind == EXPR_TOKEN_STAR ||
+           parser->token.kind == EXPR_TOKEN_SLASH ||
+           parser->token.kind == EXPR_TOKEN_PERCENT) {
+        const expr_token_kind operation = parser->token.kind;
+        const qvm_opcode_t opcode =
+            operation == EXPR_TOKEN_STAR ? QVM_OP_MUL :
+            operation == EXPR_TOKEN_SLASH ? QVM_OP_DIV : QVM_OP_MOD;
+        expr_node right;
+        expr_value_kind result_kind;
+        parser_next(parser);
+        if (!parser_parse_unary(parser, (uint16_t)(target + 1u), &right) ||
+            !parser_arithmetic_result_kind(
+                parser, operation, out->kind, right.kind, &result_kind) ||
+            !parser_emit_instruction(parser, opcode, target, 0u,
+                                     target, right.reg))
+            return false;
+        out->kind = result_kind;
+    }
+    return true;
+}
+
+static bool parser_parse_additive(
+    expr_parser *parser, uint16_t target, expr_node *out) {
+    if (!parser_parse_multiplicative(parser, target, out)) return false;
+    while (parser->token.kind == EXPR_TOKEN_PLUS ||
+           parser->token.kind == EXPR_TOKEN_MINUS) {
+        const expr_token_kind operation = parser->token.kind;
+        const qvm_opcode_t opcode = operation == EXPR_TOKEN_PLUS
+                                        ? QVM_OP_ADD : QVM_OP_SUB;
+        expr_node right;
+        expr_value_kind result_kind;
+        parser_next(parser);
+        if (!parser_parse_multiplicative(
+                parser, (uint16_t)(target + 1u), &right) ||
+            !parser_arithmetic_result_kind(
+                parser, operation, out->kind, right.kind, &result_kind) ||
+            !parser_emit_instruction(parser, opcode, target, 0u,
+                                     target, right.reg))
+            return false;
+        out->kind = result_kind;
+    }
+    return true;
+}
+
 static bool parser_parse_compare(expr_parser *parser, uint16_t target,
                                  expr_node *out) {
     expr_token_kind operation;
     expr_node right;
     uint32_t comparison;
-    if (!parser_parse_unary(parser, target, out)) return false;
+    if (!parser_parse_additive(parser, target, out)) return false;
     operation = parser->token.kind;
     if (operation < EXPR_TOKEN_EQ || operation > EXPR_TOKEN_GE) return true;
     parser_next(parser);
-    if (!parser_parse_unary(parser, (uint16_t)(target + 1u), &right))
+    if (!parser_parse_additive(parser, (uint16_t)(target + 1u), &right))
         return false;
     if (operation == EXPR_TOKEN_EQ || operation == EXPR_TOKEN_NE) {
         if (!((out->kind == EXPR_VALUE_BOOL &&
@@ -1602,6 +1733,154 @@ static bool numeric_compare(const qvm_value_t *left,
     return true;
 }
 
+static bool arithmetic_opcode(qvm_opcode_t op) {
+    return op == QVM_OP_ADD || op == QVM_OP_SUB ||
+           op == QVM_OP_MUL || op == QVM_OP_DIV || op == QVM_OP_MOD;
+}
+
+static bool checked_sint_multiply(int64_t left, int64_t right,
+                                  int64_t *out) {
+    if (left > 0) {
+        if ((right > 0 && left > INT64_MAX / right) ||
+            (right < 0 && right < INT64_MIN / left))
+            return false;
+    } else if (left < 0) {
+        if ((right > 0 && left < INT64_MIN / right) ||
+            (right < 0 && right < INT64_MAX / left))
+            return false;
+    }
+    *out = left * right;
+    return true;
+}
+
+static bool evaluate_sint_arithmetic(qvm_opcode_t op,
+                                     int64_t left, int64_t right,
+                                     int64_t *out) {
+    switch (op) {
+        case QVM_OP_ADD:
+            if ((right > 0 && left > INT64_MAX - right) ||
+                (right < 0 && left < INT64_MIN - right))
+                return false;
+            *out = left + right;
+            return true;
+        case QVM_OP_SUB:
+            if ((right > 0 && left < INT64_MIN + right) ||
+                (right < 0 && left > INT64_MAX + right))
+                return false;
+            *out = left - right;
+            return true;
+        case QVM_OP_MUL:
+            return checked_sint_multiply(left, right, out);
+        case QVM_OP_DIV:
+            if (right == 0 || (left == INT64_MIN && right == -1))
+                return false;
+            *out = left / right;
+            return true;
+        case QVM_OP_MOD:
+            if (right == 0 || (left == INT64_MIN && right == -1))
+                return false;
+            *out = left % right;
+            return true;
+        default: return false;
+    }
+}
+
+static bool evaluate_uint_arithmetic(qvm_opcode_t op,
+                                     uint64_t left, uint64_t right,
+                                     uint64_t *out) {
+    switch (op) {
+        case QVM_OP_ADD:
+            if (left > UINT64_MAX - right) return false;
+            *out = left + right;
+            return true;
+        case QVM_OP_SUB:
+            if (left < right) return false;
+            *out = left - right;
+            return true;
+        case QVM_OP_MUL:
+            if (right != 0u && left > UINT64_MAX / right) return false;
+            *out = left * right;
+            return true;
+        case QVM_OP_DIV:
+            if (right == 0u) return false;
+            *out = left / right;
+            return true;
+        case QVM_OP_MOD:
+            if (right == 0u) return false;
+            *out = left % right;
+            return true;
+        default: return false;
+    }
+}
+
+static bool numeric_as_double(const qvm_value_t *value, double *out) {
+    if (value->type == EXPR_VALUE_FLOAT)
+        *out = value->number;
+    else if (value->type == EXPR_VALUE_SINT)
+        *out = (double)value->integer;
+    else if (value->type == EXPR_VALUE_UINT)
+        *out = (double)value->uinteger;
+    else
+        return false;
+    return true;
+}
+
+static bool evaluate_float_arithmetic(qvm_opcode_t op,
+                                      const qvm_value_t *left,
+                                      const qvm_value_t *right,
+                                      double *out) {
+    double left_number;
+    double right_number;
+    if (op == QVM_OP_MOD ||
+        !numeric_as_double(left, &left_number) ||
+        !numeric_as_double(right, &right_number) ||
+        ((op == QVM_OP_DIV) && right_number == 0.0))
+        return false;
+    switch (op) {
+        case QVM_OP_ADD: *out = left_number + right_number; break;
+        case QVM_OP_SUB: *out = left_number - right_number; break;
+        case QVM_OP_MUL: *out = left_number * right_number; break;
+        case QVM_OP_DIV: *out = left_number / right_number; break;
+        default: return false;
+    }
+    return isfinite(*out) != 0;
+}
+
+static int expr_arithmetic_binary(qvm_opcode_t op,
+                                  const qvm_value_t *left,
+                                  const qvm_value_t *right,
+                                  qvm_value_t *out) {
+    if (left->type == EXPR_VALUE_SINT &&
+        right->type == EXPR_VALUE_SINT) {
+        int64_t result;
+        if (!evaluate_sint_arithmetic(
+                op, left->integer, right->integer, &result))
+            return 0;
+        make_value(out, EXPR_VALUE_SINT);
+        out->integer = result;
+        return 1;
+    }
+    if (left->type == EXPR_VALUE_UINT &&
+        right->type == EXPR_VALUE_UINT) {
+        uint64_t result;
+        if (!evaluate_uint_arithmetic(
+                op, left->uinteger, right->uinteger, &result))
+            return 0;
+        make_value(out, EXPR_VALUE_UINT);
+        out->uinteger = result;
+        return 1;
+    }
+    if (left->type == EXPR_VALUE_FLOAT ||
+        right->type == EXPR_VALUE_FLOAT) {
+        double result;
+        if (!evaluate_float_arithmetic(op, left, right, &result)) return 0;
+        make_value(out, EXPR_VALUE_FLOAT);
+        out->number = result;
+        return 1;
+    }
+    return 0;
+}
+
 static int expr_binary(void *user, qvm_opcode_t op, uint32_t arg,
                        const qvm_value_t *left, const qvm_value_t *right,
                        qvm_value_t *out) {
@@ -1609,6 +1888,8 @@ static int expr_binary(void *user, qvm_opcode_t op, uint32_t arg,
     bool unordered = false;
     bool result;
     (void)user;
+    if (arithmetic_opcode(op))
+        return expr_arithmetic_binary(op, left, right, out);
     if (op == QVM_OP_BAND || op == QVM_OP_BOR) {
         bool logical;
         if (left->type != EXPR_VALUE_BOOL || right->type != EXPR_VALUE_BOOL)
@@ -1645,6 +1926,27 @@ static int expr_binary(void *user, qvm_opcode_t op, uint32_t arg,
     make_value(out, EXPR_VALUE_BOOL);
     out->boolean = result;
     return 1;
+}
+
+static int expr_unary(void *user, qvm_opcode_t op,
+                      const qvm_value_t *input, qvm_value_t *out) {
+    (void)user;
+    if (op != QVM_OP_NEG || input == NULL || out == NULL) return 0;
+    if (input->type == EXPR_VALUE_SINT) {
+        const int64_t value = input->integer;
+        if (value == INT64_MIN) return 0;
+        make_value(out, EXPR_VALUE_SINT);
+        out->integer = -value;
+        return 1;
+    }
+    if (input->type == EXPR_VALUE_FLOAT) {
+        const double result = -input->number;
+        if (!isfinite(result)) return 0;
+        make_value(out, EXPR_VALUE_FLOAT);
+        out->number = result;
+        return 1;
+    }
+    return 0;
 }
 
 static void expr_make_invalid(void *user, qvm_value_t *out) {
@@ -1703,6 +2005,7 @@ static scxml_expr_status expr_evaluate(
     ops.resolve = expr_resolve;
     ops.truthy = expr_truthy;
     ops.binary = expr_binary;
+    ops.unary = expr_unary;
     ops.make_invalid = expr_make_invalid;
     ops.make_bool = expr_make_bool;
     ops.make_number = expr_make_number;
