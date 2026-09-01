@@ -29,8 +29,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 134,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 34,
+    W3C_PASS_DOCUMENT_COUNT = 136,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 32,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -69,6 +69,11 @@ typedef enum w3c_invoke_completion_case {
     W3C_INVOKE_TERMINAL_COMPLETION,
     W3C_INVOKE_CHILD_FINAL_COMPLETION
 } w3c_invoke_completion_case;
+
+typedef enum w3c_invoke_cancellation_case {
+    W3C_INVOKE_CANCEL_STOPS_CHILD = 0,
+    W3C_INVOKE_CANCEL_REJECTS_RETURN
+} w3c_invoke_cancellation_case;
 
 typedef enum w3c_invoke_finalize_case {
     W3C_INVOKE_FINALIZE_BEFORE_SELECTION = 0,
@@ -541,6 +546,19 @@ typedef struct w3c_invoke_completion_probe {
     uint64_t token;
     char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
 } w3c_invoke_completion_probe;
+
+typedef struct w3c_invoke_cancellation_probe {
+    scxml_session *child;
+    size_t start_prepares;
+    size_t start_commits;
+    size_t start_discards;
+    size_t cancel_prepares;
+    size_t cancel_commits;
+    size_t cancel_discards;
+    uint64_t token;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    bool child_cancelled;
+} w3c_invoke_cancellation_probe;
 
 typedef struct w3c_invoke_finalize_start {
     uint64_t token;
@@ -1391,6 +1409,74 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
     *out_ticket = (cflow_statechart_effect_ticket){
         w3c_invoke_completion_cancel_commit,
         w3c_invoke_completion_cancel_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_invoke_cancellation_start_commit(void *user) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe != NULL) ++probe->start_commits;
+}
+
+static void w3c_invoke_cancellation_start_discard(void *user) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe != NULL) ++probe->start_discards;
+}
+
+static void w3c_invoke_cancellation_cancel_commit(void *user) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe == NULL || probe->child == NULL) return;
+    ++probe->cancel_commits;
+    scxml_session_cancel(probe->child);
+    probe->child_cancelled = true;
+}
+
+static void w3c_invoke_cancellation_cancel_discard(void *user) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe != NULL) ++probe->cancel_discards;
+}
+
+static scxml_adapter_status w3c_capture_invoke_cancellation_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe == NULL || probe->child == NULL || request == NULL ||
+        out_ticket == NULL || out_error == NULL ||
+        probe->start_prepares != 0u || request->token == 0u ||
+        request->id == NULL || request->id_size == 0u ||
+        request->id_size >= sizeof(probe->id))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    memcpy(probe->id, request->id, request->id_size);
+    probe->id[request->id_size] = '\0';
+    probe->token = request->token;
+    ++probe->start_prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_invoke_cancellation_start_commit,
+        w3c_invoke_cancellation_start_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status w3c_capture_invoke_cancellation_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_cancellation_probe *probe =
+        (w3c_invoke_cancellation_probe *)user;
+    if (probe == NULL || probe->child == NULL || request == NULL ||
+        out_ticket == NULL || out_error == NULL ||
+        probe->cancel_prepares != 0u || request->token != probe->token ||
+        request->id == NULL || request->id_size != strlen(probe->id) ||
+        memcmp(request->id, probe->id, request->id_size) != 0)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->cancel_prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_invoke_cancellation_cancel_commit,
+        w3c_invoke_cancellation_cancel_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -2645,6 +2731,222 @@ cleanup:
     if (executor_initialized) cflow_executor_destroy(&executor);
     scxml_program_destroy(&program);
     free(source);
+    return succeeded;
+}
+
+static bool run_w3c_invoke_cancellation_fixture(
+    const char *fixture_name, w3c_invoke_cancellation_case test_case) {
+    char parent_path[W3C_FIXTURE_PATH_CAPACITY];
+    char child_path[W3C_FIXTURE_PATH_CAPACITY];
+    char *parent_source = NULL;
+    char *child_source = NULL;
+    size_t parent_source_size = 0u;
+    size_t child_source_size = 0u;
+    scxml_program parent_program = {0};
+    scxml_program child_program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor parent_executor = {0};
+    cflow_executor child_executor = {0};
+    scxml_session parent = {0};
+    scxml_session child = {0};
+    cflow_statechart_instance_stats parent_stats = {0};
+    cflow_statechart_instance_stats child_stats = {0};
+    scxml_invoke_stats invoke_stats = {0};
+    w3c_invoke_cancellation_probe probe = {.child = &child};
+    w3c_result_probe result = {0};
+    const scxml_event_io_adapter event_io = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND,
+        .prepare_send = w3c_capture_result_send,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_invoke_adapter invoke = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(invoke),
+        .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
+        .prepare_start = w3c_capture_invoke_cancellation_start,
+        .prepare_cancel = w3c_capture_invoke_cancellation_cancel,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    scxml_session_config parent_config = {0};
+    scxml_session_config child_config = {0};
+    cflow_event_view child_finish = {0};
+    cflow_event_view child_return = {0};
+    const char *child_fixture = NULL;
+    const char *expected_id = NULL;
+    uint64_t expected_returned_rejected = 0u;
+    bool parent_executor_initialized = false;
+    bool child_executor_initialized = false;
+    bool parent_initialized = false;
+    bool child_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    if (test_case == W3C_INVOKE_CANCEL_STOPS_CHILD) {
+        child_fixture = "test237-child.scxml";
+        expected_id = "invoke237";
+        expected_returned_rejected = 1u;
+    } else if (test_case == W3C_INVOKE_CANCEL_REJECTS_RETURN) {
+        child_fixture = "test252-child.scxml";
+        expected_id = "invoke252";
+        expected_returned_rejected = 2u;
+    } else {
+        return false;
+    }
+    path_size = snprintf(parent_path, sizeof(parent_path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(parent_path))
+        return false;
+    path_size = snprintf(child_path, sizeof(child_path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, child_fixture);
+    if (path_size < 0 || (size_t)path_size >= sizeof(child_path))
+        return false;
+    parent_source = tt_read_file(parent_path, &parent_source_size);
+    child_source = tt_read_file(child_path, &child_source_size);
+    if (parent_source == NULL || child_source == NULL) {
+        info("fixture=%s child=%s could not be read", fixture_name,
+             child_fixture);
+        goto cleanup;
+    }
+    if (scxml_compile(
+            &child_program, child_source, child_source_size, NULL,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s child compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (scxml_compile(
+            &parent_program, parent_source, parent_source_size, NULL,
+            &diagnostic) != SCXML_OK) {
+        info("fixture=%s parent compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&child_executor)) goto cleanup;
+    child_executor_initialized = true;
+    child_config = (scxml_session_config){
+        .program = &child_program,
+        .executor = &child_executor,
+        .external_event_capacity = 1u,
+        .internal_event_capacity = 1u,
+        .completion_capacity = 1u,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 0u,
+        .adapter_internal_event_capacity = 0u};
+    if (scxml_session_init(&child, &child_config) !=
+        CFLOW_STATECHART_INSTANCE_OK) {
+        info("fixture=%s child init error=%s", fixture_name,
+             scxml_session_error(&child));
+        goto cleanup;
+    }
+    child_initialized = true;
+    if (!cflow_executor_wait_idle(&child_executor) ||
+        !scxml_session_get_stats(&child, &child_stats) || child_stats.done ||
+        child_stats.errored || child_stats.cancelled)
+        goto cleanup;
+
+    if (!cflow_executor_serial_init(&parent_executor)) goto cleanup;
+    parent_executor_initialized = true;
+    parent_config = (scxml_session_config){
+        .program = &parent_program,
+        .executor = &parent_executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 2u,
+        .invocation_capacity = 1u,
+        .event_io = &event_io,
+        .adapter_user = &result,
+        .invoke = &invoke,
+        .invoke_user = &probe};
+    if (scxml_session_init(&parent, &parent_config) !=
+        CFLOW_STATECHART_INSTANCE_OK) {
+        info("fixture=%s parent init error=%s", fixture_name,
+             scxml_session_error(&parent));
+        goto cleanup;
+    }
+    parent_initialized = true;
+    if (!cflow_executor_wait_idle(&parent_executor) ||
+        probe.start_prepares != 1u || probe.start_commits != 1u ||
+        probe.start_discards != 0u || probe.token == 0u ||
+        strcmp(probe.id, expected_id) != 0 ||
+        !w3c_admit_external_event(&parent, &parent_program, "leave") ||
+        !cflow_executor_wait_idle(&parent_executor) ||
+        probe.cancel_prepares != 1u || probe.cancel_commits != 1u ||
+        probe.cancel_discards != 0u || !probe.child_cancelled ||
+        !cflow_executor_wait_idle(&child_executor) ||
+        !scxml_session_get_stats(&child, &child_stats))
+        goto cleanup;
+    if (!child_stats.done || child_stats.errored || !child_stats.cancelled ||
+        !scxml_program_event(
+            &child_program, "finish", sizeof("finish") - 1u,
+            &child_finish) ||
+        scxml_session_try_send(&child, &child_finish) !=
+            CFLOW_MAILBOX_CANCELLED)
+        goto cleanup;
+
+    if (test_case == W3C_INVOKE_CANCEL_REJECTS_RETURN) {
+        if (!scxml_program_event(
+                &parent_program, "childToParent",
+                sizeof("childToParent") - 1u, &child_return) ||
+            scxml_session_report_invoke_event(
+                &parent, probe.token, &child_return) !=
+                CFLOW_MAILBOX_INVALID_ARGUMENT)
+            goto cleanup;
+    }
+    if (scxml_session_report_invoke_done(&parent, probe.token) !=
+            CFLOW_MAILBOX_INVALID_ARGUMENT ||
+        !w3c_admit_external_event(&parent, &parent_program, "timeout") ||
+        !cflow_executor_wait_idle(&parent_executor) ||
+        !scxml_session_get_stats(&parent, &parent_stats) ||
+        !scxml_session_get_invoke_stats(&parent, &invoke_stats))
+        goto cleanup;
+
+    succeeded = parent_stats.done && !parent_stats.errored &&
+        child_stats.done && !child_stats.errored && child_stats.cancelled &&
+        result.prepare_send_calls == 1u && result.commits == 1u &&
+        result.discards == 0u && strcmp(result.event, "result.pass") == 0 &&
+        probe.start_prepares == 1u && probe.start_commits == 1u &&
+        probe.start_discards == 0u && probe.cancel_prepares == 1u &&
+        probe.cancel_commits == 1u && probe.cancel_discards == 0u &&
+        invoke_stats.started == 1u && invoke_stats.start_failed == 0u &&
+        invoke_stats.cancelled == 1u && invoke_stats.cancel_failed == 0u &&
+        invoke_stats.completed == 0u &&
+        invoke_stats.returned_accepted == 0u &&
+        invoke_stats.returned_rejected == expected_returned_rejected &&
+        invoke_stats.active == 0u;
+    if (!succeeded)
+        info("fixture=%s parent_done=%d child_cancelled=%d result=%s start=%zu/%zu/%zu cancel=%zu/%zu/%zu accepted=%llu rejected=%llu completed=%llu active=%zu parent_error=%s child_error=%s",
+             fixture_name, parent_stats.done ? 1 : 0,
+             child_stats.cancelled ? 1 : 0, result.event,
+             probe.start_prepares, probe.start_commits,
+             probe.start_discards, probe.cancel_prepares,
+             probe.cancel_commits, probe.cancel_discards,
+             (unsigned long long)invoke_stats.returned_accepted,
+             (unsigned long long)invoke_stats.returned_rejected,
+             (unsigned long long)invoke_stats.completed,
+             invoke_stats.active, scxml_session_error(&parent),
+             scxml_session_error(&child));
+
+cleanup:
+    if (parent_initialized &&
+        scxml_session_destroy(&parent) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (child_initialized &&
+        scxml_session_destroy(&child) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (parent_executor_initialized)
+        cflow_executor_destroy(&parent_executor);
+    if (child_executor_initialized)
+        cflow_executor_destroy(&child_executor);
+    scxml_program_destroy(&parent_program);
+    scxml_program_destroy(&child_program);
+    free(parent_source);
+    free(child_source);
     return succeeded;
 }
 
@@ -4707,9 +5009,19 @@ suite("SCXML W3C-derived conformance regression corpus") {
             "test236.scxml", W3C_INVOKE_TERMINAL_COMPLETION));
     }
 
+    it("test 237 cancels the child when the invoking state exits") {
+        check_true(run_w3c_invoke_cancellation_fixture(
+            "test237.scxml", W3C_INVOKE_CANCEL_STOPS_CHILD));
+    }
+
     it("test 247 reports completion after a child reaches top-level final") {
         check_true(run_w3c_invoke_completion_fixture(
             "test247.scxml", W3C_INVOKE_CHILD_FINAL_COMPLETION));
+    }
+
+    it("test 252 rejects child Events received after cancellation") {
+        check_true(run_w3c_invoke_cancellation_fixture(
+            "test252.scxml", W3C_INVOKE_CANCEL_REJECTS_RETURN));
     }
 
     it("test 530 evaluates invoke content when invoke executes") {

@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 132
-local PASS transformations, records 36 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 136
+local PASS transformations, records 32 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -79,7 +79,9 @@ Status meanings are strict:
 | `test234.scxml` | [test234.txml](https://www.w3.org/Voice/2013/scxml-irp/234/test234.txml) | A returned Event executes only the `finalize` belonging to its exact committed invocation token. |
 | `test235.scxml` | [test235.txml](https://www.w3.org/Voice/2013/scxml-irp/235/test235.txml) | Completion for explicit invocation ID `foo` passes only when the selected Event's `_event.name` is exactly `done.invoke.foo`. |
 | `test236.scxml` | [test236.txml](https://www.w3.org/Voice/2013/scxml-irp/236/test236.txml) | A normal return precedes completion; after completion is processed, the stale token is rejected and its late Event cannot reach selection. |
+| `test237.scxml` | [test237.txml](https://www.w3.org/Voice/2013/scxml-irp/237/test237.txml) | Leaving the invoking state commits cancellation of a real host-owned child; the cancelled child rejects further processing and its stale completion token is rejected by the parent. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
+| `test252.scxml` | [test252.txml](https://www.w3.org/Voice/2013/scxml-irp/252/test252.txml) | After cancellation, both a normal child Event and completion report through the stale token are rejected; only an independent parent Event can reach pass. |
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
@@ -451,6 +453,17 @@ session from `test247-child.scxml`, observes that session's top-level-final
 `done` state, destroys it cleanly, and only then reports one completion through
 the parent token. The child remains host-owned; production code gains no child
 interpreter, cross-session registry, transport, or thread.
+
+Tests 237 and 252 use a second real host-owned TurboSCXML session that remains
+active until the parent leaves its invoking state. The committed cancel ticket
+calls `scxml_session_cancel()` on that child without waiting or recursively
+pumping either executor. Test 237 requires subsequent child admission to return
+`CANCELLED` and stale completion reporting to return `INVALID_ARGUMENT`. Test
+252 attempts both a normal returned Event and completion after cancellation;
+both are rejected before parent selection, and only an independent timeout can
+reach pass. The upstream child `onexit` producer is replaced by that explicit
+post-cancel report, so test 250 remains `UNSUPPORTED` until controlled child
+cancellation can execute every active-state `onexit` handler.
 
 Tests 229 and 230 replace the invoked child implementation with one bounded
 autoforward host. Test 229 reports `childToParent` through the committed child
