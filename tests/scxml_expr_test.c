@@ -323,6 +323,22 @@ static bool evaluate_expression(const char *source,
     return result;
 }
 
+static scxml_expr_status evaluate_value_expression(
+    const char *source, const scxml_expr_root *root,
+    scxml_expr_value *out_value, scxml_expr_diagnostic *diagnostic) {
+    scxml_expr_program program = {0};
+    state_fixture states = {false};
+    scxml_expr_status status = compile_value_expression(
+        &program, source, diagnostic);
+    if (status == SCXML_EXPR_OK) {
+        status = scxml_expr_evaluate_value(
+            &program, root, state_is_active, &states,
+            out_value, diagnostic);
+    }
+    scxml_expr_program_destroy(&program);
+    return status;
+}
+
 spec("TurboSCXML private SCXML expressions") {
   static scxml_expr_root root;
 
@@ -447,6 +463,101 @@ spec("TurboSCXML private SCXML expressions") {
                       &program, "order.count", NULL, &diagnostic),
                   SCXML_EXPR_TYPE_MISMATCH);
       check_null(program.impl);
+    }
+  }
+
+  it("evaluates checked arithmetic with conventional precedence") {
+    const char *sources[] = {
+        "order.count + 5 * 2",
+        "(order.count + 5) * 2",
+        "10u - 3u",
+        "order.ratio * 2 + order.count",
+        "-order.count",
+        "+order.ratio",
+        "-7 / 3",
+        "-7 % 3",
+        "-9223372036854775808"};
+    const scxml_expr_value_kind kinds[] = {
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_UINT,
+        SCXML_EXPR_VALUE_FLOAT,
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_FLOAT,
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_SINT,
+        SCXML_EXPR_VALUE_SINT};
+    const int64_t signed_results[] = {
+        INT64_C(7), INT64_C(4), INT64_C(0), INT64_C(0), INT64_C(3),
+        INT64_C(0), INT64_C(-2), INT64_C(-1), INT64_MIN};
+    size_t index;
+
+    for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+      scxml_expr_diagnostic diagnostic = {0};
+      scxml_expr_value value = {0};
+      check_equal(evaluate_value_expression(
+                      sources[index], &root, &value, &diagnostic),
+                  SCXML_EXPR_OK);
+      check_equal(value.kind, kinds[index]);
+      if (value.kind == SCXML_EXPR_VALUE_SINT)
+        check_equal(value.data.sint, signed_results[index]);
+      else if (value.kind == SCXML_EXPR_VALUE_UINT)
+        check_equal(value.data.uint, UINT64_C(7));
+      else if (value.kind == SCXML_EXPR_VALUE_FLOAT)
+        check_true(fabs(value.data.number -
+                        (index == 3u ? 0.0 : 1.5)) < 1e-12);
+    }
+
+    check_true(evaluate_expression(
+        "order.count + 5 * 2 == 7 && -order.count == 3", &root));
+    check_true(evaluate_expression(
+        "order.ratio + 0.5 == 2.0 && (10u / 2u) == 5u", &root));
+  }
+
+  it("rejects arithmetic with incompatible static operand kinds") {
+    const char *sources[] = {
+        "1 + 2u",
+        "2u - 1",
+        "\"left\" + \"right\"",
+        "-1u",
+        "1.0 % 1.0",
+        "true * 2"};
+    size_t index;
+
+    for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+      scxml_expr_program program = {0};
+      scxml_expr_diagnostic diagnostic = {0};
+      check_equal(compile_value_expression(
+                      &program, sources[index], &diagnostic),
+                  SCXML_EXPR_TYPE_MISMATCH);
+      check_null(program.impl);
+    }
+  }
+
+  it("fails arithmetic faults without changing the output value") {
+    const char *sources[] = {
+        "9223372036854775807 + 1",
+        "-9223372036854775808 - 1",
+        "9223372036854775807 * 2",
+        "18446744073709551615u + 1u",
+        "0u - 1u",
+        "1 / 0",
+        "1u % 0u",
+        "1.0 / 0.0",
+        "1e308 * 1e308",
+        "-(-9223372036854775808)"};
+    size_t index;
+
+    for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+      scxml_expr_diagnostic diagnostic = {0};
+      scxml_expr_value value = {
+          .kind = SCXML_EXPR_VALUE_BOOL,
+          .data.boolean = true};
+      check_equal(evaluate_value_expression(
+                      sources[index], &root, &value, &diagnostic),
+                  SCXML_EXPR_EVALUATION_ERROR);
+      check_equal(value.kind, SCXML_EXPR_VALUE_BOOL);
+      check_true(value.data.boolean);
     }
   }
 
