@@ -1,4 +1,5 @@
 #include <cflow/executor.h>
+#include <cmeta/struct.h>
 #include <scxml/scxml.h>
 
 #include "tinytest.h"
@@ -19,6 +20,35 @@
 static const char HOST_SCXML_PROCESSOR[] =
     "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
 static const char HOST_ORIGIN_TYPE[] = "scxml";
+
+Struct(host_cmeta_state,
+    (int, unused)
+);
+
+static const cmeta_type_traits HOST_CMETA_STATE_TRAITS = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
+static const cmeta_type_desc HOST_CMETA_STATE_TYPE = {
+    .name = "host_cmeta_state",
+    .size = sizeof(host_cmeta_state),
+    .align = _Alignof(host_cmeta_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &HOST_CMETA_STATE_TRAITS};
+static const cmeta_data_field_desc HOST_CMETA_STATE_FIELDS[] = {
+    {"test.scxml.host.unused", "unused", offsetof(host_cmeta_state, unused),
+     &cmeta_data_int}};
+static const cmeta_data_struct_shape HOST_CMETA_STATE_SHAPE = {
+    .layout = StructMeta(host_cmeta_state),
+    .fields = HOST_CMETA_STATE_FIELDS,
+    .field_count = sizeof(HOST_CMETA_STATE_FIELDS) /
+                   sizeof(HOST_CMETA_STATE_FIELDS[0])};
+static const cmeta_data_desc HOST_CMETA_STATE_DESC = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.host.state",
+    .display_name = "SCXML host state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &HOST_CMETA_STATE_TYPE,
+    .shape = &HOST_CMETA_STATE_SHAPE};
 
 typedef enum host_message_state {
     HOST_MESSAGE_FREE = 0,
@@ -198,6 +228,7 @@ static bool host_router_activate(
 }
 
 static bool host_router_unregister(host_router *router, size_t endpoint);
+static size_t host_router_discard_pending(host_router *router);
 
 static bool host_router_register(
     host_router *router, scxml_session *session,
@@ -313,6 +344,28 @@ static void host_release_message_locked(host_message *message) {
     if (adapter != NULL && adapter->outstanding != 0u)
         --adapter->outstanding;
     memset(message, 0, sizeof(*message));
+}
+
+static size_t host_router_discard_pending(host_router *router) {
+    size_t discarded = 0u;
+    size_t index;
+    if (router == NULL) return SIZE_MAX;
+    turbo_mutex_lock(&router->lock);
+    for (index = 0u; index < router->message_capacity; ++index) {
+        if (router->messages[index].state == HOST_MESSAGE_INFLIGHT) {
+            turbo_mutex_unlock(&router->lock);
+            return SIZE_MAX;
+        }
+    }
+    for (index = 0u; index < router->message_capacity; ++index) {
+        if (router->messages[index].state == HOST_MESSAGE_RESERVED ||
+            router->messages[index].state == HOST_MESSAGE_READY) {
+            host_release_message_locked(&router->messages[index]);
+            ++discarded;
+        }
+    }
+    turbo_mutex_unlock(&router->lock);
+    return discarded;
 }
 
 static void host_ticket_commit(void *user) {
@@ -546,24 +599,52 @@ static scxml_status host_compile(
         program, source, strlen(source), NULL, diagnostic);
 }
 
-static scxml_status host_compile_fixture(
-    const char *fixture_name, scxml_program *program,
-    scxml_diagnostic *diagnostic) {
+static bool host_read_fixture(
+    const char *fixture_name, char **out_source, size_t *out_size) {
     char path[512];
-    char *source = NULL;
-    size_t source_size = 0u;
     int path_size;
-    scxml_status status;
-    if (fixture_name == NULL || program == NULL || diagnostic == NULL)
-        return SCXML_INVALID_ARGUMENT;
+    if (fixture_name == NULL || out_source == NULL || out_size == NULL)
+        return false;
+    *out_source = NULL;
+    *out_size = 0u;
     path_size = snprintf(path, sizeof(path), "%s/%s",
                          SCXML_W3C_FIXTURE_DIR, fixture_name);
     if (path_size < 0 || (size_t)path_size >= sizeof(path))
-        return SCXML_LIMIT_EXCEEDED;
-    source = tt_read_file(path, &source_size);
-    if (source == NULL) return SCXML_XML_ERROR;
+        return false;
+    *out_source = tt_read_file(path, out_size);
+    return *out_source != NULL;
+}
+
+static scxml_status host_compile_fixture(
+    const char *fixture_name, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_status status;
+    if (program == NULL || diagnostic == NULL)
+        return SCXML_INVALID_ARGUMENT;
+    if (!host_read_fixture(fixture_name, &source, &source_size))
+        return SCXML_XML_ERROR;
     status = scxml_compile(
         program, source, source_size, NULL, diagnostic);
+    free(source);
+    return status;
+}
+
+static scxml_status host_compile_cmeta_fixture(
+    const char *fixture_name, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    const scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&HOST_CMETA_STATE_DESC);
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_status status;
+    if (program == NULL || diagnostic == NULL)
+        return SCXML_INVALID_ARGUMENT;
+    if (!host_read_fixture(fixture_name, &source, &source_size))
+        return SCXML_XML_ERROR;
+    status = scxml_compile_cmeta(
+        program, source, source_size, NULL, &options, diagnostic);
     free(source);
     return status;
 }
@@ -846,13 +927,179 @@ cleanup:
     return succeeded;
 }
 
+typedef enum host_invoke_ticket_kind {
+    HOST_INVOKE_TICKET_NONE = 0,
+    HOST_INVOKE_TICKET_START,
+    HOST_INVOKE_TICKET_CANCEL
+} host_invoke_ticket_kind;
+
+typedef struct host_invoke_probe host_invoke_probe;
+
+typedef struct host_invoke_ticket_row {
+    host_invoke_probe *probe;
+    host_invoke_ticket_kind kind;
+    bool live;
+    bool terminalized;
+} host_invoke_ticket_row;
+
+struct host_invoke_probe {
+    uint64_t token;
+    char id[HOST_SEND_ID_CAPACITY];
+    size_t start_prepares;
+    size_t start_commits;
+    size_t start_discards;
+    size_t cancel_prepares;
+    size_t cancel_commits;
+    size_t cancel_discards;
+    size_t terminal_violations;
+    host_invoke_ticket_row start_ticket;
+    host_invoke_ticket_row cancel_ticket;
+    bool duplicate_terminal_on_close;
+    bool closed;
+};
+
+static bool host_invoke_terminal(
+    host_invoke_ticket_row *ticket, bool committed) {
+    host_invoke_probe *probe = ticket != NULL ? ticket->probe : NULL;
+    if (probe == NULL) return false;
+    if (!ticket->live || ticket->terminalized) {
+        ++probe->terminal_violations;
+        return false;
+    }
+    if (ticket->kind == HOST_INVOKE_TICKET_START) {
+        if (committed)
+            ++probe->start_commits;
+        else
+            ++probe->start_discards;
+    } else if (ticket->kind == HOST_INVOKE_TICKET_CANCEL) {
+        if (committed)
+            ++probe->cancel_commits;
+        else
+            ++probe->cancel_discards;
+    } else {
+        ++probe->terminal_violations;
+        return false;
+    }
+    ticket->live = false;
+    ticket->terminalized = true;
+    return true;
+}
+
+static void host_invoke_commit(void *user) {
+    (void)host_invoke_terminal((host_invoke_ticket_row *)user, true);
+}
+
+static void host_invoke_discard(void *user) {
+    (void)host_invoke_terminal((host_invoke_ticket_row *)user, false);
+}
+
+static bool host_invoke_prepare_ticket(
+    host_invoke_probe *probe, host_invoke_ticket_kind kind,
+    cflow_statechart_effect_ticket *out_ticket) {
+    host_invoke_ticket_row *ticket;
+    if (probe == NULL || out_ticket == NULL ||
+        (kind != HOST_INVOKE_TICKET_START &&
+         kind != HOST_INVOKE_TICKET_CANCEL))
+        return false;
+    ticket = kind == HOST_INVOKE_TICKET_START
+        ? &probe->start_ticket : &probe->cancel_ticket;
+    if (ticket->live || ticket->terminalized) return false;
+    *ticket = (host_invoke_ticket_row){
+        .probe = probe, .kind = kind, .live = true};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        host_invoke_commit, host_invoke_discard, ticket};
+    return true;
+}
+
+static scxml_adapter_status host_invoke_prepare_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    static const char expected_id[] = "foo";
+    static const char expected_type[] = "http://www.w3.org/TR/scxml/";
+    static const char expected_src[] = "test253-child.scxml";
+    host_invoke_probe *probe = (host_invoke_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->closed || probe->start_ticket.live ||
+        request->token == 0u || request->id == NULL ||
+        request->type == NULL || request->src == NULL ||
+        request->autoforward || request->payload.kind != SCXML_PAYLOAD_NONE ||
+        !host_text_equal(request->id, request->id_size, expected_id) ||
+        !host_text_equal(request->type, request->type_size, expected_type) ||
+        !host_text_equal(request->src, request->src_size, expected_src) ||
+        probe->start_prepares != 0u ||
+        !host_copy(probe->id, sizeof(probe->id),
+                   request->id, request->id_size) ||
+        !host_invoke_prepare_ticket(
+            probe, HOST_INVOKE_TICKET_START, out_ticket)) {
+        if (out_error != NULL)
+            *out_error = "unexpected invoked SCXML start request";
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    probe->token = request->token;
+    ++probe->start_prepares;
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status host_invoke_prepare_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    host_invoke_probe *probe = (host_invoke_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->closed || probe->cancel_ticket.live ||
+        request->token == 0u || request->id == NULL ||
+        request->token != probe->token || probe->start_commits != 1u ||
+        probe->cancel_prepares != 0u ||
+        !host_text_equal(request->id, request->id_size, probe->id) ||
+        !host_invoke_prepare_ticket(
+            probe, HOST_INVOKE_TICKET_CANCEL, out_ticket)) {
+        if (out_error != NULL)
+            *out_error = "unexpected invoked SCXML cancel request";
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    ++probe->cancel_prepares;
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void host_invoke_close(void *user) {
+    host_invoke_probe *probe = (host_invoke_probe *)user;
+    if (probe == NULL) return;
+    probe->closed = true;
+    if (probe->duplicate_terminal_on_close)
+        host_invoke_terminal(&probe->cancel_ticket, true);
+}
+
+static bool host_invoke_is_quiescent(void *user) {
+    const host_invoke_probe *probe = (const host_invoke_probe *)user;
+    return probe != NULL && probe->closed &&
+        !probe->start_ticket.live && !probe->cancel_ticket.live;
+}
+
+static const scxml_invoke_adapter HOST_INVOKE_ADAPTER = {
+    .abi_version = SCXML_ADAPTER_ABI,
+    .struct_size = sizeof(scxml_invoke_adapter),
+    .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
+    .prepare_start = host_invoke_prepare_start,
+    .prepare_cancel = host_invoke_prepare_cancel,
+    .close = host_invoke_close,
+    .is_quiescent = host_invoke_is_quiescent};
+
 typedef enum host_w3c_route_kind {
     HOST_W3C_INVOKE_TARGET = 0,
-    HOST_W3C_BIDIRECTIONAL
+    HOST_W3C_BIDIRECTIONAL,
+    HOST_W3C_INVOKED_EVENT_IO
 } host_w3c_route_kind;
 
+typedef struct host_w3c_route_control {
+    bool fail_after_child_ready;
+    bool duplicate_terminal_on_close;
+    bool cleanup_completed;
+} host_w3c_route_control;
+
 static bool host_run_w3c_route_fixture(
-    const char *fixture_name, host_w3c_route_kind kind) {
+    const char *fixture_name, host_w3c_route_kind kind,
+    host_w3c_route_control *control) {
     static const char invoke_child_source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
         "<state id='waiting'><transition event='parentToChild' "
@@ -865,15 +1112,24 @@ static bool host_run_w3c_route_fixture(
         "event='parentToChild' target='done'><send target='#_parent' "
         "event='eventReceived'/></transition></state>"
         "<final id='done'/></scxml>";
+    const bool invoked_event_io = kind == HOST_W3C_INVOKED_EVENT_IO;
     const char *child_source = kind == HOST_W3C_INVOKE_TARGET
         ? invoke_child_source : roundtrip_child_source;
     const char *alias = kind == HOST_W3C_INVOKE_TARGET
-        ? "#_invokedChild" : "#_child";
+        ? "#_invokedChild" : invoked_event_io ? "#_foo" : "#_child";
     const size_t expected_deliveries = kind == HOST_W3C_INVOKE_TARGET
         ? 2u : 3u;
+    const char *expected_last_event = invoked_event_io
+        ? "success" : "eventReceived";
+    const host_cmeta_state initial_data = {0};
+    const scxml_cmeta_session_options_v1 cmeta_data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(cmeta_data),
+        .initial_state = &initial_data};
     host_router router;
     host_adapter_context parent_adapter;
     host_adapter_context child_adapter;
+    host_invoke_probe invoke_probe = {0};
     scxml_program parent_program = {0};
     scxml_program child_program = {0};
     scxml_diagnostic diagnostic = {0};
@@ -885,6 +1141,8 @@ static bool host_run_w3c_route_fixture(
     scxml_session_config child_config;
     cflow_statechart_instance_stats parent_stats = {0};
     cflow_statechart_instance_stats child_stats = {0};
+    scxml_invoke_stats invoke_stats = {0};
+    cflow_statechart_instance_status init_status;
     size_t parent_endpoint = SIZE_MAX;
     size_t child_endpoint = SIZE_MAX;
     size_t delivery;
@@ -893,21 +1151,35 @@ static bool host_run_w3c_route_fixture(
     bool child_executor_initialized = false;
     bool parent_initialized = false;
     bool child_initialized = false;
+    bool child_destroyed = false;
+    bool parent_destroyed = false;
+    bool child_unregistered = false;
+    bool parent_unregistered = false;
     bool succeeded = false;
 
     if (fixture_name == NULL ||
         (kind != HOST_W3C_INVOKE_TARGET &&
-         kind != HOST_W3C_BIDIRECTIONAL))
+         kind != HOST_W3C_BIDIRECTIONAL &&
+         kind != HOST_W3C_INVOKED_EVENT_IO))
         return false;
     if (!host_router_init(&router, HOST_MESSAGE_CAPACITY)) goto cleanup;
     router_initialized = true;
     host_adapter_init(&parent_adapter, &router);
     host_adapter_init(&child_adapter, &router);
-    if (host_compile_fixture(
-            fixture_name, &parent_program, &diagnostic) != SCXML_OK ||
-        host_compile(child_source, &child_program, &diagnostic) != SCXML_OK ||
-        !cflow_executor_serial_init(&parent_executor))
+    if (invoked_event_io) {
+        if (host_compile_cmeta_fixture(
+                fixture_name, &parent_program, &diagnostic) != SCXML_OK ||
+            host_compile_cmeta_fixture(
+                "test253-child.scxml", &child_program,
+                &diagnostic) != SCXML_OK)
+            goto cleanup;
+    } else if (host_compile_fixture(
+                   fixture_name, &parent_program, &diagnostic) != SCXML_OK ||
+               host_compile(
+                   child_source, &child_program, &diagnostic) != SCXML_OK) {
         goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&parent_executor)) goto cleanup;
     parent_executor_initialized = true;
     if (!cflow_executor_serial_init(&child_executor)) goto cleanup;
     child_executor_initialized = true;
@@ -917,6 +1189,13 @@ static bool host_run_w3c_route_fixture(
     parent_config.adapter_user = &parent_adapter;
     child_config.event_io = &HOST_ADAPTER;
     child_config.adapter_user = &child_adapter;
+    if (invoked_event_io) {
+        invoke_probe.duplicate_terminal_on_close =
+            control != NULL && control->duplicate_terminal_on_close;
+        parent_config.invocation_capacity = 1u;
+        parent_config.invoke = &HOST_INVOKE_ADAPTER;
+        parent_config.invoke_user = &invoke_probe;
+    }
     if (!host_router_reserve(
             &router, true, &parent_adapter, &parent_endpoint) ||
         !host_router_reserve(
@@ -924,21 +1203,32 @@ static bool host_run_w3c_route_fixture(
         !host_router_set_parent(
             &router, child_endpoint, parent_endpoint) ||
         !host_router_set_invoke_alias(
-            &router, parent_endpoint, alias, child_endpoint) ||
-        scxml_session_init(&parent, &parent_config) !=
-            CFLOW_STATECHART_INSTANCE_OK)
+            &router, parent_endpoint, alias, child_endpoint))
         goto cleanup;
+    init_status = invoked_event_io
+        ? scxml_session_init_cmeta(&parent, &parent_config, &cmeta_data)
+        : scxml_session_init(&parent, &parent_config);
+    if (init_status != CFLOW_STATECHART_INSTANCE_OK) goto cleanup;
     parent_initialized = true;
     if (!host_router_activate(
             &router, parent_endpoint, &parent, &parent_program) ||
-        scxml_session_init(&child, &child_config) !=
-            CFLOW_STATECHART_INSTANCE_OK)
+        !cflow_executor_wait_idle(&parent_executor))
         goto cleanup;
+    if (invoked_event_io &&
+        (invoke_probe.start_prepares != 1u ||
+         invoke_probe.start_commits != 1u ||
+         invoke_probe.start_discards != 0u || invoke_probe.token == 0u))
+        goto cleanup;
+    init_status = invoked_event_io
+        ? scxml_session_init_cmeta(&child, &child_config, &cmeta_data)
+        : scxml_session_init(&child, &child_config);
+    if (init_status != CFLOW_STATECHART_INSTANCE_OK) goto cleanup;
     child_initialized = true;
     if (!host_router_activate(
             &router, child_endpoint, &child, &child_program) ||
-        !cflow_executor_wait_idle(&parent_executor) ||
         !cflow_executor_wait_idle(&child_executor))
+        goto cleanup;
+    if (control != NULL && control->fail_after_child_ready)
         goto cleanup;
     for (delivery = 0u; delivery < expected_deliveries; ++delivery) {
         if (host_router_ready_count(&router) != 1u ||
@@ -949,31 +1239,88 @@ static bool host_run_w3c_route_fixture(
     }
     if (host_router_ready_count(&router) != 0u ||
         router.last_delivery.count != expected_deliveries ||
-        strcmp(router.last_delivery.event, "eventReceived") != 0 ||
+        strcmp(router.last_delivery.event, expected_last_event) != 0 ||
         !scxml_session_get_stats(&parent, &parent_stats) ||
         !scxml_session_get_stats(&child, &child_stats))
         goto cleanup;
     succeeded = parent_stats.done && !parent_stats.errored &&
         child_stats.done && !child_stats.errored;
+    if (invoked_event_io) {
+        if (!scxml_session_get_invoke_stats(&parent, &invoke_stats))
+            goto cleanup;
+        succeeded = succeeded && invoke_probe.start_prepares == 1u &&
+            invoke_probe.start_commits == 1u &&
+            invoke_probe.start_discards == 0u &&
+            invoke_probe.cancel_prepares == 1u &&
+            invoke_probe.cancel_commits == 1u &&
+            invoke_probe.cancel_discards == 0u &&
+            invoke_probe.terminal_violations == 0u &&
+            invoke_probe.start_ticket.terminalized &&
+            invoke_probe.cancel_ticket.terminalized &&
+            invoke_stats.started == 1u &&
+            invoke_stats.start_failed == 0u &&
+            invoke_stats.cancelled == 1u &&
+            invoke_stats.cancel_failed == 0u &&
+            invoke_stats.active == 0u;
+    }
 
 cleanup:
-    if (child_initialized &&
-        scxml_session_destroy(&child) != CFLOW_STATECHART_INSTANCE_OK)
+    if (child_initialized) scxml_session_close(&child);
+    if (parent_initialized) scxml_session_close(&parent);
+    child_destroyed = !child_initialized;
+    parent_destroyed = !parent_initialized;
+    child_unregistered = !router_initialized || child_endpoint == SIZE_MAX;
+    parent_unregistered = !router_initialized || parent_endpoint == SIZE_MAX;
+    {
+        bool cleanup_safe = true;
+        if (child_executor_initialized &&
+            !cflow_executor_wait_idle(&child_executor))
+            cleanup_safe = false;
+        if (parent_executor_initialized &&
+            !cflow_executor_wait_idle(&parent_executor))
+            cleanup_safe = false;
+        if (cleanup_safe && router_initialized &&
+            host_router_discard_pending(&router) == SIZE_MAX)
+            cleanup_safe = false;
+        if (cleanup_safe) {
+            child_destroyed = !child_initialized ||
+                scxml_session_destroy(&child) ==
+                    CFLOW_STATECHART_INSTANCE_OK;
+            parent_destroyed = !parent_initialized ||
+                scxml_session_destroy(&parent) ==
+                    CFLOW_STATECHART_INSTANCE_OK;
+        }
+        if (cleanup_safe && child_destroyed && parent_destroyed) {
+            if (!child_unregistered)
+                child_unregistered = host_router_unregister(
+                    &router, child_endpoint);
+            if (!parent_unregistered)
+                parent_unregistered = host_router_unregister(
+                    &router, parent_endpoint);
+        }
+        cleanup_safe = cleanup_safe && child_destroyed &&
+            parent_destroyed && child_unregistered && parent_unregistered;
+        if (!cleanup_safe) succeeded = false;
+        if (cleanup_safe) {
+            if (child_executor_initialized)
+                cflow_executor_destroy(&child_executor);
+            if (parent_executor_initialized)
+                cflow_executor_destroy(&parent_executor);
+            scxml_program_destroy(&child_program);
+            scxml_program_destroy(&parent_program);
+            if (router_initialized) host_router_destroy(&router);
+        }
+    }
+    if (invoked_event_io && parent_initialized &&
+        (!invoke_probe.closed || invoke_probe.terminal_violations != 0u ||
+         !invoke_probe.start_ticket.terminalized ||
+         invoke_probe.start_ticket.live ||
+         !invoke_probe.cancel_ticket.terminalized ||
+         invoke_probe.cancel_ticket.live))
         succeeded = false;
-    if (parent_initialized &&
-        scxml_session_destroy(&parent) != CFLOW_STATECHART_INSTANCE_OK)
-        succeeded = false;
-    if (router_initialized && child_endpoint != SIZE_MAX)
-        (void)host_router_unregister(&router, child_endpoint);
-    if (router_initialized && parent_endpoint != SIZE_MAX)
-        (void)host_router_unregister(&router, parent_endpoint);
-    if (child_executor_initialized)
-        cflow_executor_destroy(&child_executor);
-    if (parent_executor_initialized)
-        cflow_executor_destroy(&parent_executor);
-    scxml_program_destroy(&child_program);
-    scxml_program_destroy(&parent_program);
-    if (router_initialized) host_router_destroy(&router);
+    if (control != NULL)
+        control->cleanup_completed = child_destroyed && parent_destroyed &&
+            child_unregistered && parent_unregistered;
     return succeeded;
 }
 
@@ -1051,12 +1398,57 @@ spec("SCXML host Event I/O adapter contract") {
 
     it("routes a parent send through #_invokeid") {
         check_true(host_run_w3c_route_fixture(
-            "test192.scxml", HOST_W3C_INVOKE_TARGET));
+            "test192.scxml", HOST_W3C_INVOKE_TARGET, NULL));
     }
 
     it("exchanges SCXML Events between parent and child sessions") {
         check_true(host_run_w3c_route_fixture(
-            "test347.scxml", HOST_W3C_BIDIRECTIONAL));
+            "test347.scxml", HOST_W3C_BIDIRECTIONAL, NULL));
+    }
+
+    it("test 253 uses SCXML Event I/O in both invoke directions") {
+        check_true(host_run_w3c_route_fixture(
+            "test253.scxml", HOST_W3C_INVOKED_EVENT_IO, NULL));
+    }
+
+    it("cleans a committed child route after injected failure") {
+        host_w3c_route_control control = {
+            .fail_after_child_ready = true};
+
+        check_false(host_run_w3c_route_fixture(
+            "test253.scxml", HOST_W3C_INVOKED_EVENT_IO, &control));
+        check_true(control.cleanup_completed);
+    }
+
+    it("rejects a duplicate invoke terminal during shutdown") {
+        host_w3c_route_control control = {
+            .duplicate_terminal_on_close = true};
+
+        check_false(host_run_w3c_route_fixture(
+            "test253.scxml", HOST_W3C_INVOKED_EVENT_IO, &control));
+        check_true(control.cleanup_completed);
+    }
+
+    it("detects a duplicate invoke ticket terminal call") {
+        host_invoke_probe probe = {0};
+        scxml_invoke_start_request request = {
+            .token = 1u,
+            .id = "foo",
+            .id_size = sizeof("foo") - 1u,
+            .type = "http://www.w3.org/TR/scxml/",
+            .type_size = sizeof("http://www.w3.org/TR/scxml/") - 1u,
+            .src = "test253-child.scxml",
+            .src_size = sizeof("test253-child.scxml") - 1u};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+
+        check_equal(host_invoke_prepare_start(
+                        &probe, &request, &ticket, &error),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        ticket.commit(ticket.user);
+        check_equal(probe.start_commits, (size_t)1u);
+        check_equal(probe.terminal_violations, (size_t)1u);
     }
 
     it("publishes committed cross-session sends with SCXML field mapping") {
@@ -1285,12 +1677,14 @@ spec("SCXML host Event I/O adapter contract") {
         check_equal(host_prepare_send(
                         &adapter, &request, &first, &error),
                     SCXML_ADAPTER_ACCEPTED);
+        first.commit(first.user);
         scxml_session_close(&owner);
         check_false(host_adapter_is_quiescent(&adapter));
         check_equal(host_prepare_send(
                         &adapter, &request, &second, &error),
                     SCXML_ADAPTER_CLOSED);
-        first.discard(first.user);
+        check_equal(host_router_ready_count(&router), (size_t)1u);
+        check_equal(host_router_discard_pending(&router), (size_t)1u);
         check_true(host_adapter_is_quiescent(&adapter));
         check_equal(host_router_ready_count(&router), (size_t)0u);
 

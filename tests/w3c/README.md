@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 136
-local PASS transformations, records 32 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 137
+local PASS transformations, records 31 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -82,6 +82,7 @@ Status meanings are strict:
 | `test237.scxml` | [test237.txml](https://www.w3.org/Voice/2013/scxml-irp/237/test237.txml) | Leaving the invoking state commits cancellation of a real host-owned child; the cancelled child rejects further processing and its stale completion token is rejected by the parent. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
 | `test252.scxml` | [test252.txml](https://www.w3.org/Voice/2013/scxml-irp/252/test252.txml) | After cancellation, both a normal child Event and completion report through the stale token are rejected; only an independent parent Event can reach pass. |
+| `test253.scxml` | [test253.txml](https://www.w3.org/Voice/2013/scxml-irp/253/test253.txml) | One active canonical SCXML invocation exchanges `childRunning`, `parentToChild`, and `success` through `#_parent`/`#_foo`; both receivers require the SCXML Event I/O `origintype`. |
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
@@ -464,6 +465,15 @@ both are rejected before parent selection, and only an independent timeout can
 reach pass. The upstream child `onexit` producer is replaced by that explicit
 post-cancel report, so test 250 remains `UNSUPPORTED` until controlled child
 cancellation can execute every active-state `onexit` handler.
+
+Test 253 uses the same host-owned child boundary but keeps a live canonical
+SCXML invocation in the parent. The host commits that exact start before
+activating `test253-child.scxml`, maps child `#_parent` to the parent endpoint
+and parent `#_foo` to the child endpoint, then pumps exactly three committed
+external Events. Both CMeta sessions reject the route unless the received
+`_event.origintype` is the W3C-permitted `scxml` processor short name. The
+separate child fixture isolates the inline-markup interpretation tracked by
+test 239; it does not add a child interpreter or file loader to production.
 
 Tests 229 and 230 replace the invoked child implementation with one bounded
 autoforward host. Test 229 reports `childToParent` through the committed child

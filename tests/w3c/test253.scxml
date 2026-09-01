@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="invoking">
+  <state id="invoking" initial="waiting">
+    <invoke id="foo" type="http://www.w3.org/TR/scxml/"
+            src="test253-child.scxml"/>
+    <state id="waiting">
+      <transition event="childRunning"
+                  cond="_event.origintype == &quot;scxml&quot;"
+                  target="reply"/>
+      <transition event="childRunning" target="fail"/>
+      <transition event="*" target="fail"/>
+    </state>
+    <state id="reply">
+      <onentry>
+        <send target="#_foo" event="parentToChild"/>
+      </onentry>
+      <transition event="success" target="pass"/>
+      <transition event="failure" target="fail"/>
+      <transition event="*" target="fail"/>
+    </state>
+  </state>
+  <final id="pass"/>
+  <state id="fail"/>
+</scxml>
