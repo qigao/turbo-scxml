@@ -671,7 +671,7 @@ void scxml_session_cancel(scxml_session *session) {
     scxml_session_impl *impl = session != NULL
         ? (scxml_session_impl *)session->impl : NULL;
     if (impl == NULL) return;
-    cflow_statechart_instance_cancel(&impl->instance);
+    cflow_statechart_instance_request_exit(&impl->instance);
     session_close_adapter(impl);
 }
 

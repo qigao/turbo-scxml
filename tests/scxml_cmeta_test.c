@@ -3584,7 +3584,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("discards a prepared dynamic start when session cancellation wins") {
+    it("settles a prepared dynamic start before controlled cancellation") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' initial='idle'><state id='idle'>"
@@ -3628,8 +3628,13 @@ spec("TurboSCXML public CMeta data model") {
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
         check_true(stats.cancelled);
-        check_equal(probe.start_commits, (size_t)0u);
-        check_equal(probe.start_discards, (size_t)1u);
+        check_equal(probe.start_commits, (size_t)1u);
+        check_equal(probe.start_discards, (size_t)0u);
+        check_equal(probe.prepare_cancels, (size_t)1u);
+        check_equal(probe.cancel_tokens[0], probe.start_tokens[0]);
+        check_equal(probe.cancel_ids[0], "worker.1", sizeof("worker.1"));
+        check_equal(probe.cancel_commits, (size_t)1u);
+        check_equal(probe.cancel_discards, (size_t)0u);
         check_equal(probe.close_calls, (size_t)1u);
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);

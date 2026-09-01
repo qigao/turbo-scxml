@@ -3,6 +3,7 @@
 #include <cflow/statechart_instance.h>
 #include <turbo_cmeta_data.h>
 #include <turbostl/typed.h>
+#include <tlog.h>
 
 #include "tinytest.h"
 
@@ -29,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 144,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 24,
+    W3C_PASS_DOCUMENT_COUNT = 145,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 23,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -39,7 +40,9 @@ enum {
     W3C_MATERIALIZATION_INVOKE_CAPACITY = 2,
     W3C_INVOKE_COMPLETION_EXTERNAL_CAPACITY = 3,
     W3C_FINALIZE_INVOKE_CAPACITY = 2,
-    W3C_AUTOFORWARD_EVENT_CAPACITY = 2
+    W3C_AUTOFORWARD_EVENT_CAPACITY = 2,
+    W3C_CANCELLATION_LOG_CAPACITY = 2,
+    W3C_CANCELLATION_LOG_MESSAGE_CAPACITY = 32
 };
 
 static const char W3C_SCXML_EVENT_PROCESSOR[] =
@@ -72,7 +75,8 @@ typedef enum w3c_invoke_completion_case {
 
 typedef enum w3c_invoke_cancellation_case {
     W3C_INVOKE_CANCEL_STOPS_CHILD = 0,
-    W3C_INVOKE_CANCEL_REJECTS_RETURN
+    W3C_INVOKE_CANCEL_REJECTS_RETURN,
+    W3C_INVOKE_CANCEL_RUNS_CHILD_ONEXIT
 } w3c_invoke_cancellation_case;
 
 typedef enum w3c_invoke_finalize_case {
@@ -559,6 +563,12 @@ typedef struct w3c_invoke_cancellation_probe {
     char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     bool child_cancelled;
 } w3c_invoke_cancellation_probe;
+
+typedef struct w3c_invoke_cancellation_log {
+    size_t count;
+    char messages[W3C_CANCELLATION_LOG_CAPACITY]
+                 [W3C_CANCELLATION_LOG_MESSAGE_CAPACITY];
+} w3c_invoke_cancellation_log;
 
 typedef struct w3c_invoke_finalize_start {
     uint64_t token;
@@ -1411,6 +1421,28 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
         w3c_invoke_completion_cancel_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_capture_invoke_cancellation_log(
+    const turbo_log_entry_t *entry, void *user_data) {
+    w3c_invoke_cancellation_log *capture =
+        (w3c_invoke_cancellation_log *)user_data;
+    size_t message_size;
+    if (entry == NULL || capture == NULL || entry->component == NULL ||
+        strcmp(entry->component, "cflow.scxml") != 0)
+        return;
+    if (capture->count >= W3C_CANCELLATION_LOG_CAPACITY) {
+        if (capture->count != SIZE_MAX) ++capture->count;
+        return;
+    }
+    message_size = entry->message_len;
+    if (message_size >= W3C_CANCELLATION_LOG_MESSAGE_CAPACITY)
+        message_size = W3C_CANCELLATION_LOG_MESSAGE_CAPACITY - 1u;
+    if (message_size != 0u)
+        memcpy(capture->messages[capture->count], entry->message,
+               message_size);
+    capture->messages[capture->count][message_size] = '\0';
+    ++capture->count;
 }
 
 static void w3c_invoke_cancellation_start_commit(void *user) {
@@ -2753,6 +2785,7 @@ static bool run_w3c_invoke_cancellation_fixture(
     cflow_statechart_instance_stats child_stats = {0};
     scxml_invoke_stats invoke_stats = {0};
     w3c_invoke_cancellation_probe probe = {.child = &child};
+    w3c_invoke_cancellation_log cancellation_log = {0};
     w3c_result_probe result = {0};
     const scxml_event_io_adapter event_io = {
         .abi_version = SCXML_ADAPTER_ABI,
@@ -2776,11 +2809,20 @@ static bool run_w3c_invoke_cancellation_fixture(
     const char *child_fixture = NULL;
     const char *expected_id = NULL;
     uint64_t expected_returned_rejected = 0u;
+    tlog_t *previous_logger = tlog_peek_default();
+    tlog_t *logger = NULL;
+    turbo_log_sink_t *sink = NULL;
+    bool require_exit_logs = false;
     bool parent_executor_initialized = false;
     bool child_executor_initialized = false;
     bool parent_initialized = false;
     bool child_initialized = false;
     bool succeeded = false;
+    bool reached_verification = false;
+    cflow_statechart_instance_status parent_destroy_status =
+        CFLOW_STATECHART_INSTANCE_OK;
+    cflow_statechart_instance_status child_destroy_status =
+        CFLOW_STATECHART_INSTANCE_OK;
     int path_size;
 
     if (fixture_name == NULL) return false;
@@ -2792,6 +2834,20 @@ static bool run_w3c_invoke_cancellation_fixture(
         child_fixture = "test252-child.scxml";
         expected_id = "invoke252";
         expected_returned_rejected = 2u;
+    } else if (test_case == W3C_INVOKE_CANCEL_RUNS_CHILD_ONEXIT) {
+        const tlog_config_t log_config = {
+            .min_level = TURBO_LOG_LEVEL_DEBUG, .buffer_size = 0u};
+        child_fixture = "test250-child.scxml";
+        expected_id = "invoke250";
+        expected_returned_rejected = 1u;
+        require_exit_logs = true;
+        logger = tlog_create(&log_config);
+        if (logger == NULL) goto cleanup;
+        sink = turbo_sink_callback_create(
+            w3c_capture_invoke_cancellation_log, &cancellation_log);
+        if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
+        sink = NULL;
+        tlog_set_default(logger);
     } else {
         return false;
     }
@@ -2905,9 +2961,12 @@ static bool run_w3c_invoke_cancellation_fixture(
         !scxml_session_get_stats(&parent, &parent_stats) ||
         !scxml_session_get_invoke_stats(&parent, &invoke_stats))
         goto cleanup;
+    if (logger != NULL) tlog_flush(logger);
 
+    reached_verification = true;
     succeeded = parent_stats.done && !parent_stats.errored &&
         child_stats.done && !child_stats.errored && child_stats.cancelled &&
+        child_stats.active_state_count == 0u &&
         result.prepare_send_calls == 1u && result.commits == 1u &&
         result.discards == 0u && strcmp(result.event, "result.pass") == 0 &&
         probe.start_prepares == 1u && probe.start_commits == 1u &&
@@ -2918,9 +2977,13 @@ static bool run_w3c_invoke_cancellation_fixture(
         invoke_stats.completed == 0u &&
         invoke_stats.returned_accepted == 0u &&
         invoke_stats.returned_rejected == expected_returned_rejected &&
-        invoke_stats.active == 0u;
+        invoke_stats.active == 0u &&
+        (!require_exit_logs ||
+         (cancellation_log.count == W3C_CANCELLATION_LOG_CAPACITY &&
+          strcmp(cancellation_log.messages[0], "Exiting sub01") == 0 &&
+          strcmp(cancellation_log.messages[1], "Exiting sub0") == 0));
     if (!succeeded)
-        info("fixture=%s parent_done=%d child_cancelled=%d result=%s start=%zu/%zu/%zu cancel=%zu/%zu/%zu accepted=%llu rejected=%llu completed=%llu active=%zu parent_error=%s child_error=%s",
+        info("fixture=%s parent_done=%d child_cancelled=%d result=%s start=%zu/%zu/%zu cancel=%zu/%zu/%zu accepted=%llu rejected=%llu completed=%llu active=%zu exit_logs=%zu/%s/%s parent_error=%s child_error=%s",
              fixture_name, parent_stats.done ? 1 : 0,
              child_stats.cancelled ? 1 : 0, result.event,
              probe.start_prepares, probe.start_commits,
@@ -2929,24 +2992,42 @@ static bool run_w3c_invoke_cancellation_fixture(
              (unsigned long long)invoke_stats.returned_accepted,
              (unsigned long long)invoke_stats.returned_rejected,
              (unsigned long long)invoke_stats.completed,
-             invoke_stats.active, scxml_session_error(&parent),
+             invoke_stats.active, cancellation_log.count,
+             cancellation_log.messages[0], cancellation_log.messages[1],
+             scxml_session_error(&parent),
              scxml_session_error(&child));
 
 cleanup:
-    if (parent_initialized &&
-        scxml_session_destroy(&parent) != CFLOW_STATECHART_INSTANCE_OK)
-        succeeded = false;
-    if (child_initialized &&
-        scxml_session_destroy(&child) != CFLOW_STATECHART_INSTANCE_OK)
-        succeeded = false;
+    if (parent_initialized) {
+        parent_destroy_status = scxml_session_destroy(&parent);
+        if (parent_destroy_status != CFLOW_STATECHART_INSTANCE_OK)
+            succeeded = false;
+    }
+    if (child_initialized) {
+        child_destroy_status = scxml_session_destroy(&child);
+        if (child_destroy_status != CFLOW_STATECHART_INSTANCE_OK)
+            succeeded = false;
+    }
     if (parent_executor_initialized)
         cflow_executor_destroy(&parent_executor);
     if (child_executor_initialized)
         cflow_executor_destroy(&child_executor);
+    if (logger != NULL) tlog_flush(logger);
+    tlog_set_default(previous_logger);
+    if (sink != NULL) turbo_sink_destroy(sink);
+    if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&parent_program);
     scxml_program_destroy(&child_program);
     free(parent_source);
     free(child_source);
+    if (!succeeded &&
+        test_case == W3C_INVOKE_CANCEL_RUNS_CHILD_ONEXIT)
+        info("test250 reached_verification=%d parent_destroy=%d child_destroy=%d logs=%zu/%s/%s child_done=%d child_cancelled=%d child_errored=%d",
+             reached_verification ? 1 : 0, (int)parent_destroy_status,
+             (int)child_destroy_status, cancellation_log.count,
+             cancellation_log.messages[0], cancellation_log.messages[1],
+             child_stats.done ? 1 : 0, child_stats.cancelled ? 1 : 0,
+             child_stats.errored ? 1 : 0);
     return succeeded;
 }
 
@@ -5012,6 +5093,11 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 237 cancels the child when the invoking state exits") {
         check_true(run_w3c_invoke_cancellation_fixture(
             "test237.scxml", W3C_INVOKE_CANCEL_STOPS_CHILD));
+    }
+
+    it("test 250 runs every active child onexit handler when cancelled") {
+        check_true(run_w3c_invoke_cancellation_fixture(
+            "test250.scxml", W3C_INVOKE_CANCEL_RUNS_CHILD_ONEXIT));
     }
 
     it("test 247 reports completion after a child reaches top-level final") {
