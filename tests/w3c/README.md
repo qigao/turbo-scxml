@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 137
-local PASS transformations, records 31 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 144
+local PASS transformations, records 24 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -80,6 +80,13 @@ Status meanings are strict:
 | `test235.scxml` | [test235.txml](https://www.w3.org/Voice/2013/scxml-irp/235/test235.txml) | Completion for explicit invocation ID `foo` passes only when the selected Event's `_event.name` is exactly `done.invoke.foo`. |
 | `test236.scxml` | [test236.txml](https://www.w3.org/Voice/2013/scxml-irp/236/test236.txml) | A normal return precedes completion; after completion is processed, the stale token is rejected and its late Event cannot reach selection. |
 | `test237.scxml` | [test237.txml](https://www.w3.org/Voice/2013/scxml-irp/237/test237.txml) | Leaving the invoking state commits cancellation of a real host-owned child; the cancelled child rejects further processing and its stale completion token is rejected by the parent. |
+| `test239.scxml` | [test239.txml](https://www.w3.org/Voice/2013/scxml-irp/239/test239.txml) | Real host-owned children execute both an allowlisted `src` document and copied inline XML, returning distinct witness Events. |
+| `test240.scxml` | [test240.txml](https://www.w3.org/Voice/2013/scxml-irp/240/test240.txml) | Namelist and param values are copied into a closed child CMeta schema before two real child sessions run. |
+| `test241.scxml` | [test241.txml](https://www.w3.org/Voice/2013/scxml-irp/241/test241.txml) | Namelist and param inject the same nondefault integer and produce identical child-visible success. |
+| `test242.scxml` | [test242.txml](https://www.w3.org/Voice/2013/scxml-irp/242/test242.txml) | An allowlisted `src` child and inline child execute the same behavior and each returns `childRan`. |
+| `test243.scxml` | [test243.txml](https://www.w3.org/Voice/2013/scxml-irp/243/test243.txml) | A matching param initializes the typed child `child_value` field before execution. |
+| `test244.scxml` | [test244.txml](https://www.w3.org/Voice/2013/scxml-irp/244/test244.txml) | A matching namelist key initializes the typed child `child_value` field before execution. |
+| `test245.scxml` | [test245.txml](https://www.w3.org/Voice/2013/scxml-irp/245/test245.txml) | An unmatched named value is ignored; the closed child schema retains its declared field's zero default. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
 | `test252.scxml` | [test252.txml](https://www.w3.org/Voice/2013/scxml-irp/252/test252.txml) | After cancellation, both a normal child Event and completion report through the stale token are rejected; only an independent parent Event can reach pass. |
 | `test253.scxml` | [test253.txml](https://www.w3.org/Voice/2013/scxml-irp/253/test253.txml) | One active canonical SCXML invocation exchanges `childRunning`, `parentToChild`, and `success` through `#_parent`/`#_foo`; both receivers require the SCXML Event I/O `origintype`. |
@@ -438,6 +445,19 @@ uses a legal expression whose read from the unbound startup Event fails at
 execution; `error.execution` reaches `pass` while the host observes zero starts.
 These transformations exercise the public materialization/report boundary and
 do not claim that the core itself implements file loading or a child interpreter.
+
+Tests 239-245 use a dedicated bounded child-materialization host. Every accepted
+start request is copied into one of two fixed ticket rows before the callback
+returns. The host resolves only `test239-child.scxml`, `test240-child.scxml`,
+`test242-child.scxml`, and `test245-child.scxml`, or compiles the copied inline
+XML directly; arbitrary paths and URLs are not accepted. Each child receives a
+fresh CMeta state. Only an exact integer `child_value` entry is mapped into that
+closed schema; unknown names are counted and ignored. Tests 239 and 242 prove
+actual execution of `src` and inline markup through distinct/equivalent child
+Events. Tests 240, 241, 243, and 244 prove namelist/param injection, while test
+245 proves that an unmatched key cannot extend or mutate the child model. Child
+programs, sessions, executors, source resolution, and Event relay remain owned
+by the host; no production file loader or recursive child interpreter is added.
 
 Tests 228, 232, 235, 236, and 247 use one strict bounded invoke-completion host.
 Every case requires exactly one nonzero committed start token and exact start,

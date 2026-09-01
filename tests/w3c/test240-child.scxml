@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="check">
+  <state id="check">
+    <transition cond="child_value == expected_value" target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass">
+    <onentry><send target="#_parent" event="success"/></onentry>
+  </final>
+  <final id="fail">
+    <onentry><send target="#_parent" event="failure"/></onentry>
+  </final>
+</scxml>

@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="fromNamelist">
+  <state id="fromNamelist">
+    <invoke id="namelist240" type="http://www.w3.org/TR/scxml/"
+            src="test240-child.scxml" namelist="child_value"/>
+    <transition event="success" target="fromParam"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="fromParam">
+    <invoke id="param240" type="http://www.w3.org/TR/scxml/"
+            src="test240-child.scxml">
+      <param name="child_value" expr="child_value"/>
+    </invoke>
+    <transition event="success" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <state id="fail"/>
+</scxml>
