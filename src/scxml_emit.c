@@ -201,7 +201,7 @@ static scxml_status compile_cmeta_condition_program(
     status = decode_cmeta_attribute_source(
         build, condition, "condition", &source, &source_size);
     if (status != SCXML_OK) return status;
-    expression_status = scxml_expr_compile(
+    expression_status = scxml_expr_compile_value(
         program, source, source_size,
         build->cmeta_root, resolve_cmeta_condition_state, build,
         &build->expression_limits, &expression_diagnostic);
@@ -270,6 +270,7 @@ static scxml_status compile_cmeta_condition(
     scxml_build *build, scxml_syntax_attribute condition,
     scxml_guard_user *guard) {
     guard->data_model = SCXML_DATA_MODEL_CMETA;
+    guard->execution_error_event = build->execution_error_event;
     return compile_cmeta_condition_program(
         build, condition, &guard->value.expression);
 }
@@ -304,6 +305,7 @@ static bool evaluate_scxml_transition_guard_impl(
         return true;
     }
     if (guard->data_model == SCXML_DATA_MODEL_CMETA) {
+        const bool null_value = false;
         scxml_expr_diagnostic diagnostic = {0};
         scxml_expr_system_values current_system_values;
         if (!scxml_analyze_bind_current_event_system_values(
@@ -322,7 +324,17 @@ static bool evaluate_scxml_transition_guard_impl(
             SCXML_EXPR_OK) {
             return true;
         }
-        *out_error = "CMeta transition condition evaluation failed";
+        *out_enabled = false;
+        if (guard->execution_error_event == 0u) {
+            *out_error = "SCXML transition condition error event is unavailable";
+            return false;
+        }
+        {
+            const cflow_event_view raised = {
+                guard->execution_error_event, &cmeta_type_bool, &null_value};
+            return cflow_statechart_guard_context_raise_internal(
+                context, &raised, 0u, out_error);
+        }
     }
     return false;
 }
@@ -1990,8 +2002,8 @@ static scxml_status emit_transition_token(
             build->data_model == SCXML_DATA_MODEL_CMETA
                 ? build->cmeta_root->storage_type
                 : &cmeta_type_bool,
-            CMETA_EFFECT_PURE,
-            CMETA_PROP_STABLE | CMETA_PROP_NO_ALIAS};
+            CMETA_EFFECT_MAY_FAIL,
+            CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS};
         build->guard_bindings[guard_index] =
             (cflow_statechart_guard_binding){
                 .id = row.guard,

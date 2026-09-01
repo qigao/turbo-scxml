@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 148,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 20,
+    W3C_PASS_DOCUMENT_COUNT = 150,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 18,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -5208,6 +5208,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test487.scxml"));
     }
 
+    it("test 309 treats a non-Boolean transition condition as false") {
+        check_true(run_w3c_cmeta_fixture("test309.scxml"));
+    }
+
     it("test 310 exposes In through the CMeta data model") {
         check_true(run_w3c_cmeta_fixture("test310.scxml"));
     }
@@ -5224,6 +5228,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 314 raises a value-expression error only when evaluated") {
         check_true(run_w3c_cmeta_fixture("test314.scxml"));
+    }
+
+    it("test 344 queues a transition condition error before entry raises") {
+        check_true(run_w3c_cmeta_fixture("test344.scxml"));
     }
 
     it("test 318 retains the selected event through state entry") {

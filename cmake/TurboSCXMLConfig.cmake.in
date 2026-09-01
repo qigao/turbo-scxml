@@ -18,7 +18,7 @@ endif()
 include(CMakeFindDependencyMacro)
 unset(TurboUtils_DIR CACHE)
 unset(TurboUtils_DIR)
-find_dependency(TurboUtils CONFIG REQUIRED
+find_dependency(TurboUtils 1.1 CONFIG REQUIRED
   PATHS "${TURBOUTILS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 
