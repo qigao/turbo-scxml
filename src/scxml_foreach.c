@@ -45,10 +45,13 @@ scxml_expr_status scxml_foreach_compile(
     status = scxml_location_compile(
         &compiled.item, item, item_size, root, max_path_depth, true,
         diagnostic);
-    if (status != SCXML_EXPR_OK) return status;
+    if (status != SCXML_EXPR_OK && status != SCXML_EXPR_UNKNOWN_LOCATION)
+        return status;
     element_type = compiled.sequence.element_type;
-    if (!cmeta_type_equal(compiled.item.value->storage_type, element_type) ||
-        compiled.item.storage_size != element_type->size)
+    compiled.item_location_valid = status == SCXML_EXPR_OK;
+    if (compiled.item_location_valid &&
+        (!cmeta_type_equal(compiled.item.value->storage_type, element_type) ||
+         compiled.item.storage_size != element_type->size))
         return foreach_report(
             diagnostic, SCXML_EXPR_TYPE_MISMATCH,
             "CMeta foreach item requires the exact element type");
@@ -108,6 +111,10 @@ scxml_expr_status scxml_foreach_open(
         return foreach_report(diagnostic,
                               SCXML_EXPR_INVALID_ARGUMENT,
                               "invalid CMeta foreach open arguments");
+    if (!program->item_location_valid)
+        return foreach_report(diagnostic,
+                              SCXML_EXPR_UNKNOWN_LOCATION,
+                              "CMeta foreach item is not a writable location");
     status = scxml_sequence_open(
         &program->sequence, staged_root, &range, &length, diagnostic);
     if (status != SCXML_EXPR_OK) return status;

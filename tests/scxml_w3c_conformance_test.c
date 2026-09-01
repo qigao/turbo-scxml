@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 155,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 13,
+    W3C_PASS_DOCUMENT_COUNT = 156,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 12,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -218,6 +218,7 @@ typedef struct w3c_cmeta_fixture_options {
     scxml_adapter_status send_rejection;
     w3c_send_extension_fn send_extension;
     void *send_extension_user;
+    size_t max_iterations;
 } w3c_cmeta_fixture_options;
 
 typedef struct w3c_executor_blocker {
@@ -3666,7 +3667,7 @@ static bool run_w3c_cmeta_fixture_with_schema(
         .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
         .struct_size = sizeof(data),
         .initial_state = initial_state};
-    const scxml_cmeta_compile_options_v1 compile_options =
+    scxml_cmeta_compile_options_v1 compile_options =
         scxml_cmeta_default_compile_options(root);
     scxml_session_config config = {0};
     bool executor_initialized = false;
@@ -3685,6 +3686,8 @@ static bool run_w3c_cmeta_fixture_with_schema(
     if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
     source = tt_read_file(path, &source_size);
     if (source == NULL) goto cleanup;
+    if (options != NULL && options->max_iterations != 0u)
+        compile_options.max_iterations = options->max_iterations;
     if (scxml_compile_cmeta(
             &program, source, source_size, NULL, &compile_options,
             &diagnostic) != SCXML_OK) {
@@ -3935,6 +3938,13 @@ static bool run_w3c_foreach_snapshot_fixture(const char *fixture_name) {
     atomic_store(&w3c_foreach_staged_state, NULL);
     return succeeded && mutation.prepares == 1u &&
            mutation.commits == 1u && mutation.discards == 0u;
+}
+
+static bool run_w3c_invalid_foreach_fixture(const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {
+        .max_iterations = 2u};
+    return run_w3c_foreach_fixture_with_options(
+        fixture_name, &options, 3u);
 }
 
 static bool run_w3c_cmeta_external_fixture(
@@ -4919,6 +4929,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 153 assigns foreach items from first to last") {
         check_true(run_w3c_foreach_fixture("test153.scxml"));
+    }
+
+    it("test 152 aborts foreach blocks for invalid arrays and item locations") {
+        check_true(run_w3c_invalid_foreach_fixture("test152.scxml"));
     }
 
     it("test 155 executes foreach content after each item assignment") {

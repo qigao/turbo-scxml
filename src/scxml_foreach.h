@@ -11,6 +11,7 @@ typedef struct scxml_foreach_program {
     size_t max_iterations;
     bool has_index;
     bool managed_item;
+    bool item_location_valid;
 } scxml_foreach_program;
 
 typedef struct scxml_foreach_value {
