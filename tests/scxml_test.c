@@ -742,9 +742,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_adapter_probe probe = {0};
-        scxml_event_io_adapter_v1 adapter = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_event_io_adapter_v1),
+        scxml_event_io_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
                 SCXML_EVENT_IO_CAP_CANCEL,
@@ -772,8 +772,11 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         check_equal(scxml_session_init(&session, &config),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
         check_null(session.impl);
-        adapter.abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1;
+        adapter.abi_version = SCXML_ADAPTER_ABI;
         adapter.struct_size = sizeof(adapter) - 1u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        adapter.struct_size = sizeof(adapter) + 1u;
         check_equal(scxml_session_init(&session, &config),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
         adapter.struct_size = sizeof(adapter);
@@ -820,9 +823,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_adapter_probe probe = {.quiescent = true};
-        scxml_event_io_adapter_v1 adapter = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_event_io_adapter_v1),
+        scxml_event_io_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND |
                 SCXML_EVENT_IO_CAP_DELAYED_SEND |
                 SCXML_EVENT_IO_CAP_CANCEL,
@@ -895,8 +898,8 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_adapter_probe probe = {.quiescent = true};
-        const scxml_event_io_adapter_v1 adapter = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
+        const scxml_event_io_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
             .struct_size = sizeof(adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = scxml_adapter_prepare_send,
@@ -960,9 +963,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             cflow_statechart_instance_stats stats = {0};
             scxml_adapter_probe probe = {
                 .send_status = failures[index], .quiescent = true};
-            scxml_event_io_adapter_v1 adapter = {
-                .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-                .struct_size = sizeof(scxml_event_io_adapter_v1),
+            scxml_event_io_adapter adapter = {
+                .abi_version = SCXML_ADAPTER_ABI,
+                .struct_size = sizeof(scxml_event_io_adapter),
                 .capabilities = SCXML_EVENT_IO_CAP_SEND,
                 .prepare_send = scxml_adapter_prepare_send,
                 .close = scxml_adapter_close,
@@ -1008,9 +1011,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             "<state id='active'>"
             "<transition event='error.communication' target='done'/></state>"
             "<final id='done'/></scxml>";
-        scxml_event_io_adapter_v1 adapter = {
-            .abi_version = SCXML_EVENT_IO_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_event_io_adapter_v1),
+        scxml_event_io_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
             .capabilities = SCXML_EVENT_IO_CAP_SEND,
             .prepare_send = scxml_adapter_prepare_send,
             .close = scxml_adapter_close,
@@ -2212,9 +2215,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_invoke_probe probe = {0};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
                 SCXML_INVOKE_CAP_FORWARD,
@@ -2246,7 +2249,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         config.invocation_capacity = 1u;
         check_equal(scxml_session_init(&session, &config),
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
-        adapter.abi_version = SCXML_INVOKE_ADAPTER_ABI_V1;
+        adapter.abi_version = SCXML_ADAPTER_ABI;
         check_equal(scxml_session_init(&session, &config),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_session_destroy(&session),
@@ -2274,9 +2277,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_invoke_probe probe = {.quiescent = true};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
                 SCXML_INVOKE_CAP_FORWARD,
@@ -2347,9 +2350,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_diagnostic diagnostic = {0};
         cflow_executor executor = {0};
         scxml_invoke_probe probe = {.quiescent = true};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
             .prepare_start = scxml_invoke_prepare_start,
@@ -2417,9 +2420,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_log_capture capture = {0};
         scxml_invoke_probe probe = {
             .quiescent = true, .log_capture = &capture};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
                 SCXML_INVOKE_CAP_FORWARD,
@@ -2531,9 +2534,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         cflow_executor executor = {0};
         scxml_executor_blocker blocker;
         scxml_invoke_probe probe = {.quiescent = true};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
             .prepare_start = scxml_invoke_prepare_start,
@@ -2610,9 +2613,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_invoke_probe probe = {
             .quiescent = true,
             .forward_status = SCXML_ADAPTER_ERROR_COMMUNICATION};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL |
                 SCXML_INVOKE_CAP_FORWARD,
@@ -2674,9 +2677,9 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_invoke_probe probe = {
             .quiescent = true,
             .cancel_status = SCXML_ADAPTER_ERROR_COMMUNICATION};
-        scxml_invoke_adapter_v1 adapter = {
-            .abi_version = SCXML_INVOKE_ADAPTER_ABI_V1,
-            .struct_size = sizeof(scxml_invoke_adapter_v1),
+        scxml_invoke_adapter adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
             .capabilities = SCXML_INVOKE_CAP_START |
                 SCXML_INVOKE_CAP_CANCEL,
             .prepare_start = scxml_invoke_prepare_start,

@@ -16,15 +16,8 @@ extern "C" {
 #endif
 
 #define SCXML_DIAGNOSTIC_CAPACITY 256u
-#define SCXML_EVENT_IO_ADAPTER_ABI_V1 1u
-#define SCXML_EVENT_IO_ADAPTER_ABI_V2 2u
-#define SCXML_EVENT_IO_ADAPTER_ABI_V3 3u
-#define SCXML_INVOKE_ADAPTER_ABI_V1 1u
-#define SCXML_INVOKE_ADAPTER_ABI_V2 2u
-#define SCXML_INVOKE_ADAPTER_ABI_V3 3u
-#define SCXML_SESSION_ADAPTERS_ABI_V2 2u
-#define SCXML_SESSION_ADAPTERS_ABI_V3 3u
-#define SCXML_EVENT_METADATA_ABI_V3 3u
+#define SCXML_ADAPTER_ABI 1u
+#define SCXML_EVENT_METADATA_ABI 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_DEFAULT_MAX_ITERATIONS 65536u
@@ -109,8 +102,8 @@ typedef enum scxml_program_requirement {
     SCXML_REQUIREMENT_PAYLOAD = 1u << 4u,
     SCXML_REQUIREMENT_INVOKE_PAYLOAD = 1u << 5u,
     SCXML_REQUIREMENT_INVOKE_IDLOCATION = 1u << 6u,
-    SCXML_REQUIREMENT_CONTENT_V3 = 1u << 7u,
-    SCXML_REQUIREMENT_INVOKE_CONTENT_V3 = 1u << 8u,
+    SCXML_REQUIREMENT_CONTENT = 1u << 7u,
+    SCXML_REQUIREMENT_INVOKE_CONTENT = 1u << 8u,
     SCXML_REQUIREMENT_LATE_BINDING = 1u << 9u
 } scxml_program_requirement;
 
@@ -119,7 +112,7 @@ typedef enum scxml_event_io_capability {
     SCXML_EVENT_IO_CAP_DELAYED_SEND = UINT64_C(1) << 1u,
     SCXML_EVENT_IO_CAP_CANCEL = UINT64_C(1) << 2u,
     SCXML_EVENT_IO_CAP_PAYLOAD = UINT64_C(1) << 3u,
-    SCXML_EVENT_IO_CAP_CONTENT_V3 = UINT64_C(1) << 4u
+    SCXML_EVENT_IO_CAP_CONTENT = UINT64_C(1) << 4u
 } scxml_event_io_capability;
 
 typedef enum scxml_adapter_status {
@@ -150,34 +143,6 @@ typedef enum scxml_location_status {
 #define SCXML_EVENT_DATA_CAPACITY 4096u
 #endif
 
-/** Borrowed external Event metadata copied by v2 session admission. */
-typedef struct scxml_event_metadata {
-    const char *send_id;
-    size_t send_id_size;
-    const char *origin;
-    size_t origin_size;
-    const char *origin_type;
-    size_t origin_type_size;
-    const char *invoke_id;
-    size_t invoke_id_size;
-    /** UTF-8 scalar data exposed as `_event.data`. */
-    const char *data;
-    size_t data_size;
-} scxml_event_metadata;
-
-/** Borrowed literal request fields valid only during one prepare callback. */
-typedef struct scxml_send_request {
-    const char *event;
-    size_t event_size;
-    const char *target;
-    size_t target_size;
-    const char *type;
-    size_t type_size;
-    const char *id;
-    size_t id_size;
-    uint64_t delay_ms;
-} scxml_send_request;
-
 typedef enum scxml_payload_value_kind {
     SCXML_PAYLOAD_VALUE_INVALID = 0,
     SCXML_PAYLOAD_VALUE_BOOL,
@@ -202,33 +167,11 @@ typedef struct scxml_payload_value {
     } data;
 } scxml_payload_value;
 
-typedef struct scxml_payload_entry {
-    const char *name;
-    size_t name_size;
-    scxml_payload_value value;
-} scxml_payload_entry;
-
 typedef enum scxml_payload_kind {
     SCXML_PAYLOAD_NONE = 0,
     SCXML_PAYLOAD_CONTENT,
     SCXML_PAYLOAD_NAMED
 } scxml_payload_kind;
-
-/**
- * Callback-scoped payload view. Named entries preserve SCXML order and
- * duplicates. Every pointer is invalid after the prepare callback returns.
- */
-typedef struct scxml_payload_view {
-    scxml_payload_kind kind;
-    scxml_payload_value content;
-    const scxml_payload_entry *entries;
-    size_t entry_count;
-} scxml_payload_view;
-
-typedef struct scxml_send_request_v2 {
-    scxml_send_request base;
-    scxml_payload_view payload;
-} scxml_send_request_v2;
 
 typedef enum scxml_content_kind {
     SCXML_CONTENT_INVALID = 0,
@@ -252,36 +195,56 @@ typedef struct scxml_content_view {
     const void *object;
 } scxml_content_view;
 
-/**
- * Additive owned-event admission contract. `base.data` must be empty when
- * `data.kind` is not INVALID. Scalar and UTF-8 content is copied into the
- * metadata bound. CMETA content must use the session's compiled root schema,
- * fit `SCXML_EVENT_DATA_CAPACITY`, and provide copy/destroy traits.
- */
-typedef struct scxml_event_metadata_v3 {
-    uint32_t abi_version;
-    size_t struct_size;
-    scxml_event_metadata base;
-    scxml_content_view data;
-} scxml_event_metadata_v3;
-
-typedef struct scxml_payload_entry_v3 {
+typedef struct scxml_payload_entry {
     const char *name;
     size_t name_size;
     scxml_content_view value;
-} scxml_payload_entry_v3;
+} scxml_payload_entry;
 
-typedef struct scxml_payload_view_v3 {
+/**
+ * Callback-scoped payload view. Named entries preserve SCXML order and
+ * duplicates. Every pointer is invalid after the prepare callback returns.
+ */
+typedef struct scxml_payload_view {
     scxml_payload_kind kind;
     scxml_content_view content;
-    const scxml_payload_entry_v3 *entries;
+    const scxml_payload_entry *entries;
     size_t entry_count;
-} scxml_payload_view_v3;
+} scxml_payload_view;
 
-typedef struct scxml_send_request_v3 {
-    scxml_send_request base;
-    scxml_payload_view_v3 payload;
-} scxml_send_request_v3;
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct scxml_send_request {
+    const char *event;
+    size_t event_size;
+    const char *target;
+    size_t target_size;
+    const char *type;
+    size_t type_size;
+    const char *id;
+    size_t id_size;
+    uint64_t delay_ms;
+    scxml_payload_view payload;
+} scxml_send_request;
+
+/**
+ * Owned external Event metadata copied atomically during admission. Scalar and
+ * UTF-8 content is copied into the metadata bound. CMETA content must use the
+ * session's compiled root schema, fit `SCXML_EVENT_DATA_CAPACITY`, and provide
+ * copy/destroy traits.
+ */
+typedef struct scxml_event_metadata {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *send_id;
+    size_t send_id_size;
+    const char *origin;
+    size_t origin_size;
+    const char *origin_type;
+    size_t origin_type_size;
+    const char *invoke_id;
+    size_t invoke_id_size;
+    scxml_content_view data;
+} scxml_event_metadata;
 
 typedef struct scxml_cancel_request {
     const char *send_id;
@@ -289,7 +252,7 @@ typedef struct scxml_cancel_request {
 } scxml_cancel_request;
 
 /**
- * Versioned Event I/O reservation table copied by session initialization.
+ * Exact-shape Event I/O reservation table copied by session initialization.
  *
  * Prepare callbacks run on the session SerialExecutor. They must reserve all
  * capacity without publishing the effect and copy every request field needed
@@ -312,7 +275,8 @@ typedef struct scxml_cancel_request {
  *
  * Prepare must reserve host ingress capacity, not target-session mailbox
  * capacity that can be lost before commit. Commit publishes only that reserved
- * host row; a host dispatcher subsequently calls `session_try_send_v2/v3` and
+ * host row; a host dispatcher subsequently calls
+ * `scxml_session_try_send_with_metadata()` and
  * retains the row on `CFLOW_MAILBOX_FULL`. Async decode or delivery failure is
  * reported with `session_report_adapter_error`. Capabilities are promises:
  * delayed send and cancellation must not be advertised unless the host owns a
@@ -323,7 +287,7 @@ typedef struct scxml_cancel_request {
  * initializing session, and activate/register the generated location only
  * after init succeeds. Close must discard those rows if init fails.
  */
-typedef struct scxml_event_io_adapter_v1 {
+typedef struct scxml_event_io_adapter {
     uint32_t abi_version;
     size_t struct_size;
     uint64_t capabilities;
@@ -337,48 +301,14 @@ typedef struct scxml_event_io_adapter_v1 {
         const char **out_error);
     void (*close)(void *user);
     bool (*is_quiescent)(void *user);
-} scxml_event_io_adapter_v1;
-
-/** Payload-aware Event I/O adapter; ownership otherwise matches v1. */
-typedef struct scxml_event_io_adapter_v2 {
-    uint32_t abi_version;
-    size_t struct_size;
-    uint64_t capabilities;
-    scxml_adapter_status (*prepare_send)(
-        void *user, const scxml_send_request_v2 *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_cancel)(
-        void *user, const scxml_cancel_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    void (*close)(void *user);
-    bool (*is_quiescent)(void *user);
-} scxml_event_io_adapter_v2;
-
-/** Content-aware Event I/O adapter; lifecycle ownership matches v1. */
-typedef struct scxml_event_io_adapter_v3 {
-    uint32_t abi_version;
-    size_t struct_size;
-    uint64_t capabilities;
-    scxml_adapter_status (*prepare_send)(
-        void *user, const scxml_send_request_v3 *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_cancel)(
-        void *user, const scxml_cancel_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    void (*close)(void *user);
-    bool (*is_quiescent)(void *user);
-} scxml_event_io_adapter_v3;
+} scxml_event_io_adapter;
 
 typedef enum scxml_invoke_capability {
     SCXML_INVOKE_CAP_START = UINT64_C(1) << 0u,
     SCXML_INVOKE_CAP_CANCEL = UINT64_C(1) << 1u,
     SCXML_INVOKE_CAP_FORWARD = UINT64_C(1) << 2u,
     SCXML_INVOKE_CAP_PAYLOAD = UINT64_C(1) << 3u,
-    SCXML_INVOKE_CAP_CONTENT_V3 = UINT64_C(1) << 4u
+    SCXML_INVOKE_CAP_CONTENT = UINT64_C(1) << 4u
 } scxml_invoke_capability;
 
 /** Borrowed invocation fields valid only during one prepare callback. */
@@ -391,17 +321,8 @@ typedef struct scxml_invoke_start_request {
     const char *src;
     size_t src_size;
     bool autoforward;
-} scxml_invoke_start_request;
-
-typedef struct scxml_invoke_start_request_v2 {
-    scxml_invoke_start_request base;
     scxml_payload_view payload;
-} scxml_invoke_start_request_v2;
-
-typedef struct scxml_invoke_start_request_v3 {
-    scxml_invoke_start_request base;
-    scxml_payload_view_v3 payload;
-} scxml_invoke_start_request_v3;
+} scxml_invoke_start_request;
 
 typedef struct scxml_invoke_cancel_request {
     uint64_t token;
@@ -418,7 +339,7 @@ typedef struct scxml_invoke_forward_request {
 } scxml_invoke_forward_request;
 
 /**
- * Versioned invocation adapter copied by session initialization.
+ * Exact-shape invocation adapter copied by session initialization.
  *
  * Prepare callbacks run on the session SerialExecutor without the session
  * registry mutex held. ACCEPTED transfers one valid move-only effect ticket;
@@ -426,7 +347,7 @@ typedef struct scxml_invoke_forward_request {
  * every borrowed request field retained after return. `close` and
  * `is_quiescent` follow the Event I/O adapter ownership contract above.
  */
-typedef struct scxml_invoke_adapter_v1 {
+typedef struct scxml_invoke_adapter {
     uint32_t abi_version;
     size_t struct_size;
     uint64_t capabilities;
@@ -444,73 +365,7 @@ typedef struct scxml_invoke_adapter_v1 {
         const char **out_error);
     void (*close)(void *user);
     bool (*is_quiescent)(void *user);
-} scxml_invoke_adapter_v1;
-
-/** Payload-aware invocation adapter; ownership otherwise matches v1. */
-typedef struct scxml_invoke_adapter_v2 {
-    uint32_t abi_version;
-    size_t struct_size;
-    uint64_t capabilities;
-    scxml_adapter_status (*prepare_start)(
-        void *user, const scxml_invoke_start_request_v2 *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_cancel)(
-        void *user, const scxml_invoke_cancel_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_forward)(
-        void *user, const scxml_invoke_forward_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    void (*close)(void *user);
-    bool (*is_quiescent)(void *user);
-} scxml_invoke_adapter_v2;
-
-/** Content-aware invocation adapter; lifecycle ownership matches v1. */
-typedef struct scxml_invoke_adapter_v3 {
-    uint32_t abi_version;
-    size_t struct_size;
-    uint64_t capabilities;
-    scxml_adapter_status (*prepare_start)(
-        void *user, const scxml_invoke_start_request_v3 *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_cancel)(
-        void *user, const scxml_invoke_cancel_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    scxml_adapter_status (*prepare_forward)(
-        void *user, const scxml_invoke_forward_request *request,
-        cflow_statechart_effect_ticket *out_ticket,
-        const char **out_error);
-    void (*close)(void *user);
-    bool (*is_quiescent)(void *user);
-} scxml_invoke_adapter_v3;
-
-/**
- * Optional v2 adapter injection used with the unchanged base session config.
- * A non-NULL v2 adapter requires the corresponding v1 config field to be
- * NULL. Tables are copied; user pointers remain borrowed through destruction.
- */
-typedef struct scxml_session_adapters_v2 {
-    uint32_t abi_version;
-    size_t struct_size;
-    const scxml_event_io_adapter_v2 *event_io;
-    void *event_io_user;
-    const scxml_invoke_adapter_v2 *invoke;
-    void *invoke_user;
-} scxml_session_adapters_v2;
-
-/** Optional v3 adapter injection; mutually exclusive with v1 config fields. */
-typedef struct scxml_session_adapters_v3 {
-    uint32_t abi_version;
-    size_t struct_size;
-    const scxml_event_io_adapter_v3 *event_io;
-    void *event_io_user;
-    const scxml_invoke_adapter_v3 *invoke;
-    void *invoke_user;
-} scxml_session_adapters_v3;
+} scxml_invoke_adapter;
 
 typedef struct scxml_invoke_stats {
     uint64_t started;
@@ -550,12 +405,12 @@ typedef struct scxml_session_config {
     /** Maximum retained delayed sends in this session. */
     size_t delayed_send_capacity;
     /** Ops are copied; adapter_user remains borrowed through destruction. */
-    const scxml_event_io_adapter_v1 *event_io;
+    const scxml_event_io_adapter *event_io;
     void *adapter_user;
     /** Fixed invocation registry rows; must cover the compiled descriptors. */
     size_t invocation_capacity;
     /** Ops are copied; invoke_user remains borrowed through destruction. */
-    const scxml_invoke_adapter_v1 *invoke;
+    const scxml_invoke_adapter *invoke;
     void *invoke_user;
 } scxml_session_config;
 
@@ -687,32 +542,6 @@ cflow_statechart_instance_status scxml_session_init_cmeta(
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v1 *options);
 
-/** Initialize a null-data-model session with opt-in payload-aware adapters. */
-cflow_statechart_instance_status scxml_session_init_v2(
-    scxml_session *session,
-    const scxml_session_config *config,
-    const scxml_session_adapters_v2 *adapters);
-
-/** Initialize a CMeta session with opt-in payload-aware adapters. */
-cflow_statechart_instance_status scxml_session_init_cmeta_v2(
-    scxml_session *session,
-    const scxml_session_config *config,
-    const scxml_cmeta_session_options_v1 *options,
-    const scxml_session_adapters_v2 *adapters);
-
-/** Initialize a null-data-model session with content-aware adapters. */
-cflow_statechart_instance_status scxml_session_init_v3(
-    scxml_session *session,
-    const scxml_session_config *config,
-    const scxml_session_adapters_v3 *adapters);
-
-/** Initialize a CMeta session with content-aware adapters. */
-cflow_statechart_instance_status scxml_session_init_cmeta_v3(
-    scxml_session *session,
-    const scxml_session_config *config,
-    const scxml_cmeta_session_options_v1 *options,
-    const scxml_session_adapters_v3 *adapters);
-
 cflow_mailbox_status scxml_session_try_send(
     scxml_session *session, const cflow_event_view *event);
 
@@ -721,18 +550,9 @@ cflow_mailbox_status scxml_session_try_send(
  * are capacity-coupled to the configured external mailbox and released before
  * transition selection. Oversized or partially NULL fields fail admission.
  */
-cflow_mailbox_status scxml_session_try_send_v2(
+cflow_mailbox_status scxml_session_try_send_with_metadata(
     scxml_session *session, const cflow_event_view *event,
     const scxml_event_metadata *metadata);
-/**
- * Copy one external Event and a format-neutral owned data value atomically.
- * Invalid ABI, conflicting legacy data, unsupported content, schema mismatch,
- * lifecycle-trait failure, or capacity overflow returns INVALID_ARGUMENT
- * without consuming an external Event or metadata row.
- */
-cflow_mailbox_status scxml_session_try_send_v3(
-    scxml_session *session, const cflow_event_view *event,
-    const scxml_event_metadata_v3 *metadata);
 /**
  * Copy one returned invocation Event into the external FIFO with its live
  * session token. Admission validates the token once; external preprocessing

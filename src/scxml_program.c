@@ -46,7 +46,10 @@ static scxml_status compile_scxml_model(
                                     : scxml_default_limits();
     turbo_xml_document document = {0};
     turbo_xml_diagnostic xml_diagnostic = {0};
-    turbo_xml_node root;
+    turbo_xml_node xml_root;
+    scxml_ast ast = {0};
+    scxml_ast_limits ast_limits = {0};
+    scxml_syntax_node root = {0};
     scxml_build build;
     scxml_counts counts = {0};
     scxml_program_impl *impl = NULL;
@@ -54,10 +57,10 @@ static scxml_status compile_scxml_model(
     cflow_statechart_definition_v2 definition_v2;
     cflow_statechart_status native_status;
     scxml_status status;
-    turbo_xml_attribute version;
-    turbo_xml_attribute datamodel;
-    turbo_xml_attribute binding;
-    turbo_xml_attribute document_name_attribute;
+    scxml_syntax_attribute version;
+    scxml_syntax_attribute datamodel;
+    scxml_syntax_attribute binding;
+    scxml_syntax_attribute document_name_attribute;
     turbo_xml_string_view document_name = {NULL, 0u};
     size_t index;
     size_t name_bytes = 0u;
@@ -103,12 +106,30 @@ static scxml_status compile_scxml_model(
                               xml_diagnostic.location,
                               xml_diagnostic.message);
     }
-    root = turbo_xml_document_root(&document);
+    xml_root = turbo_xml_document_root(&document);
+    ast_limits.max_nodes = limits.xml.max_nodes;
+    ast_limits.max_attributes = limits.xml.max_attributes;
+    ast_limits.max_depth = limits.xml.max_depth;
+    if (!scxml_analyze_checked_add(
+            limits.xml.max_input_bytes,
+            limits.xml.max_retained_string_bytes,
+            &ast_limits.max_storage_bytes)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(xml_root),
+            "SCXML AST storage limit overflow");
+        goto cleanup;
+    }
+    status = scxml_ast_build(
+        &ast, xml_root, &ast_limits, diagnostic);
+    if (status != SCXML_OK) goto cleanup;
+    turbo_xml_document_destroy(&document);
+    root = scxml_syntax_root(&ast);
     if (scxml_analyze_element_kind(root) != SCXML_ELEMENT_SCXML ||
-        !scxml_analyze_view_equal_raw(turbo_xml_node_namespace_uri(root),
+        !scxml_analyze_view_equal_raw(scxml_syntax_node_namespace_uri(root),
                         SCXML_NAMESPACE)) {
         status = scxml_analyze_fail(&build, SCXML_INVALID_NAMESPACE,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "root must be W3C SCXML scxml element");
         goto cleanup;
     }
@@ -116,57 +137,57 @@ static scxml_status compile_scxml_model(
     if (status != SCXML_OK) goto cleanup;
     version = scxml_analyze_find_attribute(root, "version");
     if (version.impl == NULL ||
-        !scxml_analyze_view_equal_raw(turbo_xml_attribute_value(version), "1.0")) {
+        !scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(version), "1.0")) {
         status = scxml_analyze_fail(
             &build, SCXML_INVALID_VERSION,
-            version.impl != NULL ? turbo_xml_attribute_location(version)
-                                 : turbo_xml_node_location(root),
+            version.impl != NULL ? scxml_syntax_attribute_location(version)
+                                 : scxml_syntax_node_location(root),
             "SCXML version must be 1.0");
         goto cleanup;
     }
     datamodel = scxml_analyze_find_attribute(root, "datamodel");
     binding = scxml_analyze_find_attribute(root, "binding");
     if (binding.impl != NULL &&
-        !scxml_analyze_view_equal_raw(turbo_xml_attribute_value(binding), "early")) {
-        if (!scxml_analyze_view_equal_raw(turbo_xml_attribute_value(binding), "late")) {
+        !scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(binding), "early")) {
+        if (!scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(binding), "late")) {
             status = scxml_analyze_fail(&build, SCXML_INVALID_STRUCTURE,
-                                turbo_xml_attribute_location(binding),
+                                scxml_syntax_attribute_location(binding),
                                 "binding must be 'early' or 'late'");
             goto cleanup;
         }
         if (data_model != SCXML_DATA_MODEL_CMETA) {
             status = scxml_analyze_fail(
                 &build, SCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(binding),
+                scxml_syntax_attribute_location(binding),
                 "binding='late' requires the CMeta data model");
             goto cleanup;
         }
         build.late_binding = true;
     }
     if (data_model == SCXML_DATA_MODEL_NULL && datamodel.impl != NULL &&
-        !scxml_analyze_view_equal_raw(turbo_xml_attribute_value(datamodel), "null")) {
+        !scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(datamodel), "null")) {
         status = scxml_analyze_fail(&build, SCXML_UNSUPPORTED_DATAMODEL,
-                            turbo_xml_attribute_location(datamodel),
+                            scxml_syntax_attribute_location(datamodel),
                             "only the SCXML null data model is supported");
         goto cleanup;
     }
     if (data_model == SCXML_DATA_MODEL_CMETA &&
         (datamodel.impl == NULL ||
-         !scxml_analyze_view_equal_raw(turbo_xml_attribute_value(datamodel), "cmeta"))) {
+         !scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(datamodel), "cmeta"))) {
         status = scxml_analyze_fail(
             &build, SCXML_UNSUPPORTED_DATAMODEL,
-            datamodel.impl != NULL ? turbo_xml_attribute_location(datamodel)
-                                   : turbo_xml_node_location(root),
+            datamodel.impl != NULL ? scxml_syntax_attribute_location(datamodel)
+                                   : scxml_syntax_node_location(root),
             "CMeta compilation requires datamodel='cmeta'");
         goto cleanup;
     }
     document_name_attribute = scxml_analyze_find_attribute(root, "name");
     if (document_name_attribute.impl != NULL) {
-        document_name = turbo_xml_attribute_value(document_name_attribute);
+        document_name = scxml_syntax_attribute_value(document_name_attribute);
         if (!scxml_analyze_is_xml_nmtoken(document_name)) {
             status = scxml_analyze_fail(
                 &build, SCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(document_name_attribute),
+                scxml_syntax_attribute_location(document_name_attribute),
                 "SCXML name must be one XML NMTOKEN");
             goto cleanup;
         }
@@ -185,7 +206,7 @@ static scxml_status compile_scxml_model(
         !scxml_analyze_checked_add(counts.event_occurrences, 2u,
                      &counts.event_occurrences)) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "reserved SCXML error event count overflow");
         goto cleanup;
     }
@@ -196,7 +217,7 @@ static scxml_status compile_scxml_model(
     if (!scxml_analyze_checked_add(counts.event_occurrences, counts.state_names,
                      &descriptor_extra_multiplier)) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "event descriptor expansion bound overflow");
         goto cleanup;
     }
@@ -220,7 +241,7 @@ static scxml_status compile_scxml_model(
             !scxml_analyze_checked_add(transition_action_capacity, extra,
                          &transition_action_capacity)) {
             status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                                turbo_xml_node_location(root),
+                                scxml_syntax_node_location(root),
                                 "event descriptor expansion overflow");
             goto cleanup;
         }
@@ -239,7 +260,7 @@ static scxml_status compile_scxml_model(
         transition_action_capacity > CFLOW_STATECHART_MAX_ACTION_REFS ||
         action_ref_count > CFLOW_STATECHART_MAX_ACTION_REFS) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "SCXML state or transition count exceeds limits");
         goto cleanup;
     }
@@ -354,7 +375,7 @@ static scxml_status compile_scxml_model(
         (counts.synthetic_initials != 0u &&
          build.synthetic_initials == NULL)) {
         status = scxml_analyze_fail(&build, SCXML_ALLOCATION_FAILED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "unable to allocate bounded SCXML declarations");
         goto cleanup;
     }
@@ -395,7 +416,7 @@ static scxml_status compile_scxml_model(
          (SCXML_REQUIREMENT_EVENT_IO |
           SCXML_REQUIREMENT_INVOKE)) != 0u ||
         needs_execution_error)
-        scxml_analyze_collect_reserved_error_events(&build, turbo_xml_node_location(root));
+        scxml_analyze_collect_reserved_error_events(&build, scxml_syntax_node_location(root));
     status = scxml_analyze_build_event_names(&build, build.event_occurrence_index);
     if (status != SCXML_OK) goto cleanup;
     if (needs_execution_error) {
@@ -406,7 +427,7 @@ static scxml_status compile_scxml_model(
             build.event_names, build.event_name_count, execution_name);
         if (execution == NULL) {
             status = scxml_analyze_fail(&build, SCXML_NATIVE_IR_REJECTED,
-                                turbo_xml_node_location(root),
+                                scxml_syntax_node_location(root),
                                 "reserved execution error event was not retained");
             goto cleanup;
         }
@@ -436,13 +457,13 @@ static scxml_status compile_scxml_model(
         build.invocation_storage_index !=
             counts.invocation_string_bytes) {
         status = scxml_analyze_fail(&build, SCXML_NATIVE_IR_REJECTED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "effect descriptor emission mismatched admission");
         goto cleanup;
     }
     if (!scxml_analyze_checked_add(name_bytes, document_name.size, &name_bytes)) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "retained SCXML name size overflow");
         goto cleanup;
     }
@@ -450,7 +471,7 @@ static scxml_status compile_scxml_model(
         if (!scxml_analyze_checked_add(name_bytes, build.state_names[index].name.size,
                          &name_bytes)) {
             status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                                turbo_xml_node_location(root),
+                                scxml_syntax_node_location(root),
                                 "retained SCXML name size overflow");
             goto cleanup;
         }
@@ -459,7 +480,7 @@ static scxml_status compile_scxml_model(
         if (!scxml_analyze_checked_add(name_bytes, build.event_names[index].name.size,
                          &name_bytes)) {
             status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                                turbo_xml_node_location(root),
+                                scxml_syntax_node_location(root),
                                 "retained SCXML name size overflow");
             goto cleanup;
         }
@@ -472,13 +493,13 @@ static scxml_status compile_scxml_model(
                      counts.invocation_string_bytes,
                      &retained_string_bytes)) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "retained SCXML string size overflow");
         goto cleanup;
     }
     if (retained_string_bytes > limits.max_name_bytes) {
         status = scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "retained SCXML strings exceed max_name_bytes");
         goto cleanup;
     }
@@ -510,7 +531,7 @@ static scxml_status compile_scxml_model(
     impl = (scxml_program_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         status = scxml_analyze_fail(&build, SCXML_ALLOCATION_FAILED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "unable to allocate SCXML program");
         goto cleanup;
     }
@@ -522,7 +543,7 @@ static scxml_status compile_scxml_model(
                        "native Statechart rejected SCXML lowering (status=%d)",
                        (int)native_status);
         status = scxml_analyze_fail(&build, SCXML_NATIVE_IR_REJECTED,
-                            turbo_xml_node_location(root), message);
+                            scxml_syntax_node_location(root), message);
         goto cleanup;
     }
     impl->state_names = scxml_emit_allocate_rows(build.state_name_index,
@@ -538,7 +559,7 @@ static scxml_status compile_scxml_model(
          impl->event_names_by_id == NULL) ||
         (name_bytes != 0u && impl->name_storage == NULL)) {
         status = scxml_analyze_fail(&build, SCXML_ALLOCATION_FAILED,
-                            turbo_xml_node_location(root),
+                            scxml_syntax_node_location(root),
                             "unable to retain SCXML name mappings");
         goto cleanup;
     }
@@ -576,7 +597,7 @@ static scxml_status compile_scxml_model(
             build.event_names, build.event_name_count, communication_name);
         if (execution == NULL || communication == NULL) {
             status = scxml_analyze_fail(&build, SCXML_NATIVE_IR_REJECTED,
-                                turbo_xml_node_location(root),
+                                scxml_syntax_node_location(root),
                                 "reserved SCXML error events were not retained");
             goto cleanup;
         }
@@ -656,7 +677,7 @@ static scxml_status compile_scxml_model(
             impl->event_names_by_id[id - 1u] != NULL) {
             status = scxml_analyze_fail(
                 &build, SCXML_NATIVE_IR_REJECTED,
-                turbo_xml_node_location(root),
+                scxml_syntax_node_location(root),
                 "SCXML event ID map invariant failed");
             goto cleanup;
         }
@@ -698,6 +719,7 @@ cleanup:
         free(impl);
     }
     scxml_emit_free_build(&build);
+    scxml_ast_destroy(&ast);
     turbo_xml_document_destroy(&document);
     return status;
 }

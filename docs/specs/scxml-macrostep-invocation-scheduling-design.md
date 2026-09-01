@@ -13,13 +13,13 @@
 
 - W3C IRP [`test422.txml`](https://www.w3.org/Voice/2013/scxml-irp/422/test422.txml) 与 [`test423.txml`](https://www.w3.org/Voice/2013/scxml-irp/423/test423.txml)。
 - 只读参考基线 `qigao/scxml@c80cedfa43b559861a054e992137685cdd29af16`：`FastMicroStep.cpp` 在内部队列清空后先取消失活调用、再按 configuration/文档顺序启动仍活动调用，随后才报告稳定并读取外部事件。本设计只比较调度语义，不复制实现代码。
-- CFlow v3 `on_stable_transaction` 契约：回调位于 internal/eventless/completion drain 之后、宏步 settle 和下一次 external admission 之前；staged state、internal Events 与 effect tickets 作为一个事务提交或丢弃。
+- CFlow V4 `on_host_transaction` 的 `PREPARE_QUIESCENCE` 契约：回调位于 internal/eventless/completion drain 之后、宏步 settle 和下一次 external admission 之前；staged state、internal Events 与 effect tickets 作为一个事务提交或丢弃。
 
 ## 状态归属与依赖边界
 
 `cflow_statechart_instance` 是活动配置、配置版本、internal/completion 队列、external FIFO、最优转换选择和宏步状态的唯一事实源。`scxml_session_impl` 是编译后 invocation descriptors、逐 descriptor invocation rows、token、统计和 adapter attachment 的唯一事实源。host adapter 只拥有已经接受的 prepare ticket 及其外部资源；它不拥有 SCXML 活动配置，也不决定下一个事件。
 
-依赖方向保持 `TurboSCXML -> installed TurboUtils/CFlow`。TurboSCXML 通过 `scxml_session_init_model()` 注册 CFlow v3 `on_stable_transaction` 与 external preprocess hook；不新增第二个 scheduler、全局 session registry、子解释器或反向依赖。
+依赖方向保持 `TurboSCXML -> installed TurboUtils/CFlow`。TurboSCXML 通过 `scxml_session_init_model()` 注册唯一的 CFlow V4 `on_host_transaction`，在 `PREPARE_TRIGGER` 处理 Event 观察与 external preprocess，在 `PREPARE_QUIESCENCE` 启动仍活动的调用；不新增第二个 scheduler、全局 session registry、子解释器或反向依赖。
 
 ## 精确调度序列
 
@@ -27,7 +27,7 @@
 
 1. CFlow 执行初始进入或已选转换的 exit、transition content 与 entry，并事务性提交 TurboSCXML 的 `INVOKE_ENTER`/`INVOKE_EXIT` lifecycle effects。
 2. CFlow 反复选择 eventless 转换，随后按既有优先级处理 internal Events、adapter-internal Events 与 completion；任何新内部工作都会继续当前宏步。
-3. 上述队列清空且宏步仍活动时，CFlow 调用 `scxml_runtime_start_stable_invocations_transaction()`。此时 `published_state` 不可变，`staged_state` 是独立副本，活动配置通过 call-scoped `is_active` 查询。
+3. 上述队列清空且宏步仍活动时，CFlow 进入 V4 `PREPARE_QUIESCENCE`，TurboSCXML 调用 `scxml_runtime_start_pending_invocations()`。published state 不可变，首次请求编辑时由 CFlow 懒构造唯一 staged state，活动配置通过 call-scoped host context 查询。
 4. TurboSCXML 按 `program->invocations[0..count)` 扫描 descriptor。只有 row 为 `PENDING` 且 owner 在当前配置中活动时才 prepare start。因此同一宏步进入后又退出的 transient owner 已由 EXIT effect 清空，不会启动；仍活动的 ancestor 和 leaf 按编译保留的文档顺序启动。
 5. 每个成功 prepare 的 adapter ticket 与 invocation row 变更一起 stage。CFlow 先原子发布 staged state 和 staged internal Events，再按 staging 顺序 commit effects；因此 adapter `commit` 是调用对 host 可见的边界。
 6. 若稳定事务生成新的 internal Event，CFlow 回到内部工作并再次稳定；只有没有内部工作时才 settle 当前宏步。
@@ -75,6 +75,6 @@ manifest 仍是唯一 conformance 事实源，行数保持 202（168 mandatory�
 
 ## 兼容性、修复与回滚
 
-预期不修改公开 API、adapter ABI、package target、数据格式、依赖关系或用户配置。首先登记 W3C 测试并保存缺 fixture RED，再添加忠实 fixture 与直接 adapter-order 回归。若直接回归已通过，生产代码保持不变。
+SCXML 公开 API、adapter ABI、package target、数据格式、依赖关系和用户配置不变。其依赖的 CFlow StateChart hook ABI 已统一为 V4-only，因此 TurboSCXML 与 TurboUtils 必须配套重编译；TurboSCXML 内部不保留 V1-V3 context 适配层。首先登记 W3C 测试并保存缺 fixture RED，再添加忠实 fixture 与直接 adapter-order 回归。若直接回归已通过，生产语义保持不变。
 
 只有直接回归在现有 runtime 上因调度语义失败时，才在暴露失败的 owning layer 做最小修复：活动配置/外部 FIFO 属于 CFlow，invocation row/adapter 事务属于 TurboSCXML；不得跨层复制状态。修复必须保持 callbacks outside locks、事务性发布和现有错误语义。回滚方式是单独撤销该最小生产改动并保留 characterization 测试为失败证据；若修复需要公开 ABI、依赖或数据格式变化，则视为计划缺陷，停止而不扩展范围。

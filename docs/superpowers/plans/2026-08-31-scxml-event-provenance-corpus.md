@@ -82,7 +82,7 @@
 - Modify: `tests/scxml_w3c_conformance_test.c`
 
 **Interfaces:**
-- Consumes: `scxml_session_copy_location()`, `scxml_session_try_send_v2()`, `scxml_session_report_invoke_event()`, and committed Event I/O/invoke tickets.
+- Consumes: `scxml_session_copy_location()`, `scxml_session_try_send_with_metadata()`, `scxml_session_report_invoke_event()`, and committed Event I/O/invoke tickets.
 - Produces: strict terminal evidence for failed-send identity, reply routing, and child-return invocation identity.
 
 - [x] **Step 1: Extend the test CMeta schema and send probe**

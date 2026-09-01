@@ -4,9 +4,9 @@
 
 **Goal:** Prove and, only if necessary, minimally correct TurboSCXML's ordering for W3C mandatory tests 422 and 423: newly entered live invocations start after macrostep internal work settles, and external events are removed until one enables a non-empty transition set.
 
-**Architecture:** CFlow remains the sole owner of active configuration, macrostep settlement, internal-before-external priority, and external queue removal. TurboSCXML remains the owner of SCXML invocation descriptors, session-owned invocation rows, adapter transactions, and W3C lowering. The existing CFlow v3 stable-transaction hook is the intended synchronous boundary. Do not add a second scheduler, a process-global session registry, a child interpreter, or host callbacks under a session lock.
+**Architecture:** CFlow remains the sole owner of active configuration, macrostep settlement, internal-before-external priority, and external queue removal. TurboSCXML remains the owner of SCXML invocation descriptors, session-owned invocation rows, adapter transactions, and W3C lowering. CFlow V4 `on_host_transaction` at `PREPARE_QUIESCENCE` is the synchronous boundary. Do not add a second scheduler, a process-global session registry, a child interpreter, or host callbacks under a session lock.
 
-**Characterization gate:** Current code already invokes `scxml_runtime_start_stable_invocations_transaction()` from CFlow's stable-transaction boundary before macrostep settlement and the next external admission. Add real adapter-order and public-path regressions first. If they are GREEN without a production change, preserve the existing runtime and treat this as conformance characterization plus corpus promotion. Never manufacture a runtime diff merely to satisfy TDD; the required RED may be the registered harness cases failing because faithful fixtures are absent. If a direct adapter-order regression is RED, change only the owning layer exposed by that failure.
+**Characterization gate:** Current code invokes `scxml_runtime_start_pending_invocations()` from CFlow's V4 quiescence transaction before macrostep settlement and the next external admission. Add real adapter-order and public-path regressions first. If they are GREEN without a production change, preserve the existing runtime and treat this as conformance characterization plus corpus promotion. Never manufacture a runtime diff merely to satisfy TDD; the required RED may be the registered harness cases failing because faithful fixtures are absent. If a direct adapter-order regression is RED, change only the owning layer exposed by that failure.
 
 **State and failure contract:** One `scxml_session_impl` owns invocation rows and one CFlow instance owns the active configuration and queues. Start requests are prepared outside session locks, staged transactionally, and become visible only on commit. Preparation/evaluation/staging failure must discard owned adapter work, retain the first useful error, and publish no partial invocation. External events remain FIFO; unmatched external events are consumed, while internal work always settles before the next external event is considered.
 
@@ -40,7 +40,7 @@
 - Modify after GREEN: `tests/w3c/manifest.tsv`, `tests/w3c/README.md`
 
 **Interfaces:**
-- Consumes: CFlow macrostep settlement, internal/external queues, `on_stable_transaction`, session invocation rows, and versioned invoke/Event I/O adapters.
+- Consumes: CFlow macrostep settlement, internal/external queues, V4 `on_host_transaction`, session invocation rows, and versioned invoke/Event I/O adapters.
 - Produces: a deterministic trace in which eventless/internal work settles, live newly entered invocations start in document order, their effects commit, unmatched external events are consumed, and the first enabling external event starts the next macrostep.
 
 - [ ] Write the focused design first. It must document state ownership, the exact scheduling sequence, lock/callback boundaries, bounded capacity, prepare/commit/discard rollback, close/cancel behavior, compatibility, and a rollback path for any production correction.

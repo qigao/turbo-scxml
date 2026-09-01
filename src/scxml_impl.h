@@ -8,6 +8,8 @@
 
 #include "scxml_expr.h"
 #include "scxml_assign.h"
+#include "scxml_ast.h"
+#include "scxml_syntax.h"
 #include "scxml_foreach.h"
 #include "scxml_location.h"
 
@@ -48,7 +50,7 @@ typedef struct scxml_program_name {
 } scxml_program_name;
 
 typedef struct scxml_node_ref {
-    const void *node;
+    scxml_ast_node_id node_id;
     cflow_machine_state_id id;
 } scxml_node_ref;
 
@@ -185,7 +187,7 @@ typedef struct scxml_invocation_descriptor {
     size_t done_name_size;
     cflow_event_id done_event;
     const scxml_block *finalize;
-    const void *source_node;
+    scxml_ast_node_id source_node_id;
     bool autoforward;
     bool has_type_expr;
     bool has_src_expr;
@@ -452,7 +454,9 @@ typedef enum scxml_invocation_effect_kind {
     SCXML_INVOCATION_EFFECT_ENTER = 1,
     SCXML_INVOCATION_EFFECT_EXIT,
     SCXML_INVOCATION_EFFECT_START,
-    SCXML_INVOCATION_EFFECT_FAIL
+    SCXML_INVOCATION_EFFECT_FAIL,
+    SCXML_INVOCATION_EFFECT_COMPLETE,
+    SCXML_INVOCATION_EFFECT_FORWARD
 } scxml_invocation_effect_kind;
 
 typedef struct scxml_invocation_lifecycle_effect {
@@ -516,18 +520,14 @@ struct scxml_session_impl {
     bool current_event_data_object_live;
     scxml_event_data_storage current_event_data_object;
     scxml_expr_system_values system_values;
-    scxml_event_io_adapter_v1 event_io;
-    scxml_event_io_adapter_v2 event_io_v2;
-    scxml_event_io_adapter_v3 event_io_v3;
+    scxml_event_io_adapter event_io;
     void *adapter_user;
     turbo_mutex_t registry_lock;
     scxml_delayed_send *delayed_sends;
     size_t delayed_send_capacity;
     scxml_prepared_effect *prepared_effects;
     size_t prepared_effect_capacity;
-    scxml_invoke_adapter_v1 invoke;
-    scxml_invoke_adapter_v2 invoke_v2;
-    scxml_invoke_adapter_v3 invoke_v3;
+    scxml_invoke_adapter invoke;
     void *invoke_user;
     scxml_invocation_row *invocation_rows;
     size_t invocation_capacity;
@@ -543,44 +543,12 @@ struct scxml_session_impl {
     scxml_external_event_metadata_row *external_metadata_rows;
     size_t external_metadata_capacity;
     scxml_payload_entry *payload_scratch;
-    scxml_payload_entry_v3 *payload_scratch_v3;
     size_t payload_scratch_capacity;
     uint64_t next_external_metadata_token;
     bool has_event_io;
     bool has_invoke;
-    uint32_t event_io_abi;
-    uint32_t invoke_abi;
     atomic_bool adapter_close_called;
     atomic_bool invoke_close_called;
 };
-
-typedef enum scxml_element_kind {
-    SCXML_ELEMENT_UNKNOWN = 0,
-    SCXML_ELEMENT_SCXML,
-    SCXML_ELEMENT_STATE,
-    SCXML_ELEMENT_PARALLEL,
-    SCXML_ELEMENT_TRANSITION,
-    SCXML_ELEMENT_INITIAL,
-    SCXML_ELEMENT_FINAL,
-    SCXML_ELEMENT_HISTORY,
-    SCXML_ELEMENT_ONENTRY,
-    SCXML_ELEMENT_ONEXIT,
-    SCXML_ELEMENT_RAISE,
-    SCXML_ELEMENT_SEND,
-    SCXML_ELEMENT_CANCEL,
-    SCXML_ELEMENT_LOG,
-    SCXML_ELEMENT_ASSIGN,
-    SCXML_ELEMENT_FOREACH,
-    SCXML_ELEMENT_IF,
-    SCXML_ELEMENT_ELSEIF,
-    SCXML_ELEMENT_ELSE,
-    SCXML_ELEMENT_INVOKE,
-    SCXML_ELEMENT_FINALIZE,
-    SCXML_ELEMENT_CONTENT,
-    SCXML_ELEMENT_PARAM,
-    SCXML_ELEMENT_DATAMODEL,
-    SCXML_ELEMENT_DATA,
-    SCXML_ELEMENT_DONEDATA
-} scxml_element_kind;
 
 #endif

@@ -27,6 +27,11 @@ turboscxml_add_test(scxml_test scxml_test.c
     SCXML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
 turboscxml_add_test(
+  scxml_ast_test
+  scxml_ast_test.c
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
   scxml_event_io_contract_test
   scxml_event_io_contract_test.c
   LIBS TurboUtils::Core

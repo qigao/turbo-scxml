@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 130
-local PASS transformations, records 38 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 132
+local PASS transformations, records 36 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -73,6 +73,8 @@ Status meanings are strict:
 | `test226.scxml` | [test226.txml](https://www.w3.org/Voice/2013/scxml-irp/226/test226.txml) | The strict host receives the canonical type, exact source URL, and named integer parameter before returning the child Event. |
 | `test228.scxml` | [test228.txml](https://www.w3.org/Voice/2013/scxml-irp/228/test228.txml) | The completion Event returned through a live token exposes that invocation's exact ID through `_event.invokeid`. |
 | `test232.scxml` | [test232.txml](https://www.w3.org/Voice/2013/scxml-irp/232/test232.txml) | The host reports two normal Events and completion in that order; the parent's three-state sequence observes the same FIFO order. |
+| `test233.scxml` | [test233.txml](https://www.w3.org/Voice/2013/scxml-irp/233/test233.txml) | The matching invocation's `finalize` assignment commits before the returned Event's transition guard is evaluated. |
+| `test234.scxml` | [test234.txml](https://www.w3.org/Voice/2013/scxml-irp/234/test234.txml) | A returned Event executes only the `finalize` belonging to its exact committed invocation token. |
 | `test235.scxml` | [test235.txml](https://www.w3.org/Voice/2013/scxml-irp/235/test235.txml) | Completion for explicit invocation ID `foo` passes only when the selected Event's `_event.name` is exactly `done.invoke.foo`. |
 | `test236.scxml` | [test236.txml](https://www.w3.org/Voice/2013/scxml-irp/236/test236.txml) | A normal return precedes completion; after completion is processed, the stale token is rejected and its late Event cannot reach selection. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
@@ -386,7 +388,7 @@ does not become a second expression or state fact source. Test 183 uses the
 same committed loopback but permits its event1 transition only after the
 generated ID has been published to the owned `send_id` location.
 
-Tests 176 and 205 use the versioned v2 payload boundary to require the exact
+Tests 176 and 205 use the single typed payload boundary to require the exact
 event name, payload name, scalar kind, and value evaluated by the inline block.
 Test 178 additionally requires both duplicate names in document order, proving
 that the callback-scoped payload remains an ordered entry sequence rather than
@@ -397,14 +399,14 @@ message and rejects a later delivery attempt. This follows the documented
 host-owned timer and session-owned lifecycle boundary without adding a second
 timer registry to TurboSCXML.
 
-Test 179 replaces upstream self-delivery with the versioned v3 host Event I/O
+Test 179 replaces upstream self-delivery with the single content-aware host Event I/O
 adapter. The fixture still evaluates literal `content` when `send` executes;
 the adapter is the external-service boundary and requires the exact UTF-8 bytes
 `123` before the only terminal path can complete. Test 185 replaces wall-clock
 delivery with ordered public admission: the host requires the delayed request
 to carry 1000 ms, admits the zero-delay Event first, and admits the delayed
 Event only after the session reaches its waiting state. Test 186 mutates the
-source CMeta field after a delayed send; the v2 host must already own scalar
+source CMeta field after a delayed send; the typed host must already own scalar
 payload 1 while the eventless terminal guard observes the new value 2. Tests
 208 and 210 retain two live delayed-send identities in the session registry.
 The strict host requires the cancellation to name the first identity, rejects
@@ -419,7 +421,7 @@ invocation token. The fixtures independently require the writable CMeta
 `idlocation` to be nonempty and exactly `s0.1`, so removing the generated child
 does not weaken either binding or `stateid.platformid` witness.
 
-Tests 215, 216, 220, 225, 226, 530, and 554 use one bounded v2 invoke host.
+Tests 215, 216, 220, 225, 226, 530, and 554 use one bounded invoke host.
 Tests 215 and 216 overwrite their initial CMeta strings in `onentry`; only the
 new type/source is accepted. Test 220 requires the canonical SCXML type before
 the host reports completion. Test 225 requires two committed requests to carry
@@ -447,6 +449,16 @@ session from `test247-child.scxml`, observes that session's top-level-final
 `done` state, destroys it cleanly, and only then reports one completion through
 the parent token. The child remains host-owned; production code gains no child
 interpreter, cross-session registry, transport, or thread.
+
+Tests 233 and 234 use a bounded two-token-aware invoke host. Test 233 reports
+`childToParent` through its sole committed token and can pass only when that
+invocation's `finalize` assignment is visible to selection of the same Event.
+Test 234 starts two live invocations, reports through the first token, and uses
+distinct assignment results so running neither handler, the second handler, or
+both handlers cannot pass. The CFlow V4 host transaction stages the CMeta write,
+completion bookkeeping, and autoforward tickets together; rollback discards all
+of them. Session destruction then verifies cancellation cleanup for every
+invocation that remains active.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads
@@ -497,7 +509,7 @@ no scalar string view.
 The selected Event remains current through all eventless microsteps in the
 same run-to-completion cycle. Initial eventless work has no current Event and
 therefore fails evaluation when it reads `_event`. Scalar/text/XML data is
-exposed as a bounded string. `scxml_session_try_send_v3()` additionally
+exposed as a bounded string. `scxml_session_try_send_with_metadata()` additionally
 copies structured CMeta data whose descriptor is exactly the compiled session
 root, allowing typed paths such as `_event.data.order.count`. The copy is owned
 by the session until the next Event is selected or the session is destroyed.
@@ -509,7 +521,7 @@ Event slot and row metadata.
 
 Format parsing remains outside the SCXML runtime. An embedding application may
 use CBind/CSerde to convert JSON, XML, YAML, or another format into the compiled
-root CMeta object, then admit that object through the v3 API. This keeps codecs
+root CMeta object, then admit that object through the metadata API. This keeps codecs
 and their errors out of transition selection. Invalid envelopes, unsupported
 content, schema mismatches, bare/unknown `_event` paths, and every write to an
 `_event` location fail fast without a compatibility fallback.

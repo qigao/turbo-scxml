@@ -7,7 +7,7 @@
 SCXML processor type、同 session 唯一 ID、`src`/`param`/`content` 传递、
 `content` 的求值时点，以及参数求值失败时不得启动外部服务。
 
-范围止于 TurboSCXML 的编译描述符、session 内物化、版本化 invoke adapter
+范围止于 TurboSCXML 的编译描述符、session 内物化、单一 invoke adapter
 事务和本地 conformance harness。文件/HTTP 获取、子解释器、服务发现、认证、
 授权和持久化仍由 host 实现；本任务不把这些能力嵌入核心，也不把 uSCXML 作为
 构建或运行依赖。
@@ -21,7 +21,7 @@ SCXML processor type、同 session 唯一 ID、`src`/`param`/`content` 传递、
   依次物化 type、src、ID、namelist/param 和 content；`SCXMLInvoker` 负责
   host 侧子解释器生命周期。本设计只比较边界和求值时点，不复制代码。
 - TurboSCXML 现有 `scxml_runtime_start_stable_invocations_transaction()`、
-  CMeta expression/location program 与 invoke adapter v1/v2/v3 契约。
+  CMeta expression/location program 与当前 content-aware invoke adapter 契约。
 
 ## 候选边界与选择
 
@@ -65,10 +65,11 @@ descriptor、autoforward 和 owner state。字符串、payload 与 content view 
 3. 在同一个 staged state 上求值 `typeexpr` 和 `srcexpr`；没有表达式时使用
    编译期静态 type/src。标准 type `http://www.w3.org/TR/scxml/` 不被核心拒绝，
    原样交给 host 的 SCXML invoker 实现。
-4. 求值 namelist/param，或在 v2/v3 边界物化 scalar/structured/inline content。
+4. 求值 namelist/param，并在统一边界物化 scalar/structured/inline content。
    `content expr` 此刻求值，不能在 XML admission 时提前求值。
-5. 构造 v1 base request；v2 增加 scalar/named payload，v3 增加结构化 content。
-   所有计数、字符串和动态 ID 均受既有编译/初始化容量限制。
+5. 构造唯一的 `scxml_invoke_start_request`；其中 payload 可表达 scalar、named
+   entries 与结构化 content。所有计数、字符串和动态 ID 均受既有编译/初始化
+   容量限制。
 6. 在 session lock 外调用 `prepare_start`。只有 `ACCEPTED` 且 ticket 合同完整时，
    才把 START row 和 adapter ticket 一起 stage；CFlow 发布状态后恰好 commit 一次。
 
@@ -100,9 +101,9 @@ payload size 和权限独立拒绝请求，拒绝结果必须经 adapter status 
 
 ## 兼容性与迁移
 
-公开函数、结构体布局、adapter ABI、CMake target、依赖方向、配置和数据格式均
-不改变。现有 v1 host 继续接收 base fields；需要 param/content 的文档仍要求
-host 提供对应 v2/v3 capability。canonical SCXML type 的“支持”由完整平台的
+本设计后续由 [Single Adapter ABI Design](scxml-single-adapter-abi-design.md)
+收口为一个公开 adapter ABI。需要 param/content 的文档要求 host 提供对应
+payload/content capability。canonical SCXML type 的“支持”由完整平台的
 host adapter 提供，TurboSCXML 的保证是接受、物化并原样路由，而不是内建传输。
 
 本批次预计只增加 characterization、W3C fixture 与 corpus 状态。如果直接测试
@@ -111,7 +112,7 @@ ABI、依赖或部署变化都视为计划缺陷并停止扩展。
 
 ## 验证与回滚
 
-先登记七个 named W3C tests 并保存缺 fixture RED，再增加一个严格 v3 adapter
+先登记七个 named W3C tests 并保存缺 fixture RED，再增加一个严格 content-aware adapter
 characterization：它必须同时观察运行时 type/src、两个不同动态 ID、canonical
 type、named payload、执行时 content，以及失败 invocation 的零 start。fixture
 随后通过公开 session/adapter/report API 形成终态 witness。

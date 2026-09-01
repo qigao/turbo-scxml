@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <datamodel>
+    <data id="sequence" expr="11"/>
+  </datamodel>
+  <state id="waiting">
+    <invoke type="http://www.w3.org/TR/scxml/" id="first">
+      <finalize><assign location="sequence" expr="21"/></finalize>
+    </invoke>
+    <invoke type="http://www.w3.org/TR/scxml/" id="second">
+      <finalize><assign location="sequence" expr="12"/></finalize>
+    </invoke>
+    <transition event="childToParent" cond="sequence == 21" target="pass"/>
+    <transition event="childToParent" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>
