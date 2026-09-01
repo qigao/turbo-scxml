@@ -493,6 +493,10 @@ typedef enum scxml_completion_data_state {
     SCXML_COMPLETION_DATA_BOUND
 } scxml_completion_data_state;
 
+#define SCXML_COMPLETION_DATA_SUBSET_SUFFIX "#runtime-subset:"
+#define SCXML_COMPLETION_DATA_SUBSET_SUFFIX_SIZE \
+    (sizeof(SCXML_COMPLETION_DATA_SUBSET_SUFFIX) - 1u)
+
 typedef struct scxml_completion_data_slot {
     scxml_completion_data_state state;
     cflow_machine_state_id parent;
@@ -500,6 +504,12 @@ typedef struct scxml_completion_data_slot {
     size_t data_size;
     const cmeta_data_desc *data_schema;
     bool data_object_live;
+    cmeta_data_field_desc *projection_fields;
+    size_t projection_field_capacity;
+    char *projection_stable_id;
+    size_t projection_stable_id_capacity;
+    cmeta_data_struct_shape projection_shape;
+    cmeta_data_desc projection_schema;
     char data[SCXML_EVENT_METADATA_CAPACITY + 1u];
     scxml_event_data_storage data_object;
 } scxml_completion_data_slot;
@@ -550,6 +560,10 @@ struct scxml_session_impl {
     scxml_event_data_storage current_event_data_object;
     scxml_completion_data_slot *completion_data_slots;
     size_t completion_data_capacity;
+    cmeta_data_field_desc *completion_projection_fields;
+    char *completion_projection_stable_ids;
+    size_t completion_projection_field_capacity;
+    size_t completion_projection_stable_id_capacity;
     size_t current_completion_data_slot;
     uint64_t next_completion_data_sequence;
     scxml_expr_system_values system_values;

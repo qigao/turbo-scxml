@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 154
-local PASS transformations, records 14 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 155
+local PASS transformations, records 13 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -34,12 +34,12 @@ Status meanings are strict:
 
 The current CMeta `<donedata><param>` profile is deliberately narrower than
 the complete W3C failure semantics. Successful params are materialized from
-one immutable state snapshot and published atomically as a typed object. If
-any param fails, TurboSCXML discards the whole derived object and raises one
-`error.execution`; it does not retain earlier successful name/value pairs.
-Accordingly tests 294, 298, and 488 are executable, while test 343 remains
-`UNSUPPORTED` until per-param failure can omit only the failing pair without
-weakening ownership or bounded-storage guarantees.
+one immutable state snapshot. Each failed param queues `error.execution` and is
+omitted, while successful siblings are published through a slot-owned subset
+schema. Projection fields and stable IDs are preallocated at session creation,
+so mixed completion data does not allocate at runtime and remains bounded by the
+compiled descriptor. Tests 294, 298, 343, and 488 cover full, empty, and mixed
+completion-data outcomes.
 
 | Local fixture | Upstream source | Assertion preserved |
 | --- | --- | --- |
@@ -108,6 +108,7 @@ weakening ownership or bounded-storage guarantees.
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test294.scxml` | [test294.txml](https://www.w3.org/Voice/2013/scxml-irp/294/test294.txml) | A named param becomes a structured completion Event field, while a later inline content child remains the full completion data value. |
 | `test298.scxml` | [test298.txml](https://www.w3.org/Voice/2013/scxml-irp/298/test298.txml) | An unavailable param location queues `error.execution` before completion and contributes no field to that completion Event's data. |
+| `test343.scxml` | [test343.txml](https://www.w3.org/Voice/2013/scxml-irp/343/test343.txml) | A valid `sequence` param survives in completion data when a later invalid `send_id` location queues `error.execution`; the projected schema omits only `send_id`. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test488.scxml` | [test488.txml](https://www.w3.org/Voice/2013/scxml-irp/488/test488.txml) | A failed param expression queues `error.execution` before completion and leaves that completion Event's `_event.data` empty. |
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |

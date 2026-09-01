@@ -4668,25 +4668,27 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("discards failed donedata params and processes error.execution") {
+    it("preserves valid donedata params when a sibling fails") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' initial='idle'>"
-            "<state id='idle'><transition event='go' target='running'/>"
-            "</state><parallel id='running'>"
-            "<state id='payload' initial='work'>"
+            "<state id='idle'><transition event='go' target='parent'/>"
+            "</state><state id='parent' initial='work'>"
+            "<transition event='error.execution' target='waiting'/>"
+            "<transition event='done.state.parent' target='failed'/>"
             "<state id='work'><transition target='childDone'/></state>"
             "<final id='childDone'><donedata>"
             "<param name='enabled' expr='true'/>"
             "<param name='count' expr='source'/>"
             "</donedata></final>"
-            "</state>"
-            "<state id='hold'/><transition event='error.execution' "
-            "cond='enabled == false &amp;&amp; count == 7 &amp;&amp; "
-            "_event.name == &quot;error.execution&quot; &amp;&amp; "
-            "_event.type == &quot;platform&quot; &amp;&amp; "
-            "_event.data == &quot;&quot;' target='success'/>"
-            "</parallel><final id='success'/></scxml>";
+            "</state><state id='waiting'>"
+            "<transition event='done.state.parent' "
+            "cond='_event.data.enabled == true' target='probeMissing'/>"
+            "<transition event='done.state.parent' target='failed'/>"
+            "</state><state id='probeMissing'>"
+            "<transition cond='_event.data.count == 7' target='failed'/>"
+            "<transition target='success'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
         const scxml_public_data initial = {
             false, 7, SCXML_PUBLIC_SOURCE_FAIL};
         const scxml_cmeta_session_options_v1 data = {

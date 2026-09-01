@@ -109,6 +109,8 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->late_initializers);
     free(impl->prepared_effects);
     free(impl->external_metadata_rows);
+    free(impl->completion_projection_stable_ids);
+    free(impl->completion_projection_fields);
     free(impl->completion_data_slots);
     free(impl->invocation_effects);
     free(impl->invocation_rows);
@@ -185,6 +187,41 @@ static void destroy_initialized_cmeta_state(
     free(state);
 }
 
+static cflow_statechart_instance_status completion_projection_limits(
+    const scxml_program_impl *program,
+    size_t *out_field_capacity, size_t *out_stable_id_capacity) {
+    size_t field_capacity = 0u;
+    size_t stable_id_capacity = 0u;
+    size_t index;
+    if (program == NULL || out_field_capacity == NULL ||
+        out_stable_id_capacity == NULL ||
+        (program->done_data_count != 0u && program->done_data == NULL))
+        return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+    for (index = 0u; index < program->done_data_count; ++index) {
+        const scxml_done_data_descriptor *descriptor =
+            &program->done_data[index];
+        size_t required;
+        if (descriptor->assignment_count == 0u) continue;
+        if (!cmeta_data_desc_valid(&descriptor->schema))
+            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+        required = strlen(descriptor->schema.stable_id);
+        if (!scxml_analyze_checked_add(
+                required, SCXML_COMPLETION_DATA_SUBSET_SUFFIX_SIZE,
+                &required) ||
+            !scxml_analyze_checked_add(
+                required, descriptor->assignment_count, &required) ||
+            !scxml_analyze_checked_add(required, 1u, &required))
+            return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+        if (descriptor->assignment_count > field_capacity)
+            field_capacity = descriptor->assignment_count;
+        if (required > stable_id_capacity)
+            stable_id_capacity = required;
+    }
+    *out_field_capacity = field_capacity;
+    *out_stable_id_capacity = stable_id_capacity;
+    return CFLOW_STATECHART_INSTANCE_OK;
+}
+
 static cflow_statechart_instance_status scxml_session_init_model(
     scxml_session *session,
     const scxml_session_config *config,
@@ -197,6 +234,10 @@ static cflow_statechart_instance_status scxml_session_init_model(
     turbo_uuid_t session_uuid;
     size_t invocation_effect_capacity = 0u;
     size_t completion_data_capacity = 0u;
+    size_t completion_projection_field_capacity = 0u;
+    size_t completion_projection_stable_id_capacity = 0u;
+    size_t completion_projection_field_total = 0u;
+    size_t completion_projection_stable_id_total = 0u;
     size_t index;
     bool requires_forward = false;
     uint64_t event_io_capabilities = 0u;
@@ -226,6 +267,19 @@ static cflow_statechart_instance_status scxml_session_init_model(
         !scxml_analyze_checked_add(
             config->completion_capacity, 1u,
             &completion_data_capacity))
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+    status = completion_projection_limits(
+        program, &completion_projection_field_capacity,
+        &completion_projection_stable_id_capacity);
+    if (status != CFLOW_STATECHART_INSTANCE_OK) return status;
+    if (!scxml_analyze_checked_multiply(
+            completion_data_capacity,
+            completion_projection_field_capacity,
+            &completion_projection_field_total) ||
+        !scxml_analyze_checked_multiply(
+            completion_data_capacity,
+            completion_projection_stable_id_capacity,
+            &completion_projection_stable_id_total))
         return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
     if ((program->requirements & SCXML_REQUIREMENT_EVENT_IO) != 0u) {
         if (config->event_io == NULL ||
@@ -354,6 +408,18 @@ static cflow_statechart_instance_status scxml_session_init_model(
         (scxml_completion_data_slot *)scxml_emit_allocate_rows(
             impl->completion_data_capacity,
             sizeof(*impl->completion_data_slots));
+    impl->completion_projection_field_capacity =
+        completion_projection_field_capacity;
+    impl->completion_projection_stable_id_capacity =
+        completion_projection_stable_id_capacity;
+    impl->completion_projection_fields =
+        (cmeta_data_field_desc *)scxml_emit_allocate_rows(
+            completion_projection_field_total,
+            sizeof(*impl->completion_projection_fields));
+    impl->completion_projection_stable_ids =
+        (char *)scxml_emit_allocate_rows(
+            completion_projection_stable_id_total,
+            sizeof(*impl->completion_projection_stable_ids));
     impl->payload_scratch_capacity = program->max_payload_entries;
     impl->payload_scratch =
         (scxml_payload_entry *)scxml_emit_allocate_rows(
@@ -388,6 +454,10 @@ static cflow_statechart_instance_status scxml_session_init_model(
          impl->external_metadata_rows == NULL) ||
         (impl->completion_data_capacity != 0u &&
          impl->completion_data_slots == NULL) ||
+        (completion_projection_field_total != 0u &&
+         impl->completion_projection_fields == NULL) ||
+        (completion_projection_stable_id_total != 0u &&
+         impl->completion_projection_stable_ids == NULL) ||
         (impl->payload_scratch_capacity != 0u &&
          impl->payload_scratch == NULL) ||
         (impl->invocation_capacity != 0u &&
@@ -397,6 +467,22 @@ static cflow_statechart_instance_status scxml_session_init_model(
         session_free_storage(impl);
         free(impl);
         return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
+    }
+    for (index = 0u; index < impl->completion_data_capacity; ++index) {
+        scxml_completion_data_slot *slot =
+            &impl->completion_data_slots[index];
+        slot->projection_field_capacity =
+            impl->completion_projection_field_capacity;
+        slot->projection_stable_id_capacity =
+            impl->completion_projection_stable_id_capacity;
+        if (slot->projection_field_capacity != 0u)
+            slot->projection_fields =
+                impl->completion_projection_fields +
+                index * slot->projection_field_capacity;
+        if (slot->projection_stable_id_capacity != 0u)
+            slot->projection_stable_id =
+                impl->completion_projection_stable_ids +
+                index * slot->projection_stable_id_capacity;
     }
     turbo_mutex_init(&impl->registry_lock);
     if (impl->registry_lock == NULL) {
