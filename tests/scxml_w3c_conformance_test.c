@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 153,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 15,
+    W3C_PASS_DOCUMENT_COUNT = 154,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 14,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -5198,6 +5198,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 294 places param and content values in completion data") {
         check_true(run_w3c_cmeta_fixture("test294.scxml"));
+    }
+
+    it("test 298 raises error.execution for an invalid param location") {
+        check_true(run_w3c_cmeta_fixture("test298.scxml"));
     }
 
     it("test 488 orders a param expression error before empty completion data") {

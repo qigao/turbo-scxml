@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="s0">
+  <state id="s0" initial="s01">
+    <transition event="error.execution" target="verify"/>
+    <transition event="done.state.s0" target="fail"/>
+    <state id="s01"><transition target="s02"/></state>
+    <final id="s02">
+      <donedata>
+        <param name="sequence" location="_event.data.sequence"/>
+      </donedata>
+    </final>
+  </state>
+  <state id="verify">
+    <transition event="done.state.s0"
+                cond="_event.data == &quot;&quot;" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 153
-local PASS transformations, records 15 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 154
+local PASS transformations, records 14 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -37,7 +37,7 @@ the complete W3C failure semantics. Successful params are materialized from
 one immutable state snapshot and published atomically as a typed object. If
 any param fails, TurboSCXML discards the whole derived object and raises one
 `error.execution`; it does not retain earlier successful name/value pairs.
-Accordingly tests 294 and 488 are executable, while test 343 remains
+Accordingly tests 294, 298, and 488 are executable, while test 343 remains
 `UNSUPPORTED` until per-param failure can omit only the failing pair without
 weakening ownership or bounded-storage guarantees.
 
@@ -107,6 +107,7 @@ weakening ownership or bounded-storage guarantees.
 | `test286.scxml` | [test286.txml](https://www.w3.org/Voice/2013/scxml-irp/286/test286.txml) | An unknown assignment location raises internal `error.execution` and aborts the remaining executable-content block. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test294.scxml` | [test294.txml](https://www.w3.org/Voice/2013/scxml-irp/294/test294.txml) | A named param becomes a structured completion Event field, while a later inline content child remains the full completion data value. |
+| `test298.scxml` | [test298.txml](https://www.w3.org/Voice/2013/scxml-irp/298/test298.txml) | An unavailable param location queues `error.execution` before completion and contributes no field to that completion Event's data. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test488.scxml` | [test488.txml](https://www.w3.org/Voice/2013/scxml-irp/488/test488.txml) | A failed param expression queues `error.execution` before completion and leaves that completion Event's `_event.data` empty. |
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
@@ -396,6 +397,13 @@ materialized. The only passing path consumes `error.execution` before
 `done.state.s0`, then requires that completion Event's `_event.data` to be the
 empty string. This preserves the upstream error and empty-data observations
 without changing the atomic typed-object ownership contract.
+
+Test 298 uses `_event.data.sequence` through `donedata/param/@location` while
+no Event is bound. The legal CMeta location expression therefore cannot supply
+a value during completion materialization. The passing path first consumes the
+resulting internal `error.execution`, then consumes `done.state.s0` only when
+its `_event.data` is empty. The derived object is discarded atomically, so the
+invalid name/value pair never becomes observable.
 
 Test 286 maps the generated invalid location to the unknown CMeta field
 `missing`. Its following `foo` raise and FIFO confirmation Event prove that
