@@ -1,6 +1,7 @@
 #include "scxml_runtime.h"
 #include "scxml_analyze.h"
 #include "scxml_program.h"
+#include "scxml_session.h"
 
 typedef enum scxml_execute_outcome {
     SCXML_EXECUTE_CONTINUE = 0,
@@ -2692,6 +2693,9 @@ static scxml_execute_outcome execute_scxml_range(
             for (assignment = 0u;
                  assignment < step->assignment_count; ++assignment) {
                 scxml_expr_diagnostic diagnostic = {0};
+                if (scxml_session_data_initializer_is_overridden(
+                        session, step->assignment + assignment))
+                    continue;
                 if (scxml_assign_apply_with_system(
                         &block->assignments[step->assignment + assignment],
                         state, evaluate_cmeta_executable_active,

@@ -22,12 +22,13 @@ scxml_status scxml_emit_compile_cmeta_content_expression(
     const char *subject, scxml_content_descriptor *content,
     scxml_expr_program *scalar_program);
 scxml_status scxml_emit_data_initializers(
-    scxml_build *build, scxml_syntax_node node);
+    scxml_build *build, scxml_syntax_node node, bool is_root);
 scxml_status scxml_emit_done_data(
     scxml_build *build, scxml_syntax_node node,
     size_t node_count, cflow_machine_state_id parent);
 scxml_status scxml_emit_state_executables(
-    scxml_build *build, scxml_syntax_node node, size_t node_count);
+    scxml_build *build, scxml_syntax_node node, size_t node_count,
+    bool is_root);
 scxml_status scxml_emit_transitions(
     scxml_build *build, scxml_syntax_node node,
     size_t node_count, size_t synthetic_count);

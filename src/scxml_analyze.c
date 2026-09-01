@@ -2183,7 +2183,8 @@ static scxml_status analyze_invoke(
 }
 
 static scxml_status analyze_datamodel(
-    scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
+    scxml_build *build, scxml_syntax_node node, bool top_level,
+    scxml_counts *counts) {
     size_t index;
     size_t data_count = 0u;
     scxml_status status = scxml_analyze_validate_element_attributes(
@@ -2239,7 +2240,11 @@ static scxml_status analyze_datamodel(
         if (!scxml_analyze_checked_add(counts->assignment_rows, 1u,
                          &counts->assignment_rows) ||
             !scxml_analyze_checked_add(counts->data_initializer_rows, 1u,
-                         &counts->data_initializer_rows))
+                         &counts->data_initializer_rows) ||
+            (top_level &&
+             !scxml_analyze_checked_add(
+                 counts->top_level_data_initializer_rows, 1u,
+                 &counts->top_level_data_initializer_rows)))
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                               scxml_syntax_node_location(child),
                               "CMeta data initializer count overflow");
@@ -2478,7 +2483,7 @@ scxml_status scxml_analyze_state(scxml_build *build,
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                                   scxml_syntax_node_location(child),
                                   "datamodel is allowed only in scxml, state, or parallel");
-            status = analyze_datamodel(build, child, counts);
+            status = analyze_datamodel(build, child, is_root, counts);
         } else if (child_kind == SCXML_ELEMENT_DONEDATA) {
             if (kind != SCXML_ELEMENT_FINAL)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,

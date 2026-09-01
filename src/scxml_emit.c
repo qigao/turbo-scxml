@@ -1059,7 +1059,7 @@ static scxml_status emit_datamodel_assignments(
 }
 
 scxml_status scxml_emit_data_initializers(
-    scxml_build *build, scxml_syntax_node node) {
+    scxml_build *build, scxml_syntax_node node, bool is_root) {
     size_t index;
     if (build->late_binding) return SCXML_OK;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
@@ -1071,14 +1071,16 @@ scxml_status scxml_emit_data_initializers(
             size_t count;
             const scxml_status status = emit_datamodel_assignments(
                 build, child, &first, &count);
-            (void)first;
-            (void)count;
             if (status != SCXML_OK) return status;
+            if (is_root) {
+                build->top_level_data_initializer_first = first;
+                build->top_level_data_initializer_count = count;
+            }
         } else if (scxml_analyze_is_state_element(kind) ||
                    kind == SCXML_ELEMENT_INITIAL ||
                    kind == SCXML_ELEMENT_HISTORY) {
             const scxml_status status =
-                scxml_emit_data_initializers(build, child);
+                scxml_emit_data_initializers(build, child, false);
             if (status != SCXML_OK) return status;
         }
     }
@@ -1628,6 +1630,7 @@ static scxml_status emit_finalize_block(
 
 static scxml_status emit_late_initializer_block(
     scxml_build *build, scxml_syntax_node datamodel,
+    bool top_level,
     cflow_statechart_executable_id *out_executable) {
     const size_t block_index = build->block_index;
     const size_t executable_index = build->executable_index;
@@ -1642,6 +1645,10 @@ static scxml_status emit_late_initializer_block(
     status = emit_datamodel_assignments(
         build, datamodel, &assignment_first, &assignment_count);
     if (status != SCXML_OK || assignment_count == 0u) return status;
+    if (top_level) {
+        build->top_level_data_initializer_first = assignment_first;
+        build->top_level_data_initializer_count = assignment_count;
+    }
     if (build->step_index >= build->step_capacity) {
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                           scxml_syntax_node_location(datamodel),
@@ -1752,7 +1759,8 @@ static scxml_status emit_done_data_block(
 
 scxml_status scxml_emit_state_executables(scxml_build *build,
                                                  scxml_syntax_node node,
-                                                 size_t node_count) {
+                                                 size_t node_count,
+                                                 bool is_root) {
     const cflow_machine_state_id owner = scxml_analyze_node_id(build, node, node_count);
     uint32_t entry_order = 0u;
     uint32_t exit_order = 0u;
@@ -1769,7 +1777,7 @@ scxml_status scxml_emit_state_executables(scxml_build *build,
                 scxml_analyze_element_kind(child) == SCXML_ELEMENT_DATAMODEL) {
                 cflow_statechart_executable_id executable = 0u;
                 scxml_status status = emit_late_initializer_block(
-                    build, child, &executable);
+                    build, child, is_root, &executable);
                 if (status != SCXML_OK) return status;
                 if (executable != 0u) {
                     build->state_actions[build->state_action_index++] =
@@ -1879,7 +1887,7 @@ scxml_status scxml_emit_state_executables(scxml_build *build,
              child_kind == SCXML_ELEMENT_INITIAL ||
              child_kind == SCXML_ELEMENT_HISTORY)) {
             scxml_status status = scxml_emit_state_executables(
-                build, child, node_count);
+                build, child, node_count, false);
             if (status != SCXML_OK) return status;
         }
     }
