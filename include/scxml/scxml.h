@@ -611,6 +611,12 @@ cflow_mailbox_status scxml_session_report_adapter_error(
 bool scxml_session_report_send_done(
     scxml_session *session, const char *send_id, size_t send_id_size);
 void scxml_session_close(scxml_session *session);
+/**
+ * Stop admission and asynchronously execute every active state's `onexit`
+ * content on the session SerialExecutor before cancelled termination. A
+ * semantic microstep already reaching commit remains visible. This function
+ * does not wait for the controlled exit; observe the executor or session stats.
+ */
 void scxml_session_cancel(scxml_session *session);
 bool scxml_session_get_stats(
     const scxml_session *session,

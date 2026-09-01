@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 144
-local PASS transformations, records 24 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 145
+local PASS transformations, records 23 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -88,6 +88,7 @@ Status meanings are strict:
 | `test244.scxml` | [test244.txml](https://www.w3.org/Voice/2013/scxml-irp/244/test244.txml) | A matching namelist key initializes the typed child `child_value` field before execution. |
 | `test245.scxml` | [test245.txml](https://www.w3.org/Voice/2013/scxml-irp/245/test245.txml) | An unmatched named value is ignored; the closed child schema retains its declared field's zero default. |
 | `test247.scxml` | [test247.txml](https://www.w3.org/Voice/2013/scxml-irp/247/test247.txml) | A host-owned real child session reaches top-level final before exactly one completion is reported through the real parent's committed token. |
+| `test250.scxml` | [test250.txml](https://www.w3.org/Voice/2013/scxml-irp/250/test250.txml) | Cancelling a real nested child runs the active `sub01` and `sub0` `onexit` handlers in descendant-before-ancestor order and does not report normal invocation completion. |
 | `test252.scxml` | [test252.txml](https://www.w3.org/Voice/2013/scxml-irp/252/test252.txml) | After cancellation, both a normal child Event and completion report through the stale token are rejected; only an independent parent Event can reach pass. |
 | `test253.scxml` | [test253.txml](https://www.w3.org/Voice/2013/scxml-irp/253/test253.txml) | One active canonical SCXML invocation exchanges `childRunning`, `parentToChild`, and `success` through `#_parent`/`#_foo`; both receivers require the SCXML Event I/O `origintype`. |
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
@@ -475,16 +476,17 @@ session from `test247-child.scxml`, observes that session's top-level-final
 the parent token. The child remains host-owned; production code gains no child
 interpreter, cross-session registry, transport, or thread.
 
-Tests 237 and 252 use a second real host-owned TurboSCXML session that remains
+Tests 237, 250, and 252 use a second real host-owned TurboSCXML session that remains
 active until the parent leaves its invoking state. The committed cancel ticket
 calls `scxml_session_cancel()` on that child without waiting or recursively
 pumping either executor. Test 237 requires subsequent child admission to return
 `CANCELLED` and stale completion reporting to return `INVALID_ARGUMENT`. Test
+250 keeps nested `sub0/sub01` active, requests CFlow controlled exit, and
+captures the real child `tlog` records in `sub01`, then `sub0` order while the
+child terminates cancelled rather than normally complete. Test
 252 attempts both a normal returned Event and completion after cancellation;
 both are rejected before parent selection, and only an independent timeout can
-reach pass. The upstream child `onexit` producer is replaced by that explicit
-post-cancel report, so test 250 remains `UNSUPPORTED` until controlled child
-cancellation can execute every active-state `onexit` handler.
+reach pass.
 
 Test 253 uses the same host-owned child boundary but keeps a live canonical
 SCXML invocation in the parent. The host commits that exact start before
