@@ -1106,9 +1106,22 @@ static void completion_data_discard_payload(
 }
 
 static void completion_data_release(scxml_completion_data_slot *slot) {
+    cmeta_data_field_desc *projection_fields;
+    size_t projection_field_capacity;
+    char *projection_stable_id;
+    size_t projection_stable_id_capacity;
     if (slot == NULL) return;
+    projection_fields = slot->projection_fields;
+    projection_field_capacity = slot->projection_field_capacity;
+    projection_stable_id = slot->projection_stable_id;
+    projection_stable_id_capacity = slot->projection_stable_id_capacity;
     completion_data_discard_payload(slot);
     memset(slot, 0, sizeof(*slot));
+    slot->projection_fields = projection_fields;
+    slot->projection_field_capacity = projection_field_capacity;
+    slot->projection_stable_id = projection_stable_id;
+    slot->projection_stable_id_capacity =
+        projection_stable_id_capacity;
 }
 
 static scxml_completion_data_slot *completion_data_reserve(
@@ -2310,9 +2323,52 @@ static scxml_execute_outcome fail_done_data_expression(
         operation->block, operation->context, operation->out_error);
 }
 
+static bool initialize_done_data_projection(
+    scxml_done_data_materialization *operation,
+    size_t *out_marker_offset) {
+    const scxml_done_data_descriptor *descriptor = operation->descriptor;
+    scxml_completion_data_slot *slot = operation->slot;
+    size_t stable_id_size;
+    size_t required;
+    if (descriptor->fields == NULL ||
+        descriptor->shape.field_count != descriptor->assignment_count ||
+        slot->projection_fields == NULL ||
+        slot->projection_field_capacity < descriptor->assignment_count ||
+        slot->projection_stable_id == NULL ||
+        out_marker_offset == NULL)
+        return false;
+    stable_id_size = strlen(descriptor->schema.stable_id);
+    if (!scxml_analyze_checked_add(
+            stable_id_size, SCXML_COMPLETION_DATA_SUBSET_SUFFIX_SIZE,
+            out_marker_offset) ||
+        !scxml_analyze_checked_add(
+            *out_marker_offset, descriptor->assignment_count, &required) ||
+        !scxml_analyze_checked_add(required, 1u, &required) ||
+        required > slot->projection_stable_id_capacity)
+        return false;
+    memcpy(slot->projection_stable_id,
+           descriptor->schema.stable_id, stable_id_size);
+    memcpy(slot->projection_stable_id + stable_id_size,
+           SCXML_COMPLETION_DATA_SUBSET_SUFFIX,
+           SCXML_COMPLETION_DATA_SUBSET_SUFFIX_SIZE);
+    memset(slot->projection_stable_id + *out_marker_offset, '0',
+           descriptor->assignment_count);
+    slot->projection_stable_id[required - 1u] = '\0';
+    slot->projection_shape = (cmeta_data_struct_shape){
+        .layout = descriptor->shape.layout,
+        .fields = slot->projection_fields,
+        .field_count = 0u};
+    slot->projection_schema = descriptor->schema;
+    slot->projection_schema.stable_id = slot->projection_stable_id;
+    slot->projection_schema.shape = &slot->projection_shape;
+    return true;
+}
+
 static scxml_execute_outcome materialize_done_data_object(
     scxml_done_data_materialization *operation) {
     const scxml_done_data_descriptor *descriptor = operation->descriptor;
+    size_t marker_offset = 0u;
+    size_t successful_fields = 0u;
     size_t assignment;
     if (operation->session->program->cmeta_root == NULL ||
         operation->block->assignments == NULL ||
@@ -2321,7 +2377,9 @@ static scxml_execute_outcome materialize_done_data_object(
         descriptor->assignment_count >
             operation->block->assignment_storage_count -
                 descriptor->assignment_first ||
-        !cmeta_data_desc_valid(&descriptor->schema)) {
+        !cmeta_data_desc_valid(&descriptor->schema) ||
+        descriptor->fields == NULL ||
+        descriptor->shape.field_count != descriptor->assignment_count) {
         completion_data_release(operation->slot);
         *operation->out_error =
             "SCXML donedata object descriptor is invalid";
@@ -2333,6 +2391,12 @@ static scxml_execute_outcome materialize_done_data_object(
         return fail_done_data_expression(operation);
     operation->slot->data_schema = &descriptor->schema;
     operation->slot->data_object_live = true;
+    if (!initialize_done_data_projection(operation, &marker_offset)) {
+        completion_data_release(operation->slot);
+        *operation->out_error =
+            "SCXML donedata projection storage is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
     for (assignment = 0u;
          assignment < descriptor->assignment_count; ++assignment) {
         scxml_expr_diagnostic diagnostic = {0};
@@ -2342,8 +2406,36 @@ static scxml_execute_outcome materialize_done_data_object(
                 operation->state, operation->slot->data_object.bytes,
                 evaluate_cmeta_executable_active,
                 (void *)operation->context,
-                operation->system_values, &diagnostic) != SCXML_EXPR_OK)
-            return fail_done_data_expression(operation);
+                operation->system_values, &diagnostic) == SCXML_EXPR_OK) {
+            operation->slot->projection_fields[successful_fields++] =
+                descriptor->fields[assignment];
+            operation->slot->projection_stable_id[
+                marker_offset + assignment] = '1';
+        } else {
+            const scxml_execute_outcome outcome =
+                raise_done_data_execution_error(
+                    operation->block, operation->context,
+                    operation->out_error);
+            if (outcome != SCXML_EXECUTE_CONTINUE) {
+                completion_data_release(operation->slot);
+                return outcome;
+            }
+        }
+    }
+    if (successful_fields == 0u) {
+        completion_data_publish_empty(operation->slot);
+        return SCXML_EXECUTE_CONTINUE;
+    }
+    if (successful_fields != descriptor->assignment_count) {
+        operation->slot->projection_shape.field_count = successful_fields;
+        if (!cmeta_data_desc_valid(&operation->slot->projection_schema)) {
+            completion_data_release(operation->slot);
+            *operation->out_error =
+                "SCXML donedata projected schema is invalid";
+            return SCXML_EXECUTE_FATAL;
+        }
+        operation->slot->data_schema =
+            &operation->slot->projection_schema;
     }
     operation->slot->state = SCXML_COMPLETION_DATA_READY;
     return SCXML_EXECUTE_CONTINUE;
