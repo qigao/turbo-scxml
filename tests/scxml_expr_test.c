@@ -924,7 +924,8 @@ spec("TurboSCXML private SCXML expressions") {
 
     check_equal(scxml_assign_compile(
                     &program, "order.count", 11u, "9", 1u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                    &root_data, resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
                 SCXML_EXPR_OK);
     check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
@@ -934,7 +935,8 @@ spec("TurboSCXML private SCXML expressions") {
 
     check_equal(scxml_assign_compile(
                     &program, "order.count", 11u, "order.ratio", 11u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                    &root_data, resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
                 SCXML_EXPR_OK);
     check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
@@ -944,7 +946,8 @@ spec("TurboSCXML private SCXML expressions") {
 
     check_equal(scxml_assign_compile(
                     &program, "label", 5u, "label", 5u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                    &root_data, resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
                 SCXML_EXPR_OK);
     check_equal(scxml_assign_apply(
                     &program, &root, state_is_active, &states, &diagnostic),
@@ -955,7 +958,8 @@ spec("TurboSCXML private SCXML expressions") {
 
     check_equal(scxml_assign_compile(
                     &program, "order.ready", 11u, "1", 1u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                    &root_data, resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
                 SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
   }
@@ -971,7 +975,8 @@ spec("TurboSCXML private SCXML expressions") {
     destination.order.count = -4;
     check_equal(scxml_assign_compile(
                     &program, "order.count", 11u, "order.count", 11u,
-                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                    &root_data, resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
                 SCXML_EXPR_OK);
     check_equal(scxml_assign_apply_from_with_system(
                     &program, &source, &destination,
@@ -980,6 +985,66 @@ spec("TurboSCXML private SCXML expressions") {
     check_equal(source.order.count, 17);
     check_equal(destination.order.count, 17);
     scxml_assign_program_destroy(&program);
+  }
+
+  it("defers unresolved executable assignment locations without mutating state") {
+    const scxml_expr_root before = root;
+    scxml_assign_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+
+    check_equal(scxml_assign_compile(
+                    &program, "missing", sizeof("missing") - 1u,
+                    "1 +", sizeof("1 +") - 1u, &root_data,
+                    resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_RUNTIME, &diagnostic),
+                SCXML_EXPR_SYNTAX_ERROR);
+    check_null(program.impl);
+
+    check_equal(scxml_assign_compile(
+                    &program, "missing", sizeof("missing") - 1u,
+                    "9", sizeof("9") - 1u, &root_data,
+                    resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_STRICT, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_null(program.impl);
+
+    check_equal(scxml_assign_compile(
+                    &program, "missing", sizeof("missing") - 1u,
+                    "_event.data.order.count",
+                    sizeof("_event.data.order.count") - 1u, &root_data,
+                    resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_RUNTIME, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_assign_apply(
+                    &program, &root, state_is_active, &states, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(&root, &before, sizeof(root));
+    scxml_assign_program_destroy(&program);
+  }
+
+  it("rejects corrupt assignment schemas under the runtime location policy") {
+    cmeta_data_desc invalid_order = order_data;
+    cmeta_data_field_desc invalid_fields[
+        sizeof(root_fields) / sizeof(root_fields[0])];
+    cmeta_data_struct_shape invalid_shape = root_shape;
+    cmeta_data_desc invalid_root = root_data;
+    scxml_assign_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    memcpy(invalid_fields, root_fields, sizeof(invalid_fields));
+    invalid_order.storage_type = NULL;
+    invalid_fields[1].value = &invalid_order;
+    invalid_shape.fields = invalid_fields;
+    invalid_root.shape = &invalid_shape;
+    check_true(cmeta_data_desc_valid(&invalid_root));
+    check_equal(scxml_assign_compile(
+                    &program, "order.count", sizeof("order.count") - 1u,
+                    "9", sizeof("9") - 1u, &invalid_root,
+                    resolve_state, NULL, NULL,
+                    SCXML_ASSIGN_LOCATION_RUNTIME, &diagnostic),
+                SCXML_EXPR_INVALID_ARGUMENT);
+    check_null(program.impl);
   }
 
   it("executes recognized system assignments as read-only failures") {
@@ -996,7 +1061,8 @@ spec("TurboSCXML private SCXML expressions") {
     status = scxml_assign_compile(
         &program, "_event", sizeof("_event") - 1u,
         "true", sizeof("true") - 1u,
-        &root_data, resolve_state, NULL, NULL, &diagnostic);
+        &root_data, resolve_state, NULL, NULL,
+        SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     check_equal(status, SCXML_EXPR_OK);
     if (status == SCXML_EXPR_OK) {
       check_equal(scxml_assign_apply_with_system(

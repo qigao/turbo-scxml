@@ -7,6 +7,11 @@ typedef struct scxml_assign_program {
     void *impl;
 } scxml_assign_program;
 
+typedef enum scxml_assign_location_policy {
+    SCXML_ASSIGN_LOCATION_STRICT = 0,
+    SCXML_ASSIGN_LOCATION_RUNTIME = 1
+} scxml_assign_location_policy;
+
 scxml_expr_status scxml_assign_compile(
     scxml_assign_program *out,
     const char *location, size_t location_size,
@@ -15,6 +20,7 @@ scxml_expr_status scxml_assign_compile(
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
     const scxml_expr_limits *limits,
+    scxml_assign_location_policy location_policy,
     scxml_expr_diagnostic *diagnostic);
 
 /* Mutates only staged_root. Callers discard the whole staged object on error. */

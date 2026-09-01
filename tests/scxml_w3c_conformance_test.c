@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 150,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 18,
+    W3C_PASS_DOCUMENT_COUNT = 152,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 16,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -5188,6 +5188,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
             "test554.scxml", W3C_INVOKE_ARGUMENT_ERROR));
     }
 
+    it("test 286 raises error.execution for an invalid assign location") {
+        check_true(run_w3c_cmeta_fixture("test286.scxml"));
+    }
+
     it("test 287 assigns a legal value to a valid location") {
         check_true(run_w3c_cmeta_fixture("test287.scxml"));
     }
@@ -5214,6 +5218,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 310 exposes In through the CMeta data model") {
         check_true(run_w3c_cmeta_fixture("test310.scxml"));
+    }
+
+    it("test 311 raises error.execution when a location cannot be evaluated") {
+        check_true(run_w3c_cmeta_fixture("test311.scxml"));
     }
 
     it("test 312 raises error.execution for an illegal value expression") {

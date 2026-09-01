@@ -197,24 +197,39 @@ scxml_expr_status scxml_location_compile(
             return location_report(
                 diagnostic, SCXML_EXPR_LIMIT_EXCEEDED, index,
                 "SCXML location path depth limit exceeded");
-        if (!cmeta_data_desc_valid(current) ||
-            current->kind != CMETA_DATA_STRUCT || current->shape == NULL ||
-            current->storage_type == NULL)
+        if (!cmeta_data_desc_valid(current))
+            return location_report(
+                diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
+                segment_start, "CMeta location schema is invalid");
+        if (current->kind != CMETA_DATA_STRUCT)
             return location_report(
                 diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
                 segment_start, "SCXML location traverses a non-struct value");
+        if (current->shape == NULL || current->storage_type == NULL)
+            return location_report(
+                diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
+                segment_start, "CMeta location schema is invalid");
         shape = (const cmeta_data_struct_shape *)current->shape;
         field = location_find_field(
             shape, path + segment_start, index - segment_start);
-        if (field == NULL || !cmeta_data_desc_valid(field->value) ||
-            field->value->storage_type == NULL ||
-            field->offset > current->storage_type->size ||
-            field->value->storage_type->size >
-                current->storage_type->size - field->offset ||
-            absolute_offset > SIZE_MAX - field->offset)
+        if (field == NULL)
             return location_report(
                 diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
                 segment_start, "SCXML location is unresolved");
+        if (!cmeta_data_desc_valid(field->value) ||
+            field->offset > current->storage_type->size ||
+            (field->value->storage_type != NULL &&
+             field->value->storage_type->size >
+                 current->storage_type->size - field->offset) ||
+            absolute_offset > SIZE_MAX - field->offset)
+            return location_report(
+                diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
+                segment_start, "CMeta location schema is invalid");
+        if (field->value->storage_type == NULL)
+            return location_report(
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION,
+                segment_start,
+                "SCXML location does not expose addressable storage");
         absolute_offset += field->offset;
         current = field->value;
         if (at_end) break;
@@ -224,8 +239,8 @@ scxml_expr_status scxml_location_compile(
         current->storage_type->size >
             root->storage_type->size - absolute_offset)
         return location_report(
-            diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
-            "SCXML location exceeds root storage");
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
+            "CMeta location schema exceeds root storage");
     compiled.root = root;
     compiled.value = current;
     compiled.offset = absolute_offset;

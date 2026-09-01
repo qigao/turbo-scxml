@@ -10,11 +10,17 @@
 #define SCXML_ASSIGN_SINT64_UPPER_BOUND 9223372036854775808.0
 #define SCXML_ASSIGN_UINT64_UPPER_BOUND 18446744073709551616.0
 
+typedef enum scxml_assign_destination_kind {
+    SCXML_ASSIGN_DESTINATION_MUTABLE = 0,
+    SCXML_ASSIGN_DESTINATION_READ_ONLY_SYSTEM,
+    SCXML_ASSIGN_DESTINATION_INVALID
+} scxml_assign_destination_kind;
+
 typedef struct scxml_assign_program_impl {
     const cmeta_data_desc *destination;
     size_t destination_offset;
     size_t max_string_bytes;
-    bool read_only_system_destination;
+    scxml_assign_destination_kind destination_kind;
     scxml_expr_program expression;
 } scxml_assign_program_impl;
 
@@ -63,19 +69,23 @@ scxml_expr_status scxml_assign_compile(
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
     const scxml_expr_limits *limits_or_null,
+    scxml_assign_location_policy location_policy,
     scxml_expr_diagnostic *diagnostic) {
     const scxml_expr_limits limits =
         limits_or_null != NULL ? *limits_or_null
                                : scxml_expr_default_limits();
     scxml_assign_program_impl *impl = NULL;
     const cmeta_data_desc *destination = NULL;
-    bool read_only_system_destination;
+    scxml_assign_destination_kind destination_kind =
+        SCXML_ASSIGN_DESTINATION_MUTABLE;
     scxml_expr_status status;
     scxml_location destination_location = {0};
     if (out == NULL || out->impl != NULL || location == NULL ||
         location_size == 0u || expression == NULL || expression_size == 0u ||
         !cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
         resolve_state == NULL ||
+        (location_policy != SCXML_ASSIGN_LOCATION_STRICT &&
+         location_policy != SCXML_ASSIGN_LOCATION_RUNTIME) ||
         !scxml_expr_limits_valid(&limits))
         return assign_report(diagnostic,
                              SCXML_EXPR_INVALID_ARGUMENT, 0u,
@@ -85,24 +95,31 @@ scxml_expr_status scxml_assign_compile(
                              SCXML_EXPR_LIMIT_EXCEEDED,
                              limits.max_source_bytes,
                              "CMeta assignment location byte limit exceeded");
-    read_only_system_destination =
-        scxml_location_is_read_only_system(
-            location, location_size, limits.max_path_depth);
-    if (!read_only_system_destination) {
+    if (scxml_location_is_read_only_system(
+            location, location_size, limits.max_path_depth)) {
+        destination_kind = SCXML_ASSIGN_DESTINATION_READ_ONLY_SYSTEM;
+    } else {
         status = scxml_location_compile(
             &destination_location, location, location_size, root,
             limits.max_path_depth, true, diagnostic);
-        if (status != SCXML_EXPR_OK) return status;
-        destination = destination_location.value;
-        if ((destination->kind == CMETA_DATA_STRING &&
-             (cmeta_data_buffer_ops_of(destination) == NULL ||
-              cmeta_data_buffer_ops_of(destination)->ownership ==
-                  CMETA_DATA_BUFFER_CUSTOM)) ||
-            (destination->kind == CMETA_DATA_ENUM &&
-             cmeta_data_enum_ops_of(destination) == NULL))
-            return assign_report(
-                diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
-                "CMeta assignment destination lacks a safe adapter");
+        if (status != SCXML_EXPR_OK) {
+            if (status != SCXML_EXPR_UNKNOWN_LOCATION ||
+                location_policy != SCXML_ASSIGN_LOCATION_RUNTIME ||
+                location[0] == '_')
+                return status;
+            destination_kind = SCXML_ASSIGN_DESTINATION_INVALID;
+        } else {
+            destination = destination_location.value;
+            if ((destination->kind == CMETA_DATA_STRING &&
+                 (cmeta_data_buffer_ops_of(destination) == NULL ||
+                  cmeta_data_buffer_ops_of(destination)->ownership ==
+                      CMETA_DATA_BUFFER_CUSTOM)) ||
+                (destination->kind == CMETA_DATA_ENUM &&
+                 cmeta_data_enum_ops_of(destination) == NULL))
+                return assign_report(
+                    diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
+                    "CMeta assignment destination lacks a safe adapter");
+        }
     }
     impl = (scxml_assign_program_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL)
@@ -116,7 +133,7 @@ scxml_expr_status scxml_assign_compile(
         free(impl);
         return status;
     }
-    if (!read_only_system_destination &&
+    if (destination_kind == SCXML_ASSIGN_DESTINATION_MUTABLE &&
         !assign_destination_accepts(
             destination,
             scxml_expr_program_value_kind(&impl->expression))) {
@@ -129,7 +146,7 @@ scxml_expr_status scxml_assign_compile(
     impl->destination = destination;
     impl->destination_offset = destination_location.offset;
     impl->max_string_bytes = limits.max_string_bytes;
-    impl->read_only_system_destination = read_only_system_destination;
+    impl->destination_kind = destination_kind;
     out->impl = impl;
     return assign_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
@@ -344,10 +361,14 @@ static scxml_expr_status assign_apply(
         return assign_report(diagnostic,
                              SCXML_EXPR_INVALID_ARGUMENT, 0u,
                              "invalid CMeta assignment evaluation arguments");
-    if (impl->read_only_system_destination)
+    if (impl->destination_kind == SCXML_ASSIGN_DESTINATION_READ_ONLY_SYSTEM)
         return assign_report(diagnostic,
                              SCXML_EXPR_EVALUATION_ERROR, 0u,
                              "CMeta system locations are read-only");
+    if (impl->destination_kind == SCXML_ASSIGN_DESTINATION_INVALID)
+        return assign_report(diagnostic,
+                             SCXML_EXPR_UNKNOWN_LOCATION, 0u,
+                             "CMeta assignment destination is invalid");
     status = scxml_expr_evaluate_value_with_system(
         &impl->expression, source_root, is_active, active_user,
         system_values, &source, diagnostic);
