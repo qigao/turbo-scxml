@@ -54,7 +54,7 @@ session-owned.
 | Topology | Single owning session/executor mutates completion slots. No cross-thread producer is added. |
 | Order | Param evaluation and projected fields preserve XML document order. Each failure Event is enqueued in that same order before the later completion Event. |
 | Capacity | Per-slot field capacity is the largest descriptor assignment count. Per-slot stable-ID capacity is the largest checked sum of base ID bytes, `#runtime-subset:`, one marker byte per assignment, and the terminator. Total storage is checked multiplication by `completion_capacity + 1`. |
-| Full behavior | Overflow or allocation failure rejects session initialization with the existing limit/allocation status. Runtime capacity mismatch is an invariant violation and fails the session. No heap allocation or fallback occurs during materialization. |
+| Full behavior | Overflow or allocation failure rejects session initialization with the existing limit/allocation status. Runtime capacity mismatch is an invariant violation and fails the session. Projection metadata introduces no heap allocation or fallback during materialization; existing CMeta object-copy and field-adapter allocation semantics are unchanged. |
 | Failure | A param evaluation failure leaves its destination unchanged, excludes its field, and queues `error.execution`. Failure to copy the source object, queue the error, or validate the projected schema releases the slot and is fatal. |
 | Release | The slot destroys its owned object exactly once, clears Event payload state, and preserves its preallocated projection pointers for reuse. Session destruction drains every live slot before freeing backing arrays. |
 | Observation | Existing session status, `error.execution`, completion Event data, and test ownership counters remain the observable boundary. No new logging is added. |
@@ -97,10 +97,15 @@ loadable because no public format or ABI changes.
 - A focused CMeta regression must fail under whole-object discard, then pass
   only when a successful sibling remains readable and the failed field is not
   admitted by the completion schema.
+- A multi-failure regression must consume one `error.execution` per failed
+  param, retain successful fields after failures, and preserve document order.
+- Sequential mixed completions must reuse one released projection slot across
+  different subset shapes without retaining stale fields or losing storage.
+- A projection-specific capacity test must reach checked multiplication after
+  `completion_capacity + 1` succeeds and report the existing limit status.
 - W3C-derived tests 294, 298, 343, and 488 must pass together.
 - Managed copy/destroy counters must balance after session destruction.
-- Session capacity overflow, strict inventory, Debug CTest, and Release CTest
-  must remain green.
+- Strict inventory, Debug CTest, and Release CTest must remain green.
 
 ## References
 

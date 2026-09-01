@@ -4,7 +4,7 @@
 
 **Goal:** Preserve successful CMeta completion params while omitting each failed param and queuing `error.execution`, then promote W3C mandatory test343.
 
-**Architecture:** Keep immutable candidate assignments and fields in the compiled program. Preallocate one field-projection slice and stable-ID slice per completion slot at session initialization, then derive a slot-owned compatible subset schema without runtime allocation. The completion slot remains the sole owner of the copied object and publishes either the full static schema, a mixed-success projection, or empty data.
+**Architecture:** Keep immutable candidate assignments and fields in the compiled program. Preallocate one field-projection slice and stable-ID slice per completion slot at session initialization, then derive a slot-owned compatible subset schema without runtime allocation for projection metadata. Existing CMeta object-copy and field-adapter allocation semantics remain unchanged. The completion slot remains the sole owner of the copied object and publishes either the full static schema, a mixed-success projection, or empty data.
 
 **Tech Stack:** C11, TurboSCXML, TurboUtils CMeta/CFlow, TinyTest, CMake Presets
 
@@ -148,6 +148,8 @@ In `materialize_done_data_object()`:
 Rebuild both Debug targets and run filters `preserves valid donedata params`, `343`, `294`, `298`, and `488`.
 
 Expected: every filter passes; managed copy/move/destroy counts balance after destruction; test294 retains full structured data; tests 298 and 488 retain empty data; test343 exposes only the successful field.
+
+Review hardening adds focused filters `each failed donedata`, `different subsets`, and `projection capacity`. Mutation checks must prove that these fail respectively when execution stops at the first failed param, slot release clears projection slices, or projection checked multiplication is removed.
 
 ---
 

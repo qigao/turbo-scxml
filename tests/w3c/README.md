@@ -37,9 +37,10 @@ the complete W3C failure semantics. Successful params are materialized from
 one immutable state snapshot. Each failed param queues `error.execution` and is
 omitted, while successful siblings are published through a slot-owned subset
 schema. Projection fields and stable IDs are preallocated at session creation,
-so mixed completion data does not allocate at runtime and remains bounded by the
-compiled descriptor. Tests 294, 298, 343, and 488 cover full, empty, and mixed
-completion-data outcomes.
+so projection metadata adds no runtime allocation and remains bounded by the
+compiled descriptor. Existing CMeta object-copy and field-adapter allocation
+semantics are unchanged. Tests 294, 298, 343, and 488 cover full, empty, and
+mixed completion-data outcomes.
 
 | Local fixture | Upstream source | Assertion preserved |
 | --- | --- | --- |

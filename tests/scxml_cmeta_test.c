@@ -4641,6 +4641,43 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("rejects completion projection capacity arithmetic overflow") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='done'>"
+            "<final id='done'><donedata>"
+            "<param name='enabled' expr='true'/>"
+            "<param name='count' expr='7'/>"
+            "</donedata></final></state></scxml>";
+        const scxml_public_data initial = {
+            true, 7, SCXML_PUBLIC_SOURCE_GOOD};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = SIZE_MAX / 2u,
+            .microstep_limit = 16u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED);
+        check_null(session.impl);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("materializes every donedata param from the same state snapshot") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -4761,6 +4798,147 @@ spec("TurboSCXML public CMeta data model") {
         destroys = atomic_load_explicit(
             &public_data_destroy_count, memory_order_relaxed);
         check_equal(copies + moves, destroys);
+        scxml_program_destroy(&program);
+    }
+
+    it("continues after each failed donedata param in document order") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='done'>"
+            "<transition event='error.execution' target='secondError'/>"
+            "<transition event='done.state.parent' target='failed'/>"
+            "<final id='done'><donedata>"
+            "<param name='count' expr='source'/>"
+            "<param name='enabled' expr='true'/>"
+            "<param name='total' expr='source'/>"
+            "<param name='ratio' expr='3'/>"
+            "</donedata></final></state>"
+            "<state id='secondError'>"
+            "<transition event='error.execution' target='completion'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<state id='completion'>"
+            "<transition event='done.state.parent' "
+            "cond='_event.data.enabled == true &amp;&amp; "
+            "_event.data.ratio == 3' target='probeCount'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<state id='probeCount'>"
+            "<transition cond='_event.data.count == 7' target='failed'/>"
+            "<transition target='probeTotal'/></state>"
+            "<state id='probeTotal'>"
+            "<transition cond='_event.data.total == 0' target='failed'/>"
+            "<transition target='success'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){false, 7, SCXML_PUBLIC_SOURCE_FAIL});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("reuses completion projection storage for different subsets") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='idle1'>"
+            "<state id='idle1'><transition event='one' target='round1'/>"
+            "</state>"
+            "<state id='round1' initial='done1'>"
+            "<transition event='error.execution' target='verify1'/>"
+            "<transition event='done.state.round1' target='failed'/>"
+            "<final id='done1'><donedata>"
+            "<param name='enabled' expr='true'/>"
+            "<param name='count' expr='source'/>"
+            "</donedata></final></state>"
+            "<state id='verify1'>"
+            "<transition event='done.state.round1' "
+            "cond='_event.data.enabled == true' target='idle2'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<state id='idle2'><transition event='two' target='round2'/>"
+            "</state>"
+            "<state id='round2' initial='done2'>"
+            "<transition event='error.execution' target='verify2'/>"
+            "<transition event='done.state.round2' target='failed'/>"
+            "<final id='done2'><donedata>"
+            "<param name='enabled' expr='source == 1'/>"
+            "<param name='count' expr='9'/>"
+            "</donedata></final></state>"
+            "<state id='verify2'>"
+            "<transition event='done.state.round2' "
+            "cond='_event.data.count == 9' target='idle3'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<state id='idle3'><transition event='three' target='round3'/>"
+            "</state>"
+            "<state id='round3' initial='done3'>"
+            "<transition event='error.execution' target='verify3'/>"
+            "<transition event='done.state.round3' target='failed'/>"
+            "<final id='done3'><donedata>"
+            "<param name='ratio' expr='3'/>"
+            "<param name='count' expr='source'/>"
+            "</donedata></final></state>"
+            "<state id='verify3'>"
+            "<transition event='done.state.round3' "
+            "cond='_event.data.ratio == 3' target='success'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
+        const scxml_public_data initial = {
+            false, 7, SCXML_PUBLIC_SOURCE_FAIL};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_event_view one = {0};
+        cflow_event_view two = {0};
+        cflow_event_view three = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 2u,
+            .microstep_limit = 64u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_program_event(&program, "one", 3u, &one));
+        check_true(scxml_program_event(&program, "two", 3u, &two));
+        check_true(scxml_program_event(&program, "three", 5u, &three));
+        check_equal(scxml_session_try_send(&session, &one),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_false(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_try_send(&session, &two),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_false(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_try_send(&session, &three),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
     }
 
