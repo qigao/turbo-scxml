@@ -2699,7 +2699,6 @@ static scxml_execute_outcome execute_scxml_range(
         } else if (step->kind == SCXML_STEP_LATE_INITIALIZE) {
             scxml_late_initializer_state *initializer;
             cflow_statechart_effect_ticket ticket;
-            size_t assignment;
             void *state;
             if (session == NULL || context->stage_effect == NULL ||
                 block->assignments == NULL ||
@@ -2735,23 +2734,11 @@ static scxml_execute_outcome execute_scxml_range(
                 }
             }
             state = mutable_state_get(mutable_state, out_error);
-            if (state == NULL) return SCXML_EXECUTE_FATAL;
-            for (assignment = 0u;
-                 assignment < step->assignment_count; ++assignment) {
-                scxml_expr_diagnostic diagnostic = {0};
-                if (scxml_session_data_initializer_is_overridden(
-                        session, step->assignment + assignment))
-                    continue;
-                if (scxml_assign_apply_with_system(
-                        &block->assignments[step->assignment + assignment],
-                        state, evaluate_cmeta_executable_active,
-                        (void *)context, system_values, &diagnostic) !=
-                    SCXML_EXPR_OK) {
-                    *out_error =
-                        "SCXML late data initializer evaluation failed";
-                    return SCXML_EXECUTE_FATAL;
-                }
-            }
+            if (state == NULL ||
+                !apply_data_initializers(
+                    block, session, context, state, system_values,
+                    step->assignment, step->assignment_count, out_error))
+                return SCXML_EXECUTE_FATAL;
         } else if (step->kind == SCXML_STEP_FOREACH) {
             const scxml_foreach_descriptor *descriptor;
             scxml_expr_diagnostic diagnostic = {0};

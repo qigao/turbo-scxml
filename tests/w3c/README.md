@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 157
-local PASS transformations, records 11 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 158
+local PASS transformations, records 10 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -106,6 +106,7 @@ mixed completion-data outcomes.
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test276.scxml` | [test276.txml](https://www.w3.org/Voice/2013/scxml-irp/276/test276.txml) | A V2 host environment value replaces the contained initializer of its exact top-level data declaration. |
+| `test277.scxml` | [test277.txml](https://www.w3.org/Voice/2013/scxml-irp/277/test277.txml) | An initializer reads `_event.data.sequence` while no Event is bound, queues `error.execution` ahead of an entry sentinel, and leaves the typed field writable for a later assignment. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
 | `test286.scxml` | [test286.txml](https://www.w3.org/Voice/2013/scxml-irp/286/test286.txml) | An unknown assignment location raises internal `error.execution` and aborts the remaining executable-content block. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
@@ -586,6 +587,14 @@ interpreter validates that location against the compiled root data declarations
 and skips only that initializer. The initial guard therefore reaches pass only
 when the host value wins, preserving the upstream parent-to-child instantiation
 witness without embedding host invocation ownership in the interpreter.
+
+Test 277 maps the upstream illegal ECMAScript initializer to the legal CMeta
+expression `_event.data.sequence`, evaluated while `_event` is unbound during
+initialization. The field already exists in the caller-supplied closed CMeta
+schema and its zero-initialized value is the platform's typed empty value. The
+fixture requires the resulting internal `error.execution` to outrank an initial
+state `sentinel`, then assigns `sequence=1` and reaches pass only when that field
+remains writable after recovery.
 
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads

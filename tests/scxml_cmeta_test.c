@@ -4747,18 +4747,50 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("fails late initialization atomically and requires journal capacity") {
+    it("recovers a late initializer once before state onentry") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='late' initial='target'>"
+            "<state id='target'><datamodel><data id='count' "
+            "expr='_event.data.count'/><data id='enabled' expr='true'/>"
+            "</datamodel><onentry><raise event='sentinel'/></onentry>"
+            "<transition event='error.execution' "
+            "cond='enabled &amp;&amp; count == 0' target='outside'/>"
+            "<transition event='sentinel' cond='count == 1' "
+            "target='passed'/><transition event='*' target='failed'/>"
+            "</state><state id='outside'><onentry><assign location='count' "
+            "expr='1'/></onentry><transition event='sentinel' "
+            "target='target'/></state><final id='passed'/>"
+            "<state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){false, 0, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("requires journal capacity for recoverable late initialization") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' binding='late' initial='active'>"
             "<datamodel><data id='enabled' expr='true'/></datamodel>"
             "<state id='active'><datamodel>"
             "<data id='count' expr='2'/><data id='count' expr='source'/>"
-            "</datamodel></state></scxml>";
+            "</datamodel><transition event='error.execution' "
+            "cond='enabled &amp;&amp; count == 2' target='done'/></state>"
+            "<final id='done'/></scxml>";
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
         cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
         const scxml_public_data initial = {
             false, 9, SCXML_PUBLIC_SOURCE_FAIL};
         scxml_session_config config = {
@@ -4781,10 +4813,15 @@ spec("TurboSCXML public CMeta data model") {
                     CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
         config.effect_capacity = 1u;
         check_equal(scxml_session_init_cmeta(&session, &config, &data),
-                    CFLOW_STATECHART_INSTANCE_ACTION_FAILED);
-        check_null(session.impl);
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
         check_false(initial.enabled);
         check_equal(initial.count, 9);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
     }

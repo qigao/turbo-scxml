@@ -104,20 +104,20 @@
 - Consumes: the internal initializer-error staging helper from Task 1.
 - Produces: recoverable first-entry late initialization and executable W3C test 277 coverage.
 
-- [ ] **Step 1: Add and verify the failing late-binding test**
+- [x] **Step 1: Add and verify the failing late-binding test**
 
   Use `binding='late'` with the runtime-illegal initializer inside the target
   state. Require `error.execution` before that state's `onentry` sentinel,
   then exit and re-enter the state to prove the initializer is not retried.
   Run only this filter and observe the current fatal instance error.
 
-- [ ] **Step 2: Reuse per-assignment recovery in the late step**
+- [x] **Step 2: Reuse per-assignment recovery in the late step**
 
   Replace the fatal evaluation branch with the same internal-error staging
   helper. Continue sibling assignments; let the existing late-initializer
   ticket commit the DONE marker only if all required Events were staged.
 
-- [ ] **Step 3: Add W3C test 277 in RED state**
+- [x] **Step 3: Add W3C test 277 in RED state**
 
   Transform the upstream fixture to CMeta with `sequence` as the declared
   location and `_event.data.sequence` as the runtime-illegal initializer.
@@ -125,13 +125,13 @@
   `1`, and final equality guard. Register the fixture before changing the
   manifest and verify the strict corpus rejects the missing/unsupported row.
 
-- [ ] **Step 4: Promote the manifest and provenance to GREEN**
+- [x] **Step 4: Promote the manifest and provenance to GREEN**
 
   Mark test 277 `PASS/TERMINAL_PASS`, document the exact transformation, and
   update mandatory PASS/UNSUPPORTED counts by `+1/-1`. Run the focused W3C
   filter and the complete conformance executable.
 
-- [ ] **Step 5: Commit late recovery and corpus promotion**
+- [x] **Step 5: Commit late recovery and corpus promotion**
 
   ```text
   test(scxml): promote data initializer error corpus
