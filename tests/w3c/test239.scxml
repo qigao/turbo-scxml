@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="fromSrc">
+  <state id="fromSrc">
+    <invoke id="src239" type="http://www.w3.org/TR/scxml/"
+            src="test239-child.scxml"/>
+    <transition event="srcRan" target="fromContent"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="fromContent">
+    <invoke id="content239" type="http://www.w3.org/TR/scxml/">
+      <content>
+        <scxml xmlns="http://www.w3.org/2005/07/scxml"
+               version="1.0" datamodel="cmeta" initial="run">
+          <state id="run">
+            <onentry><send target="#_parent" event="contentRan"/></onentry>
+            <transition target="done"/>
+          </state>
+          <final id="done"/>
+        </scxml>
+      </content>
+    </invoke>
+    <transition event="contentRan" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <state id="fail"/>
+</scxml>

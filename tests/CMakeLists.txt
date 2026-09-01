@@ -39,6 +39,12 @@ turboscxml_add_test(
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 turboscxml_add_test(
+  scxml_invoke_child_materialization_test
+  scxml_invoke_child_materialization_test.c
+  DEFINITIONS
+    SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+
+turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
   LIBS TurboUtils::Core TurboUtils::STL

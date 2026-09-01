@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="invokeChild">
+  <state id="invokeChild">
+    <invoke id="unknown245" type="http://www.w3.org/TR/scxml/"
+            src="test245-child.scxml" namelist="unknown_value"/>
+    <transition event="success" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <state id="fail"/>
+</scxml>
