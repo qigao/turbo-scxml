@@ -3,6 +3,8 @@
 #include "scxml_program.h"
 #include "scxml_session.h"
 
+#include <stdlib.h>
+
 typedef enum scxml_execute_outcome {
     SCXML_EXECUTE_CONTINUE = 0,
     SCXML_EXECUTE_BLOCK_ABORTED,
@@ -2309,29 +2311,69 @@ static bool apply_data_initializers(
     const scxml_block *block, scxml_session_impl *session,
     const cflow_statechart_executable_context *context,
     void *state, const scxml_expr_system_values *system_values,
+    scxml_expr_is_active_fn is_active, void *active_user,
     size_t first, size_t count, const char **out_error) {
+    const cmeta_type_desc *state_type =
+        block != NULL ? block->state_type : NULL;
+    const bool trivial_state =
+        state_type != NULL &&
+        cmeta_type_require_traits(
+            state_type,
+            CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY) ==
+            CMETA_OK;
+    void *snapshot;
     size_t assignment;
-    if (block == NULL || session == NULL || context == NULL || state == NULL ||
+    if (block == NULL || context == NULL || state == NULL ||
         system_values == NULL || out_error == NULL ||
-        block->assignments == NULL || first > block->assignment_storage_count ||
-        count > block->assignment_storage_count - first) {
+        block->assignments == NULL || state_type == NULL ||
+        state_type->size == 0u || first > block->assignment_storage_count ||
+        count > block->assignment_storage_count - first ||
+        (!trivial_state &&
+         cmeta_type_require_traits(
+             state_type, CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE |
+                             CMETA_TRAIT_DESTROY) != CMETA_OK)) {
         if (out_error != NULL)
             *out_error = "SCXML data initializer context is invalid";
+        return false;
+    }
+    snapshot = malloc(state_type->size);
+    if (snapshot == NULL) {
+        *out_error = "SCXML data initializer snapshot allocation failed";
         return false;
     }
     for (assignment = 0u; assignment < count; ++assignment) {
         const size_t index = first + assignment;
         scxml_expr_diagnostic diagnostic = {0};
+        scxml_expr_status status;
         if (scxml_session_data_initializer_is_overridden(session, index))
             continue;
-        if (scxml_assign_apply_with_system(
-                &block->assignments[index], state,
-                evaluate_cmeta_initializer_active, NULL,
-                system_values, &diagnostic) != SCXML_EXPR_OK &&
-            raise_block_execution_error(block, context, out_error) !=
-                SCXML_EXECUTE_BLOCK_ABORTED)
+        if (trivial_state) {
+            memcpy(snapshot, state, state_type->size);
+        } else if (!state_type->traits->copy_construct(snapshot, state)) {
+            *out_error = "SCXML data initializer snapshot copy failed";
+            free(snapshot);
             return false;
+        }
+        status = scxml_assign_apply_with_system(
+            &block->assignments[index], state, is_active, active_user,
+            system_values, &diagnostic);
+        if (status != SCXML_EXPR_OK) {
+            if (trivial_state) {
+                memcpy(state, snapshot, state_type->size);
+            } else {
+                state_type->traits->destroy(state);
+                state_type->traits->move_construct(state, snapshot);
+            }
+        }
+        if (!trivial_state) state_type->traits->destroy(snapshot);
+        if (status != SCXML_EXPR_OK &&
+            raise_block_execution_error(block, context, out_error) !=
+                SCXML_EXECUTE_BLOCK_ABORTED) {
+            free(snapshot);
+            return false;
+        }
     }
+    free(snapshot);
     return true;
 }
 
@@ -2694,6 +2736,7 @@ static scxml_execute_outcome execute_scxml_range(
             if (state == NULL ||
                 !apply_data_initializers(
                     block, session, context, state, system_values,
+                    evaluate_cmeta_initializer_active, NULL,
                     step->assignment, step->assignment_count, out_error))
                 return SCXML_EXECUTE_FATAL;
         } else if (step->kind == SCXML_STEP_LATE_INITIALIZE) {
@@ -2737,6 +2780,7 @@ static scxml_execute_outcome execute_scxml_range(
             if (state == NULL ||
                 !apply_data_initializers(
                     block, session, context, state, system_values,
+                    evaluate_cmeta_executable_active, (void *)context,
                     step->assignment, step->assignment_count, out_error))
                 return SCXML_EXECUTE_FATAL;
         } else if (step->kind == SCXML_STEP_FOREACH) {

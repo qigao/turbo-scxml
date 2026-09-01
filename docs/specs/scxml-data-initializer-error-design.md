@@ -58,6 +58,11 @@ error Events, the marker and successful sibling assignments commit together.
   rows live until `scxml_program_destroy()`.
 - Session ownership: validated environment override indices remain immutable
   until `scxml_session_destroy()`.
+- Per-assignment rollback: one root-sized scratch object is allocated when an
+  initializer block executes. Trivial state uses `memcpy`; managed state uses
+  the root descriptor's copy/destroy/move traits. The scratch is refreshed
+  before each non-overridden assignment, so a failed adapter restores only
+  that assignment's input while earlier successful siblings remain staged.
 - Input ownership: the caller's initial object is borrowed only during session
   initialization; CFlow owns its independent copy afterward.
 - Thread topology: initializer actions run only on the borrowed serial
@@ -65,7 +70,9 @@ error Events, the marker and successful sibling assignments commit together.
   introduced.
 - Capacity: one early executable/block/step/state-action row is allocated only
   when early CMeta data declarations exist. Error Events consume the existing
-  bounded internal queue.
+  bounded internal queue. Scratch allocation is exactly one root object per
+  executing initializer block; allocation or managed-copy failure fails the
+  transaction explicitly.
 - Shutdown: program rows and session state use existing destruction paths; no
   new drain protocol is required.
 
@@ -89,6 +96,11 @@ The root initializer entry action has order zero. Root entry precedes
 descendant entry, so its staged error Events precede Events raised by initial
 state `onentry` content. Multiple failing data declarations produce one Event
 each in document order; successful siblings are still committed.
+
+Early initialization evaluates `In()` against the empty configuration. Late
+initialization retains the entered action-time configuration, so the owning
+state is visible to `In()` before its `onentry`. Program-level CFlow bindings
+execute the same early block without session-only environment overrides.
 
 If assignment evaluation fails but staging `error.execution` succeeds, the
 initializer block returns success so normal initialization continues. If the

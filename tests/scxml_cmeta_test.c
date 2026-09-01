@@ -4189,6 +4189,58 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("executes early data through program-level CFlow bindings") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<datamodel><data id='count' expr='2'/></datamodel>"
+            "<state id='active'><transition cond='count == 2' "
+            "target='done'/></state><final id='done'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_status init_status;
+        cflow_statechart_instance_status destroy_status;
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_direct_to_idle(
+            &program,
+            (scxml_public_data){false, 0, SCXML_PUBLIC_SOURCE_GOOD},
+            &init_status, &destroy_status);
+        check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(destroy_status, CFLOW_STATECHART_INSTANCE_OK);
+        scxml_program_destroy(&program);
+    }
+
+    it("restores an early data location when its adapter rejects") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<datamodel><data id='failing_id' expr='&quot;new&quot;'/>"
+            "<data id='enabled' expr='true'/></datamodel>"
+            "<state id='active'><transition event='error.execution' "
+            "cond='failing_id == &quot;old&quot; &amp;&amp; enabled' "
+            "target='done'/><transition event='*' target='failed'/></state>"
+            "<final id='done'/><state id='failed'/></scxml>";
+        scxml_public_data initial = {
+            false, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        initial.failing_id.size = sizeof("old") - 1u;
+        memcpy(initial.failing_id.data, "old", sizeof("old"));
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(&program, initial);
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
     it("applies early data initializers to a private session copy") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -4742,6 +4794,55 @@ spec("TurboSCXML public CMeta data model") {
         stats = run_to_idle(
             &program,
             (scxml_public_data){false, 9, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("evaluates late data against the entered configuration") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='late' initial='active'>"
+            "<state id='active'><datamodel><data id='enabled' "
+            "expr='In(&quot;active&quot;)'/></datamodel>"
+            "<transition cond='enabled' target='done'/>"
+            "<transition target='failed'/></state><final id='done'/>"
+            "<state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){false, 0, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("restores a late data location when its adapter rejects") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='late' initial='active'>"
+            "<state id='active'><datamodel><data id='failing_id' "
+            "expr='&quot;new&quot;'/><data id='enabled' expr='true'/>"
+            "</datamodel><transition event='error.execution' "
+            "cond='failing_id == &quot;old&quot; &amp;&amp; enabled' "
+            "target='done'/><transition event='*' target='failed'/></state>"
+            "<final id='done'/><state id='failed'/></scxml>";
+        scxml_public_data initial = {
+            false, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        initial.failing_id.size = sizeof("old") - 1u;
+        memcpy(initial.failing_id.data, "old", sizeof("old"));
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(&program, initial);
         check_true(stats.done);
         check_false(stats.errored);
         scxml_program_destroy(&program);

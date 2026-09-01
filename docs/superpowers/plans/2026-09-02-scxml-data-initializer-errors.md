@@ -137,6 +137,17 @@
   test(scxml): promote data initializer error corpus
   ```
 
+### Task 2A: Close independent review findings
+
+- [x] Preserve early initialization through public program-level CFlow
+  bindings where no owning `scxml_session` exists.
+- [x] Preserve action-time `In()` membership for late initializers while early
+  initialization continues to observe the empty configuration.
+- [x] Snapshot each assignment input so a failing string or enum adapter
+  restores its prior value without rolling back successful siblings.
+- [x] Add RED/GREEN raw-binding, late-membership, and early/late failing-adapter
+  regression tests.
+
 ### Task 3: Verify design invariants and release configurations
 
 **Files:**
@@ -147,23 +158,23 @@
 - Consumes: Tasks 1 and 2 commits.
 - Produces: reproducible Debug/Release evidence and a clean PR-ready branch.
 
-- [ ] **Step 1: Run CodeGraph impact analysis and inspect every affected caller**
+- [x] **Step 1: Run CodeGraph impact analysis and inspect every affected caller**
 
   Run `codegraph affected -p .` for modified production files, then read the
   reported callers and adjacent tests. Confirm root action order, assignment
   range bounds, override matching, and late ticket settlement.
 
-- [ ] **Step 2: Run focused and full Debug verification**
+- [x] **Step 2: Run focused and full Debug verification**
 
   Run fresh configure, full build, and `ctest --preset win-dev-user
   --output-on-failure` from `VsDevCmd.bat`.
 
-- [ ] **Step 3: Run full Release verification**
+- [x] **Step 3: Run full Release verification**
 
   Run fresh configure, full build, and `ctest --preset win-release-user
   --output-on-failure` from `VsDevCmd.bat`.
 
-- [ ] **Step 4: Review artifacts and commit final documentation state**
+- [x] **Step 4: Review artifacts and commit final documentation state**
 
   Run `git diff --check`, verify `.codegraph/` and build trees are untracked or
   ignored, inspect `git status --short`, and commit only any final plan/design
