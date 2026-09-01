@@ -1084,6 +1084,7 @@ scxml_status scxml_emit_data_initializers(
             if (status != SCXML_OK) return status;
         }
     }
+    if (is_root) build->data_initializer_count = build->assignment_index;
     return SCXML_OK;
 }
 
@@ -1696,6 +1697,63 @@ static scxml_status emit_late_initializer_block(
     return SCXML_OK;
 }
 
+static scxml_status emit_early_initializer_block(
+    scxml_build *build, cflow_statechart_executable_id *out_executable) {
+    const size_t block_index = build->block_index;
+    const size_t executable_index = build->executable_index;
+    const size_t step_index = build->step_index;
+    const cflow_statechart_executable_id executable =
+        (cflow_statechart_executable_id)(executable_index + 1u);
+    if (build->data_initializer_count == 0u) {
+        *out_executable = 0u;
+        return SCXML_OK;
+    }
+    if (step_index >= build->step_capacity) {
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            (turbo_xml_location){0u, 0u, 0u},
+            "early initializer exceeded admitted storage");
+    }
+    build->steps[step_index] = (scxml_step){
+        .kind = SCXML_STEP_EARLY_INITIALIZE,
+        .next = step_index + 1u,
+        .assignment = 0u,
+        .assignment_count = build->data_initializer_count};
+    ++build->step_index;
+    build->blocks[block_index] = (scxml_block){
+        .state_type = build->cmeta_root->storage_type,
+        .steps = build->steps,
+        .branches = build->branches,
+        .effects = build->effects,
+        .assignments = build->assignments,
+        .payloads = build->payloads,
+        .foreach_descriptors = build->foreach_descriptors,
+        .invocations = build->invocations,
+        .step_begin = step_index,
+        .step_end = build->step_index,
+        .step_storage_count = build->step_capacity,
+        .branch_storage_count = build->branch_capacity,
+        .effect_storage_count = build->effect_capacity,
+        .assignment_storage_count = build->assignment_capacity,
+        .payload_storage_count = build->payload_capacity,
+        .foreach_storage_count = build->foreach_capacity,
+        .invocation_storage_count = build->invocation_capacity,
+        .execution_error_event = build->execution_error_event,
+        .max_conditional_depth = build->max_conditional_depth};
+    build->executables[executable_index] = (cflow_statechart_executable){
+        executable, build->cmeta_root->storage_type,
+        CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
+        CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS};
+    build->bindings[executable_index] = (cflow_statechart_executable_binding){
+        .id = executable,
+        .user = &build->blocks[block_index],
+        .contextual_fn = scxml_runtime_execute_block};
+    ++build->executable_index;
+    ++build->block_index;
+    *out_executable = executable;
+    return SCXML_OK;
+}
+
 static scxml_status emit_done_data_block(
     scxml_build *build, size_t done_data,
     cflow_statechart_executable_id *out_executable) {
@@ -1769,6 +1827,17 @@ scxml_status scxml_emit_state_executables(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                           scxml_syntax_node_location(node),
                           "SCXML state has no native owner for executable content");
+    }
+    if (is_root && !build->late_binding &&
+        build->data_initializer_count != 0u) {
+        cflow_statechart_executable_id executable = 0u;
+        const scxml_status status =
+            emit_early_initializer_block(build, &executable);
+        if (status != SCXML_OK) return status;
+        build->state_actions[build->state_action_index++] =
+            (cflow_statechart_state_action){
+                owner, CFLOW_STATECHART_STATE_ACTION_ENTRY,
+                executable, entry_order++};
     }
     if (build->late_binding) {
         for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {

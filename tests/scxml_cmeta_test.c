@@ -4160,6 +4160,35 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("recovers from an illegal early data initializer") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='initial'>"
+            "<datamodel><data id='count' "
+            "expr='_event.data.count'/><data id='enabled' "
+            "expr='true'/></datamodel>"
+            "<state id='initial'><onentry><raise event='sentinel'/>"
+            "</onentry><transition event='error.execution' cond='enabled' "
+            "target='recover'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<state id='recover'><onentry><assign location='count' "
+            "expr='1'/></onentry><transition cond='count == 1' "
+            "target='passed'/><transition target='failed'/></state>"
+            "<final id='passed'/><state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){false, 0, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
     it("applies early data initializers to a private session copy") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "

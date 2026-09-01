@@ -71,6 +71,7 @@ typedef enum scxml_step_kind {
     SCXML_STEP_CANCEL,
     SCXML_STEP_INVOKE_ENTER,
     SCXML_STEP_INVOKE_EXIT,
+    SCXML_STEP_EARLY_INITIALIZE,
     SCXML_STEP_LATE_INITIALIZE,
     SCXML_STEP_DONEDATA
 } scxml_step_kind;
@@ -343,6 +344,7 @@ typedef struct scxml_build {
     size_t done_data_index;
     size_t done_data_capacity;
     size_t late_initializer_index;
+    size_t data_initializer_count;
     size_t top_level_data_initializer_first;
     size_t top_level_data_initializer_count;
     uint32_t requirements;

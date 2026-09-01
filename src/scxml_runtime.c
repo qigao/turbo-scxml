@@ -2280,6 +2280,15 @@ static bool evaluate_cmeta_executable_active(
     return true;
 }
 
+static bool evaluate_cmeta_initializer_active(
+    void *user, cflow_machine_state_id state, bool *out_active) {
+    (void)user;
+    (void)state;
+    if (out_active == NULL) return false;
+    *out_active = false;
+    return true;
+}
+
 static scxml_execute_outcome raise_block_execution_error(
     const scxml_block *block,
     const cflow_statechart_executable_context *context,
@@ -2294,6 +2303,36 @@ static scxml_execute_outcome raise_block_execution_error(
         return SCXML_EXECUTE_FATAL;
     }
     return SCXML_EXECUTE_BLOCK_ABORTED;
+}
+
+static bool apply_data_initializers(
+    const scxml_block *block, scxml_session_impl *session,
+    const cflow_statechart_executable_context *context,
+    void *state, const scxml_expr_system_values *system_values,
+    size_t first, size_t count, const char **out_error) {
+    size_t assignment;
+    if (block == NULL || session == NULL || context == NULL || state == NULL ||
+        system_values == NULL || out_error == NULL ||
+        block->assignments == NULL || first > block->assignment_storage_count ||
+        count > block->assignment_storage_count - first) {
+        if (out_error != NULL)
+            *out_error = "SCXML data initializer context is invalid";
+        return false;
+    }
+    for (assignment = 0u; assignment < count; ++assignment) {
+        const size_t index = first + assignment;
+        scxml_expr_diagnostic diagnostic = {0};
+        if (scxml_session_data_initializer_is_overridden(session, index))
+            continue;
+        if (scxml_assign_apply_with_system(
+                &block->assignments[index], state,
+                evaluate_cmeta_initializer_active, NULL,
+                system_values, &diagnostic) != SCXML_EXPR_OK &&
+            raise_block_execution_error(block, context, out_error) !=
+                SCXML_EXECUTE_BLOCK_ABORTED)
+            return false;
+    }
+    return true;
 }
 
 static scxml_execute_outcome raise_done_data_execution_error(
@@ -2650,6 +2689,13 @@ static scxml_execute_outcome execute_scxml_range(
                 mutable_state_read(mutable_state, context),
                 system_values, out_error);
             if (outcome != SCXML_EXECUTE_CONTINUE) return outcome;
+        } else if (step->kind == SCXML_STEP_EARLY_INITIALIZE) {
+            void *state = mutable_state_get(mutable_state, out_error);
+            if (state == NULL ||
+                !apply_data_initializers(
+                    block, session, context, state, system_values,
+                    step->assignment, step->assignment_count, out_error))
+                return SCXML_EXECUTE_FATAL;
         } else if (step->kind == SCXML_STEP_LATE_INITIALIZE) {
             scxml_late_initializer_state *initializer;
             cflow_statechart_effect_ticket ticket;

@@ -124,15 +124,6 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->payload_scratch);
 }
 
-static bool initialization_state_is_active(
-    void *user, cflow_machine_state_id state, bool *out_active) {
-    (void)user;
-    (void)state;
-    if (out_active == NULL) return false;
-    *out_active = false;
-    return true;
-}
-
 bool scxml_session_data_initializer_is_overridden(
     const scxml_session_impl *session, size_t assignment) {
     size_t index;
@@ -206,17 +197,15 @@ static cflow_statechart_instance_status retain_environment_overrides(
 
 static cflow_statechart_instance_status initialize_cmeta_state(
     const scxml_session_impl *session, const void *initial_state,
-    const scxml_expr_system_values *system_values,
     void **out_state, bool *out_managed) {
     const scxml_program_impl *program =
         session != NULL ? session->program : NULL;
     const cmeta_type_desc *type;
     void *state;
     bool managed;
-    size_t index;
     if (program == NULL || program->cmeta_root == NULL ||
         program->cmeta_root->storage_type == NULL || initial_state == NULL ||
-        system_values == NULL || out_state == NULL || out_managed == NULL)
+        out_state == NULL || out_managed == NULL)
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     type = program->cmeta_root->storage_type;
     managed = cmeta_type_require_traits(
@@ -234,19 +223,6 @@ static cflow_statechart_instance_status initialize_cmeta_state(
         }
     } else {
         memcpy(state, initial_state, type->size);
-    }
-    for (index = 0u; index < program->data_initializer_count; ++index) {
-        scxml_expr_diagnostic diagnostic = {0};
-        if (scxml_session_data_initializer_is_overridden(session, index))
-            continue;
-        if (scxml_assign_apply_with_system(
-                &program->assignments[index], state,
-                initialization_state_is_active, NULL, system_values,
-                &diagnostic) != SCXML_EXPR_OK) {
-            if (managed) type->traits->destroy(state);
-            free(state);
-            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
-        }
     }
     *out_state = state;
     *out_managed = managed;
@@ -616,7 +592,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     if (data_model == SCXML_DATA_MODEL_CMETA &&
         program->data_initializer_count != 0u) {
         status = initialize_cmeta_state(
-            impl, cmeta_initial_state, &impl->system_values,
+            impl, cmeta_initial_state,
             &initialized_cmeta_state, &initialized_cmeta_state_managed);
         if (status != CFLOW_STATECHART_INSTANCE_OK) {
             session_close_adapter(impl);

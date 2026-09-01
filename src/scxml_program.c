@@ -194,6 +194,21 @@ static scxml_status compile_scxml_model(
     }
     status = scxml_analyze_state(&build, root, SCXML_ELEMENT_SCXML, true, &counts);
     if (status != SCXML_OK) goto cleanup;
+    if (data_model == SCXML_DATA_MODEL_CMETA && !build.late_binding &&
+        counts.data_initializer_rows != 0u &&
+        (!scxml_analyze_checked_add(counts.executable_blocks, 1u,
+                                    &counts.executable_blocks) ||
+         !scxml_analyze_checked_add(counts.block_rows, 1u,
+                                    &counts.block_rows) ||
+         !scxml_analyze_checked_add(counts.executable_steps, 1u,
+                                    &counts.executable_steps) ||
+         !scxml_analyze_checked_add(counts.state_action_rows, 1u,
+                                    &counts.state_action_rows))) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED, scxml_syntax_node_location(root),
+            "early data initializer execution rows exceed limits");
+        goto cleanup;
+    }
     needs_execution_error =
         counts.assignment_rows != 0u || counts.foreach_rows != 0u ||
         counts.dynamic_expression_rows != 0u ||
@@ -459,6 +474,8 @@ static scxml_status compile_scxml_model(
             counts.invocation_string_bytes ||
         build.top_level_data_initializer_count !=
             counts.top_level_data_initializer_rows ||
+        build.data_initializer_count !=
+            (build.late_binding ? 0u : counts.data_initializer_rows) ||
         build.top_level_data_initializer_first > build.assignment_index ||
         build.top_level_data_initializer_count >
             build.assignment_index -
