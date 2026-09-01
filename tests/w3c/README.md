@@ -72,6 +72,8 @@ Status meanings are strict:
 | `test225.scxml` | [test225.txml](https://www.w3.org/Voice/2013/scxml-irp/225/test225.txml) | Two invocations in one session receive different nonzero tokens and generated IDs at both idlocations and the host boundary. |
 | `test226.scxml` | [test226.txml](https://www.w3.org/Voice/2013/scxml-irp/226/test226.txml) | The strict host receives the canonical type, exact source URL, and named integer parameter before returning the child Event. |
 | `test228.scxml` | [test228.txml](https://www.w3.org/Voice/2013/scxml-irp/228/test228.txml) | The completion Event returned through a live token exposes that invocation's exact ID through `_event.invokeid`. |
+| `test229.scxml` | [test229.txml](https://www.w3.org/Voice/2013/scxml-irp/229/test229.txml) | A child Event is copied back to the same `autoforward` invocation; only the committed host reservation produces the child's `eventReceived` reply. |
+| `test230.scxml` | [test230.txml](https://www.w3.org/Voice/2013/scxml-irp/230/test230.txml) | The invocation adapter receives exact copies of all seven SCXML Event fields through the borrowed versioned envelope. |
 | `test232.scxml` | [test232.txml](https://www.w3.org/Voice/2013/scxml-irp/232/test232.txml) | The host reports two normal Events and completion in that order; the parent's three-state sequence observes the same FIFO order. |
 | `test233.scxml` | [test233.txml](https://www.w3.org/Voice/2013/scxml-irp/233/test233.txml) | The matching invocation's `finalize` assignment commits before the returned Event's transition guard is evaluated. |
 | `test234.scxml` | [test234.txml](https://www.w3.org/Voice/2013/scxml-irp/234/test234.txml) | A returned Event executes only the `finalize` belonging to its exact committed invocation token. |
@@ -449,6 +451,17 @@ session from `test247-child.scxml`, observes that session's top-level-final
 `done` state, destroys it cleanly, and only then reports one completion through
 the parent token. The child remains host-owned; production code gains no child
 interpreter, cross-session registry, transport, or thread.
+
+Tests 229 and 230 replace the invoked child implementation with one bounded
+autoforward host. Test 229 reports `childToParent` through the committed child
+token, copies the prepared autoforward Event, and makes `eventReceived`
+deliverable only when that ticket commits; a host pump reports the response
+after executor idle. Test 230 admits distinct values for every standard Event
+field and compares a callback-owned copy of the versioned envelope before the
+same committed host pump reports `fieldsEqual`. The targetless input
+transitions only register these finite Event names and retain the waiting
+configuration. No adapter callback admits an Event or recursively advances the
+session.
 
 Tests 233 and 234 use a bounded two-token-aware invoke host. Test 233 reports
 `childToParent` through its sole committed token and can pass only when that

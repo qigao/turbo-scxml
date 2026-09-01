@@ -954,12 +954,45 @@ static bool execute_invocation_finalize(
     return false;
 }
 
+static scxml_event_envelope_view current_event_envelope(
+    const scxml_expr_system_values *values) {
+    scxml_content_view data = {
+        .kind = SCXML_CONTENT_TEXT_UTF8,
+        .bytes = values->event_data.data,
+        .byte_count = values->event_data.size};
+    if (values->event_data_schema != NULL &&
+        values->event_data_object != NULL) {
+        data = (scxml_content_view){
+            .kind = SCXML_CONTENT_CMETA,
+            .schema = values->event_data_schema,
+            .object = values->event_data_object};
+    }
+    return (scxml_event_envelope_view){
+        .abi_version = SCXML_EVENT_ENVELOPE_ABI,
+        .struct_size = sizeof(scxml_event_envelope_view),
+        .name = values->event_name.data,
+        .name_size = values->event_name.size,
+        .type = values->event_type.data,
+        .type_size = values->event_type.size,
+        .send_id = values->event_send_id.data,
+        .send_id_size = values->event_send_id.size,
+        .origin = values->event_origin.data,
+        .origin_size = values->event_origin.size,
+        .origin_type = values->event_origin_type.data,
+        .origin_type_size = values->event_origin_type.size,
+        .invoke_id = values->event_invoke_id.data,
+        .invoke_id_size = values->event_invoke_id.size,
+        .data = data};
+}
+
 static bool forward_external_to_invocations(
     scxml_session_impl *session,
     const scxml_evaluation_context *context,
     cflow_statechart_host_context *host_context,
     const cflow_event_view *event, size_t skipped_invocation,
     const char **out_error) {
+    const scxml_event_envelope_view envelope =
+        current_event_envelope(&session->system_values);
     size_t index;
     for (index = 0u; index < session->program->invocation_count; ++index) {
         const scxml_invocation_descriptor *descriptor =
@@ -993,7 +1026,8 @@ static bool forward_external_to_invocations(
             .token = token,
             .id = request_id,
             .id_size = id_size,
-            .event = event};
+            .event = event,
+            .envelope = &envelope};
         status = session->invoke.prepare_forward(
             session->invoke_user, &request, &adapter_ticket, &adapter_error);
         if (status == SCXML_ADAPTER_ACCEPTED &&

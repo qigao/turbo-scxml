@@ -18,6 +18,7 @@ extern "C" {
 #define SCXML_DIAGNOSTIC_CAPACITY 256u
 #define SCXML_ADAPTER_ABI 1u
 #define SCXML_EVENT_METADATA_ABI 1u
+#define SCXML_EVENT_ENVELOPE_ABI 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_DEFAULT_MAX_ITERATIONS 65536u
@@ -246,6 +247,29 @@ typedef struct scxml_event_metadata {
     scxml_content_view data;
 } scxml_event_metadata;
 
+/**
+ * Complete borrowed SCXML Event view valid only during one adapter callback.
+ * Consumers must validate `abi_version` and `struct_size`, then copy every
+ * field retained after the callback returns.
+ */
+typedef struct scxml_event_envelope_view {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *name;
+    size_t name_size;
+    const char *type;
+    size_t type_size;
+    const char *send_id;
+    size_t send_id_size;
+    const char *origin;
+    size_t origin_size;
+    const char *origin_type;
+    size_t origin_type_size;
+    const char *invoke_id;
+    size_t invoke_id_size;
+    scxml_content_view data;
+} scxml_event_envelope_view;
+
 typedef struct scxml_cancel_request {
     const char *send_id;
     size_t send_id_size;
@@ -336,6 +360,8 @@ typedef struct scxml_invoke_forward_request {
     size_t id_size;
     /** Borrowed Event view valid only for the callback duration. */
     const cflow_event_view *event;
+    /** Complete borrowed SCXML Event copy, valid only for this callback. */
+    const scxml_event_envelope_view *envelope;
 } scxml_invoke_forward_request;
 
 /**
@@ -344,7 +370,7 @@ typedef struct scxml_invoke_forward_request {
  * Prepare callbacks run on the session SerialExecutor without the session
  * registry mutex held. ACCEPTED transfers one valid move-only effect ticket;
  * the session invokes exactly one of commit and discard. The adapter must copy
- * every borrowed request field retained after return. `close` and
+ * every borrowed request or envelope field retained after return. `close` and
  * `is_quiescent` follow the Event I/O adapter ownership contract above.
  */
 typedef struct scxml_invoke_adapter {
