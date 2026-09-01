@@ -1005,6 +1005,14 @@ static scxml_status analyze_done_data(
     }
     if (!scxml_analyze_checked_add(counts->done_data_rows, 1u,
                      &counts->done_data_rows) ||
+        !scxml_analyze_checked_add(counts->executable_blocks, 1u,
+                     &counts->executable_blocks) ||
+        !scxml_analyze_checked_add(counts->block_rows, 1u,
+                     &counts->block_rows) ||
+        !scxml_analyze_checked_add(counts->executable_steps, 1u,
+                     &counts->executable_steps) ||
+        !scxml_analyze_checked_add(counts->state_action_rows, 1u,
+                     &counts->state_action_rows) ||
         !scxml_analyze_checked_add(counts->assignment_rows, param_count,
                      &counts->assignment_rows) ||
         (has_expression &&

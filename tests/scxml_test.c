@@ -710,6 +710,41 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
+    it("preserves inline donedata in an owning null-model session") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='parent'><state id='parent' initial='childDone'>"
+            "<final id='childDone'><donedata><content>ready</content>"
+            "</donedata></final><transition event='done.state.parent' "
+            "target='done'/></state><final id='done'/></scxml>";
+        scxml_program program = {0};
+        scxml_session session = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 2u,
+            .microstep_limit = 8u};
+
+        check_equal(compile_status(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("copies the stable SCXML Event I/O location without partial output") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"

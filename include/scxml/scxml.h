@@ -415,6 +415,13 @@ typedef struct scxml_session_config {
     cflow_executor *executor;
     size_t external_event_capacity;
     size_t internal_event_capacity;
+    /**
+     * Bounded native completion queue. Programs using `donedata` retain this
+     * many queued derived payload rows plus one row borrowed by the current
+     * Event. Each row retains at most `SCXML_EVENT_METADATA_CAPACITY + 1`
+     * text bytes and `SCXML_EVENT_DATA_CAPACITY` aligned object bytes plus
+     * row metadata.
+     */
     size_t completion_capacity;
     size_t microstep_limit;
     size_t max_storage_bytes;

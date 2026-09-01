@@ -71,7 +71,8 @@ typedef enum scxml_step_kind {
     SCXML_STEP_CANCEL,
     SCXML_STEP_INVOKE_ENTER,
     SCXML_STEP_INVOKE_EXIT,
-    SCXML_STEP_LATE_INITIALIZE
+    SCXML_STEP_LATE_INITIALIZE,
+    SCXML_STEP_DONEDATA
 } scxml_step_kind;
 
 typedef enum scxml_effect_kind {
@@ -131,6 +132,7 @@ typedef struct scxml_step {
     size_t assignment_count;
     size_t late_initializer;
     size_t foreach_descriptor;
+    size_t done_data;
 } scxml_step;
 
 typedef struct scxml_foreach_descriptor {
@@ -156,6 +158,7 @@ typedef struct scxml_block {
     const scxml_payload_descriptor *payloads;
     const scxml_foreach_descriptor *foreach_descriptors;
     const struct scxml_invocation_descriptor *invocations;
+    const struct scxml_done_data_descriptor *done_data;
     size_t step_begin;
     size_t step_end;
     size_t step_storage_count;
@@ -165,6 +168,7 @@ typedef struct scxml_block {
     size_t payload_storage_count;
     size_t foreach_storage_count;
     size_t invocation_storage_count;
+    size_t done_data_storage_count;
     size_t max_conditional_depth;
     cflow_event_id execution_error_event;
     const scxml_program_name *const *event_names_by_id;
@@ -481,6 +485,24 @@ typedef union scxml_event_data_storage {
     unsigned char bytes[SCXML_EVENT_DATA_CAPACITY];
 } scxml_event_data_storage;
 
+typedef enum scxml_completion_data_state {
+    SCXML_COMPLETION_DATA_FREE = 0,
+    SCXML_COMPLETION_DATA_BUILDING,
+    SCXML_COMPLETION_DATA_READY,
+    SCXML_COMPLETION_DATA_BOUND
+} scxml_completion_data_state;
+
+typedef struct scxml_completion_data_slot {
+    scxml_completion_data_state state;
+    cflow_machine_state_id parent;
+    uint64_t sequence;
+    size_t data_size;
+    const cmeta_data_desc *data_schema;
+    bool data_object_live;
+    char data[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    scxml_event_data_storage data_object;
+} scxml_completion_data_slot;
+
 typedef struct scxml_external_event_metadata_row {
     scxml_session_impl *session;
     uint64_t token;
@@ -525,6 +547,10 @@ struct scxml_session_impl {
     const cmeta_data_desc *current_event_data_schema;
     bool current_event_data_object_live;
     scxml_event_data_storage current_event_data_object;
+    scxml_completion_data_slot *completion_data_slots;
+    size_t completion_data_capacity;
+    size_t current_completion_data_slot;
+    uint64_t next_completion_data_sequence;
     scxml_expr_system_values system_values;
     scxml_event_io_adapter event_io;
     void *adapter_user;

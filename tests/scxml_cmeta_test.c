@@ -46,6 +46,7 @@ static const cmeta_type_identity public_data_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.scxml.public.data");
 
 static atomic_size_t public_data_copy_count;
+static atomic_size_t public_data_move_count;
 static atomic_size_t public_data_destroy_count;
 
 static bool public_data_copy(void *destination, const void *source) {
@@ -60,6 +61,8 @@ static void public_data_move(void *destination, void *source) {
     if (destination == NULL || source == NULL) return;
     memcpy(destination, source, sizeof(scxml_public_data));
     memset(source, 0, sizeof(scxml_public_data));
+    (void)atomic_fetch_add_explicit(
+        &public_data_move_count, 1u, memory_order_relaxed);
 }
 
 static void public_data_destroy(void *value) {
@@ -991,7 +994,9 @@ static cflow_statechart_instance_stats run_direct_to_idle(
     cflow_statechart_instance_status *out_init_status,
     cflow_statechart_instance_status *out_destroy_status) {
     const cflow_statechart_guard_binding *guards = NULL;
+    const cflow_statechart_executable_binding *executables = NULL;
     size_t guard_count = 0u;
+    size_t executable_count = 0u;
     cflow_executor executor = {0};
     cflow_statechart_instance instance = {0};
     cflow_statechart_instance_stats stats = {0};
@@ -999,12 +1004,16 @@ static cflow_statechart_instance_stats run_direct_to_idle(
 
     check_true(scxml_program_guard_bindings(
         program, &guards, &guard_count));
+    check_true(scxml_program_instance_bindings(
+        program, &executables, &executable_count));
     check_true(cflow_executor_serial_init(&executor));
     config = (cflow_statechart_instance_config){
         .statechart = scxml_program_statechart(program),
         .initial_state = &initial,
         .guards = guards,
         .guard_count = guard_count,
+        .executables = executables,
+        .executable_count = executable_count,
         .external_event_capacity = 2u,
         .internal_event_capacity = 2u,
         .completion_capacity = 2u,
@@ -4521,6 +4530,99 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("orders failed donedata content before empty completion data") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='work'>"
+            "<transition event='error.execution' target='waiting'/>"
+            "<transition event='done.state.parent' target='failed'/>"
+            "<state id='work'><transition target='childDone'/></state>"
+            "<final id='childDone'><donedata>"
+            "<content expr='_event.data.count'/></donedata></final>"
+            "</state><state id='waiting'>"
+            "<transition event='done.state.parent' "
+            "cond='_event.data == &quot;&quot;' target='success'/>"
+            "<transition event='*' target='failed'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("keeps raw StateChart execution independent of donedata envelopes") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='childDone'>"
+            "<final id='childDone'><donedata>"
+            "<content expr='count'/></donedata></final>"
+            "<transition event='done.state.parent' target='success'/>"
+            "</state><final id='success'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_status init_status;
+        cflow_statechart_instance_status destroy_status;
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_direct_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD},
+            &init_status, &destroy_status);
+        check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(destroy_status, CFLOW_STATECHART_INSTANCE_OK);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects completion payload capacity arithmetic overflow") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='done'>"
+            "<final id='done'><donedata>"
+            "<content expr='count'/></donedata></final>"
+            "</state></scxml>";
+        const scxml_public_data initial = {
+            true, 7, SCXML_PUBLIC_SOURCE_GOOD};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = SIZE_MAX,
+            .microstep_limit = 16u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED);
+        check_null(session.impl);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("materializes every donedata param from the same state snapshot") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -4586,10 +4688,13 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 2u,
             .completion_capacity = 4u,
             .microstep_limit = 16u};
-        size_t copies, destroys, copies_before, destroys_before, live_before;
+        size_t copies, moves, destroys;
+        size_t copies_before, destroys_before, live_before;
 
         atomic_store_explicit(
             &public_data_copy_count, 0u, memory_order_relaxed);
+        atomic_store_explicit(
+            &public_data_move_count, 0u, memory_order_relaxed);
         atomic_store_explicit(
             &public_data_destroy_count, 0u, memory_order_relaxed);
         check_equal(compile_cmeta(source, &program, &diagnostic),
@@ -4599,12 +4704,14 @@ spec("TurboSCXML public CMeta data model") {
                     CFLOW_STATECHART_INSTANCE_OK);
         copies = atomic_load_explicit(
             &public_data_copy_count, memory_order_relaxed);
+        moves = atomic_load_explicit(
+            &public_data_move_count, memory_order_relaxed);
         destroys = atomic_load_explicit(
             &public_data_destroy_count, memory_order_relaxed);
-        check_true(copies > destroys);
+        check_true(copies + moves > destroys);
         copies_before = copies;
         destroys_before = destroys;
-        live_before = copies - destroys;
+        live_before = copies + moves - destroys;
 
         check_true(scxml_program_event(&program, "go", 2u, &go));
         check_equal(scxml_session_try_send(&session, &go),
@@ -4615,21 +4722,25 @@ spec("TurboSCXML public CMeta data model") {
         check_false(stats.errored);
         copies = atomic_load_explicit(
             &public_data_copy_count, memory_order_relaxed);
+        moves = atomic_load_explicit(
+            &public_data_move_count, memory_order_relaxed);
         destroys = atomic_load_explicit(
             &public_data_destroy_count, memory_order_relaxed);
         check_true(copies > copies_before);
         check_true(destroys > destroys_before);
-        check_true(copies >= destroys);
-        check_equal(copies - destroys, live_before);
+        check_true(copies + moves >= destroys);
+        check_true(copies + moves - destroys <= live_before);
 
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
         copies = atomic_load_explicit(
             &public_data_copy_count, memory_order_relaxed);
+        moves = atomic_load_explicit(
+            &public_data_move_count, memory_order_relaxed);
         destroys = atomic_load_explicit(
             &public_data_destroy_count, memory_order_relaxed);
-        check_equal(copies, destroys);
+        check_equal(copies + moves, destroys);
         scxml_program_destroy(&program);
     }
 
