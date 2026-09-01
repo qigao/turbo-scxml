@@ -4831,7 +4831,7 @@ spec("TurboSCXML public CMeta data model") {
         check_null(program.impl);
     }
 
-    it("admits protected system locations and rejects unknown assignments") {
+    it("admits executable unknown locations and protected system locations") {
         static const char missing_location[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
@@ -4844,6 +4844,11 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
             "<assign location='missing' expr='2'/></onentry></state></scxml>";
+        static const char unknown_initializer[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><datamodel>"
+            "<data id='missing' expr='2'/></datamodel>"
+            "<state id='active'/></scxml>";
         static const char unknown_system_location[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
@@ -4863,9 +4868,9 @@ spec("TurboSCXML public CMeta data model") {
             "<state id='active'><onentry>"
             "<assign location='count' expr='2'/></onentry></state></scxml>";
         const char *invalid[] = {
-            missing_location, missing_expr, unknown_location,
-            unknown_system_location, scalar_system_subpath,
-            malformed_system_path};
+            missing_location, missing_expr, unknown_initializer,
+            unknown_system_location,
+            scalar_system_subpath, malformed_system_path};
         static const char *read_only_system_locations[] = {
             "_sessionid", "_name", "_event", "_event.name",
             "_event.data.count", "_event.unknown", "_ioprocessors",
@@ -4879,6 +4884,14 @@ spec("TurboSCXML public CMeta data model") {
             check_equal(compile_cmeta(invalid[index], &program, &diagnostic),
                         SCXML_INVALID_STRUCTURE);
             check_null(program.impl);
+        }
+        {
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            check_equal(compile_cmeta(
+                            unknown_location, &program, &diagnostic),
+                        SCXML_OK);
+            scxml_program_destroy(&program);
         }
         for (index = 0u;
              index < sizeof(read_only_system_locations) /

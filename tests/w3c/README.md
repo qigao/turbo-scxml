@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 150
-local PASS transformations, records 18 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 152
+local PASS transformations, records 16 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -104,12 +104,14 @@ or bounded-storage guarantees.
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
+| `test286.scxml` | [test286.txml](https://www.w3.org/Voice/2013/scxml-irp/286/test286.txml) | An unknown assignment location raises internal `error.execution` and aborts the remaining executable-content block. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test294.scxml` | [test294.txml](https://www.w3.org/Voice/2013/scxml-irp/294/test294.txml) | A named param becomes a structured completion Event field, while a later inline content child remains the full completion data value. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
 | `test309.scxml` | [test309.txml](https://www.w3.org/Voice/2013/scxml-irp/309/test309.txml) | A non-Boolean transition condition is treated as false, allowing the unconditional fallback to run. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
+| `test311.scxml` | [test311.txml](https://www.w3.org/Voice/2013/scxml-irp/311/test311.txml) | A location path that traverses a scalar cannot yield a valid location and raises internal `error.execution`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
 | `test313.scxml` | [test313.txml](https://www.w3.org/Voice/2013/scxml-irp/313/test313.txml) | A syntactically ill-formed CMeta value expression rejects the document at load time with `SCXML_INVALID_STRUCTURE`. |
 | `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
@@ -386,16 +388,24 @@ read from unavailable structured Event data. Its only passing path first consume
 `error.execution`, then requires the later `done.state.s0` Event data to equal
 the empty string; an early completion reaches `fail`.
 
-Test 287 maps the generated data ID to the CMeta integer `sequence`, assigns
+Test 286 maps the generated invalid location to the unknown CMeta field
+`missing`. Its following `foo` raise and FIFO confirmation Event prove that
+the assignment places `error.execution` on the internal queue and aborts the
+remaining executable-content block. Test 287 maps the generated data ID to the
+CMeta integer `sequence`, assigns
 the literal value `1`, and observes that committed value from the following
 eventless guard. Test 487 keeps a valid integer location but maps the generated
 illegal value to `1e100`: this is a finite floating expression accepted by the
 numeric assignment compiler, while exact integer conversion fails only when
 the assignment executes. Its following `foo` raise and a FIFO confirmation
-Event distinguish block abortion from merely queuing `error.execution`. Test
-286 remains `UNSUPPORTED` because unknown CMeta locations are currently
-rejected during document compilation rather than admitted as runtime-failing
-assignments.
+Event distinguish block abortion from merely queuing `error.execution`.
+
+Test 311 maps its invalid location expression to `sequence.missing`. The path
+is lexically valid but traverses the scalar CMeta `sequence` field, so it can
+never yield a writable location and its only passing transition consumes the
+resulting internal `error.execution`. Test 307 remains `UNSUPPORTED`: the
+static CMeta schema does not expose the loaded-instance missing-substructure
+state needed to compare pre-late-binding and post-load access behavior.
 
 Tests 309 and 344 map the generated non-Boolean predicate to the typed CMeta
 integer `sequence`. Test 309 can reach pass only when the invalid condition is

@@ -955,7 +955,8 @@ static scxml_status emit_assign_step(scxml_build *build,
         &build->assignments[assignment], location, location_size,
         expression, expression_size, build->cmeta_root,
         resolve_cmeta_condition_state, build,
-        &build->expression_limits, &assignment_diagnostic);
+        &build->expression_limits, SCXML_ASSIGN_LOCATION_RUNTIME,
+        &assignment_diagnostic);
     free(location);
     free(expression);
     if (assignment_status != SCXML_EXPR_OK) {
@@ -1014,7 +1015,7 @@ static scxml_status emit_data_initializer(
         &build->assignments[build->assignment_index],
         location_source, location_size, expression_source, expression_size,
         build->cmeta_root, resolve_cmeta_condition_state, build,
-        &build->expression_limits, &diagnostic);
+        &build->expression_limits, SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     free(location_source);
     free(expression_source);
     if (expression_status != SCXML_EXPR_OK) {
@@ -1150,7 +1151,7 @@ static scxml_status emit_done_data_param(
         &build->assignments[build->assignment_index],
         name_source, name_size, value_source, value_size,
         build->cmeta_root, resolve_cmeta_condition_state, build,
-        &build->expression_limits, &diagnostic);
+        &build->expression_limits, SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     free(name_source);
     free(value_source);
     if (expression_status != SCXML_EXPR_OK) {
