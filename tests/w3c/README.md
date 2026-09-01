@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently executes 147
-local PASS transformations, records 21 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 148
+local PASS transformations, records 20 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -22,9 +22,10 @@ transformations and profile boundaries but does not override manifest facts.
 
 Status meanings are strict:
 
-- `PASS` means the local fixture is executed and must deterministically reach
-  its `pass` terminal, or the equivalent single-pass terminal checked by a
-  specialized strict adapter harness.
+- `PASS` means the local fixture has a deterministic witness: it either reaches
+  its `pass` terminal (or an equivalent strict-adapter terminal), or, only when
+  the upstream assertion explicitly permits load rejection, compilation fails
+  with the exact status checked by a specialized harness.
 - `UNSUPPORTED` means a mandatory upstream document remains outside the
   implemented or testable TurboSCXML profile. The row states the missing
   assertion rather than silently omitting it.
@@ -109,6 +110,7 @@ or bounded-storage guarantees.
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
+| `test313.scxml` | [test313.txml](https://www.w3.org/Voice/2013/scxml-irp/313/test313.txml) | A syntactically ill-formed CMeta value expression rejects the document at load time with `SCXML_INVALID_STRUCTURE`. |
 | `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
@@ -401,8 +403,11 @@ as a block-abort sentinel, then queues a confirmation Event after selecting
 `error.execution`; FIFO ordering exposes any incorrectly retained `foo` before
 the fixture can pass. Test 314 advances through `s01` and `s02` with internal
 Events, while the compound parent's `error.execution` transition rejects any
-premature evaluation before `s03`. This does not claim support for syntactically
-invalid documents or recoverable transition-guard failures.
+premature evaluation before `s03`. Test 313 instead selects the alternative
+explicitly permitted by its upstream manual assertion: the incomplete CMeta
+expression `1 +` is rejected during document compilation with
+`SCXML_INVALID_STRUCTURE`, before any executable content can run. This does not
+claim recoverable transition-guard failures.
 
 Tests 172-175 preserve the upstream mutation-before-send witness with the
 owned CMeta `send_id` and integer `sequence` fields. Tests 172 and 174 use a

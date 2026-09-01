@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 147,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 21,
+    W3C_PASS_DOCUMENT_COUNT = 148,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 20,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -752,8 +752,10 @@ static bool validate_w3c_manifest_source(char *source,
             ++stats.optional;
         }
         if (manifest_value_is(row->columns[W3C_MANIFEST_STATUS], "PASS")) {
-            if (!manifest_value_is(row->columns[W3C_MANIFEST_EXPECTED],
-                                   "TERMINAL_PASS") ||
+            if ((!manifest_value_is(row->columns[W3C_MANIFEST_EXPECTED],
+                                    "TERMINAL_PASS") &&
+                 !manifest_value_is(row->columns[W3C_MANIFEST_EXPECTED],
+                                    "COMPILE_REJECT")) ||
                 manifest_value_is(row->columns[W3C_MANIFEST_TRANSFORMATION],
                                   "NONE"))
                 goto cleanup;
@@ -2099,6 +2101,49 @@ cleanup:
     if (instance_initialized)
         (void)cflow_statechart_instance_destroy(&instance);
     if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_compile_reject_fixture(
+    const char *fixture_name, scxml_status expected_status,
+    const char *expected_diagnostic) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    scxml_status status;
+    bool succeeded = false;
+    int written;
+
+    if (fixture_name == NULL || expected_status == SCXML_OK ||
+        expected_diagnostic == NULL || expected_diagnostic[0] == '\0')
+        return false;
+    written = snprintf(path, sizeof(path), "%s/%s",
+                       SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (written < 0 || (size_t)written >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL || source_size == 0u) {
+        info("fixture=%s read failed", fixture_name);
+        goto cleanup;
+    }
+    status = scxml_compile_cmeta(
+        &program, source, source_size, NULL, &compile_options, &diagnostic);
+    if (status != expected_status || diagnostic.status != expected_status ||
+        strstr(diagnostic.message, expected_diagnostic) == NULL ||
+        program.impl != NULL) {
+        info("fixture=%s compile_status=%d diagnostic_status=%d diagnostic=%s",
+             fixture_name, (int)status, (int)diagnostic.status,
+             diagnostic.message);
+        goto cleanup;
+    }
+    succeeded = true;
+
+cleanup:
     scxml_program_destroy(&program);
     free(source);
     return succeeded;
@@ -4794,6 +4839,24 @@ suite("SCXML W3C-derived conformance regression corpus") {
             source, SCXML_W3C_FIXTURE_DIR, true, NULL, &stats));
     }
 
+    it("accepts a documented PASS witnessed by compile rejection") {
+        char source[] =
+            "id\tfixture\tapplicability\tstatus\tfeature\tupstream\t"
+            "expected\ttransformation\trationale\n"
+            "313\ttest313.scxml\tMANDATORY\tPASS\tExpressions\t"
+            W3C_UPSTREAM_PREFIX
+            "313/test313.txml\tCOMPILE_REJECT\tlocal illegal expression\t"
+            "load rejection is the selected upstream-permitted outcome\n";
+        static const char documentation[] =
+            "test313.scxml " W3C_UPSTREAM_PREFIX "313/test313.txml";
+        w3c_manifest_stats stats = {0};
+
+        check_true(validate_w3c_manifest_source(
+            source, SCXML_W3C_FIXTURE_DIR, false, documentation, &stats));
+        check_equal(stats.passed, (size_t)1u);
+        check_equal(stats.unsupported, (size_t)0u);
+    }
+
     it("rejects malformed inventory rows") {
         char source[] =
             "id\tfixture\tapplicability\tstatus\tfeature\tupstream\t"
@@ -5151,6 +5214,12 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 312 raises error.execution for an illegal value expression") {
         check_true(run_w3c_cmeta_fixture("test312.scxml"));
+    }
+
+    it("test 313 rejects a syntactically ill-formed expression at load") {
+        check_true(run_w3c_compile_reject_fixture(
+            "test313.scxml", SCXML_INVALID_STRUCTURE,
+            "CMeta assignment"));
     }
 
     it("test 314 raises a value-expression error only when evaluated") {
