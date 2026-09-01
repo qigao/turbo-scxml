@@ -595,14 +595,6 @@ static bool host_context_stage_effect(
         (cflow_statechart_host_context *)user, ticket, out_error);
 }
 
-typedef struct scxml_active_query {
-    cflow_statechart_is_active_fn function;
-    void *user;
-} scxml_active_query;
-
-static bool evaluate_hook_active(
-    void *user, cflow_machine_state_id state, bool *out_active);
-
 static scxml_evaluation_context host_evaluation_context(
     cflow_statechart_host_context *context, const void *state) {
     const scxml_evaluation_context evaluation = {
@@ -677,25 +669,6 @@ static bool stage_invocation_result(
     if (!cflow_statechart_host_context_stage_effect(
             context, &ticket, out_error)) {
         discard_invocation_lifecycle(effect);
-        return false;
-    }
-    return true;
-}
-
-static bool raise_done_data_execution_error(
-    scxml_session_impl *session,
-    const scxml_evaluation_context *context,
-    const char **out_error) {
-    const bool payload = false;
-    const cflow_event_view execution_error = {
-        session->program->execution_error_event,
-        &cmeta_type_bool, &payload};
-    if (session->program->execution_error_event == 0u ||
-        context->raise_internal == NULL ||
-        !context->raise_internal(
-            context->raise_user, &execution_error, out_error)) {
-        if (*out_error == NULL)
-            *out_error = "SCXML donedata expression failed";
         return false;
     }
     return true;
@@ -1119,8 +1092,90 @@ void scxml_runtime_destroy_event_data_object(const cmeta_data_desc *schema,
         type->traits->destroy(object);
 }
 
+static void completion_data_discard_payload(
+    scxml_completion_data_slot *slot) {
+    if (slot == NULL) return;
+    if (slot->data_object_live) {
+        scxml_runtime_destroy_event_data_object(
+            slot->data_schema, slot->data_object.bytes);
+        slot->data_object_live = false;
+    }
+    slot->data_schema = NULL;
+    slot->data_size = 0u;
+    slot->data[0] = '\0';
+}
+
+static void completion_data_release(scxml_completion_data_slot *slot) {
+    if (slot == NULL) return;
+    completion_data_discard_payload(slot);
+    memset(slot, 0, sizeof(*slot));
+}
+
+static scxml_completion_data_slot *completion_data_reserve(
+    scxml_session_impl *session, cflow_machine_state_id parent,
+    const char **out_error) {
+    size_t index;
+    if (session == NULL || out_error == NULL || parent == 0u) {
+        if (out_error != NULL)
+            *out_error = "SCXML completion data reservation is invalid";
+        return NULL;
+    }
+    if (session->next_completion_data_sequence == UINT64_MAX) {
+        *out_error = "SCXML completion data sequence is exhausted";
+        return NULL;
+    }
+    for (index = 0u; index < session->completion_data_capacity; ++index) {
+        scxml_completion_data_slot *slot =
+            &session->completion_data_slots[index];
+        if (slot->state != SCXML_COMPLETION_DATA_FREE) continue;
+        slot->state = SCXML_COMPLETION_DATA_BUILDING;
+        slot->parent = parent;
+        slot->sequence = session->next_completion_data_sequence++;
+        return slot;
+    }
+    *out_error = "SCXML completion data storage is full";
+    return NULL;
+}
+
+static void completion_data_publish_empty(
+    scxml_completion_data_slot *slot) {
+    completion_data_discard_payload(slot);
+    slot->state = SCXML_COMPLETION_DATA_READY;
+}
+
+static scxml_completion_data_slot *completion_data_bind_oldest(
+    scxml_session_impl *session, cflow_machine_state_id parent,
+    size_t *out_index) {
+    scxml_completion_data_slot *selected = NULL;
+    size_t selected_index = SIZE_MAX;
+    size_t index;
+    for (index = 0u; index < session->completion_data_capacity; ++index) {
+        scxml_completion_data_slot *candidate =
+            &session->completion_data_slots[index];
+        if (candidate->state != SCXML_COMPLETION_DATA_READY ||
+            candidate->parent != parent ||
+            (selected != NULL &&
+             candidate->sequence >= selected->sequence))
+            continue;
+        selected = candidate;
+        selected_index = index;
+    }
+    if (selected != NULL) selected->state = SCXML_COMPLETION_DATA_BOUND;
+    if (out_index != NULL) *out_index = selected_index;
+    return selected;
+}
+
 void scxml_runtime_clear_current_event_metadata(scxml_session_impl *session) {
     static const scxml_expr_string_view empty = {"", 0u};
+    if (session->current_completion_data_slot != SIZE_MAX) {
+        if (session->current_completion_data_slot <
+            session->completion_data_capacity) {
+            completion_data_release(
+                &session->completion_data_slots[
+                    session->current_completion_data_slot]);
+        }
+        session->current_completion_data_slot = SIZE_MAX;
+    }
     if (session->current_event_data_object_live) {
         scxml_runtime_destroy_event_data_object(
             session->current_event_data_schema,
@@ -1137,112 +1192,38 @@ void scxml_runtime_clear_current_event_metadata(scxml_session_impl *session) {
     session->system_values.event_data = empty;
 }
 
-static bool evaluate_hook_active(
-    void *user, cflow_machine_state_id state, bool *out_active) {
-    const scxml_active_query *query = (const scxml_active_query *)user;
-    if (query == NULL || query->function == NULL || out_active == NULL)
-        return false;
-    *out_active = query->function(query->user, state);
-    return true;
-}
-
 static bool bind_completion_done_data(
     scxml_session_impl *session,
-    const scxml_evaluation_context *context,
     cflow_machine_state_id completion, const char **out_error) {
-    const scxml_active_query active_query = {
-        context != NULL ? context->is_active : NULL,
-        context != NULL ? context->configuration_user : NULL};
-    size_t index;
-    for (index = 0u; index < session->program->done_data_count; ++index) {
-        const scxml_done_data_descriptor *descriptor =
-            &session->program->done_data[index];
-        scxml_expr_diagnostic diagnostic = {0};
-        scxml_expr_value value = {0};
-        const char *data = NULL;
-        size_t data_size = 0u;
-        bool active;
-        if (descriptor->parent != completion) continue;
-        if (context == NULL || context->state == NULL ||
-            context->is_active == NULL) {
-            *out_error = "SCXML donedata active-state query failed";
+    size_t slot_index = SIZE_MAX;
+    scxml_completion_data_slot *slot;
+    if (session == NULL || out_error == NULL) {
+        if (out_error != NULL)
+            *out_error = "SCXML completion data binding is invalid";
+        return false;
+    }
+    slot = completion_data_bind_oldest(
+        session, completion, &slot_index);
+    if (slot == NULL) return true;
+    session->current_completion_data_slot = slot_index;
+    if (slot->data_object_live) {
+        if (!cmeta_data_desc_valid(slot->data_schema)) {
+            *out_error = "SCXML completion data schema is invalid";
             return false;
         }
-        active = context->is_active(
-            context->configuration_user, descriptor->final_state);
-        if (!active) continue;
-        if (descriptor->assignment_count != 0u) {
-            size_t assignment;
-            if (session->program->cmeta_root == NULL ||
-                descriptor->assignment_first >
-                    session->program->assignment_count ||
-                descriptor->assignment_count >
-                    session->program->assignment_count -
-                        descriptor->assignment_first ||
-                !cmeta_data_desc_valid(&descriptor->schema) ||
-                !scxml_runtime_copy_event_data_object(
-                    session->program->cmeta_root,
-                    session->current_event_data_object.bytes,
-                    context->state)) {
-                return raise_done_data_execution_error(
-                    session, context, out_error);
-            }
-            session->current_event_data_object_live = true;
-            for (assignment = 0u;
-                 assignment < descriptor->assignment_count; ++assignment) {
-                if (scxml_assign_apply_from_with_system(
-                        &session->program->assignments[
-                            descriptor->assignment_first + assignment],
-                        context->state,
-                        session->current_event_data_object.bytes,
-                        evaluate_hook_active, (void *)&active_query,
-                        &session->system_values, &diagnostic) !=
-                    SCXML_EXPR_OK) {
-                    scxml_runtime_destroy_event_data_object(
-                        session->program->cmeta_root,
-                        session->current_event_data_object.bytes);
-                    session->current_event_data_object_live = false;
-                    return raise_done_data_execution_error(
-                        session, context, out_error);
-                }
-            }
-            session->current_event_data_schema = &descriptor->schema;
-            session->system_values.event_data =
-                (scxml_expr_string_view){NULL, 0u};
-            session->system_values.event_data_schema = &descriptor->schema;
-            session->system_values.event_data_object =
-                session->current_event_data_object.bytes;
-            return true;
-        }
-        if (descriptor->content.kind == SCXML_CONTENT_SCALAR) {
-            if (scxml_expr_evaluate_value_with_system(
-                    &descriptor->expression, context->state,
-                    evaluate_hook_active, (void *)&active_query,
-                    &session->system_values, &value, &diagnostic) !=
-                    SCXML_EXPR_OK ||
-                !scxml_runtime_scalar_value_to_text(
-                    &value, session->current_event_data,
-                    sizeof(session->current_event_data), &data, &data_size)) {
-                return raise_done_data_execution_error(
-                    session, context, out_error);
-            }
-        } else if (descriptor->content.kind ==
-                       SCXML_CONTENT_TEXT_UTF8 ||
-                   descriptor->content.kind ==
-                       SCXML_CONTENT_XML_UTF8) {
-            data = descriptor->content.bytes;
-            data_size = descriptor->content.byte_count;
-        } else {
-            return raise_done_data_execution_error(
-                session, context, out_error);
-        }
-        if (data != session->current_event_data && data_size != 0u)
-            memmove(session->current_event_data, data, data_size);
-        session->current_event_data[data_size] = '\0';
+        session->current_event_data_schema = slot->data_schema;
         session->system_values.event_data =
-            (scxml_expr_string_view){
-                session->current_event_data, data_size};
-        return true;
+            (scxml_expr_string_view){NULL, 0u};
+        session->system_values.event_data_schema = slot->data_schema;
+        session->system_values.event_data_object = slot->data_object.bytes;
+    } else {
+        if (slot->data_schema != NULL ||
+            slot->data_size > SCXML_EVENT_METADATA_CAPACITY) {
+            *out_error = "SCXML completion text data is invalid";
+            return false;
+        }
+        session->system_values.event_data =
+            (scxml_expr_string_view){slot->data, slot->data_size};
     }
     return true;
 }
@@ -1295,7 +1276,7 @@ static bool scxml_runtime_observe_event(
             (scxml_expr_string_view){
                 internal_type, sizeof(internal_type) - 1u};
         return bind_completion_done_data(
-            session, context, event->completion, out_error);
+            session, event->completion, out_error);
     }
     if (event->event == NULL || event->event->id == 0u ||
         event->event->id > session->program->event_name_count) {
@@ -2301,6 +2282,158 @@ static scxml_execute_outcome raise_block_execution_error(
     return SCXML_EXECUTE_BLOCK_ABORTED;
 }
 
+static scxml_execute_outcome raise_done_data_execution_error(
+    const scxml_block *block,
+    const cflow_statechart_executable_context *context,
+    const char **out_error) {
+    const scxml_execute_outcome outcome =
+        raise_block_execution_error(block, context, out_error);
+    return outcome == SCXML_EXECUTE_BLOCK_ABORTED
+        ? SCXML_EXECUTE_CONTINUE : outcome;
+}
+
+typedef struct scxml_done_data_materialization {
+    const scxml_block *block;
+    scxml_session_impl *session;
+    const scxml_done_data_descriptor *descriptor;
+    const cflow_statechart_executable_context *context;
+    const void *state;
+    const scxml_expr_system_values *system_values;
+    scxml_completion_data_slot *slot;
+    const char **out_error;
+} scxml_done_data_materialization;
+
+static scxml_execute_outcome fail_done_data_expression(
+    scxml_done_data_materialization *operation) {
+    completion_data_publish_empty(operation->slot);
+    return raise_done_data_execution_error(
+        operation->block, operation->context, operation->out_error);
+}
+
+static scxml_execute_outcome materialize_done_data_object(
+    scxml_done_data_materialization *operation) {
+    const scxml_done_data_descriptor *descriptor = operation->descriptor;
+    size_t assignment;
+    if (operation->session->program->cmeta_root == NULL ||
+        operation->block->assignments == NULL ||
+        descriptor->assignment_first >
+            operation->block->assignment_storage_count ||
+        descriptor->assignment_count >
+            operation->block->assignment_storage_count -
+                descriptor->assignment_first ||
+        !cmeta_data_desc_valid(&descriptor->schema)) {
+        completion_data_release(operation->slot);
+        *operation->out_error =
+            "SCXML donedata object descriptor is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
+    if (!scxml_runtime_copy_event_data_object(
+            operation->session->program->cmeta_root,
+            operation->slot->data_object.bytes, operation->state))
+        return fail_done_data_expression(operation);
+    operation->slot->data_schema = &descriptor->schema;
+    operation->slot->data_object_live = true;
+    for (assignment = 0u;
+         assignment < descriptor->assignment_count; ++assignment) {
+        scxml_expr_diagnostic diagnostic = {0};
+        if (scxml_assign_apply_from_with_system(
+                &operation->block->assignments[
+                    descriptor->assignment_first + assignment],
+                operation->state, operation->slot->data_object.bytes,
+                evaluate_cmeta_executable_active,
+                (void *)operation->context,
+                operation->system_values, &diagnostic) != SCXML_EXPR_OK)
+            return fail_done_data_expression(operation);
+    }
+    operation->slot->state = SCXML_COMPLETION_DATA_READY;
+    return SCXML_EXECUTE_CONTINUE;
+}
+
+static scxml_execute_outcome materialize_done_data_scalar(
+    scxml_done_data_materialization *operation) {
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_value value = {0};
+    const char *data = NULL;
+    size_t data_size = 0u;
+    if (scxml_expr_evaluate_value_with_system(
+            &operation->descriptor->expression, operation->state,
+            evaluate_cmeta_executable_active,
+            (void *)operation->context, operation->system_values,
+            &value, &diagnostic) != SCXML_EXPR_OK ||
+        !scxml_runtime_scalar_value_to_text(
+            &value, operation->slot->data,
+            sizeof(operation->slot->data), &data, &data_size))
+        return fail_done_data_expression(operation);
+    if (data_size > SCXML_EVENT_METADATA_CAPACITY) {
+        completion_data_release(operation->slot);
+        *operation->out_error =
+            "SCXML donedata scalar exceeds its admitted bound";
+        return SCXML_EXECUTE_FATAL;
+    }
+    if (data != operation->slot->data && data_size != 0u)
+        memmove(operation->slot->data, data, data_size);
+    operation->slot->data[data_size] = '\0';
+    operation->slot->data_size = data_size;
+    operation->slot->state = SCXML_COMPLETION_DATA_READY;
+    return SCXML_EXECUTE_CONTINUE;
+}
+
+static scxml_execute_outcome materialize_done_data_inline(
+    scxml_done_data_materialization *operation) {
+    const size_t byte_count = operation->descriptor->content.byte_count;
+    if (byte_count > SCXML_EVENT_METADATA_CAPACITY) {
+        completion_data_release(operation->slot);
+        *operation->out_error =
+            "SCXML inline donedata exceeds its admitted bound";
+        return SCXML_EXECUTE_FATAL;
+    }
+    if (byte_count != 0u)
+        memcpy(operation->slot->data,
+               operation->descriptor->content.bytes, byte_count);
+    operation->slot->data[byte_count] = '\0';
+    operation->slot->data_size = byte_count;
+    operation->slot->state = SCXML_COMPLETION_DATA_READY;
+    return SCXML_EXECUTE_CONTINUE;
+}
+
+static scxml_execute_outcome materialize_done_data(
+    const scxml_block *block, scxml_session_impl *session,
+    const scxml_step *step,
+    const cflow_statechart_executable_context *context,
+    const void *state,
+    const scxml_expr_system_values *system_values,
+    const char **out_error) {
+    scxml_done_data_materialization operation = {0};
+    if (session == NULL) return SCXML_EXECUTE_CONTINUE;
+    if (block->done_data == NULL ||
+        step->done_data >= block->done_data_storage_count ||
+        context == NULL || state == NULL || system_values == NULL) {
+        *out_error = "SCXML donedata execution context is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
+    operation = (scxml_done_data_materialization){
+        .block = block,
+        .session = session,
+        .descriptor = &block->done_data[step->done_data],
+        .context = context,
+        .state = state,
+        .system_values = system_values,
+        .out_error = out_error};
+    operation.slot = completion_data_reserve(
+        session, operation.descriptor->parent, out_error);
+    if (operation.slot == NULL) return SCXML_EXECUTE_FATAL;
+    if (operation.descriptor->assignment_count != 0u)
+        return materialize_done_data_object(&operation);
+    if (operation.descriptor->content.kind == SCXML_CONTENT_SCALAR)
+        return materialize_done_data_scalar(&operation);
+    if (operation.descriptor->content.kind == SCXML_CONTENT_TEXT_UTF8 ||
+        operation.descriptor->content.kind == SCXML_CONTENT_XML_UTF8)
+        return materialize_done_data_inline(&operation);
+    completion_data_release(operation.slot);
+    *out_error = "SCXML donedata descriptor has no materializable content";
+    return SCXML_EXECUTE_FATAL;
+}
+
 static bool enqueue_condition_execution_error(
     const scxml_block *block,
     const cflow_statechart_executable_context *context,
@@ -2418,6 +2551,12 @@ static scxml_execute_outcome execute_scxml_range(
                     &diagnostic) !=
                 SCXML_EXPR_OK)
                 return raise_block_execution_error(block, context, out_error);
+        } else if (step->kind == SCXML_STEP_DONEDATA) {
+            const scxml_execute_outcome outcome = materialize_done_data(
+                block, session, step, context,
+                mutable_state_read(mutable_state, context),
+                system_values, out_error);
+            if (outcome != SCXML_EXECUTE_CONTINUE) return outcome;
         } else if (step->kind == SCXML_STEP_LATE_INITIALIZE) {
             scxml_late_initializer_state *initializer;
             cflow_statechart_effect_ticket ticket;

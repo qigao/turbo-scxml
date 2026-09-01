@@ -95,9 +95,21 @@ static void session_free_storage(scxml_session_impl *impl) {
             }
         }
     }
+    if (impl->completion_data_slots != NULL) {
+        for (index = 0u; index < impl->completion_data_capacity; ++index) {
+            scxml_completion_data_slot *slot =
+                &impl->completion_data_slots[index];
+            if (slot->data_object_live) {
+                scxml_runtime_destroy_event_data_object(
+                    slot->data_schema, slot->data_object.bytes);
+                slot->data_object_live = false;
+            }
+        }
+    }
     free(impl->late_initializers);
     free(impl->prepared_effects);
     free(impl->external_metadata_rows);
+    free(impl->completion_data_slots);
     free(impl->invocation_effects);
     free(impl->invocation_rows);
     free(impl->delayed_sends);
@@ -184,6 +196,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     cflow_statechart_instance_status status;
     turbo_uuid_t session_uuid;
     size_t invocation_effect_capacity = 0u;
+    size_t completion_data_capacity = 0u;
     size_t index;
     bool requires_forward = false;
     uint64_t event_io_capabilities = 0u;
@@ -209,6 +222,11 @@ static cflow_statechart_instance_status scxml_session_init_model(
         config->effect_capacity == 0u) {
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     }
+    if (program->done_data_count != 0u &&
+        !scxml_analyze_checked_add(
+            config->completion_capacity, 1u,
+            &completion_data_capacity))
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
     if ((program->requirements & SCXML_REQUIREMENT_EVENT_IO) != 0u) {
         if (config->event_io == NULL ||
             config->effect_capacity == 0u ||
@@ -331,6 +349,11 @@ static cflow_statechart_instance_status scxml_session_init_model(
         (scxml_external_event_metadata_row *)scxml_emit_allocate_rows(
             impl->external_metadata_capacity,
             sizeof(*impl->external_metadata_rows));
+    impl->completion_data_capacity = completion_data_capacity;
+    impl->completion_data_slots =
+        (scxml_completion_data_slot *)scxml_emit_allocate_rows(
+            impl->completion_data_capacity,
+            sizeof(*impl->completion_data_slots));
     impl->payload_scratch_capacity = program->max_payload_entries;
     impl->payload_scratch =
         (scxml_payload_entry *)scxml_emit_allocate_rows(
@@ -363,6 +386,8 @@ static cflow_statechart_instance_status scxml_session_init_model(
          impl->prepared_effects == NULL) ||
         (impl->external_metadata_capacity != 0u &&
          impl->external_metadata_rows == NULL) ||
+        (impl->completion_data_capacity != 0u &&
+         impl->completion_data_slots == NULL) ||
         (impl->payload_scratch_capacity != 0u &&
          impl->payload_scratch == NULL) ||
         (impl->invocation_capacity != 0u &&
@@ -409,6 +434,8 @@ static cflow_statechart_instance_status scxml_session_init_model(
     impl->next_invocation_token = UINT64_C(1);
     impl->next_external_metadata_token =
         SCXML_EXTERNAL_METADATA_TOKEN_BIT | UINT64_C(1);
+    impl->current_completion_data_slot = SIZE_MAX;
+    impl->next_completion_data_sequence = UINT64_C(1);
     atomic_init(&impl->adapter_close_called, false);
     atomic_init(&impl->invoke_close_called, false);
     instance_hooks = (cflow_statechart_instance_hooks){

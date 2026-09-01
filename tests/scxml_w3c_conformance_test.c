@@ -30,8 +30,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 146,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 22,
+    W3C_PASS_DOCUMENT_COUNT = 147,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 21,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -5411,6 +5411,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 527 evaluates expression content for completion data") {
         check_true(run_w3c_cmeta_fixture("test527.scxml"));
+    }
+
+    it("test 528 orders content errors before empty completion data") {
+        check_true(run_w3c_cmeta_fixture("test528.scxml"));
     }
 
     it("test 529 preserves inline completion content") {
