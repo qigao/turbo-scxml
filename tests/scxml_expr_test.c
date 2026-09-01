@@ -241,6 +241,27 @@ static const cmeta_data_desc root_data = {
     .shape = &root_shape
 };
 
+static const cmeta_data_field_desc event_order_fields[] = {
+    {"test.scxml.expr.event.order", "order",
+     offsetof(scxml_expr_root, order), &order_data}
+};
+
+static const cmeta_data_struct_shape event_order_shape = {
+    .layout = StructMeta(scxml_expr_root),
+    .fields = event_order_fields,
+    .field_count = sizeof(event_order_fields) / sizeof(event_order_fields[0])
+};
+
+static const cmeta_data_desc event_order_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.expr.event.order.data",
+    .display_name = "OrderEvent",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &root_type,
+    .shape = &event_order_shape
+};
+
 typedef struct state_fixture {
     bool fail_active;
 } state_fixture;
@@ -748,6 +769,43 @@ spec("TurboSCXML private SCXML expressions") {
     scxml_expr_program_destroy(&program);
   }
 
+  it("reads only paths admitted by a compatible event data subset schema") {
+    scxml_expr_root event_data = root;
+    scxml_expr_system_values system_values = {
+        .event_name = {"completion", sizeof("completion") - 1u},
+        .event_type = {"internal", sizeof("internal") - 1u},
+        .event_data = {NULL, 0u},
+        .event_data_schema = &event_order_data,
+        .event_data_object = &event_data
+    };
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+    bool result = false;
+
+    event_data.order.count = 42;
+    check_equal(compile_expression(
+                    &program, "_event.data.order.count == 42",
+                    NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &system_values, &result, &diagnostic),
+                SCXML_EXPR_OK);
+    check_true(result);
+    scxml_expr_program_destroy(&program);
+
+    check_equal(compile_expression(
+                    &program, "_event.data.enabled == true",
+                    NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &system_values, &result, &diagnostic),
+                SCXML_EXPR_EVALUATION_ERROR);
+    scxml_expr_program_destroy(&program);
+  }
+
   it("applies exact reflected assignments and preserves destinations on failure") {
     scxml_assign_program program = {0};
     scxml_expr_diagnostic diagnostic = {0};
@@ -789,6 +847,28 @@ spec("TurboSCXML private SCXML expressions") {
                     &root_data, resolve_state, NULL, NULL, &diagnostic),
                 SCXML_EXPR_TYPE_MISMATCH);
     check_null(program.impl);
+  }
+
+  it("evaluates assignments from an immutable source into a separate destination") {
+    scxml_expr_root source = root;
+    scxml_expr_root destination = root;
+    scxml_assign_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+
+    source.order.count = 17;
+    destination.order.count = -4;
+    check_equal(scxml_assign_compile(
+                    &program, "order.count", 11u, "order.count", 11u,
+                    &root_data, resolve_state, NULL, NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_assign_apply_from_with_system(
+                    &program, &source, &destination,
+                    state_is_active, &states, NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(source.order.count, 17);
+    check_equal(destination.order.count, 17);
+    scxml_assign_program_destroy(&program);
   }
 
   it("executes recognized system assignments as read-only failures") {

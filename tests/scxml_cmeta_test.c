@@ -4521,6 +4521,118 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("materializes every donedata param from the same state snapshot") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='work'>"
+            "<state id='work'><transition target='childDone'/></state>"
+            "<final id='childDone'><donedata>"
+            "<param name='count' expr='1'/>"
+            "<param name='enabled' expr='count == 7'/>"
+            "</donedata></final>"
+            "<transition event='done.state.parent' "
+            "cond='_event.data.count == 1 &amp;&amp; "
+            "_event.data.enabled == true' target='success'/></state>"
+            "<final id='success'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){false, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        scxml_program_destroy(&program);
+    }
+
+    it("discards failed donedata params and processes error.execution") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='idle'>"
+            "<state id='idle'><transition event='go' target='running'/>"
+            "</state><parallel id='running'>"
+            "<state id='payload' initial='work'>"
+            "<state id='work'><transition target='childDone'/></state>"
+            "<final id='childDone'><donedata>"
+            "<param name='enabled' expr='true'/>"
+            "<param name='count' expr='source'/>"
+            "</donedata></final>"
+            "</state>"
+            "<state id='hold'/><transition event='error.execution' "
+            "cond='enabled == false &amp;&amp; count == 7 &amp;&amp; "
+            "_event.name == &quot;error.execution&quot; &amp;&amp; "
+            "_event.type == &quot;platform&quot; &amp;&amp; "
+            "_event.data == &quot;&quot;' target='success'/>"
+            "</parallel><final id='success'/></scxml>";
+        const scxml_public_data initial = {
+            false, 7, SCXML_PUBLIC_SOURCE_FAIL};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_event_view go = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 4u,
+            .microstep_limit = 16u};
+        size_t copies, destroys, copies_before, destroys_before, live_before;
+
+        atomic_store_explicit(
+            &public_data_copy_count, 0u, memory_order_relaxed);
+        atomic_store_explicit(
+            &public_data_destroy_count, 0u, memory_order_relaxed);
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        copies = atomic_load_explicit(
+            &public_data_copy_count, memory_order_relaxed);
+        destroys = atomic_load_explicit(
+            &public_data_destroy_count, memory_order_relaxed);
+        check_true(copies > destroys);
+        copies_before = copies;
+        destroys_before = destroys;
+        live_before = copies - destroys;
+
+        check_true(scxml_program_event(&program, "go", 2u, &go));
+        check_equal(scxml_session_try_send(&session, &go),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        copies = atomic_load_explicit(
+            &public_data_copy_count, memory_order_relaxed);
+        destroys = atomic_load_explicit(
+            &public_data_destroy_count, memory_order_relaxed);
+        check_true(copies > copies_before);
+        check_true(destroys > destroys_before);
+        check_true(copies >= destroys);
+        check_equal(copies - destroys, live_before);
+
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        copies = atomic_load_explicit(
+            &public_data_copy_count, memory_order_relaxed);
+        destroys = atomic_load_explicit(
+            &public_data_destroy_count, memory_order_relaxed);
+        check_equal(copies, destroys);
+        scxml_program_destroy(&program);
+    }
+
     it("binds inline XML donedata to the parent completion event") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -4546,7 +4658,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("rejects donedata outside final and expr-child conflicts") {
+    it("rejects invalid donedata structure and unknown param fields") {
         static const char wrong_parent[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='only'><donedata>"
@@ -4556,6 +4668,20 @@ spec("TurboSCXML public CMeta data model") {
             "datamodel='cmeta'><final id='done'><donedata>"
             "<content expr='count'>text</content>"
             "</donedata></final></scxml>";
+        static const char mixed_payload[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><final id='done'><donedata>"
+            "<param name='count' expr='1'/><content>text</content>"
+            "</donedata></final></scxml>";
+        static const char empty_payload[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><final id='done'><donedata/>"
+            "</final></scxml>";
+        static const char unknown_param[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><final id='done'><donedata>"
+            "<param name='missing' expr='1'/>"
+            "</donedata></final></scxml>";
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
 
@@ -4563,6 +4689,15 @@ spec("TurboSCXML public CMeta data model") {
                     SCXML_INVALID_STRUCTURE);
         check_null(program.impl);
         check_equal(compile_cmeta(conflicting_content, &program, &diagnostic),
+                    SCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(compile_cmeta(mixed_payload, &program, &diagnostic),
+                    SCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(compile_cmeta(empty_payload, &program, &diagnostic),
+                    SCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(compile_cmeta(unknown_param, &program, &diagnostic),
                     SCXML_INVALID_STRUCTURE);
         check_null(program.impl);
     }

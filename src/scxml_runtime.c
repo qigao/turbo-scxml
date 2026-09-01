@@ -682,6 +682,25 @@ static bool stage_invocation_result(
     return true;
 }
 
+static bool raise_done_data_execution_error(
+    scxml_session_impl *session,
+    const scxml_evaluation_context *context,
+    const char **out_error) {
+    const bool payload = false;
+    const cflow_event_view execution_error = {
+        session->program->execution_error_event,
+        &cmeta_type_bool, &payload};
+    if (session->program->execution_error_event == 0u ||
+        context->raise_internal == NULL ||
+        !context->raise_internal(
+            context->raise_user, &execution_error, out_error)) {
+        if (*out_error == NULL)
+            *out_error = "SCXML donedata expression failed";
+        return false;
+    }
+    return true;
+}
+
 static bool stage_invocation_completion(
     scxml_session_impl *session, size_t invocation, uint64_t token,
     cflow_statechart_host_context *context, const char **out_error) {
@@ -1152,6 +1171,49 @@ static bool bind_completion_done_data(
         active = context->is_active(
             context->configuration_user, descriptor->final_state);
         if (!active) continue;
+        if (descriptor->assignment_count != 0u) {
+            size_t assignment;
+            if (session->program->cmeta_root == NULL ||
+                descriptor->assignment_first >
+                    session->program->assignment_count ||
+                descriptor->assignment_count >
+                    session->program->assignment_count -
+                        descriptor->assignment_first ||
+                !cmeta_data_desc_valid(&descriptor->schema) ||
+                !scxml_runtime_copy_event_data_object(
+                    session->program->cmeta_root,
+                    session->current_event_data_object.bytes,
+                    context->state)) {
+                return raise_done_data_execution_error(
+                    session, context, out_error);
+            }
+            session->current_event_data_object_live = true;
+            for (assignment = 0u;
+                 assignment < descriptor->assignment_count; ++assignment) {
+                if (scxml_assign_apply_from_with_system(
+                        &session->program->assignments[
+                            descriptor->assignment_first + assignment],
+                        context->state,
+                        session->current_event_data_object.bytes,
+                        evaluate_hook_active, (void *)&active_query,
+                        &session->system_values, &diagnostic) !=
+                    SCXML_EXPR_OK) {
+                    scxml_runtime_destroy_event_data_object(
+                        session->program->cmeta_root,
+                        session->current_event_data_object.bytes);
+                    session->current_event_data_object_live = false;
+                    return raise_done_data_execution_error(
+                        session, context, out_error);
+                }
+            }
+            session->current_event_data_schema = &descriptor->schema;
+            session->system_values.event_data =
+                (scxml_expr_string_view){NULL, 0u};
+            session->system_values.event_data_schema = &descriptor->schema;
+            session->system_values.event_data_object =
+                session->current_event_data_object.bytes;
+            return true;
+        }
         if (descriptor->content.kind == SCXML_CONTENT_SCALAR) {
             if (scxml_expr_evaluate_value_with_system(
                     &descriptor->expression, context->state,
@@ -1161,19 +1223,8 @@ static bool bind_completion_done_data(
                 !scxml_runtime_scalar_value_to_text(
                     &value, session->current_event_data,
                     sizeof(session->current_event_data), &data, &data_size)) {
-                const bool payload = false;
-                const cflow_event_view execution_error = {
-                    session->program->execution_error_event,
-                    &cmeta_type_bool, &payload};
-                if (session->program->execution_error_event == 0u ||
-                    context->raise_internal == NULL ||
-                    !context->raise_internal(
-                        context->raise_user, &execution_error, out_error)) {
-                    if (*out_error == NULL)
-                        *out_error = "SCXML donedata expression failed";
-                    return false;
-                }
-                return true;
+                return raise_done_data_execution_error(
+                    session, context, out_error);
             }
         } else if (descriptor->content.kind ==
                        SCXML_CONTENT_TEXT_UTF8 ||
@@ -1182,19 +1233,8 @@ static bool bind_completion_done_data(
             data = descriptor->content.bytes;
             data_size = descriptor->content.byte_count;
         } else {
-            const bool payload = false;
-            const cflow_event_view execution_error = {
-                session->program->execution_error_event,
-                &cmeta_type_bool, &payload};
-            if (session->program->execution_error_event == 0u ||
-                context->raise_internal == NULL ||
-                !context->raise_internal(
-                    context->raise_user, &execution_error, out_error)) {
-                if (*out_error == NULL)
-                    *out_error = "SCXML donedata expression failed";
-                return false;
-            }
-            return true;
+            return raise_done_data_execution_error(
+                session, context, out_error);
         }
         if (data != session->current_event_data && data_size != 0u)
             memmove(session->current_event_data, data, data_size);

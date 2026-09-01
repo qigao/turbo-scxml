@@ -33,6 +33,16 @@ scxml_expr_status scxml_assign_apply_with_system(
     const scxml_expr_system_values *system_values,
     scxml_expr_diagnostic *diagnostic);
 
+/* Evaluates against source_root and writes only to destination_root. */
+scxml_expr_status scxml_assign_apply_from_with_system(
+    const scxml_assign_program *program,
+    const void *source_root,
+    void *destination_root,
+    scxml_expr_is_active_fn is_active,
+    void *active_user,
+    const scxml_expr_system_values *system_values,
+    scxml_expr_diagnostic *diagnostic);
+
 void scxml_assign_program_destroy(
     scxml_assign_program *program);
 

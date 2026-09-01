@@ -1072,6 +1072,194 @@ scxml_status scxml_emit_data_initializers(
     return SCXML_OK;
 }
 
+static const cmeta_data_field_desc *find_done_data_field(
+    const cmeta_data_desc *root, const char *name, size_t name_size) {
+    const cmeta_data_struct_shape *shape;
+    size_t index;
+    if (root == NULL || root->kind != CMETA_DATA_STRUCT ||
+        root->shape == NULL || name == NULL || name_size == 0u)
+        return NULL;
+    shape = (const cmeta_data_struct_shape *)root->shape;
+    for (index = 0u; index < shape->field_count; ++index) {
+        const cmeta_data_field_desc *field = &shape->fields[index];
+        if (field->name != NULL && strlen(field->name) == name_size &&
+            memcmp(field->name, name, name_size) == 0)
+            return field;
+    }
+    return NULL;
+}
+
+static scxml_status emit_done_data_param(
+    scxml_build *build, scxml_syntax_node param,
+    scxml_done_data_descriptor *descriptor, size_t field_index) {
+    const scxml_syntax_attribute name =
+        scxml_analyze_find_attribute(param, "name");
+    const scxml_syntax_attribute expression =
+        scxml_analyze_find_attribute(param, "expr");
+    const scxml_syntax_attribute location =
+        scxml_analyze_find_attribute(param, "location");
+    const scxml_syntax_attribute source_attribute =
+        location.impl != NULL ? location : expression;
+    const cmeta_data_field_desc *field;
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_status expression_status;
+    scxml_status status;
+    char *name_source = NULL;
+    size_t name_size = 0u;
+    char *value_source = NULL;
+    size_t value_size = 0u;
+    char message[SCXML_DIAGNOSTIC_CAPACITY];
+    if (build->assignment_index >= build->assignment_capacity)
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            scxml_syntax_node_location(param),
+            "donedata param exceeded admitted assignment storage");
+    status = decode_cmeta_attribute_source(
+        build, name, "donedata param name", &name_source, &name_size);
+    if (status != SCXML_OK) return status;
+    field = find_done_data_field(build->cmeta_root, name_source, name_size);
+    if (field == NULL) {
+        free(name_source);
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_attribute_location(name),
+            "donedata param name is not a top-level CMeta field");
+    }
+    status = decode_cmeta_attribute_source(
+        build, source_attribute,
+        location.impl != NULL ? "donedata param location"
+                              : "donedata param expr",
+        &value_source, &value_size);
+    if (status != SCXML_OK) {
+        free(name_source);
+        return status;
+    }
+    expression_status = scxml_assign_compile(
+        &build->assignments[build->assignment_index],
+        name_source, name_size, value_source, value_size,
+        build->cmeta_root, resolve_cmeta_condition_state, build,
+        &build->expression_limits, &diagnostic);
+    free(name_source);
+    free(value_source);
+    if (expression_status != SCXML_EXPR_OK) {
+        const scxml_status public_status =
+            expression_status == SCXML_EXPR_LIMIT_EXCEEDED
+                ? SCXML_LIMIT_EXCEEDED
+                : expression_status == SCXML_EXPR_ALLOCATION_FAILED
+                      ? SCXML_ALLOCATION_FAILED
+                      : SCXML_INVALID_STRUCTURE;
+        (void)snprintf(
+            message, sizeof(message), "CMeta donedata param byte %zu: %s",
+            diagnostic.byte_offset,
+            diagnostic.message[0] != '\0'
+                ? diagnostic.message : "param compilation failed");
+        return scxml_analyze_fail(
+            build, public_status, scxml_syntax_node_location(param), message);
+    }
+    descriptor->fields[field_index] = *field;
+    ++build->assignment_index;
+    return SCXML_OK;
+}
+
+static scxml_status initialize_done_data_schema(
+    scxml_build *build, scxml_done_data_descriptor *descriptor,
+    size_t field_count) {
+    static const char display_name[] = "SCXML completion data";
+    const cmeta_data_struct_shape *root_shape =
+        (const cmeta_data_struct_shape *)build->cmeta_root->shape;
+    descriptor->fields = (cmeta_data_field_desc *)scxml_emit_allocate_rows(
+        field_count, sizeof(*descriptor->fields));
+    if (descriptor->fields == NULL)
+        return scxml_analyze_fail(
+            build, SCXML_ALLOCATION_FAILED, (turbo_xml_location){0},
+            "unable to allocate donedata schema storage");
+    descriptor->shape = (cmeta_data_struct_shape){
+        .layout = root_shape->layout,
+        .fields = descriptor->fields,
+        .field_count = field_count};
+    descriptor->schema = (cmeta_data_desc){
+        .struct_size = sizeof(cmeta_data_desc),
+        .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+        .stable_id = NULL,
+        .display_name = display_name,
+        .kind = CMETA_DATA_STRUCT,
+        .storage_type = build->cmeta_root->storage_type,
+        .shape = &descriptor->shape};
+    return SCXML_OK;
+}
+
+static scxml_status finalize_done_data_schema_id(
+    scxml_build *build, scxml_done_data_descriptor *descriptor) {
+    static const char suffix_prefix[] = "#scxml-donedata-";
+    enum { SIZE_DECIMAL_CAPACITY = 3u * sizeof(size_t) + 1u };
+    char suffix[sizeof(suffix_prefix) + 3u * sizeof(cflow_machine_state_id)];
+    const int suffix_size = snprintf(
+        suffix, sizeof(suffix), "%s%llu", suffix_prefix,
+        (unsigned long long)descriptor->final_state);
+    const size_t root_size = strlen(build->cmeta_root->stable_id);
+    size_t stable_id_size, field_index, offset;
+
+    if (suffix_size < 0 || (size_t)suffix_size >= sizeof(suffix) ||
+        !scxml_analyze_checked_add(root_size, (size_t)suffix_size,
+                                   &stable_id_size))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+            "donedata schema identifier exceeds the size bound");
+    for (field_index = 0u; field_index < descriptor->shape.field_count;
+         ++field_index) {
+        const char *name = descriptor->fields[field_index].name;
+        const size_t field_size = name != NULL ? strlen(name) : 0u;
+        char decimal[SIZE_DECIMAL_CAPACITY];
+        const int decimal_size = name != NULL
+            ? snprintf(decimal, sizeof(decimal), "%zu", field_size)
+            : -1;
+        size_t encoded_size;
+        if (decimal_size < 0 || (size_t)decimal_size >= sizeof(decimal) ||
+            !scxml_analyze_checked_add(
+                (size_t)decimal_size, 2u, &encoded_size) ||
+            !scxml_analyze_checked_add(
+                encoded_size, field_size, &encoded_size) ||
+            !scxml_analyze_checked_add(
+                stable_id_size, encoded_size, &stable_id_size))
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+                "donedata schema identifier exceeds the size bound");
+    }
+    if (!scxml_analyze_checked_add(stable_id_size, 1u, &stable_id_size))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+            "donedata schema identifier exceeds the size bound");
+    descriptor->schema_stable_id = (char *)malloc(stable_id_size);
+    if (descriptor->schema_stable_id == NULL)
+        return scxml_analyze_fail(
+            build, SCXML_ALLOCATION_FAILED, (turbo_xml_location){0},
+            "unable to allocate donedata schema identifier");
+    memcpy(descriptor->schema_stable_id,
+           build->cmeta_root->stable_id, root_size);
+    memcpy(descriptor->schema_stable_id + root_size,
+           suffix, (size_t)suffix_size);
+    offset = root_size + (size_t)suffix_size;
+    for (field_index = 0u; field_index < descriptor->shape.field_count;
+         ++field_index) {
+        const char *name = descriptor->fields[field_index].name;
+        const size_t field_size = strlen(name);
+        const int written = snprintf(
+            descriptor->schema_stable_id + offset,
+            stable_id_size - offset, ":%zu:", field_size);
+        if (written < 0 ||
+            (size_t)written >= stable_id_size - offset)
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+                "donedata schema identifier emission exceeded its bound");
+        offset += (size_t)written;
+        memcpy(descriptor->schema_stable_id + offset, name, field_size);
+        offset += field_size;
+    }
+    descriptor->schema_stable_id[offset] = '\0';
+    descriptor->schema.stable_id = descriptor->schema_stable_id;
+    return SCXML_OK;
+}
+
 scxml_status scxml_emit_done_data(
     scxml_build *build, scxml_syntax_node node, size_t node_count,
     cflow_machine_state_id parent) {
@@ -1082,6 +1270,10 @@ scxml_status scxml_emit_done_data(
         for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
             const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
             size_t content_index;
+            size_t param_count = 0u;
+            size_t param_index = 0u;
+            scxml_done_data_descriptor *descriptor;
+            scxml_status status;
             if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
                 scxml_analyze_element_kind(child) != SCXML_ELEMENT_DONEDATA)
                 continue;
@@ -1089,31 +1281,61 @@ scxml_status scxml_emit_done_data(
                 return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                                   scxml_syntax_node_location(child),
                                   "donedata emission exceeded declarations");
+            descriptor = &build->done_data[build->done_data_index];
+            descriptor->parent = parent;
+            descriptor->final_state = current;
+            descriptor->assignment_first = build->assignment_index;
             for (content_index = 0u;
                  content_index < scxml_syntax_node_child_count(child);
                  ++content_index) {
                 const scxml_syntax_node content =
                     scxml_syntax_node_child_at(child, content_index);
-                scxml_done_data_descriptor *descriptor;
-                scxml_status status;
-                if (scxml_syntax_node_type(content) != TURBO_XML_ELEMENT ||
-                    scxml_analyze_element_kind(content) != SCXML_ELEMENT_CONTENT)
+                if (scxml_syntax_node_type(content) == TURBO_XML_ELEMENT &&
+                    scxml_analyze_element_kind(content) == SCXML_ELEMENT_PARAM)
+                    ++param_count;
+            }
+            if (param_count != 0u) {
+                status = initialize_done_data_schema(
+                    build, descriptor, param_count);
+                if (status != SCXML_OK) return status;
+            }
+            for (content_index = 0u;
+                 content_index < scxml_syntax_node_child_count(child);
+                 ++content_index) {
+                const scxml_syntax_node content =
+                    scxml_syntax_node_child_at(child, content_index);
+                const scxml_element_kind content_kind =
+                    scxml_analyze_element_kind(content);
+                if (scxml_syntax_node_type(content) != TURBO_XML_ELEMENT)
                     continue;
-                descriptor = &build->done_data[build->done_data_index];
-                descriptor->parent = parent;
-                descriptor->final_state = current;
-                if (scxml_analyze_find_attribute(content, "expr").impl != NULL) {
+                if (content_kind == SCXML_ELEMENT_PARAM) {
+                    status = emit_done_data_param(
+                        build, content, descriptor, param_index++);
+                } else if (content_kind == SCXML_ELEMENT_CONTENT &&
+                           scxml_analyze_find_attribute(content, "expr").impl != NULL) {
                     status = scxml_emit_compile_cmeta_content_expression(
                         build, scxml_analyze_find_attribute(content, "expr"),
                         "donedata content", &descriptor->content,
                         &descriptor->expression);
-                } else {
+                } else if (content_kind == SCXML_ELEMENT_CONTENT) {
                     status = retain_effect_inline_content(
                         build, content, &descriptor->content);
-                }
+                } else continue;
                 if (status != SCXML_OK) return status;
-                ++build->done_data_index;
             }
+            descriptor->assignment_count =
+                build->assignment_index - descriptor->assignment_first;
+            if (param_count != 0u &&
+                (status = finalize_done_data_schema_id(
+                     build, descriptor)) != SCXML_OK)
+                return status;
+            if (param_count != 0u &&
+                !cmeta_data_desc_valid(&descriptor->schema))
+                return scxml_analyze_fail(
+                    build, SCXML_NATIVE_IR_REJECTED,
+                    scxml_syntax_node_location(child),
+                    "donedata subset schema failed validation");
+            ++build->done_data_index;
         }
     }
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
@@ -1955,9 +2177,12 @@ void scxml_emit_destroy_done_data(
     scxml_done_data_descriptor *descriptors, size_t count) {
     size_t index;
     if (descriptors == NULL) return;
-    for (index = 0u; index < count; ++index)
+    for (index = 0u; index < count; ++index) {
         scxml_expr_program_destroy(
             &descriptors[index].expression);
+        free(descriptors[index].fields);
+        free(descriptors[index].schema_stable_id);
+    }
 }
 
 void scxml_emit_free_build(scxml_build *build) {
