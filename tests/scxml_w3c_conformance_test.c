@@ -29,8 +29,8 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 132,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 36,
+    W3C_PASS_DOCUMENT_COUNT = 134,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 34,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -38,13 +38,19 @@ enum {
     W3C_MACROSTEP_INVOKE_CAPACITY = 3,
     W3C_MATERIALIZATION_INVOKE_CAPACITY = 2,
     W3C_INVOKE_COMPLETION_EXTERNAL_CAPACITY = 3,
-    W3C_FINALIZE_INVOKE_CAPACITY = 2
+    W3C_FINALIZE_INVOKE_CAPACITY = 2,
+    W3C_AUTOFORWARD_EVENT_CAPACITY = 2
 };
 
 static const char W3C_SCXML_EVENT_PROCESSOR[] =
     "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
 static const char W3C_SCXML_INVOKE_PROCESSOR[] =
     "http://www.w3.org/TR/scxml/";
+static const char W3C_AUTOFORWARD_INPUT_EVENT[] = "event230";
+static const char W3C_AUTOFORWARD_SEND_ID[] = "send-230";
+static const char W3C_AUTOFORWARD_ORIGIN[] = "scxml://parent/session";
+static const char W3C_AUTOFORWARD_INVOKE_ID[] = "source-invoke-230";
+static const char W3C_AUTOFORWARD_DATA[] = "payload-230";
 
 typedef enum w3c_invoke_materialization_kind {
     W3C_INVOKE_TYPE_EXPR = 0,
@@ -490,6 +496,40 @@ typedef struct w3c_invoke_probe {
     uint64_t token;
     char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
 } w3c_invoke_probe;
+
+typedef struct w3c_invoke_autoforward_probe
+    w3c_invoke_autoforward_probe;
+
+typedef struct w3c_invoke_autoforward_ticket {
+    w3c_invoke_autoforward_probe *probe;
+    bool response_required;
+    bool fields_equal;
+    char name[W3C_EVENT_TEXT_CAPACITY];
+    char type[W3C_EVENT_TEXT_CAPACITY];
+    char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char origin[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char origin_type[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char invoke_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char data[SCXML_EVENT_METADATA_CAPACITY + 1u];
+} w3c_invoke_autoforward_ticket;
+
+struct w3c_invoke_autoforward_probe {
+    bool require_all_fields;
+    bool deliverable;
+    uint64_t token;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t start_prepares;
+    size_t start_commits;
+    size_t start_discards;
+    size_t forward_prepares;
+    size_t forward_commits;
+    size_t forward_discards;
+    size_t cancel_prepares;
+    size_t cancel_commits;
+    size_t cancel_discards;
+    w3c_invoke_autoforward_ticket
+        forwards[W3C_AUTOFORWARD_EVENT_CAPACITY];
+};
 
 typedef struct w3c_invoke_completion_probe {
     size_t start_prepares;
@@ -1360,6 +1400,167 @@ static bool w3c_invoke_text_is(
     const size_t expected_size = expected != NULL ? strlen(expected) : 0u;
     return text != NULL && expected != NULL && text_size == expected_size &&
         memcmp(text, expected, expected_size) == 0;
+}
+
+static void w3c_autoforward_start_commit(void *user) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe != NULL) ++probe->start_commits;
+}
+
+static void w3c_autoforward_start_discard(void *user) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe != NULL) ++probe->start_discards;
+}
+
+static void w3c_autoforward_forward_commit(void *user) {
+    w3c_invoke_autoforward_ticket *ticket =
+        (w3c_invoke_autoforward_ticket *)user;
+    if (ticket == NULL || ticket->probe == NULL) return;
+    ++ticket->probe->forward_commits;
+    if (ticket->response_required && ticket->fields_equal)
+        ticket->probe->deliverable = true;
+}
+
+static void w3c_autoforward_forward_discard(void *user) {
+    w3c_invoke_autoforward_ticket *ticket =
+        (w3c_invoke_autoforward_ticket *)user;
+    if (ticket != NULL && ticket->probe != NULL)
+        ++ticket->probe->forward_discards;
+}
+
+static void w3c_autoforward_cancel_commit(void *user) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe != NULL) ++probe->cancel_commits;
+}
+
+static void w3c_autoforward_cancel_discard(void *user) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe != NULL) ++probe->cancel_discards;
+}
+
+static scxml_adapter_status w3c_capture_autoforward_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || probe->start_prepares != 0u ||
+        request->token == 0u || !request->autoforward ||
+        !w3c_invoke_text_is(
+            request->type, request->type_size,
+            W3C_SCXML_INVOKE_PROCESSOR) ||
+        request->id == NULL || request->id_size == 0u ||
+        request->id_size >= sizeof(probe->id))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    probe->token = request->token;
+    memcpy(probe->id, request->id, request->id_size);
+    probe->id[request->id_size] = '\0';
+    ++probe->start_prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_autoforward_start_commit,
+        w3c_autoforward_start_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static bool w3c_copy_autoforward_envelope(
+    w3c_invoke_autoforward_ticket *ticket,
+    const scxml_event_envelope_view *envelope) {
+    return ticket != NULL && envelope != NULL &&
+        envelope->abi_version == SCXML_EVENT_ENVELOPE_ABI &&
+        envelope->struct_size == sizeof(scxml_event_envelope_view) &&
+        w3c_copy_request_text(
+            ticket->name, sizeof(ticket->name),
+            envelope->name, envelope->name_size) &&
+        w3c_copy_request_text(
+            ticket->type, sizeof(ticket->type),
+            envelope->type, envelope->type_size) &&
+        w3c_copy_request_text(
+            ticket->send_id, sizeof(ticket->send_id),
+            envelope->send_id, envelope->send_id_size) &&
+        w3c_copy_request_text(
+            ticket->origin, sizeof(ticket->origin),
+            envelope->origin, envelope->origin_size) &&
+        w3c_copy_request_text(
+            ticket->origin_type, sizeof(ticket->origin_type),
+            envelope->origin_type, envelope->origin_type_size) &&
+        w3c_copy_request_text(
+            ticket->invoke_id, sizeof(ticket->invoke_id),
+            envelope->invoke_id, envelope->invoke_id_size) &&
+        envelope->data.kind == SCXML_CONTENT_TEXT_UTF8 &&
+        w3c_copy_request_text(
+            ticket->data, sizeof(ticket->data),
+            envelope->data.bytes, envelope->data.byte_count);
+}
+
+static bool w3c_autoforward_fields_equal(
+    const w3c_invoke_autoforward_probe *probe,
+    const w3c_invoke_autoforward_ticket *ticket) {
+    if (probe == NULL || ticket == NULL ||
+        strcmp(ticket->type, "external") != 0)
+        return false;
+    if (!probe->require_all_fields)
+        return strcmp(ticket->name, "childToParent") == 0;
+    return strcmp(ticket->name, W3C_AUTOFORWARD_INPUT_EVENT) == 0 &&
+        strcmp(ticket->send_id, W3C_AUTOFORWARD_SEND_ID) == 0 &&
+        strcmp(ticket->origin, W3C_AUTOFORWARD_ORIGIN) == 0 &&
+        strcmp(ticket->origin_type, W3C_SCXML_EVENT_PROCESSOR) == 0 &&
+        strcmp(ticket->invoke_id, W3C_AUTOFORWARD_INVOKE_ID) == 0 &&
+        strcmp(ticket->data, W3C_AUTOFORWARD_DATA) == 0;
+}
+
+static scxml_adapter_status w3c_capture_autoforward_event(
+    void *user, const scxml_invoke_forward_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    w3c_invoke_autoforward_ticket *ticket;
+    const char *expected_input;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->token != probe->token ||
+        !w3c_invoke_text_is(request->id, request->id_size, probe->id) ||
+        request->event == NULL ||
+        probe->forward_prepares >= W3C_AUTOFORWARD_EVENT_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ticket = &probe->forwards[probe->forward_prepares];
+    ticket->probe = probe;
+    if (!w3c_copy_autoforward_envelope(ticket, request->envelope)) {
+        *out_error = "invalid W3C autoforward Event envelope";
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    expected_input = probe->require_all_fields
+        ? W3C_AUTOFORWARD_INPUT_EVENT : "childToParent";
+    ticket->response_required =
+        probe->forward_prepares == 0u &&
+        strcmp(ticket->name, expected_input) == 0;
+    ticket->fields_equal = w3c_autoforward_fields_equal(probe, ticket);
+    ++probe->forward_prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_autoforward_forward_commit,
+        w3c_autoforward_forward_discard, ticket};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status w3c_capture_autoforward_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_invoke_autoforward_probe *probe =
+        (w3c_invoke_autoforward_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->token != probe->token ||
+        !w3c_invoke_text_is(request->id, request->id_size, probe->id))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->cancel_prepares;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_autoforward_cancel_commit,
+        w3c_autoforward_cancel_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
 }
 
 static void w3c_invoke_finalize_start_commit(void *user) {
@@ -2435,6 +2636,172 @@ static bool run_w3c_invoke_completion_fixture(
              (unsigned long long)invoke_stats.returned_accepted,
              (unsigned long long)invoke_stats.returned_rejected,
              (unsigned long long)invoke_stats.completed,
+             invoke_stats.active, scxml_session_error(&session));
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    free(source);
+    return succeeded;
+}
+
+static bool run_w3c_invoke_autoforward_fixture(
+    const char *fixture_name, bool require_all_fields) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    scxml_session session = {0};
+    cflow_statechart_instance_stats stats = {0};
+    scxml_invoke_stats invoke_stats = {0};
+    w3c_invoke_autoforward_probe probe = {
+        .require_all_fields = require_all_fields};
+    w3c_result_probe result = {0};
+    const scxml_event_io_adapter event_io = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(event_io),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND,
+        .prepare_send = w3c_capture_result_send,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    const scxml_invoke_adapter invoke = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(invoke),
+        .capabilities = SCXML_INVOKE_CAP_START |
+            SCXML_INVOKE_CAP_CANCEL | SCXML_INVOKE_CAP_FORWARD,
+        .prepare_start = w3c_capture_autoforward_start,
+        .prepare_cancel = w3c_capture_autoforward_cancel,
+        .prepare_forward = w3c_capture_autoforward_event,
+        .close = w3c_adapter_close,
+        .is_quiescent = w3c_adapter_is_quiescent};
+    scxml_session_config config = {0};
+    cflow_event_view input_event = {0};
+    cflow_event_view response_event = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+    int path_size;
+
+    if (fixture_name == NULL) return false;
+    path_size = snprintf(path, sizeof(path), "%s/%s",
+                         SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (path_size < 0 || (size_t)path_size >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL) {
+        info("fixture=%s could not be read", fixture_name);
+        goto cleanup;
+    }
+    if (scxml_compile(
+            &program, source, source_size, NULL, &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    if (!cflow_executor_serial_init(&executor)) goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = W3C_EXTERNAL_EVENT_CAPACITY,
+        .internal_event_capacity = W3C_INTERNAL_EVENT_CAPACITY,
+        .completion_capacity = W3C_COMPLETION_CAPACITY,
+        .microstep_limit = W3C_MICROSTEP_LIMIT,
+        .effect_capacity = 4u,
+        .adapter_internal_event_capacity = 2u,
+        .invocation_capacity = 1u,
+        .event_io = &event_io,
+        .adapter_user = &result,
+        .invoke = &invoke,
+        .invoke_user = &probe};
+    if (scxml_session_init(&session, &config) !=
+        CFLOW_STATECHART_INSTANCE_OK) {
+        info("fixture=%s session init error=%s", fixture_name,
+             scxml_session_error(&session));
+        goto cleanup;
+    }
+    session_initialized = true;
+    if (!cflow_executor_wait_idle(&executor) ||
+        probe.start_prepares != 1u || probe.start_commits != 1u ||
+        probe.start_discards != 0u)
+        goto cleanup;
+
+    if (require_all_fields) {
+        const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata),
+            .send_id = W3C_AUTOFORWARD_SEND_ID,
+            .send_id_size = sizeof(W3C_AUTOFORWARD_SEND_ID) - 1u,
+            .origin = W3C_AUTOFORWARD_ORIGIN,
+            .origin_size = sizeof(W3C_AUTOFORWARD_ORIGIN) - 1u,
+            .origin_type = W3C_SCXML_EVENT_PROCESSOR,
+            .origin_type_size = sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u,
+            .invoke_id = W3C_AUTOFORWARD_INVOKE_ID,
+            .invoke_id_size = sizeof(W3C_AUTOFORWARD_INVOKE_ID) - 1u,
+            .data = {
+                .kind = SCXML_CONTENT_TEXT_UTF8,
+                .bytes = W3C_AUTOFORWARD_DATA,
+                .byte_count = sizeof(W3C_AUTOFORWARD_DATA) - 1u}};
+        if (!scxml_program_event(
+                &program, W3C_AUTOFORWARD_INPUT_EVENT,
+                sizeof(W3C_AUTOFORWARD_INPUT_EVENT) - 1u, &input_event) ||
+            scxml_session_try_send_with_metadata(
+                &session, &input_event, &metadata) != CFLOW_MAILBOX_OK)
+            goto cleanup;
+    } else {
+        if (!scxml_program_event(
+                &program, "childToParent",
+                sizeof("childToParent") - 1u, &input_event) ||
+            scxml_session_report_invoke_event(
+                &session, probe.token, &input_event) != CFLOW_MAILBOX_OK)
+            goto cleanup;
+    }
+    if (!cflow_executor_wait_idle(&executor) || !probe.deliverable)
+        goto cleanup;
+
+    if (require_all_fields) {
+        if (!scxml_program_event(
+                &program, "fieldsEqual", sizeof("fieldsEqual") - 1u,
+                &response_event))
+            goto cleanup;
+    } else if (!scxml_program_event(
+                   &program, "eventReceived",
+                   sizeof("eventReceived") - 1u, &response_event)) {
+        goto cleanup;
+    }
+    if (scxml_session_report_invoke_event(
+            &session, probe.token, &response_event) != CFLOW_MAILBOX_OK ||
+        !cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats) ||
+        !scxml_session_get_invoke_stats(&session, &invoke_stats))
+        goto cleanup;
+    succeeded = stats.done && !stats.errored &&
+        result.prepare_send_calls == 1u && result.commits == 1u &&
+        result.discards == 0u && strcmp(result.event, "result.pass") == 0 &&
+        probe.forward_prepares == W3C_AUTOFORWARD_EVENT_CAPACITY &&
+        probe.forward_commits == W3C_AUTOFORWARD_EVENT_CAPACITY &&
+        probe.forward_discards == 0u &&
+        probe.cancel_prepares == 1u && probe.cancel_commits == 1u &&
+        probe.cancel_discards == 0u && invoke_stats.started == 1u &&
+        invoke_stats.start_failed == 0u && invoke_stats.cancelled == 1u &&
+        invoke_stats.cancel_failed == 0u && invoke_stats.forwarded == 2u &&
+        invoke_stats.forward_failed == 0u &&
+        invoke_stats.returned_accepted == (require_all_fields ? 1u : 2u) &&
+        invoke_stats.returned_rejected == 0u && invoke_stats.active == 0u;
+    if (!succeeded)
+        info("fixture=%s done=%d errored=%d result=%s start=%zu/%zu/%zu forward=%zu/%zu/%zu cancel=%zu/%zu/%zu accepted=%llu forwarded=%llu active=%zu error=%s",
+             fixture_name, stats.done ? 1 : 0, stats.errored ? 1 : 0,
+             result.event, probe.start_prepares, probe.start_commits,
+             probe.start_discards, probe.forward_prepares,
+             probe.forward_commits, probe.forward_discards,
+             probe.cancel_prepares, probe.cancel_commits,
+             probe.cancel_discards,
+             (unsigned long long)invoke_stats.returned_accepted,
+             (unsigned long long)invoke_stats.forwarded,
              invoke_stats.active, scxml_session_error(&session));
 
 cleanup:
@@ -4303,6 +4670,16 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 228 binds completion to its exact invocation ID") {
         check_true(run_w3c_invoke_completion_fixture(
             "test228.scxml", W3C_INVOKE_RETURN_PROVENANCE));
+    }
+
+    it("test 229 autoforwards every external Event to the child") {
+        check_true(run_w3c_invoke_autoforward_fixture(
+            "test229.scxml", false));
+    }
+
+    it("test 230 preserves all seven autoforward Event fields") {
+        check_true(run_w3c_invoke_autoforward_fixture(
+            "test230.scxml", true));
     }
 
     it("test 232 preserves multiple returned Events before completion") {

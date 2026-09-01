@@ -240,6 +240,15 @@ typedef struct scxml_invoke_probe {
     scxml_adapter_status forward_status;
     const scxml_log_capture *log_capture;
     bool finalize_seen_before_forward;
+    bool forward_envelope_valid;
+    scxml_content_kind forward_data_kind;
+    char forward_name[64];
+    char forward_type[32];
+    char forward_send_id[64];
+    char forward_origin[128];
+    char forward_origin_type[128];
+    char forward_invoke_id[64];
+    char forward_data[64];
 } scxml_invoke_probe;
 
 static void scxml_invoke_ticket_commit(void *user) {
@@ -320,6 +329,9 @@ static scxml_adapter_status scxml_invoke_prepare_forward(
     scxml_invoke_probe *probe = (scxml_invoke_probe *)user;
     size_t index;
     if (probe == NULL || request == NULL || request->event == NULL ||
+        request->envelope == NULL ||
+        request->envelope->abi_version != SCXML_EVENT_ENVELOPE_ABI ||
+        request->envelope->struct_size != sizeof(scxml_event_envelope_view) ||
         request->event->payload_type == NULL ||
         request->event->payload == NULL || out_ticket == NULL ||
         out_error == NULL || request->token == UINT64_C(0))
@@ -332,6 +344,31 @@ static scxml_adapter_status scxml_invoke_prepare_forward(
         probe->forward_payloads[index] =
             *(const bool *)request->event->payload;
     }
+    copy_invoke_field(
+        probe->forward_name, sizeof(probe->forward_name),
+        request->envelope->name, request->envelope->name_size);
+    copy_invoke_field(
+        probe->forward_type, sizeof(probe->forward_type),
+        request->envelope->type, request->envelope->type_size);
+    copy_invoke_field(
+        probe->forward_send_id, sizeof(probe->forward_send_id),
+        request->envelope->send_id, request->envelope->send_id_size);
+    copy_invoke_field(
+        probe->forward_origin, sizeof(probe->forward_origin),
+        request->envelope->origin, request->envelope->origin_size);
+    copy_invoke_field(
+        probe->forward_origin_type, sizeof(probe->forward_origin_type),
+        request->envelope->origin_type,
+        request->envelope->origin_type_size);
+    copy_invoke_field(
+        probe->forward_invoke_id, sizeof(probe->forward_invoke_id),
+        request->envelope->invoke_id, request->envelope->invoke_id_size);
+    probe->forward_data_kind = request->envelope->data.kind;
+    copy_invoke_field(
+        probe->forward_data, sizeof(probe->forward_data),
+        request->envelope->data.bytes,
+        request->envelope->data.byte_count);
+    probe->forward_envelope_valid = true;
     ++probe->prepare_forward_calls;
     if (probe->log_capture != NULL) {
         tlog_t *logger = tlog_peek_default();
@@ -2301,6 +2338,27 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             .invoke = &adapter,
             .invoke_user = &probe};
         cflow_event_view leave = {0};
+        static const char event_send_id[] = "send-230";
+        static const char event_origin[] = "scxml://parent/session";
+        static const char event_origin_type[] =
+            "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+        static const char event_invoke_id[] = "source-invoke-230";
+        static const char event_data[] = "payload-230";
+        const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata),
+            .send_id = event_send_id,
+            .send_id_size = sizeof(event_send_id) - 1u,
+            .origin = event_origin,
+            .origin_size = sizeof(event_origin) - 1u,
+            .origin_type = event_origin_type,
+            .origin_type_size = sizeof(event_origin_type) - 1u,
+            .invoke_id = event_invoke_id,
+            .invoke_id_size = sizeof(event_invoke_id) - 1u,
+            .data = {
+                .kind = SCXML_CONTENT_TEXT_UTF8,
+                .bytes = event_data,
+                .byte_count = sizeof(event_data) - 1u}};
         scxml_invoke_stats invoke_stats = {0};
 
         check_equal(compile_status(source, &program, &diagnostic),
@@ -2322,12 +2380,22 @@ suite("SCXML Core to native CFlow Statechart compiler") {
 
         check_true(scxml_program_event(
             &program, "leave", 5u, &leave));
-        check_equal(scxml_session_try_send(&session, &leave),
+        check_equal(scxml_session_try_send_with_metadata(
+                        &session, &leave, &metadata),
                     CFLOW_MAILBOX_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_equal(probe.prepare_cancel_calls, (size_t)1u);
         check_equal(probe.cancel_tokens[0], probe.start_tokens[0]);
         check_equal(probe.prepare_forward_calls, (size_t)1u);
+        check_true(probe.forward_envelope_valid);
+        check_equal(probe.forward_name, "leave");
+        check_equal(probe.forward_type, "external");
+        check_equal(probe.forward_send_id, event_send_id);
+        check_equal(probe.forward_origin, event_origin);
+        check_equal(probe.forward_origin_type, event_origin_type);
+        check_equal(probe.forward_invoke_id, event_invoke_id);
+        check_equal(probe.forward_data_kind, SCXML_CONTENT_TEXT_UTF8);
+        check_equal(probe.forward_data, event_data);
         check_equal(probe.commit_calls, (size_t)3u);
         check_true(scxml_session_get_invoke_stats(
             &session, &invoke_stats));
