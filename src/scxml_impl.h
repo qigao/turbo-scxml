@@ -226,6 +226,7 @@ typedef struct scxml_guard_user {
     } value;
     const scxml_program_name *const *event_names_by_id;
     size_t event_name_count;
+    cflow_event_id execution_error_event;
     scxml_expr_system_values system_values;
 } scxml_guard_user;
 

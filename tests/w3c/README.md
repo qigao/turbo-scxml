@@ -4,8 +4,8 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 148
-local PASS transformations, records 20 mandatory documents as UNSUPPORTED,
+documents, 168 are mandatory and 34 optional. TurboSCXML currently records 150
+local PASS transformations, records 18 mandatory documents as UNSUPPORTED,
 and records all 34 optional-profile documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
@@ -108,10 +108,12 @@ or bounded-storage guarantees.
 | `test294.scxml` | [test294.txml](https://www.w3.org/Voice/2013/scxml-irp/294/test294.txml) | A named param becomes a structured completion Event field, while a later inline content child remains the full completion data value. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
+| `test309.scxml` | [test309.txml](https://www.w3.org/Voice/2013/scxml-irp/309/test309.txml) | A non-Boolean transition condition is treated as false, allowing the unconditional fallback to run. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
 | `test313.scxml` | [test313.txml](https://www.w3.org/Voice/2013/scxml-irp/313/test313.txml) | A syntactically ill-formed CMeta value expression rejects the document at load time with `SCXML_INVALID_STRUCTURE`. |
 | `test314.scxml` | [test314.txml](https://www.w3.org/Voice/2013/scxml-irp/314/test314.txml) | A legal expression that fails at runtime raises its processor error only when the owning state is entered and evaluates it. |
+| `test344.scxml` | [test344.txml](https://www.w3.org/Voice/2013/scxml-irp/344/test344.txml) | A non-Boolean transition condition queues `error.execution` before Events raised by the fallback transition's entry actions. |
 | `test318.scxml` | [test318.txml](https://www.w3.org/Voice/2013/scxml-irp/318/test318.txml) | `_event` remains bound to the selected Event throughout exit and entry processing until another Event is selected. |
 | `test319.scxml` | [test319.txml](https://www.w3.org/Voice/2013/scxml-irp/319/test319.txml) | `_event` is unbound during initialization before the first Event is selected. |
 | `test321.scxml` | [test321.txml](https://www.w3.org/Voice/2013/scxml-irp/321/test321.txml) | `_sessionid` is bound to a generated session identifier during initialization. |
@@ -394,6 +396,12 @@ Event distinguish block abortion from merely queuing `error.execution`. Test
 286 remains `UNSUPPORTED` because unknown CMeta locations are currently
 rejected during document compilation rather than admitted as runtime-failing
 assignments.
+
+Tests 309 and 344 map the generated non-Boolean predicate to the typed CMeta
+integer `sequence`. Test 309 can reach pass only when the invalid condition is
+treated as false. Test 344 enters a fallback state whose `onentry` raises
+`foo`; its wildcard transition reaches fail unless the guard's
+`error.execution` was queued first during transition selection.
 
 Tests 312 and 314 map the generated illegal value expression to the legal
 CMeta expression `_event.data.sequence` while `_event` is unbound. Compilation

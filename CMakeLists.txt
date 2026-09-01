@@ -19,7 +19,7 @@ endif()
 
 unset(TurboUtils_DIR CACHE)
 unset(TurboUtils_DIR)
-find_package(TurboUtils CONFIG REQUIRED
+find_package(TurboUtils 1.1 CONFIG REQUIRED
   PATHS "${TURBOUTILS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 

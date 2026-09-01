@@ -1402,7 +1402,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("rejects invalid CMeta executable conditions and keeps finalize separate") {
+    it("separates runtime condition type errors from invalid syntax") {
         static const char missing[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
@@ -1415,7 +1415,8 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
             "<if cond='count'><log label='bad'/></if>"
-            "</onentry></state></scxml>";
+            "</onentry><transition event='error.execution' target='done'/>"
+            "</state><final id='done'/></scxml>";
         static const char syntax[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'><onentry>"
@@ -1426,7 +1427,7 @@ spec("TurboSCXML public CMeta data model") {
             "datamodel='cmeta'><state id='active'><invoke id='job'>"
             "<finalize><if cond='enabled'><log label='bad'/></if>"
             "</finalize></invoke></state></scxml>";
-        const char *invalid[] = {missing, empty, non_boolean, syntax};
+        const char *invalid[] = {missing, empty, syntax};
         size_t index;
 
         for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
@@ -1436,6 +1437,19 @@ spec("TurboSCXML public CMeta data model") {
                         SCXML_INVALID_STRUCTURE);
             check_null(program.impl);
             check_true(diagnostic.location.line > 0u);
+        }
+        {
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            cflow_statechart_instance_stats stats;
+            check_equal(compile_cmeta(non_boolean, &program, &diagnostic),
+                        SCXML_OK);
+            stats = run_to_idle(
+                &program,
+                (scxml_public_data){true, 1, SCXML_PUBLIC_SOURCE_GOOD});
+            check_true(stats.done);
+            check_false(stats.errored);
+            scxml_program_destroy(&program);
         }
         {
             scxml_program program = {0};
@@ -1678,12 +1692,14 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("fails a scalar read of structured event data") {
+    it("maps a failed structured Event scalar read to error.execution") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
             "<transition event='go' cond='_event.data == &quot;&quot;' "
-            "target='wrong'/></state><final id='wrong'/></scxml>";
+            "target='wrong'/><transition event='error.execution' "
+            "target='done'/></state><final id='done'/><final id='wrong'/>"
+            "</scxml>";
         scxml_public_data event_data = {
             true, 42, SCXML_PUBLIC_SOURCE_GOOD};
         scxml_event_metadata metadata = {
@@ -1723,9 +1739,9 @@ spec("TurboSCXML public CMeta data model") {
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
         check_true(stats.done);
-        check_true(stats.errored);
-        check_equal(stats.last_status, CFLOW_STATECHART_INSTANCE_GUARD_FAILED);
-        check_equal(stats.external_failed, UINT64_C(1));
+        check_false(stats.errored);
+        check_equal(stats.last_status, CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(stats.external_failed, UINT64_C(0));
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
@@ -4003,7 +4019,7 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("keeps session identity unavailable in program-level bindings") {
+    it("maps unavailable session identity in program bindings to an Event") {
         static const char name_source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' name='Checkout'><state id='active'>"
@@ -4012,8 +4028,10 @@ spec("TurboSCXML public CMeta data model") {
         static const char session_source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='active'>"
-            "<transition cond='_sessionid != &quot;&quot;' target='done'/>"
-            "</state><final id='done'/></scxml>";
+            "<transition cond='_sessionid != &quot;&quot;' target='wrong'/>"
+            "<transition target='waiting'/></state><state id='waiting'>"
+            "<transition event='error.execution' target='done'/>"
+            "</state><final id='done'/><final id='wrong'/></scxml>";
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         cflow_statechart_instance_stats stats;
@@ -4036,8 +4054,8 @@ spec("TurboSCXML public CMeta data model") {
                     SCXML_OK);
         stats = run_direct_to_idle(
             &program, initial, &init_status, &destroy_status);
-        check_equal(init_status, CFLOW_STATECHART_INSTANCE_GUARD_FAILED);
-        check_false(stats.done);
+        check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+        check_true(stats.done);
         check_false(stats.errored);
         check_equal(destroy_status, CFLOW_STATECHART_INSTANCE_OK);
         scxml_program_destroy(&program);

@@ -198,7 +198,7 @@ static scxml_status compile_scxml_model(
         counts.assignment_rows != 0u || counts.foreach_rows != 0u ||
         counts.dynamic_expression_rows != 0u ||
         (data_model == SCXML_DATA_MODEL_CMETA &&
-         counts.conditional_branches != 0u);
+         (counts.conditional_branches != 0u || counts.guard_rows != 0u));
     if (((counts.requirements &
           (SCXML_REQUIREMENT_EVENT_IO |
            SCXML_REQUIREMENT_INVOKE)) != 0u ||
