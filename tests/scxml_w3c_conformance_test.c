@@ -38,9 +38,9 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 181,
+    W3C_PASS_DOCUMENT_COUNT = 182,
     W3C_UNSUPPORTED_DOCUMENT_COUNT = 0,
-    W3C_NOT_APPLICABLE_DOCUMENT_COUNT = 21,
+    W3C_NOT_APPLICABLE_DOCUMENT_COUNT = 20,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -193,6 +193,7 @@ typedef struct w3c_cmeta_probe {
     w3c_result_probe result;
     bool routable_loopback;
     bool require_scxml_type;
+    bool require_empty_target;
     bool require_route_target;
     bool hold_loopback_delivery;
     size_t loopback_limit;
@@ -222,6 +223,7 @@ typedef struct w3c_cmeta_fixture_options {
     size_t loopback_count;
     bool routable_loopback;
     bool require_scxml_type;
+    bool require_empty_target;
     bool require_route_target;
     bool hold_loopback_delivery;
     scxml_adapter_status send_rejection;
@@ -1340,6 +1342,8 @@ static scxml_adapter_status w3c_capture_cmeta_send(
          request->type_size != sizeof(W3C_SCXML_EVENT_PROCESSOR) - 1u ||
          memcmp(request->type, W3C_SCXML_EVENT_PROCESSOR,
                 request->type_size) != 0))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (probe->require_empty_target && request->target_size != 0u)
         return SCXML_ADAPTER_INVALID_CONTRACT;
     if (probe->require_route_target) {
         if (request->target == NULL || request->target_size == 0u ||
@@ -3714,6 +3718,8 @@ static bool run_w3c_cmeta_fixture_with_schema(
             options != NULL && options->routable_loopback,
         .require_scxml_type =
             options != NULL && options->require_scxml_type,
+        .require_empty_target =
+            options != NULL && options->require_empty_target,
         .require_route_target =
             options != NULL && options->require_route_target,
         .hold_loopback_delivery =
@@ -4116,6 +4122,15 @@ static bool run_w3c_cmeta_scxml_loopback_fixture(
         .loopback_count = 1u,
         .routable_loopback = true,
         .require_scxml_type = true};
+    return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+}
+
+static bool run_w3c_cmeta_targetless_double_loopback_fixture(
+    const char *fixture_name) {
+    const w3c_cmeta_fixture_options options = {
+        .loopback_count = 2u,
+        .require_scxml_type = true,
+        .require_empty_target = true};
     return run_w3c_cmeta_fixture_with_options(fixture_name, &options);
 }
 
@@ -5627,6 +5642,11 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 198 defaults send to the SCXML Event Processor") {
         check_true(run_w3c_cmeta_scxml_loopback_fixture("test198.scxml"));
+    }
+
+    it("test 193 routes targetless sends to its external queue") {
+        check_true(run_w3c_cmeta_targetless_double_loopback_fixture(
+            "test193.scxml"));
     }
 
     it("test 200 supports the explicit SCXML Event Processor type") {
