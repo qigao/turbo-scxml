@@ -118,6 +118,39 @@ router、默认拒绝的目标 resolver、正数网络 deadline、固定容量�
 完整配置、错误/背压语义和可编译集成骨架见
 [`docs/scxml-chttp-event-io.md`](docs/scxml-chttp-event-io.md)。
 
+## CCXML Core MVP
+
+安装包同时导出 `<ccxml/ccxml.h>` 与 `TurboSCXML::CCXML`。该组件是构建在
+TurboSCXML 公共 adapter/effect 契约上的 CCXML 1.0 孵化实现，不表示完整
+CCXML conformance。首个垂直切片支持一个 `<eventprocessor>`、按文档顺序的
+精确 `<transition event="...">` 匹配，以及空 `<accept/>` 和 `<exit/>`。
+
+```cmake
+find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML
+  PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
+target_link_libraries(app PRIVATE TurboSCXML::CCXML)
+```
+
+```c
+#include <ccxml/ccxml.h>
+
+ccxml_program program = {0};
+ccxml_diagnostic diagnostic = {0};
+ccxml_status status = ccxml_compile(
+    &program, document, document_size, NULL, &diagnostic);
+```
+
+session 通过 `ccxml_telephony_adapter_v1` 注入电话平台。`<accept/>` 默认使用
+当前 Event 的 connection identifier；provider 在 prepare 阶段返回 move-only
+effect ticket，同一 transition 的 effects 全部准备成功后才按顺序 commit，任一
+失败则逆序 discard。`<exit/>` 在已准备 effects 提交后终止 session 并且只关闭
+adapter 一次。
+
+当前明确不支持 SIP/RTP backend、conference/dialog、ECMAScript、条件表达式、
+事件模式、`<createcall>`、`<send>`、文档切换和 VoiceXML；编译器会拒绝这些
+construct，而不是近似执行。完整边界和所有权语义见
+[`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)。
+
 ## CMeta 表达式
 
 `datamodel="cmeta"` 使用 TurboSCXML 内置的有限、强类型表达式语言。CMeta

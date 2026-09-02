@@ -28,7 +28,7 @@ endif()
 
 unset(TurboSCXML_DIR CACHE)
 unset(TurboSCXML_DIR)
-set(TURBOSCXML_INSTALL_COMPONENTS SCXML)
+set(TURBOSCXML_INSTALL_COMPONENTS SCXML CCXML)
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CHttpResource)
 endif()
@@ -47,6 +47,21 @@ add_executable(turboscxml_install_consumer main.c)
 target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
 target_link_libraries(
   turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+
+if(NOT TARGET TurboSCXML::CCXML)
+  message(FATAL_ERROR "Expected installed TurboSCXML::CCXML")
+endif()
+add_executable(turboscxml_ccxml_install_consumer ccxml_main.c)
+target_compile_features(
+  turboscxml_ccxml_install_consumer PRIVATE c_std_11)
+target_link_libraries(
+  turboscxml_ccxml_install_consumer PRIVATE TurboSCXML::CCXML)
+
+add_executable(turboscxml_ccxml_install_consumer_cpp ccxml_main.cpp)
+target_compile_features(
+  turboscxml_ccxml_install_consumer_cpp PRIVATE cxx_std_17)
+target_link_libraries(
+  turboscxml_ccxml_install_consumer_cpp PRIVATE TurboSCXML::CCXML)
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
   target_compile_definitions(
     turboscxml_install_consumer PRIVATE
