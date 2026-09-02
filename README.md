@@ -7,8 +7,9 @@ TurboSCXML 将 W3C SCXML 文档编译为 Rocida CFlow Statechart，并提供有�
 - 本仓库拥有 SCXML 文档编译、SCXML session、适配器契约、测试 fixtures 与 W3C conformance corpus。
 - Rocida 继续拥有 CFlow、CMeta、QueryVM、XmlParser、Core、STL 与 TinyTest。
 - 依赖方向固定为 `TurboSCXML -> installed Rocida`；Rocida 不依赖 TurboSCXML。
-- HTTP ingress/egress、认证、持久化和服务部署不属于解释器核心；可选
-  `TurboSCXML::CHttpResource` 仅负责受宿主授权的同步资源读取。
+- HTTP、认证、持久化和服务部署不属于解释器核心；可选
+  `TurboSCXML::CHttpResource` 负责受宿主授权的同步资源读取，
+  `TurboSCXML::CHttpEventIO` 提供有界 BasicHTTP Event I/O。
 
 公开 C API 继续通过 `<scxml/scxml.h>` 提供，函数与类型保持 `scxml_*` 命名。CMake 消费目标为 `TurboSCXML::SCXML`。
 
@@ -43,7 +44,7 @@ cmake --build --preset install-linux-release-user
 
 安装位置由版本化 `CMakeUserPresets.json` 管理：Debug 为 `$PKG_ROOT/turboscxml/debug`，Release 为 `$PKG_ROOT/turboscxml/release`。
 
-启用可选 CHTTP 资源适配器时，匹配 profile 的 Rocida SDK 必须包含
+启用任一可选 CHTTP 适配器时，匹配 profile 的 Rocida SDK 必须包含
 `Rocida::CHTTP`。仓库提供独立的 `win-dev-chttp-user` 与
 `win-release-chttp-user` configure/build/test preset；该 feature 默认关闭，
 不会改变 `TurboSCXML::SCXML` 的依赖闭包。
@@ -91,6 +92,31 @@ deadline 后继续完成取消与 drain，因此它不是整个 `open()` 的墙�
 
 完整 C/C++ 安装消费入口位于 `tests/install_consumer/`；传输策略与释放语义
 的可执行例子位于 `tests/scxml_chttp_resource_test.c`。
+
+## 可选 BasicHTTP Event I/O Processor
+
+启用 `TURBOSCXML_ENABLE_CHTTP_EVENT_IO` 后会额外安装
+`<scxml/chttp_event_io.h>` 和 `TurboSCXML::CHttpEventIO`：
+
+```cmake
+find_package(TurboSCXML CONFIG REQUIRED COMPONENTS CHttpEventIO
+  PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
+target_link_libraries(app PRIVATE TurboSCXML::CHttpEventIO)
+```
+
+该组件实现 SCXML 1.0 可选 BasicHTTP Event I/O Processor：每个 binding
+发布独立 `_ioprocessors.basichttp.location`，以真实 HTTP POST 接收入站
+Event，并在有界 worker 上发送出站 Event。宿主仍须提供标准 SCXML Event
+router、默认拒绝的目标 resolver、正数网络 deadline、固定容量，以及把入站
+数据转换为 session 可复制 `scxml_content_view` 的 decoder。
+
+生命周期顺序固定为：processor init/start、binding init、把 binding descriptor
+与私有 composite adapter 放入 session config、session init、binding activate；
+关闭时依次销毁 session 和 binding，再 stop/destroy processor。该组件当前仅启用
+明文 HTTP transport；resolver 不得把 `https:` 降级为明文。
+
+完整配置、错误/背压语义和可编译集成骨架见
+[`docs/scxml-chttp-event-io.md`](docs/scxml-chttp-event-io.md)。
 
 ## CMeta 表达式
 

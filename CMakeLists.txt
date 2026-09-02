@@ -12,6 +12,21 @@ option(TURBOSCXML_ENABLE_CHTTP_RESOURCE
   "Enable the optional blocking CHTTP SCXML resource adapter" OFF)
 option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO
   "Build the optional CHTTP BasicHTTP Event I/O processor" OFF)
+option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
+
+if(ENABLE_SANITIZER_ADDRESS)
+  message(STATUS "AddressSanitizer: ON")
+  if(MSVC)
+    add_compile_options(/fsanitize=address)
+    add_link_options(/fsanitize=address)
+  else()
+    add_compile_options(
+      -fsanitize=address
+      -fno-omit-frame-pointer
+      -fno-optimize-sibling-calls)
+    add_link_options(-fsanitize=address)
+  endif()
+endif()
 
 if(NOT DEFINED ENV{ROCIDA_ROOT}
    OR "$ENV{ROCIDA_ROOT}" STREQUAL "")

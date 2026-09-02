@@ -107,7 +107,12 @@ int scxml_chttp_processor_init(
     scxml_chttp_processor *processor,
     const scxml_chttp_processor_config_v1 *config);
 int scxml_chttp_processor_start(scxml_chttp_processor *processor);
-/** Stop every phase against one timeout budget; zero waits without a limit. */
+/**
+ * Stop every phase against one timeout budget; zero waits without a limit.
+ * TURBO_ETIMEDOUT means stopping is incomplete and retryable. Another terminal
+ * error may be returned after cleanup has reached STOPPED; preserve it for
+ * diagnostics and call destroy, retaining the handle if destroy reports busy.
+ */
 int scxml_chttp_processor_stop(
     scxml_chttp_processor *processor, uint32_t timeout_ms);
 int scxml_chttp_processor_destroy(scxml_chttp_processor *processor);
