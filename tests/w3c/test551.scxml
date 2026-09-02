@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" binding="early" initial="s0">
+  <state id="s0">
+    <transition cond="send_id == &quot;ready&quot;" target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <state id="s1">
+    <datamodel><data id="send_id">ready</data></datamodel>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

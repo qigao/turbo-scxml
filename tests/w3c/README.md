@@ -4,9 +4,9 @@ These fixtures are local transformations of documents from the
 [W3C SCXML 1.0 Implementation Report test suite](https://www.w3.org/Voice/2013/scxml-irp/).
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
-documents, 168 are mandatory and 34 optional. TurboSCXML currently records 157
-local PASS transformations, records 11 mandatory documents as UNSUPPORTED,
-and records all 34 optional-profile documents as N/A. Passing this corpus is
+documents, 168 are mandatory and 34 optional. TurboSCXML records all 168
+mandatory local transformations as PASS and records all 34 optional-profile
+documents as N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
 
@@ -48,6 +48,8 @@ mixed completion-data outcomes.
 | `test147.scxml` | [test147.txml](https://www.w3.org/Voice/2013/scxml-irp/147/test147.txml) | An `if` executes only the first partition whose condition is true. |
 | `test148.scxml` | [test148.txml](https://www.w3.org/Voice/2013/scxml-irp/148/test148.txml) | An `if` executes its `else` partition when every condition is false. |
 | `test149.scxml` | [test149.txml](https://www.w3.org/Voice/2013/scxml-irp/149/test149.txml) | An `if` executes no partition when every condition is false and no `else` exists. |
+| `test150.scxml` | [test150.txml](https://www.w3.org/Voice/2013/scxml-irp/150/test150.txml) | A `foreach` reuses a declared item location and creates a finite typed session variable when the requested item name is missing. |
+| `test151.scxml` | [test151.txml](https://www.w3.org/Voice/2013/scxml-irp/151/test151.txml) | A `foreach` reuses a declared index location and creates a finite `size_t` session variable when the requested index name is missing. |
 | `test152.scxml` | [test152.txml](https://www.w3.org/Voice/2013/scxml-irp/152/test152.txml) | Invalid iterable admission or an invalid item location raises `error.execution` and aborts the containing executable-content block. |
 | `test153.scxml` | [test153.txml](https://www.w3.org/Voice/2013/scxml-irp/153/test153.txml) | A `foreach` assigns ordered collection items from first to last together with their zero-based indexes. |
 | `test155.scxml` | [test155.txml](https://www.w3.org/Voice/2013/scxml-irp/155/test155.txml) | A `foreach` executes its child content after assigning each item and before advancing. |
@@ -106,7 +108,9 @@ mixed completion-data outcomes.
 | `test530.scxml` | [test530.txml](https://www.w3.org/Voice/2013/scxml-irp/530/test530.txml) | Invoke content observes the value assigned in `onentry`, proving evaluation at invocation rather than admission. |
 | `test554.scxml` | [test554.txml](https://www.w3.org/Voice/2013/scxml-irp/554/test554.txml) | A runtime argument error raises `error.execution` and produces no host start request. |
 | `test276.scxml` | [test276.txml](https://www.w3.org/Voice/2013/scxml-irp/276/test276.txml) | A V2 host environment value replaces the contained initializer of its exact top-level data declaration. |
+| `test277.scxml` | [test277.txml](https://www.w3.org/Voice/2013/scxml-irp/277/test277.txml) | An initializer reads `_event.data.sequence` while no Event is bound, queues `error.execution` ahead of an entry sentinel, and leaves the typed field writable for a later assignment. |
 | `test279.scxml` | [test279.txml](https://www.w3.org/Voice/2013/scxml-irp/279/test279.txml) | Default early binding initializes data declared in an inactive sibling before the initial state reads it. |
+| `test280.scxml` | [test280.txml](https://www.w3.org/Voice/2013/scxml-irp/280/test280.txml) | A state-local late declaration raises `error.execution` when read before first entry, then is initialized and readable before the declaring state's `onentry`. |
 | `test286.scxml` | [test286.txml](https://www.w3.org/Voice/2013/scxml-irp/286/test286.txml) | An unknown assignment location raises internal `error.execution` and aborts the remaining executable-content block. |
 | `test287.scxml` | [test287.txml](https://www.w3.org/Voice/2013/scxml-irp/287/test287.txml) | A legal integer value is committed to a valid CMeta location before the following eventless guard is evaluated. |
 | `test294.scxml` | [test294.txml](https://www.w3.org/Voice/2013/scxml-irp/294/test294.txml) | A named param becomes a structured completion Event field, while a later inline content child remains the full completion data value. |
@@ -114,9 +118,16 @@ mixed completion-data outcomes.
 | `test343.scxml` | [test343.txml](https://www.w3.org/Voice/2013/scxml-irp/343/test343.txml) | A valid `sequence` param survives in completion data when a later invalid `send_id` location queues `error.execution`; the projected schema omits only `send_id`. |
 | `test487.scxml` | [test487.txml](https://www.w3.org/Voice/2013/scxml-irp/487/test487.txml) | A finite numeric value that cannot be represented by its valid integer location raises `error.execution` and aborts the remaining executable-content block. |
 | `test488.scxml` | [test488.txml](https://www.w3.org/Voice/2013/scxml-irp/488/test488.txml) | A failed param expression queues `error.execution` before completion and leaves that completion Event's `_event.data` empty. |
+| `test301.scxml` | [test301.txml](https://www.w3.org/Voice/2013/scxml-irp/301/test301.txml) | A timeout from the compile-time script resource provider rejects the document before program publication. |
+| `test302.scxml` | [test302.txml](https://www.w3.org/Voice/2013/scxml-irp/302/test302.txml) | A root script runs before the initial configuration evaluates its first transition. |
+| `test303.scxml` | [test303.txml](https://www.w3.org/Voice/2013/scxml-irp/303/test303.txml) | A nested script executes in document order and overwrites the preceding assignment before transition selection. |
+| `test304.scxml` | [test304.txml](https://www.w3.org/Voice/2013/scxml-irp/304/test304.txml) | A root-declared script variable is a typed supplemental location usable by SCXML assignment and guards. |
 | `test550.scxml` | [test550.txml](https://www.w3.org/Voice/2013/scxml-irp/550/test550.txml) | Explicit early binding evaluates `data/@expr` and assigns its result before the declaring state is entered. |
+| `test551.scxml` | [test551.txml](https://www.w3.org/Voice/2013/scxml-irp/551/test551.txml) | Inline child content becomes the exact CMeta string value before the declaring state is entered. |
+| `test552.scxml` | [test552.txml](https://www.w3.org/Voice/2013/scxml-irp/552/test552.txml) | The V3 host resource adapter opens `mem:test552` at early-binding time, decodes one exact CSerde integer, and closes the lease once. |
 | `test309.scxml` | [test309.txml](https://www.w3.org/Voice/2013/scxml-irp/309/test309.txml) | A non-Boolean transition condition is treated as false, allowing the unconditional fallback to run. |
 | `test310.scxml` | [test310.txml](https://www.w3.org/Voice/2013/scxml-irp/310/test310.txml) | The CMeta data model reports an active parallel sibling through `In(stateID)`. |
+| `test307.scxml` | [test307.txml](https://www.w3.org/Voice/2013/scxml-irp/307/test307.txml) | Reading an unbound late declaration and reading an absent child after that declaration loads both produce one internal `error.execution`. |
 | `test311.scxml` | [test311.txml](https://www.w3.org/Voice/2013/scxml-irp/311/test311.txml) | A location path that traverses a scalar cannot yield a valid location and raises internal `error.execution`. |
 | `test312.scxml` | [test312.txml](https://www.w3.org/Voice/2013/scxml-irp/312/test312.txml) | A runtime value-expression failure raises `error.execution` and aborts the remaining executable-content block. |
 | `test313.scxml` | [test313.txml](https://www.w3.org/Voice/2013/scxml-irp/313/test313.txml) | A syntactically ill-formed CMeta value expression rejects the document at load time with `SCXML_INVALID_STRUCTURE`. |
@@ -429,9 +440,11 @@ Event distinguish block abortion from merely queuing `error.execution`.
 Test 311 maps its invalid location expression to `sequence.missing`. The path
 is lexically valid but traverses the scalar CMeta `sequence` field, so it can
 never yield a writable location and its only passing transition consumes the
-resulting internal `error.execution`. Test 307 remains `UNSUPPORTED`: the
-static CMeta schema does not expose the loaded-instance missing-substructure
-state needed to compare pre-late-binding and post-load access behavior.
+resulting internal `error.execution`. Test 307 evaluates `sequence` before its
+late declaration enters and evaluates `sequence.missing` after initialization.
+The runtime-path policy preserves the second syntactically valid path as an
+immutable failing operand; both reads report `SCXML_EXPR_UNKNOWN_LOCATION` and
+therefore enqueue the same internal `error.execution` result.
 
 Tests 309 and 344 map the generated non-Boolean predicate to the typed CMeta
 integer `sequence`. Test 309 can reach pass only when the invalid condition is
@@ -587,18 +600,37 @@ and skips only that initializer. The initial guard therefore reaches pass only
 when the host value wins, preserving the upstream parent-to-child instantiation
 witness without embedding host invocation ownership in the interpreter.
 
+Test 277 maps the upstream illegal ECMAScript initializer to the legal CMeta
+expression `_event.data.sequence`, evaluated while `_event` is unbound during
+initialization. The field already exists in the caller-supplied closed CMeta
+schema and its zero-initialized value is the platform's typed empty value. The
+fixture requires the resulting internal `error.execution` to outrank an initial
+state `sentinel`, then assigns `sequence=1` and reaches pass only when that field
+remains writable after recovery.
+
 Tests 279 and 550 retain the upstream early-binding witness: each declaration
 belongs to a state that is never entered, while the initial state's guard reads
 the initialized CMeta field. Test 279 exercises the default binding and test 550
 spells out `binding="early"` while requiring the exact `expr` result.
 
-The late-binding implementation does not justify weakening upstream test 280:
-TurboSCXML uses caller-supplied typed CMeta storage, so a declared field exists
-before its state-local initializer runs. Reads before first entry therefore
-observe the caller value instead of the upstream generated datamodel's
-unbound-location error. Test 280 remains explicitly `UNSUPPORTED`; the local
-late-binding transaction, first-entry, re-entry, history, and rollback tests
-remain implementation tests rather than being relabeled as W3C PASS.
+Test 551 maps the upstream data-model-specific array child to the legal CMeta
+string child `ready`. The declaration remains under an inactive sibling and the
+initial guard requires the exact serialized text, so pass proves that inline
+child content was assigned at early-binding time rather than merely declared.
+
+Test 552 replaces the upstream relative file with the authorized logical URI
+`mem:test552`. The strict test provider publishes one signed CSerde token with
+value seven and records one `open` plus one `close`. The declaration remains in
+an inactive sibling under explicit early binding, while the initial state's
+guard requires seven. Pass therefore proves acquisition and assignment happen
+at the binding point rather than on state entry or XML parse.
+
+Test 280 maps the upstream late variable to `sequence` and its independent
+destination to `result`. The compiled declaration range hides caller-supplied
+bytes until the owning late-initializer phase becomes pending. The s0 access
+therefore raises `error.execution`; after entry into s1, its initializer and
+`onentry` copy both observe value one. Existing first-entry, re-entry, history,
+override, and rollback tests exercise the same session-derived binding state.
 
 ## Current state-membership profile
 

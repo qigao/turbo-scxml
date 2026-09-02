@@ -16,7 +16,7 @@ typedef struct scxml_foreach_managed_value {
 #define CMETA_CALLABLE_TYPE_LIST CMETA_BUILTIN_TYPE_LIST
 
 #include <scxml/scxml.h>
-#include <turbostl/typed.h>
+#include <rocida/stl/typed.h>
 
 #include "scxml_foreach.h"
 #include "tinytest.h"
@@ -256,6 +256,7 @@ static cflow_statechart_instance_stats run_managed_foreach(
         .external_event_capacity = 2u,
         .internal_event_capacity = 4u,
         .completion_capacity = 2u,
+        .effect_capacity = 1u,
         .microstep_limit = 32u,
         .max_storage_bytes = MANAGED_FOREACH_MAX_STORAGE_BYTES
     };
@@ -414,6 +415,37 @@ spec("TurboSCXML CMeta managed foreach") {
     scxml_program_destroy(&program);
     check_true(managed_foreach_copy_count >= 3u);
     check_true(managed_foreach_move_count >= 3u);
+    check_equal(managed_foreach_live_resources, (size_t)0u);
+  }
+
+  it("destroys an auto-declared managed item exactly once") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='work' datamodel='cmeta'><state id='work'><onentry>"
+        "<foreach array='values' item='auto_item' index='auto_index'>"
+        "<assign location='total' expr='auto_item.observed'/></foreach>"
+        "</onentry><transition cond='total == 3 &amp;&amp; "
+        "auto_item.observed == 3 &amp;&amp; auto_index == 2' target='done'/>"
+        "</state><final id='done'/></scxml>";
+    const int values[] = {1, 2, 3};
+    const scxml_cmeta_compile_options_v1 options =
+        scxml_cmeta_default_compile_options(&managed_root_data);
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    managed_foreach_live_resources = 0u;
+    managed_foreach_copy_count = 0u;
+    managed_foreach_move_count = 0u;
+    managed_foreach_copy_fail_after = SIZE_MAX;
+    check_equal(scxml_compile_cmeta(
+                    &program, source, strlen(source), NULL, &options,
+                    &diagnostic), SCXML_OK);
+    stats = run_managed_foreach(&program, values, 3u);
+    check_true(stats.done);
+    check_false(stats.errored);
+    scxml_program_destroy(&program);
+    check_true(managed_foreach_copy_count >= 3u);
     check_equal(managed_foreach_live_resources, (size_t)0u);
   }
 

@@ -24,6 +24,7 @@ bool scxml_runtime_execute_block(
 bool scxml_runtime_execute_session_block(
     void *user, const cflow_statechart_executable_context *context,
     const char **out_error);
+
 bool scxml_runtime_scalar_value_to_text(
     const scxml_expr_value *value, char *storage,
     size_t capacity, const char **out_data, size_t *out_size);
@@ -32,6 +33,7 @@ bool scxml_runtime_payload_value_from_cmeta(
     scxml_payload_value *destination);
 bool scxml_runtime_materialize_content_descriptor(
     const scxml_content_descriptor *descriptor, const void *state,
+    const scxml_expr_system_values *system_values,
     scxml_content_view *out);
 bool scxml_runtime_copy_event_data_object(
     const cmeta_data_desc *schema, void *destination,

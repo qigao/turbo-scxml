@@ -160,7 +160,7 @@ static const cmeta_data_field_desc *location_find_field(
     return NULL;
 }
 
-scxml_expr_status scxml_location_compile(
+static scxml_expr_status location_compile_root(
     scxml_location *out,
     const char *path, size_t path_size,
     const cmeta_data_desc *root, size_t max_depth,
@@ -245,6 +245,102 @@ scxml_expr_status scxml_location_compile(
     compiled.value = current;
     compiled.offset = absolute_offset;
     compiled.storage_size = current->storage_type->size;
+    compiled.slot = SIZE_MAX;
+    compiled.kind = SCXML_LOCATION_CMETA;
+    *out = compiled;
+    return location_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
+}
+
+scxml_expr_status scxml_location_compile(
+    scxml_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root, size_t max_depth,
+    bool writable,
+    scxml_expr_diagnostic *diagnostic) {
+    return location_compile_root(
+        out, path, path_size, root, max_depth, writable, diagnostic);
+}
+
+scxml_expr_status scxml_location_compile_with_scope(
+    scxml_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    size_t max_depth, bool writable,
+    scxml_expr_diagnostic *diagnostic) {
+    scxml_expr_status status;
+    const scxml_scope_slot *slot;
+    const cmeta_data_desc *current;
+    size_t slot_index = SIZE_MAX;
+    size_t absolute_offset = 0u;
+    size_t segment_start = 0u;
+    size_t first_end = 0u;
+    size_t depth = 0u;
+    size_t index;
+    size_t lexical_error = 0u;
+    scxml_location compiled = {0};
+    status = location_compile_root(
+        out, path, path_size, root, max_depth, writable, diagnostic);
+    if (status != SCXML_EXPR_UNKNOWN_LOCATION || supplemental == NULL)
+        return status;
+    if (!location_path_valid(path, path_size, &lexical_error))
+        return location_report(
+            diagnostic, SCXML_EXPR_SYNTAX_ERROR, lexical_error,
+            "SCXML location is not a dotted NCName path");
+    while (first_end < path_size && path[first_end] != '.') ++first_end;
+    slot = scxml_scope_find(
+        supplemental, path, first_end, &slot_index);
+    if (slot == NULL)
+        return location_report(
+            diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
+            "SCXML location is unresolved");
+    current = slot->value;
+    segment_start = first_end + (first_end < path_size ? 1u : 0u);
+    depth = 1u;
+    for (index = segment_start; index <= path_size && first_end < path_size;
+         ++index) {
+        const bool at_end = index == path_size;
+        const cmeta_data_struct_shape *shape;
+        const cmeta_data_field_desc *field;
+        if (!at_end && path[index] != '.') continue;
+        if (++depth > max_depth)
+            return location_report(
+                diagnostic, SCXML_EXPR_LIMIT_EXCEEDED, index,
+                "SCXML location path depth limit exceeded");
+        if (!cmeta_data_desc_valid(current) ||
+            current->kind != CMETA_DATA_STRUCT || current->shape == NULL ||
+            current->storage_type == NULL)
+            return location_report(
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, segment_start,
+                "SCXML location traverses a non-struct value");
+        shape = (const cmeta_data_struct_shape *)current->shape;
+        field = location_find_field(
+            shape, path + segment_start, index - segment_start);
+        if (field == NULL || !cmeta_data_desc_valid(field->value) ||
+            field->value->storage_type == NULL ||
+            field->offset > current->storage_type->size ||
+            field->value->storage_type->size >
+                current->storage_type->size - field->offset ||
+            absolute_offset > SIZE_MAX - field->offset)
+            return location_report(
+                diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, segment_start,
+                "SCXML location is unresolved");
+        absolute_offset += field->offset;
+        if (absolute_offset > slot->value->storage_type->size ||
+            field->value->storage_type->size >
+                slot->value->storage_type->size - absolute_offset)
+            return location_report(
+                diagnostic, SCXML_EXPR_INVALID_ARGUMENT, segment_start,
+                "supplemental location exceeds slot storage");
+        current = field->value;
+        segment_start = index + 1u;
+    }
+    compiled.root = root;
+    compiled.value = current;
+    compiled.offset = absolute_offset;
+    compiled.storage_size = current->storage_type->size;
+    compiled.slot = slot_index;
+    compiled.kind = SCXML_LOCATION_SUPPLEMENTAL;
     *out = compiled;
     return location_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
@@ -258,6 +354,7 @@ scxml_location_assign_owned_string(
     unsigned char *destination;
     cmeta_status status;
     if (location == NULL || root == NULL ||
+        location->kind != SCXML_LOCATION_CMETA ||
         (size != 0u && data == NULL) ||
         !cmeta_data_desc_valid(location->root) ||
         !cmeta_data_desc_valid(location->value) ||

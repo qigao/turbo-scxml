@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" binding="late" initial="before">
+  <state id="before">
+    <onentry>
+      <if cond="sequence == 2"><raise event="before.value"/></if>
+    </onentry>
+    <transition event="error.execution" target="loaded"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <state id="loaded">
+    <datamodel><data id="sequence" expr="2"/></datamodel>
+    <onentry>
+      <if cond="sequence.missing"><raise event="loaded.value"/></if>
+    </onentry>
+    <transition event="error.execution" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>

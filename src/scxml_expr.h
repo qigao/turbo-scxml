@@ -4,6 +4,8 @@
 #include <cflow/machine.h>
 #include <cmeta/data.h>
 
+#include "scxml_scope.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -46,6 +48,9 @@ typedef struct scxml_expr_string_view {
     size_t size;
 } scxml_expr_string_view;
 
+typedef bool (*scxml_expr_is_data_bound_fn)(
+    void *user, size_t offset, size_t storage_size, bool *out_bound);
+
 /** Call-scoped immutable SCXML system strings; no member may be retained. */
 typedef struct scxml_expr_system_values {
     scxml_expr_string_view name;
@@ -61,7 +66,18 @@ typedef struct scxml_expr_system_values {
     const cmeta_data_desc *event_data_schema;
     const void *event_data_object;
     scxml_expr_string_view scxml_location;
+    scxml_expr_is_data_bound_fn is_data_bound;
+    void *data_bound_user;
+    scxml_scope_view *supplemental;
+    /** Private per-session data-model execution context; call-scoped. */
+    void *datamodel_user;
 } scxml_expr_system_values;
+
+/* Private runtime boundary shared by every direct CMeta location access. */
+scxml_expr_status scxml_expr_require_data_bound(
+    const scxml_expr_system_values *values,
+    size_t offset, size_t storage_size,
+    scxml_expr_diagnostic *diagnostic);
 
 typedef enum scxml_expr_value_kind {
     SCXML_EXPR_VALUE_INVALID = 0,
@@ -71,6 +87,11 @@ typedef enum scxml_expr_value_kind {
     SCXML_EXPR_VALUE_FLOAT,
     SCXML_EXPR_VALUE_STRING
 } scxml_expr_value_kind;
+
+typedef enum scxml_expr_path_policy {
+    SCXML_EXPR_PATH_STRICT = 0,
+    SCXML_EXPR_PATH_RUNTIME_MISSING
+} scxml_expr_path_policy;
 
 /** One scalar result; string bytes remain borrowed only until state mutation. */
 typedef struct scxml_expr_value {
@@ -93,6 +114,15 @@ typedef bool (*scxml_expr_resolve_state_fn)(
 
 typedef bool (*scxml_expr_is_active_fn)(
     void *user, cflow_machine_state_id state, bool *out_active);
+
+typedef scxml_expr_status (*scxml_expr_external_evaluate_fn)(
+    const char *source, size_t source_size,
+    scxml_expr_value_kind expected_kind,
+    const void *root_object,
+    scxml_expr_is_active_fn is_active, void *active_user,
+    const scxml_expr_system_values *system_values,
+    scxml_expr_value *out_value,
+    scxml_expr_diagnostic *diagnostic);
 
 scxml_expr_limits scxml_expr_default_limits(void);
 bool scxml_expr_limits_valid(
@@ -117,6 +147,36 @@ scxml_expr_status scxml_expr_compile_value(
     const cmeta_data_desc *root,
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_expr_compile_value_with_scope(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_expr_compile_value_with_scope_policy(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_path_policy path_policy,
+    scxml_expr_value_kind unresolved_kind,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_expr_compile_external(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    scxml_expr_value_kind expected_kind,
+    scxml_expr_external_evaluate_fn evaluate,
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic);
 

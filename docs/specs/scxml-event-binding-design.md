@@ -3,7 +3,7 @@
 ## Context
 
 TurboSCXML owns SCXML parsing, expression evaluation, and session execution.
-TurboUtils remains an installed dependency that supplies CMeta, CFlow, XML,
+Rocida remains an installed dependency that supplies CMeta, CFlow, XML,
 QueryVM, and platform services. The SCXML repository is the only owner of the
 W3C-derived corpus and its conformance claims.
 

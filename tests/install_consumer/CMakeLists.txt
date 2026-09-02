@@ -1,6 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(TurboSCXMLInstallConsumer LANGUAGES C)
+project(TurboSCXMLInstallConsumer LANGUAGES C CXX)
+
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE
+  "Require and exercise the installed CHttpResource component" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
+  "Require the installed quickjs-sandbox profile" OFF)
+
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE AND
+   TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
+  message(FATAL_ERROR
+    "The install consumer validates one optional profile at a time")
+endif()
 
 if(NOT DEFINED ENV{TURBOSCXML_ROOT}
    OR "$ENV{TURBOSCXML_ROOT}" STREQUAL "")
@@ -14,11 +25,49 @@ endif()
 
 unset(TurboSCXML_DIR CACHE)
 unset(TurboSCXML_DIR)
-find_package(TurboSCXML CONFIG REQUIRED
-  PATHS "${TURBOSCXML_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
+  find_package(TurboSCXML CONFIG REQUIRED COMPONENTS CHttpResource
+    PATHS "${TURBOSCXML_ROOT_PATH}"
+    NO_DEFAULT_PATH)
+elseif(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
+  find_package(TurboSCXML CONFIG REQUIRED COMPONENTS QuickJS
+    PATHS "${TURBOSCXML_ROOT_PATH}"
+    NO_DEFAULT_PATH)
+else()
+  find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML
+    PATHS "${TURBOSCXML_ROOT_PATH}"
+    NO_DEFAULT_PATH)
+endif()
 
 add_executable(turboscxml_install_consumer main.c)
 target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
 target_link_libraries(
   turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
+  target_compile_definitions(
+    turboscxml_install_consumer PRIVATE
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)
+endif()
+
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
+  if(NOT TARGET TurboSCXML::CHttpResource)
+    message(FATAL_ERROR "Expected installed TurboSCXML::CHttpResource")
+  endif()
+  add_executable(turboscxml_chttp_install_consumer chttp_main.c)
+  target_compile_features(turboscxml_chttp_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_chttp_install_consumer PRIVATE TurboSCXML::CHttpResource)
+
+  add_executable(turboscxml_chttp_install_consumer_cpp chttp_main.cpp)
+  target_compile_features(
+    turboscxml_chttp_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_chttp_install_consumer_cpp PRIVATE
+    TurboSCXML::CHttpResource)
+elseif(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS AND
+       (TARGET TurboSCXML::CHttpResource OR
+       EXISTS "${TURBOSCXML_ROOT_PATH}/include/scxml/chttp_resource.h")
+      )
+  message(FATAL_ERROR
+    "Core-only install unexpectedly exposes the CHttpResource component")
+endif()

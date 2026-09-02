@@ -23,6 +23,10 @@ scxml_status scxml_emit_compile_cmeta_content_expression(
     scxml_expr_program *scalar_program);
 scxml_status scxml_emit_data_initializers(
     scxml_build *build, scxml_syntax_node node, bool is_root);
+scxml_status scxml_emit_root_scripts(
+    scxml_build *build, scxml_syntax_node root);
+scxml_status scxml_emit_collect_supplemental_scope(
+    scxml_build *build, scxml_syntax_node root);
 scxml_status scxml_emit_done_data(
     scxml_build *build, scxml_syntax_node node,
     size_t node_count, cflow_machine_state_id parent);

@@ -2,6 +2,7 @@
 #include "scxml_analyze.h"
 #include "scxml_emit.h"
 #include "scxml_runtime.h"
+#include "scxml_quickjs.h"
 
 scxml_limits scxml_default_limits(void) {
     const scxml_limits limits = {
@@ -34,12 +35,18 @@ scxml_cmeta_default_compile_options(const cmeta_data_desc *root) {
     return options;
 }
 
+scxml_quickjs_compile_options_v1
+scxml_quickjs_default_compile_options(const cmeta_data_desc *root) {
+    return scxml_quickjs_default_compile_options_impl(root);
+}
+
 static scxml_status compile_scxml_model(
     scxml_program *out, const char *input, size_t input_size,
     const scxml_limits *limits_or_null,
     scxml_data_model data_model, const cmeta_data_desc *cmeta_root,
     const scxml_expr_limits *expression_limits,
     size_t cmeta_max_iterations,
+    const scxml_quickjs_compile_options_v1 *quickjs_options,
     scxml_diagnostic *diagnostic) {
     scxml_limits limits = limits_or_null != NULL
                                     ? *limits_or_null
@@ -71,6 +78,7 @@ static scxml_status compile_scxml_model(
     size_t guard_capacity = 0u;
     size_t transition_action_capacity = 0u;
     size_t descriptor_extra_multiplier = 0u;
+    size_t supplemental_capacity = 0u;
     char *name_cursor;
     bool needs_execution_error = false;
 
@@ -80,6 +88,9 @@ static scxml_status compile_scxml_model(
     build.data_model = data_model;
     build.cmeta_root = cmeta_root;
     build.max_iterations = cmeta_max_iterations;
+    build.quickjs_profile = quickjs_options != NULL;
+    if (quickjs_options != NULL)
+        build.quickjs_options = *quickjs_options;
     if (expression_limits != NULL)
         build.expression_limits = *expression_limits;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
@@ -171,7 +182,7 @@ static scxml_status compile_scxml_model(
                             "only the SCXML null data model is supported");
         goto cleanup;
     }
-    if (data_model == SCXML_DATA_MODEL_CMETA &&
+    if (data_model == SCXML_DATA_MODEL_CMETA && !build.quickjs_profile &&
         (datamodel.impl == NULL ||
          !scxml_analyze_view_equal_raw(scxml_syntax_attribute_value(datamodel), "cmeta"))) {
         status = scxml_analyze_fail(
@@ -179,6 +190,18 @@ static scxml_status compile_scxml_model(
             datamodel.impl != NULL ? scxml_syntax_attribute_location(datamodel)
                                    : scxml_syntax_node_location(root),
             "CMeta compilation requires datamodel='cmeta'");
+        goto cleanup;
+    }
+    if (build.quickjs_profile &&
+        (datamodel.impl == NULL ||
+         !scxml_analyze_view_equal_raw(
+             scxml_syntax_attribute_value(datamodel),
+             "quickjs-sandbox"))) {
+        status = scxml_analyze_fail(
+            &build, SCXML_UNSUPPORTED_DATAMODEL,
+            datamodel.impl != NULL ? scxml_syntax_attribute_location(datamodel)
+                                   : scxml_syntax_node_location(root),
+            "QuickJS compilation requires datamodel='quickjs-sandbox'");
         goto cleanup;
     }
     document_name_attribute = scxml_analyze_find_attribute(root, "name");
@@ -194,9 +217,28 @@ static scxml_status compile_scxml_model(
     }
     status = scxml_analyze_state(&build, root, SCXML_ELEMENT_SCXML, true, &counts);
     if (status != SCXML_OK) goto cleanup;
+    if (data_model == SCXML_DATA_MODEL_CMETA &&
+        ((!build.late_binding &&
+          (counts.data_initializer_rows != 0u ||
+           counts.root_script_rows != 0u)) ||
+         (build.late_binding && counts.root_script_rows != 0u)) &&
+        (!scxml_analyze_checked_add(counts.executable_blocks, 1u,
+                                    &counts.executable_blocks) ||
+         !scxml_analyze_checked_add(counts.block_rows, 1u,
+                                    &counts.block_rows) ||
+         (!build.late_binding && counts.data_initializer_rows != 0u &&
+          !scxml_analyze_checked_add(counts.executable_steps, 1u,
+                                     &counts.executable_steps)) ||
+         !scxml_analyze_checked_add(counts.state_action_rows, 1u,
+                                    &counts.state_action_rows))) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED, scxml_syntax_node_location(root),
+            "early data initializer execution rows exceed limits");
+        goto cleanup;
+    }
     needs_execution_error =
         counts.assignment_rows != 0u || counts.foreach_rows != 0u ||
-        counts.dynamic_expression_rows != 0u ||
+        counts.dynamic_expression_rows != 0u || counts.script_rows != 0u ||
         (data_model == SCXML_DATA_MODEL_CMETA &&
          (counts.conditional_branches != 0u || counts.guard_rows != 0u));
     if (((counts.requirements &
@@ -296,6 +338,8 @@ static scxml_status compile_scxml_model(
         counts.payload_rows, sizeof(*build.payloads));
     build.assignments = scxml_emit_allocate_rows(
         counts.assignment_rows, sizeof(*build.assignments));
+    build.data_bindings = scxml_emit_allocate_rows(
+        counts.data_initializer_rows, sizeof(*build.data_bindings));
     build.foreach_descriptors = scxml_emit_allocate_rows(
         counts.foreach_rows, sizeof(*build.foreach_descriptors));
     build.invocations = scxml_emit_allocate_rows(
@@ -304,6 +348,23 @@ static scxml_status compile_scxml_model(
         counts.invocation_rows, sizeof(*build.invocation_names));
     build.done_data = scxml_emit_allocate_rows(
         counts.done_data_rows, sizeof(*build.done_data));
+    build.scripts = scxml_emit_allocate_rows(
+        counts.script_rows, sizeof(*build.scripts));
+    if (!scxml_analyze_checked_multiply(
+            counts.foreach_rows, 2u, &supplemental_capacity) ||
+        (build.quickjs_profile &&
+         !scxml_analyze_checked_add(
+             supplemental_capacity,
+             build.quickjs_options.max_script_variables,
+             &supplemental_capacity)) ||
+        !scxml_scope_schema_init(
+            &build.supplemental_scope, supplemental_capacity)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_ALLOCATION_FAILED,
+            scxml_syntax_node_location(root),
+            "unable to allocate bounded SCXML supplemental variables");
+        goto cleanup;
+    }
     build.log_storage = counts.log_label_bytes != 0u
                             ? (char *)calloc(counts.log_label_bytes, 1u)
                             : NULL;
@@ -314,17 +375,24 @@ static scxml_status compile_scxml_model(
                                    ? (char *)calloc(
                                          counts.invocation_string_bytes, 1u)
                                    : NULL;
+    build.script_storage = counts.script_source_bytes != 0u
+                               ? (char *)calloc(
+                                     counts.script_source_bytes, 1u)
+                               : NULL;
     build.step_capacity = counts.executable_steps;
     build.branch_capacity = counts.conditional_branches;
     build.effect_capacity = counts.effect_rows;
     build.payload_capacity = counts.payload_rows;
     build.assignment_capacity = counts.assignment_rows;
+    build.data_binding_capacity = counts.data_initializer_rows;
     build.foreach_capacity = counts.foreach_rows;
     build.log_storage_capacity = counts.log_label_bytes;
     build.effect_storage_capacity = counts.effect_string_bytes;
     build.invocation_storage_capacity = counts.invocation_string_bytes;
     build.invocation_capacity = counts.invocation_rows;
     build.done_data_capacity = counts.done_data_rows;
+    build.script_capacity = counts.script_rows;
+    build.script_storage_capacity = counts.script_source_bytes;
     build.guard_capacity = guard_capacity;
     build.transition_target_capacity = transition_target_capacity;
     build.max_conditional_depth = counts.max_conditional_depth;
@@ -357,16 +425,21 @@ static scxml_status compile_scxml_model(
         (counts.effect_rows != 0u && build.effects == NULL) ||
         (counts.payload_rows != 0u && build.payloads == NULL) ||
         (counts.assignment_rows != 0u && build.assignments == NULL) ||
+        (counts.data_initializer_rows != 0u &&
+         build.data_bindings == NULL) ||
         (counts.foreach_rows != 0u &&
          build.foreach_descriptors == NULL) ||
         (counts.invocation_rows != 0u &&
          (build.invocations == NULL || build.invocation_names == NULL)) ||
         (counts.done_data_rows != 0u && build.done_data == NULL) ||
+        (counts.script_rows != 0u && build.scripts == NULL) ||
         (counts.log_label_bytes != 0u && build.log_storage == NULL) ||
         (counts.effect_string_bytes != 0u &&
          build.effect_storage == NULL) ||
         (counts.invocation_string_bytes != 0u &&
          build.invocation_storage == NULL) ||
+        (counts.script_source_bytes != 0u &&
+         build.script_storage == NULL) ||
         (counts.state_action_rows != 0u && build.state_actions == NULL) ||
         (transition_action_capacity != 0u &&
          build.transition_actions == NULL) ||
@@ -435,7 +508,11 @@ static scxml_status compile_scxml_model(
     }
     status = scxml_analyze_resolve_invocation_events(&build);
     if (status != SCXML_OK) goto cleanup;
+    status = scxml_emit_collect_supplemental_scope(&build, root);
+    if (status != SCXML_OK) goto cleanup;
     status = scxml_emit_data_initializers(&build, root, true);
+    if (status != SCXML_OK) goto cleanup;
+    status = scxml_emit_root_scripts(&build, root);
     if (status != SCXML_OK) goto cleanup;
     status = scxml_emit_done_data(&build, root, build.node_ref_index, 0u);
     if (status != SCXML_OK) goto cleanup;
@@ -445,6 +522,15 @@ static scxml_status compile_scxml_model(
     status = scxml_emit_transitions(&build, root, build.node_ref_index,
                               build.synthetic_index);
     if (status != SCXML_OK) goto cleanup;
+    if (build.quickjs_profile &&
+        !scxml_quickjs_static_property_budget_valid(
+            &build.quickjs_options, build.supplemental_scope.slot_count)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(root),
+            "QuickJS static property budget exceeded");
+        goto cleanup;
+    }
     if (build.effect_index != counts.effect_rows ||
         build.payload_index != counts.payload_rows ||
         build.assignment_index != counts.assignment_rows ||
@@ -453,12 +539,18 @@ static scxml_status compile_scxml_model(
         build.invocation_index != counts.invocation_rows ||
         build.invocation_emit_index != counts.invocation_rows ||
         build.done_data_index != counts.done_data_rows ||
+        build.script_index != counts.script_rows ||
+        build.root_script_count != counts.root_script_rows ||
+        build.script_storage_index > counts.script_source_bytes ||
         build.late_initializer_index != counts.late_initializer_rows ||
+        build.data_binding_index != counts.data_initializer_rows ||
         build.block_index != counts.block_rows ||
         build.invocation_storage_index !=
             counts.invocation_string_bytes ||
         build.top_level_data_initializer_count !=
             counts.top_level_data_initializer_rows ||
+        build.data_initializer_count !=
+            (build.late_binding ? 0u : counts.data_initializer_rows) ||
         build.top_level_data_initializer_first > build.assignment_index ||
         build.top_level_data_initializer_count >
             build.assignment_index -
@@ -627,6 +719,8 @@ static scxml_status compile_scxml_model(
     impl->max_payload_entries = counts.max_payload_entries;
     impl->assignments = build.assignments;
     impl->assignment_count = build.assignment_index;
+    impl->data_bindings = build.data_bindings;
+    impl->data_binding_count = build.data_binding_index;
     impl->data_initializer_count = counts.late_initializer_rows != 0u
         ? 0u : counts.data_initializer_rows;
     impl->top_level_data_initializer_first =
@@ -642,9 +736,18 @@ static scxml_status compile_scxml_model(
     impl->invocation_count = build.invocation_index;
     impl->done_data = build.done_data;
     impl->done_data_count = build.done_data_index;
+    impl->scripts = build.scripts;
+    impl->script_count = build.script_index;
+    impl->root_script_count = build.root_script_count;
+    impl->supplemental_scope = build.supplemental_scope;
     impl->log_storage = build.log_storage;
     impl->effect_storage = build.effect_storage;
     impl->invocation_storage = build.invocation_storage;
+    impl->script_storage = build.script_storage;
+    impl->quickjs_profile = build.quickjs_profile;
+    impl->quickjs_options = build.quickjs_options;
+    impl->quickjs_options.script_resources = NULL;
+    impl->quickjs_options.script_resource_user = NULL;
     for (index = 0u; index < impl->guard_binding_count; ++index) {
         impl->guard_users[index].event_names_by_id =
             impl->event_names_by_id;
@@ -673,12 +776,16 @@ static scxml_status compile_scxml_model(
     build.effects = NULL;
     build.payloads = NULL;
     build.assignments = NULL;
+    build.data_bindings = NULL;
     build.foreach_descriptors = NULL;
     build.invocations = NULL;
     build.done_data = NULL;
+    build.scripts = NULL;
+    build.supplemental_scope = (scxml_scope_schema){0};
     build.log_storage = NULL;
     build.effect_storage = NULL;
     build.invocation_storage = NULL;
+    build.script_storage = NULL;
     impl->null_value = false;
     qsort(impl->state_names, impl->state_name_count,
           sizeof(*impl->state_names), scxml_analyze_compare_program_name);
@@ -720,15 +827,19 @@ cleanup:
         free(impl->payloads);
         scxml_emit_destroy_assignments(impl->assignments, impl->assignment_count);
         free(impl->assignments);
+        free(impl->data_bindings);
         free(impl->foreach_descriptors);
         scxml_emit_destroy_invocations(impl->invocations, impl->invocation_count);
         free(impl->invocations);
         scxml_emit_destroy_done_data(impl->done_data, impl->done_data_count);
         free(impl->done_data);
+        free(impl->scripts);
+        scxml_scope_schema_destroy(&impl->supplemental_scope);
         free(impl->name_storage);
         free(impl->log_storage);
         free(impl->effect_storage);
         free(impl->invocation_storage);
+        free(impl->script_storage);
         free(impl);
     }
     scxml_emit_free_build(&build);
@@ -768,7 +879,7 @@ scxml_status scxml_compile(
     scxml_diagnostic *diagnostic) {
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_NULL, NULL, NULL,
-        0u, diagnostic);
+        0u, NULL, diagnostic);
 }
 
 scxml_status scxml_compile_cmeta(
@@ -816,7 +927,35 @@ scxml_status scxml_compile_cmeta(
     }
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
-        options->root, &expression_limits, max_iterations, diagnostic);
+        options->root, &expression_limits, max_iterations, NULL, diagnostic);
+}
+
+scxml_status scxml_program_compile_quickjs_model(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_quickjs_compile_options_v1 *options,
+    scxml_diagnostic *diagnostic) {
+    const scxml_expr_limits expression_limits = {
+        options->max_source_bytes,
+        options->max_instructions,
+        options->max_operands,
+        options->max_expression_depth,
+        options->max_path_depth,
+        options->max_literal_bytes,
+        options->max_string_bytes};
+    return compile_scxml_model(
+        out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
+        options->root, &expression_limits, options->max_iterations,
+        options, diagnostic);
+}
+
+scxml_status scxml_compile_quickjs(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_quickjs_compile_options_v1 *options,
+    scxml_diagnostic *diagnostic) {
+    return scxml_quickjs_compile(
+        out, input, input_size, limits, options, diagnostic);
 }
 
 void scxml_program_destroy(scxml_program *program) {
@@ -841,15 +980,19 @@ void scxml_program_destroy(scxml_program *program) {
     free(impl->payloads);
     scxml_emit_destroy_assignments(impl->assignments, impl->assignment_count);
     free(impl->assignments);
+    free(impl->data_bindings);
     free(impl->foreach_descriptors);
     scxml_emit_destroy_invocations(impl->invocations, impl->invocation_count);
     free(impl->invocations);
     scxml_emit_destroy_done_data(impl->done_data, impl->done_data_count);
     free(impl->done_data);
+    free(impl->scripts);
+    scxml_scope_schema_destroy(&impl->supplemental_scope);
     free(impl->name_storage);
     free(impl->log_storage);
     free(impl->effect_storage);
     free(impl->invocation_storage);
+    free(impl->script_storage);
     free(impl);
     program->impl = NULL;
 }

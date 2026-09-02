@@ -35,7 +35,8 @@ typedef enum scxml_element_kind {
     SCXML_ELEMENT_PARAM,
     SCXML_ELEMENT_DATAMODEL,
     SCXML_ELEMENT_DATA,
-    SCXML_ELEMENT_DONEDATA
+    SCXML_ELEMENT_DONEDATA,
+    SCXML_ELEMENT_SCRIPT
 } scxml_element_kind;
 
 typedef enum scxml_attribute_kind {

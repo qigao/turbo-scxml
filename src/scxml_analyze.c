@@ -435,6 +435,8 @@ static bool attribute_allowed(scxml_element_kind kind,
             return scxml_analyze_view_equal_raw(name, "id") ||
                    scxml_analyze_view_equal_raw(name, "expr") ||
                    scxml_analyze_view_equal_raw(name, "src");
+        case SCXML_ELEMENT_SCRIPT:
+            return scxml_analyze_view_equal_raw(name, "src");
         case SCXML_ELEMENT_DATAMODEL:
         case SCXML_ELEMENT_DONEDATA:
             return false;
@@ -446,6 +448,64 @@ static bool attribute_allowed(scxml_element_kind kind,
         case SCXML_ELEMENT_UNKNOWN: return false;
     }
     return false;
+}
+
+static scxml_status analyze_script(
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
+    bool root) {
+    const scxml_syntax_attribute source =
+        scxml_analyze_find_attribute(node, "src");
+    const turbo_xml_string_view inline_source = scxml_syntax_node_text(node);
+    size_t retained;
+    size_t index;
+    scxml_status status = scxml_analyze_validate_element_attributes(
+        build, node, SCXML_ELEMENT_SCRIPT);
+    if (status != SCXML_OK) return status;
+    if (!build->quickjs_profile)
+        return scxml_analyze_fail(
+            build, SCXML_UNSUPPORTED_FEATURE,
+            scxml_syntax_node_location(node),
+            "script requires the quickjs-sandbox data model");
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) != TURBO_XML_TEXT &&
+            scxml_syntax_node_type(child) != TURBO_XML_COMMENT)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_node_location(child),
+                "script accepts text content only");
+    }
+    if (source.impl != NULL && inline_source.size != 0u)
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_node_location(node),
+            "script src and inline content are mutually exclusive");
+    if (source.impl != NULL &&
+        is_empty_view(scxml_syntax_attribute_value(source)))
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_attribute_location(source),
+            "script src must be non-empty");
+    retained = source.impl != NULL
+        ? build->quickjs_options.max_source_bytes : inline_source.size;
+    if (retained > build->quickjs_options.max_source_bytes ||
+        !scxml_analyze_checked_add(retained, 1u, &retained) ||
+        !scxml_analyze_checked_add(
+            counts->script_source_bytes, retained,
+            &counts->script_source_bytes) ||
+        !scxml_analyze_checked_add(
+            counts->script_rows, 1u, &counts->script_rows) ||
+        (root && !scxml_analyze_checked_add(
+            counts->root_script_rows, 1u,
+            &counts->root_script_rows)) ||
+        (!scxml_analyze_checked_add(
+            counts->executable_steps, 1u,
+            &counts->executable_steps)))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(node),
+            "script source exceeds admitted storage");
+    return SCXML_OK;
 }
 
 scxml_status scxml_analyze_validate_element_attributes(
@@ -960,6 +1020,7 @@ static scxml_status analyze_done_data(
         status = scxml_analyze_inspect_inline_content(
             build, child, &content_kind, &content_size);
         if (status != SCXML_OK) return status;
+        (void)content_kind;
         if (expression.impl != NULL) {
             has_expression = true;
             if (build->data_model != SCXML_DATA_MODEL_CMETA ||
@@ -1593,6 +1654,9 @@ static scxml_status analyze_conditional(
         } else if (child_kind == SCXML_ELEMENT_ASSIGN) {
             status = analyze_assign(build, child, counts);
             if (status != SCXML_OK) return status;
+        } else if (child_kind == SCXML_ELEMENT_SCRIPT) {
+            status = analyze_script(build, child, counts, false);
+            if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_IF) {
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth)) {
@@ -1674,6 +1738,8 @@ static scxml_status analyze_executable_content(
             status = analyze_log(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_ASSIGN) {
             status = analyze_assign(build, child, counts);
+        } else if (child_kind == SCXML_ELEMENT_SCRIPT) {
+            status = analyze_script(build, child, counts, false);
         } else if (child_kind == SCXML_ELEMENT_IF) {
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth)) {
@@ -2199,6 +2265,8 @@ static scxml_status analyze_datamodel(
         scxml_syntax_attribute id;
         scxml_syntax_attribute expression;
         scxml_syntax_attribute source;
+        scxml_content_kind content_kind;
+        size_t content_size = 0u;
         size_t child_index;
         if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
             (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
@@ -2215,27 +2283,42 @@ static scxml_status analyze_datamodel(
         status = scxml_analyze_validate_element_attributes(
             build, child, SCXML_ELEMENT_DATA);
         if (status != SCXML_OK) return status;
-        if (source.impl != NULL)
-            return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                              scxml_syntax_attribute_location(source),
-                              "CMeta data src requires an external resource loader");
-        if (id.impl == NULL || expression.impl == NULL ||
+        status = scxml_analyze_inspect_inline_content(
+            build, child, &content_kind, &content_size);
+        if (status != SCXML_OK) return status;
+        if (id.impl == NULL ||
             is_empty_view(scxml_syntax_attribute_value(id)) ||
-            is_empty_view(scxml_syntax_attribute_value(expression)))
+            (expression.impl == NULL && source.impl == NULL &&
+             content_size == 0u) ||
+            (expression.impl != NULL &&
+             is_empty_view(scxml_syntax_attribute_value(expression))) ||
+            (source.impl != NULL &&
+             is_empty_view(scxml_syntax_attribute_value(source))))
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
-                              "CMeta data requires nonempty id and expr attributes");
-        for (child_index = 0u;
-             child_index < scxml_syntax_node_child_count(child); ++child_index) {
-            const scxml_syntax_node content =
-                scxml_syntax_node_child_at(child, child_index);
-            if (scxml_syntax_node_type(content) == TURBO_XML_COMMENT ||
-                (scxml_syntax_node_type(content) == TURBO_XML_TEXT &&
-                 is_xml_whitespace(scxml_syntax_node_value(content))))
-                continue;
-            return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              scxml_syntax_node_location(content),
-                              "CMeta data expr cannot have child content");
+                              "CMeta data requires a nonempty id and exactly one of expr, src, or inline content");
+        if (expression.impl != NULL && source.impl != NULL)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_node_location(child),
+                "CMeta data cannot combine expr and src");
+        if ((expression.impl != NULL || source.impl != NULL) &&
+            content_size != 0u) {
+            for (child_index = 0u;
+                 child_index < scxml_syntax_node_child_count(child);
+                 ++child_index) {
+                const scxml_syntax_node content =
+                    scxml_syntax_node_child_at(child, child_index);
+                if (scxml_syntax_node_type(content) == TURBO_XML_COMMENT ||
+                    (scxml_syntax_node_type(content) == TURBO_XML_TEXT &&
+                     is_xml_whitespace(scxml_syntax_node_value(content))))
+                    continue;
+                return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
+                                  scxml_syntax_node_location(content),
+                                  expression.impl != NULL
+                                      ? "CMeta data expr cannot have child content"
+                                      : "CMeta data src cannot have child content");
+            }
         }
         if (!scxml_analyze_checked_add(counts->assignment_rows, 1u,
                          &counts->assignment_rows) ||
@@ -2252,6 +2335,8 @@ static scxml_status analyze_datamodel(
             return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                               scxml_syntax_node_location(child),
                               "CMeta data declaration count overflow");
+        if (source.impl != NULL)
+            counts->requirements |= SCXML_REQUIREMENT_DATA_RESOURCE;
     }
     if (build->late_binding && data_count != 0u) {
         if (!scxml_analyze_checked_add(counts->late_initializer_rows, 1u,
@@ -2484,6 +2569,13 @@ scxml_status scxml_analyze_state(scxml_build *build,
                                   scxml_syntax_node_location(child),
                                   "datamodel is allowed only in scxml, state, or parallel");
             status = analyze_datamodel(build, child, is_root, counts);
+        } else if (child_kind == SCXML_ELEMENT_SCRIPT) {
+            if (!is_root)
+                return scxml_analyze_fail(
+                    build, SCXML_INVALID_STRUCTURE,
+                    scxml_syntax_node_location(child),
+                    "script is executable content or a direct scxml child");
+            status = analyze_script(build, child, counts, true);
         } else if (child_kind == SCXML_ELEMENT_DONEDATA) {
             if (kind != SCXML_ELEMENT_FINAL)
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,

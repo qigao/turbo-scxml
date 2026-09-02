@@ -58,11 +58,11 @@
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml/debug",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug"
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
       },
       "environment": {
-        "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
-        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
+        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -77,8 +77,62 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
       },
       "environment": {
-        "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
-        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
+        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "win-dev-quickjs-user",
+      "inherits": "win-dev-user",
+      "binaryDir": "${sourceDir}/build/Msvc-QuickJS",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-quickjs/debug",
+        "TURBOSCXML_ENABLE_QUICKJS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "quickjs"
+      },
+      "environment": {
+        "PATH": "${sourceDir}/build/Msvc-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "win-dev-chttp-user",
+      "inherits": "win-dev-user",
+      "binaryDir": "${sourceDir}/build/Msvc-CHttp",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/debug",
+        "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
+        "VCPKG_MANIFEST_FEATURES": "chttp"
+      },
+      "environment": {
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
+        "PATH": "${sourceDir}/build/Msvc-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "win-release-quickjs-user",
+      "inherits": "win-release-user",
+      "binaryDir": "${sourceDir}/build/Msvc-Release-QuickJS",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-quickjs/release",
+        "TURBOSCXML_ENABLE_QUICKJS": "ON",
+        "VCPKG_MANIFEST_FEATURES": "quickjs"
+      },
+      "environment": {
+        "PATH": "${sourceDir}/build/Msvc-Release-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "win-release-chttp-user",
+      "inherits": "win-release-user",
+      "binaryDir": "${sourceDir}/build/Msvc-Release-CHttp",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/release",
+        "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
+        "VCPKG_MANIFEST_FEATURES": "chttp"
+      },
+      "environment": {
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
+        "PATH": "${sourceDir}/build/Msvc-Release-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -90,12 +144,12 @@
       "cacheVariables": {
         "BUILD_TESTING": "ON",
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml/debug",
-        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug"
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
       },
       "environment": {
-        "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/debug",
-        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
+        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
       }
     },
     {
@@ -110,9 +164,9 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
       },
       "environment": {
-        "TURBOUTILS_ROOT": "$env{PKG_ROOT}/turboutils/release",
-        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{TURBOUTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{TURBOUTILS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
+        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
       }
     }
   ],
@@ -146,6 +200,26 @@
       "configurePreset": "win-release-user"
     },
     {
+      "name": "win-dev-quickjs-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-dev-quickjs-user"
+    },
+    {
+      "name": "win-dev-chttp-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-dev-chttp-user"
+    },
+    {
+      "name": "win-release-quickjs-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-release-quickjs-user"
+    },
+    {
+      "name": "win-release-chttp-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-release-chttp-user"
+    },
+    {
       "name": "linux-dev-user",
       "inherits": "linux-build-user",
       "configurePreset": "linux-dev-user"
@@ -167,6 +241,38 @@
       "name": "install-win-release-user",
       "inherits": "win-build-user",
       "configurePreset": "win-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-win-dev-quickjs-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-dev-quickjs-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-win-dev-chttp-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-dev-chttp-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-win-release-quickjs-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-release-quickjs-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "install-win-release-chttp-user",
+      "inherits": "win-build-user",
+      "configurePreset": "win-release-chttp-user",
       "targets": [
         "install"
       ]
@@ -218,6 +324,26 @@
       "name": "win-release-user",
       "inherits": "win-test-user",
       "configurePreset": "win-release-user"
+    },
+    {
+      "name": "win-dev-quickjs-user",
+      "inherits": "win-test-user",
+      "configurePreset": "win-dev-quickjs-user"
+    },
+    {
+      "name": "win-dev-chttp-user",
+      "inherits": "win-test-user",
+      "configurePreset": "win-dev-chttp-user"
+    },
+    {
+      "name": "win-release-quickjs-user",
+      "inherits": "win-test-user",
+      "configurePreset": "win-release-quickjs-user"
+    },
+    {
+      "name": "win-release-chttp-user",
+      "inherits": "win-test-user",
+      "configurePreset": "win-release-chttp-user"
     },
     {
       "name": "linux-dev-user",

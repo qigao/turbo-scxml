@@ -290,6 +290,15 @@ static bool state_is_active(void *user, cflow_machine_state_id state,
     return true;
 }
 
+static bool data_is_never_bound(
+    void *user, size_t offset, size_t storage_size, bool *out_bound) {
+    (void)user;
+    (void)offset;
+    if (storage_size == 0u || out_bound == NULL) return false;
+    *out_bound = false;
+    return true;
+}
+
 static scxml_expr_status compile_expression(
     scxml_expr_program *program, const char *source,
     const scxml_expr_limits *limits,
@@ -1213,6 +1222,47 @@ spec("TurboSCXML private SCXML expressions") {
         check_equal(diagnostic.status, expected[index]);
         check_true(diagnostic.message[0] != '\0');
     }
+  }
+
+  it("reports unbound and runtime-missing paths with one status") {
+    static const char missing_source[] = "order.missing";
+    const scxml_expr_system_values unbound = {
+        .is_data_bound = data_is_never_bound};
+    scxml_expr_program program = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    state_fixture states = {false};
+    bool result = true;
+
+    check_equal(scxml_expr_compile_value_with_scope_policy(
+                    &program, missing_source,
+                    sizeof(missing_source) - 1u, &root_data, NULL,
+                    SCXML_EXPR_PATH_RUNTIME_MISSING,
+                    SCXML_EXPR_VALUE_BOOL, resolve_state, NULL, NULL,
+                    &diagnostic), SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states, NULL,
+                    &result, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_true(result);
+    scxml_expr_program_destroy(&program);
+
+    check_equal(compile_expression(
+                    &program, "order.count == -3", NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states, &unbound,
+                    &result, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_true(result);
+    scxml_expr_program_destroy(&program);
+
+    check_equal(scxml_expr_compile_value_with_scope_policy(
+                    &program, "order.", sizeof("order.") - 1u,
+                    &root_data, NULL, SCXML_EXPR_PATH_RUNTIME_MISSING,
+                    SCXML_EXPR_VALUE_BOOL, resolve_state, NULL, NULL,
+                    &diagnostic),
+                SCXML_EXPR_SYNTAX_ERROR);
+    check_null(program.impl);
   }
 
   it("rejects a selected nested scalar descriptor with inconsistent storage") {

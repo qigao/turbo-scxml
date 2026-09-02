@@ -1,26 +1,41 @@
 @PACKAGE_INIT@
 
-if(NOT DEFINED ENV{TURBOUTILS_ROOT}
-   OR "$ENV{TURBOUTILS_ROOT}" STREQUAL "")
+if(NOT DEFINED ENV{ROCIDA_ROOT}
+   OR "$ENV{ROCIDA_ROOT}" STREQUAL "")
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
-    "TURBOUTILS_ROOT must name the installed TurboUtils profile")
+    "ROCIDA_ROOT must name the installed Rocida profile")
   return()
 endif()
-file(TO_CMAKE_PATH "$ENV{TURBOUTILS_ROOT}" TURBOUTILS_ROOT_PATH)
-if(NOT IS_DIRECTORY "${TURBOUTILS_ROOT_PATH}")
+file(TO_CMAKE_PATH "$ENV{ROCIDA_ROOT}" ROCIDA_ROOT_PATH)
+if(NOT IS_DIRECTORY "${ROCIDA_ROOT_PATH}")
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
-    "TURBOUTILS_ROOT is not a directory: $ENV{TURBOUTILS_ROOT}")
+    "ROCIDA_ROOT is not a directory: $ENV{ROCIDA_ROOT}")
   return()
 endif()
 
 include(CMakeFindDependencyMacro)
-unset(TurboUtils_DIR CACHE)
-unset(TurboUtils_DIR)
-find_dependency(TurboUtils 1.1 CONFIG REQUIRED
-  PATHS "${TURBOUTILS_ROOT_PATH}"
+unset(Rocida_DIR CACHE)
+unset(Rocida_DIR)
+find_dependency(Rocida 1.1 CONFIG REQUIRED
+  PATHS "${ROCIDA_ROOT_PATH}"
   NO_DEFAULT_PATH)
+if(@TURBOSCXML_PACKAGE_HAS_QUICKJS@)
+  find_dependency(qjs CONFIG REQUIRED)
+endif()
+
+set(TurboSCXML_SCXML_FOUND TRUE)
+set(TurboSCXML_QuickJS_FOUND @TURBOSCXML_PACKAGE_HAS_QUICKJS@)
+set(TurboSCXML_CHttpResource_FOUND
+  @TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@)
+if(TurboSCXML_CHttpResource_FOUND AND NOT TARGET Rocida::CHTTP)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "This TurboSCXML package includes CHttpResource, but the selected "
+    "Rocida SDK does not provide Rocida::CHTTP")
+  return()
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboSCXMLTargets.cmake")
 check_required_components(TurboSCXML)

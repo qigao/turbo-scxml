@@ -26,6 +26,21 @@ scxml_expr_status scxml_foreach_compile(
     const cmeta_data_desc *root, size_t max_path_depth,
     size_t max_iterations,
     scxml_expr_diagnostic *diagnostic) {
+    return scxml_foreach_compile_with_scope(
+        out, array, array_size, item, item_size,
+        index_or_null, index_size, root, NULL,
+        max_path_depth, max_iterations, diagnostic);
+}
+
+scxml_expr_status scxml_foreach_compile_with_scope(
+    scxml_foreach_program *out,
+    const char *array, size_t array_size,
+    const char *item, size_t item_size,
+    const char *index_or_null, size_t index_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    size_t max_path_depth, size_t max_iterations,
+    scxml_expr_diagnostic *diagnostic) {
     scxml_foreach_program compiled = {0};
     const cmeta_type_desc *element_type;
     const cmeta_trait_flags lifecycle_traits =
@@ -42,9 +57,9 @@ scxml_expr_status scxml_foreach_compile(
         &compiled.sequence, array, array_size, root, max_path_depth,
         diagnostic);
     if (status != SCXML_EXPR_OK) return status;
-    status = scxml_location_compile(
-        &compiled.item, item, item_size, root, max_path_depth, true,
-        diagnostic);
+    status = scxml_location_compile_with_scope(
+        &compiled.item, item, item_size, root, supplemental,
+        max_path_depth, true, diagnostic);
     if (status != SCXML_EXPR_OK && status != SCXML_EXPR_UNKNOWN_LOCATION)
         return status;
     element_type = compiled.sequence.element_type;
@@ -70,8 +85,8 @@ scxml_expr_status scxml_foreach_compile(
             "copy, move, and destroy traits");
     }
     if (index_or_null != NULL) {
-        status = scxml_location_compile(
-            &compiled.index, index_or_null, index_size, root,
+        status = scxml_location_compile_with_scope(
+            &compiled.index, index_or_null, index_size, root, supplemental,
             max_path_depth, true, diagnostic);
         if (status != SCXML_EXPR_OK) return status;
         if (compiled.index.value->kind != CMETA_DATA_UINT ||
@@ -92,6 +107,16 @@ scxml_expr_status scxml_foreach_open(
     const scxml_foreach_program *program,
     void *staged_root, scxml_foreach_snapshot *snapshot,
     scxml_expr_diagnostic *diagnostic) {
+    return scxml_foreach_open_with_system(
+        program, staged_root, NULL, snapshot, diagnostic);
+}
+
+scxml_expr_status scxml_foreach_open_with_system(
+    const scxml_foreach_program *program,
+    void *staged_root,
+    const scxml_expr_system_values *system_values,
+    scxml_foreach_snapshot *snapshot,
+    scxml_expr_diagnostic *diagnostic) {
     cmeta_range range = {0};
     cmeta_range_cursor cursor = {0};
     const cmeta_type_desc *element_type;
@@ -111,6 +136,10 @@ scxml_expr_status scxml_foreach_open(
         return foreach_report(diagnostic,
                               SCXML_EXPR_INVALID_ARGUMENT,
                               "invalid CMeta foreach open arguments");
+    status = scxml_expr_require_data_bound(
+        system_values, program->sequence.offset,
+        program->sequence.storage_size, diagnostic);
+    if (status != SCXML_EXPR_OK) return status;
     if (!program->item_location_valid)
         return foreach_report(diagnostic,
                               SCXML_EXPR_UNKNOWN_LOCATION,
@@ -271,10 +300,22 @@ scxml_expr_status scxml_foreach_next(
     void *staged_root, const scxml_foreach_snapshot *snapshot,
     scxml_foreach_value *value, size_t iteration,
     scxml_expr_diagnostic *diagnostic) {
+    return scxml_foreach_next_with_system(
+        program, staged_root, snapshot, value, iteration, NULL,
+        diagnostic);
+}
+
+scxml_expr_status scxml_foreach_next_with_system(
+    const scxml_foreach_program *program,
+    void *staged_root, const scxml_foreach_snapshot *snapshot,
+    scxml_foreach_value *value, size_t iteration,
+    const scxml_expr_system_values *system_values,
+    scxml_expr_diagnostic *diagnostic) {
     unsigned char *root = (unsigned char *)staged_root;
     const cmeta_type_desc *element_type;
     const void *source;
-    void *item;
+    void *item = NULL;
+    scxml_expr_status status;
     if (program == NULL || program->sequence.root == NULL ||
         program->sequence.root->storage_type == NULL || staged_root == NULL ||
         program->sequence.element_type == NULL ||
@@ -289,15 +330,23 @@ scxml_expr_status scxml_foreach_next(
         iteration >= snapshot->length ||
         iteration > SIZE_MAX / snapshot->stride ||
         snapshot->length > program->max_iterations ||
-        program->item.offset > program->sequence.root->storage_type->size ||
         program->item.storage_size !=
             program->sequence.element_type->size ||
-        program->item.storage_size >
-            program->sequence.root->storage_type->size - program->item.offset)
+        (program->item.kind != SCXML_LOCATION_CMETA &&
+         program->item.kind != SCXML_LOCATION_SUPPLEMENTAL) ||
+        (program->has_index &&
+         program->index.kind != SCXML_LOCATION_CMETA &&
+         program->index.kind != SCXML_LOCATION_SUPPLEMENTAL) ||
+        (program->item.kind == SCXML_LOCATION_CMETA &&
+         (program->item.offset >
+              program->sequence.root->storage_type->size ||
+          program->item.storage_size >
+              program->sequence.root->storage_type->size -
+                  program->item.offset)))
         return foreach_report(diagnostic,
                               SCXML_EXPR_INVALID_ARGUMENT,
                               "invalid CMeta foreach iteration arguments");
-    if (program->has_index &&
+    if (program->has_index && program->index.kind == SCXML_LOCATION_CMETA &&
         (program->index.offset >
              program->sequence.root->storage_type->size ||
          program->index.storage_size >
@@ -307,11 +356,35 @@ scxml_expr_status scxml_foreach_next(
                               SCXML_EXPR_INVALID_ARGUMENT,
                               "CMeta foreach index location is invalid");
 
+    if (program->item.kind == SCXML_LOCATION_CMETA) {
+        status = scxml_expr_require_data_bound(
+            system_values, program->item.offset,
+            program->item.storage_size, diagnostic);
+        if (status != SCXML_EXPR_OK) return status;
+    }
+    if (program->has_index) {
+        if (program->index.kind == SCXML_LOCATION_CMETA) {
+            status = scxml_expr_require_data_bound(
+                system_values, program->index.offset,
+                program->index.storage_size, diagnostic);
+            if (status != SCXML_EXPR_OK) return status;
+        }
+    }
+
     element_type = program->sequence.element_type;
-    item = root + program->item.offset;
     source = (const unsigned char *)snapshot->storage +
              iteration * snapshot->stride;
-    if (program->managed_item &&
+    if (program->item.kind == SCXML_LOCATION_SUPPLEMENTAL) {
+        if (system_values == NULL || system_values->supplemental == NULL ||
+            !scxml_scope_view_assign(
+                system_values->supplemental, program->item.slot, source))
+            return foreach_report(
+                diagnostic, SCXML_EXPR_EVALUATION_ERROR,
+                "CMeta foreach supplemental item assignment failed");
+    } else {
+        item = root + program->item.offset;
+    }
+    if (program->item.kind == SCXML_LOCATION_CMETA && program->managed_item &&
         (cmeta_type_require_traits(
              element_type,
              CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY) !=
@@ -320,7 +393,9 @@ scxml_expr_status scxml_foreach_next(
         return foreach_report(diagnostic,
                               SCXML_EXPR_INVALID_ARGUMENT,
                               "CMeta foreach managed scratch is invalid");
-    if (program->managed_item) {
+    if (program->item.kind == SCXML_LOCATION_SUPPLEMENTAL) {
+        /* The supplemental scope owns the assigned copy. */
+    } else if (program->managed_item) {
         if (!element_type->traits->copy_construct(value->storage, source))
             return foreach_report(
                 diagnostic, SCXML_EXPR_EVALUATION_ERROR,
@@ -334,7 +409,19 @@ scxml_expr_status scxml_foreach_next(
         memcpy(item, source, element_type->size);
     }
     if (program->has_index) {
-        memcpy(root + program->index.offset, &iteration, sizeof(iteration));
+        if (program->index.kind == SCXML_LOCATION_SUPPLEMENTAL) {
+            if (system_values == NULL ||
+                system_values->supplemental == NULL ||
+                !scxml_scope_view_assign(
+                    system_values->supplemental,
+                    program->index.slot, &iteration))
+                return foreach_report(
+                    diagnostic, SCXML_EXPR_EVALUATION_ERROR,
+                    "CMeta foreach supplemental index assignment failed");
+        } else {
+            memcpy(root + program->index.offset, &iteration,
+                   sizeof(iteration));
+        }
     }
     return foreach_report(diagnostic, SCXML_EXPR_OK, NULL);
 }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="quickjs-sandbox" initial="s0">
+  <script>var Var1 = 1;</script>
+  <state id="s0">
+    <onentry>
+      <assign location="Var1" expr="2"/>
+    </onentry>
+    <transition cond="Var1 == 2" target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"/>
+  <state id="fail"/>
+</scxml>

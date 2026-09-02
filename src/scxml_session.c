@@ -3,6 +3,7 @@
 #include "scxml_emit.h"
 #include "scxml_program.h"
 #include "scxml_runtime.h"
+#include "scxml_quickjs.h"
 
 static bool event_io_adapter_valid(
     const scxml_event_io_adapter *adapter) {
@@ -78,6 +79,10 @@ static void session_close_adapter(scxml_session_impl *impl) {
 static void session_free_storage(scxml_session_impl *impl) {
     size_t index;
     if (impl == NULL) return;
+    scxml_quickjs_session_runtime_destroy(impl);
+    scxml_scope_view_clear(&impl->supplemental_checkpoint);
+    scxml_scope_view_clear(&impl->supplemental_staged);
+    scxml_scope_view_clear(&impl->supplemental_committed);
     if (impl->current_event_data_object_live) {
         scxml_runtime_destroy_event_data_object(
             impl->current_event_data_schema,
@@ -122,15 +127,11 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->bindings);
     free(impl->system_name);
     free(impl->payload_scratch);
-}
-
-static bool initialization_state_is_active(
-    void *user, cflow_machine_state_id state, bool *out_active) {
-    (void)user;
-    (void)state;
-    if (out_active == NULL) return false;
-    *out_active = false;
-    return true;
+    free(impl->cbind_scratch);
+    free(impl->data_decode_allocation);
+    free(impl->supplemental_checkpoint_allocation);
+    free(impl->supplemental_staged_allocation);
+    free(impl->supplemental_committed_allocation);
 }
 
 bool scxml_session_data_initializer_is_overridden(
@@ -142,6 +143,210 @@ bool scxml_session_data_initializer_is_overridden(
             return true;
     }
     return false;
+}
+
+static bool data_resource_adapter_valid(
+    const scxml_data_resource_adapter_v1 *adapter) {
+    return adapter != NULL &&
+           adapter->abi_version == SCXML_DATA_RESOURCE_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= sizeof(*adapter) &&
+           adapter->open != NULL && adapter->close != NULL;
+}
+
+static bool session_allocate_scope_view(
+    const scxml_scope_schema *schema,
+    void **out_allocation, scxml_scope_view *out_view) {
+    size_t allocation_size;
+    uintptr_t address;
+    uintptr_t aligned;
+    unsigned char *bound;
+    if (schema == NULL || out_allocation == NULL || out_view == NULL ||
+        *out_allocation != NULL || out_view->schema != NULL ||
+        schema->slot_count == 0u || schema->storage_size == 0u ||
+        schema->storage_align == 0u ||
+        schema->storage_size > SIZE_MAX - (schema->storage_align - 1u) ||
+        schema->storage_size + schema->storage_align - 1u >
+            SIZE_MAX - schema->slot_count)
+        return false;
+    allocation_size = schema->storage_size + schema->storage_align - 1u +
+                      schema->slot_count;
+    *out_allocation = calloc(1u, allocation_size);
+    if (*out_allocation == NULL) return false;
+    address = (uintptr_t)*out_allocation;
+    if (address > UINTPTR_MAX - (schema->storage_align - 1u)) {
+        free(*out_allocation);
+        *out_allocation = NULL;
+        return false;
+    }
+    aligned = (address + schema->storage_align - 1u) &
+              ~((uintptr_t)schema->storage_align - 1u);
+    bound = (unsigned char *)aligned + schema->storage_size;
+    *out_view = (scxml_scope_view){
+        .schema = schema,
+        .storage = (unsigned char *)aligned,
+        .bound = bound};
+    return true;
+}
+
+static cflow_statechart_instance_status retain_supplemental_scope(
+    scxml_session_impl *session, size_t max_storage_bytes) {
+    const scxml_scope_schema *schema;
+    size_t one_view_bytes;
+    size_t total_bytes;
+    if (session == NULL || session->program == NULL)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    schema = &session->program->supplemental_scope;
+    if (schema->slot_count == 0u) {
+        session->supplemental_committed.schema = schema;
+        session->supplemental_staged.schema = schema;
+        session->supplemental_checkpoint.schema = schema;
+        session->system_values.supplemental =
+            &session->supplemental_committed;
+        return CFLOW_STATECHART_INSTANCE_OK;
+    }
+    if (schema->storage_size > SIZE_MAX - (schema->storage_align - 1u) ||
+        schema->storage_size + schema->storage_align - 1u >
+            SIZE_MAX - schema->slot_count)
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+    one_view_bytes = schema->storage_size + schema->storage_align - 1u +
+                     schema->slot_count;
+    if (!scxml_analyze_checked_multiply(one_view_bytes, 3u, &total_bytes) ||
+        total_bytes > max_storage_bytes)
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+    if (!session_allocate_scope_view(
+            schema, &session->supplemental_committed_allocation,
+            &session->supplemental_committed) ||
+        !session_allocate_scope_view(
+            schema, &session->supplemental_staged_allocation,
+            &session->supplemental_staged) ||
+        !session_allocate_scope_view(
+            schema, &session->supplemental_checkpoint_allocation,
+            &session->supplemental_checkpoint))
+        return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
+    session->system_values.supplemental =
+        &session->supplemental_committed;
+    return CFLOW_STATECHART_INSTANCE_OK;
+}
+
+static cflow_statechart_instance_status retain_data_resource_options(
+    scxml_session_impl *session,
+    const scxml_cmeta_session_options_v3 *options) {
+    size_t assignment;
+    size_t max_size = 0u;
+    size_t max_align = 0u;
+    size_t allocation_size;
+    uintptr_t address;
+    uintptr_t aligned;
+    if (session == NULL || session->program == NULL)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    for (assignment = 0u;
+         assignment < session->program->assignment_count; ++assignment) {
+        const cmeta_data_desc *destination = NULL;
+        const char *uri = NULL;
+        size_t uri_size = 0u;
+        const cmeta_type_desc *type;
+        if (scxml_session_data_initializer_is_overridden(session, assignment) ||
+            !scxml_assign_external_source(
+                &session->program->assignments[assignment], &uri, &uri_size,
+                &destination))
+            continue;
+        if (uri == NULL || uri_size == 0u || destination == NULL ||
+            destination->storage_type == NULL)
+            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+        type = destination->storage_type;
+        if (type->size == 0u || type->align == 0u ||
+            (type->align & (type->align - 1u)) != 0u)
+            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+        if (type->size > max_size) max_size = type->size;
+        if (type->align > max_align) max_align = type->align;
+    }
+    if (max_size == 0u) return CFLOW_STATECHART_INSTANCE_OK;
+    if (options == NULL ||
+        !data_resource_adapter_valid(options->data_resources) ||
+        options->cbind_scratch_bytes == 0u ||
+        options->max_data_depth == 0u ||
+        options->max_data_container_items == 0u ||
+        options->max_data_buffer_bytes == 0u ||
+        max_size > SIZE_MAX - (max_align - 1u))
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    allocation_size = max_size + max_align - 1u;
+    session->data_decode_allocation = calloc(1u, allocation_size);
+    session->cbind_scratch = calloc(1u, options->cbind_scratch_bytes);
+    if (session->data_decode_allocation == NULL ||
+        session->cbind_scratch == NULL)
+        return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
+    address = (uintptr_t)session->data_decode_allocation;
+    if (address > UINTPTR_MAX - (max_align - 1u))
+        return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+    aligned = (address + max_align - 1u) &
+              ~((uintptr_t)max_align - 1u);
+    session->data_decode_storage = (void *)aligned;
+    session->data_decode_storage_size = max_size;
+    session->data_resources = *options->data_resources;
+    session->data_resource_user = options->data_resource_user;
+    session->cbind = (cbind_context)
+        CBIND_CONTEXT_WITH_BUFFERS_INIT(
+            session->cbind_scratch, options->cbind_scratch_bytes,
+            options->max_data_depth, options->max_data_container_items,
+            options->max_data_buffer_bytes);
+    session->has_data_resources = true;
+    return CFLOW_STATECHART_INSTANCE_OK;
+}
+
+static bool session_data_range_is_bound(
+    void *user, size_t offset, size_t storage_size, bool *out_bound) {
+    const scxml_session_impl *session =
+        (const scxml_session_impl *)user;
+    const scxml_program_impl *program;
+    const size_t root_size =
+        session != NULL && session->program != NULL &&
+                session->program->cmeta_root != NULL &&
+                session->program->cmeta_root->storage_type != NULL
+            ? session->program->cmeta_root->storage_type->size
+            : 0u;
+    size_t range_end;
+    size_t index;
+    bool declared = false;
+    if (session == NULL || out_bound == NULL || storage_size == 0u ||
+        root_size == 0u ||
+        !scxml_analyze_checked_add(offset, storage_size, &range_end) ||
+        range_end > root_size)
+        return false;
+    program = session->program;
+    *out_bound = false;
+    for (index = 0u; index < program->data_binding_count; ++index) {
+        const scxml_data_binding_descriptor *binding =
+            &program->data_bindings[index];
+        size_t binding_end;
+        if (binding->assignment >= program->assignment_count)
+            return false;
+        if (binding->read_only_system) {
+            if (binding->storage_size != 0u) return false;
+            continue;
+        }
+        if (binding->storage_size == 0u) return false;
+        if (!scxml_analyze_checked_add(
+                binding->offset, binding->storage_size, &binding_end) ||
+            binding_end > root_size)
+            return false;
+        if (offset >= binding_end || binding->offset >= range_end) continue;
+        declared = true;
+        if (binding->late_initializer == SIZE_MAX ||
+            scxml_session_data_initializer_is_overridden(
+                session, binding->assignment)) {
+            *out_bound = true;
+            return true;
+        }
+        if (binding->late_initializer >= session->late_initializer_count)
+            return false;
+        if (session->late_initializers[binding->late_initializer].phase !=
+            SCXML_LATE_INITIALIZER_NEVER) {
+            *out_bound = true;
+            return true;
+        }
+    }
+    *out_bound = !declared;
+    return true;
 }
 
 static cflow_statechart_instance_status retain_environment_overrides(
@@ -206,17 +411,15 @@ static cflow_statechart_instance_status retain_environment_overrides(
 
 static cflow_statechart_instance_status initialize_cmeta_state(
     const scxml_session_impl *session, const void *initial_state,
-    const scxml_expr_system_values *system_values,
     void **out_state, bool *out_managed) {
     const scxml_program_impl *program =
         session != NULL ? session->program : NULL;
     const cmeta_type_desc *type;
     void *state;
     bool managed;
-    size_t index;
     if (program == NULL || program->cmeta_root == NULL ||
         program->cmeta_root->storage_type == NULL || initial_state == NULL ||
-        system_values == NULL || out_state == NULL || out_managed == NULL)
+        out_state == NULL || out_managed == NULL)
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     type = program->cmeta_root->storage_type;
     managed = cmeta_type_require_traits(
@@ -234,19 +437,6 @@ static cflow_statechart_instance_status initialize_cmeta_state(
         }
     } else {
         memcpy(state, initial_state, type->size);
-    }
-    for (index = 0u; index < program->data_initializer_count; ++index) {
-        scxml_expr_diagnostic diagnostic = {0};
-        if (scxml_session_data_initializer_is_overridden(session, index))
-            continue;
-        if (scxml_assign_apply_with_system(
-                &program->assignments[index], state,
-                initialization_state_is_active, NULL, system_values,
-                &diagnostic) != SCXML_EXPR_OK) {
-            if (managed) type->traits->destroy(state);
-            free(state);
-            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
-        }
     }
     *out_state = state;
     *out_managed = managed;
@@ -303,7 +493,9 @@ static cflow_statechart_instance_status scxml_session_init_model(
     const scxml_session_config *config,
     scxml_data_model data_model, const void *cmeta_initial_state,
     const scxml_cmeta_environment_override *environment_overrides,
-    size_t environment_override_count) {
+    size_t environment_override_count,
+    const scxml_cmeta_session_options_v3 *resource_options,
+    bool quickjs_profile) {
     scxml_session_impl *impl;
     const scxml_program_impl *program;
     cflow_statechart_instance_config native_config;
@@ -333,11 +525,13 @@ static cflow_statechart_instance_status scxml_session_init_model(
         ? config->invoke->capabilities : 0u;
     program = (const scxml_program_impl *)config->program->impl;
     if (program->data_model != data_model ||
+        program->quickjs_profile != quickjs_profile ||
         (data_model == SCXML_DATA_MODEL_CMETA &&
          cmeta_initial_state == NULL)) {
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     }
-    if (program->late_initializer_count != 0u &&
+    if ((program->late_initializer_count != 0u ||
+         program->supplemental_scope.slot_count != 0u) &&
         config->effect_capacity == 0u) {
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     }
@@ -422,6 +616,9 @@ static cflow_statechart_instance_status scxml_session_init_model(
     impl = (scxml_session_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
     impl->program = program;
+    impl->system_values.is_data_bound = session_data_range_is_bound;
+    impl->system_values.data_bound_user = impl;
+    impl->system_values.datamodel_user = impl;
     if (turbo_uuid_v4_generate(&session_uuid) != TURBO_OK ||
         turbo_uuid_format(
             &session_uuid, impl->session_id,
@@ -455,6 +652,19 @@ static cflow_statechart_instance_status scxml_session_init_model(
                 program->document_name_size};
         status = retain_environment_overrides(
             impl, environment_overrides, environment_override_count);
+        if (status != CFLOW_STATECHART_INSTANCE_OK) {
+            session_free_storage(impl);
+            free(impl);
+            return status;
+        }
+        status = retain_data_resource_options(impl, resource_options);
+        if (status != CFLOW_STATECHART_INSTANCE_OK) {
+            session_free_storage(impl);
+            free(impl);
+            return status;
+        }
+        status = retain_supplemental_scope(
+            impl, config->max_storage_bytes);
         if (status != CFLOW_STATECHART_INSTANCE_OK) {
             session_free_storage(impl);
             free(impl);
@@ -614,9 +824,9 @@ static cflow_statechart_instance_status scxml_session_init_model(
         .struct_size = sizeof(instance_hooks),
         .on_host_transaction = scxml_runtime_host_transaction};
     if (data_model == SCXML_DATA_MODEL_CMETA &&
-        program->data_initializer_count != 0u) {
+        (program->data_initializer_count != 0u || quickjs_profile)) {
         status = initialize_cmeta_state(
-            impl, cmeta_initial_state, &impl->system_values,
+            impl, cmeta_initial_state,
             &initialized_cmeta_state, &initialized_cmeta_state_managed);
         if (status != CFLOW_STATECHART_INSTANCE_OK) {
             session_close_adapter(impl);
@@ -624,6 +834,21 @@ static cflow_statechart_instance_status scxml_session_init_model(
             session_free_storage(impl);
             free(impl);
             return status;
+        }
+    }
+    if (quickjs_profile) {
+        const char *quickjs_error = NULL;
+        if (initialized_cmeta_state == NULL ||
+            program->root_script_count > program->script_count ||
+            !scxml_quickjs_session_runtime_init(impl, &quickjs_error)) {
+            destroy_initialized_cmeta_state(
+                program, initialized_cmeta_state,
+                initialized_cmeta_state_managed);
+            session_close_adapter(impl);
+            turbo_mutex_destroy(&impl->registry_lock);
+            session_free_storage(impl);
+            free(impl);
+            return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
         }
     }
     native_config = (cflow_statechart_instance_config){
@@ -671,7 +896,7 @@ cflow_statechart_instance_status scxml_session_init(
     scxml_session *session,
     const scxml_session_config *config) {
     return scxml_session_init_model(
-        session, config, SCXML_DATA_MODEL_NULL, NULL, NULL, 0u);
+        session, config, SCXML_DATA_MODEL_NULL, NULL, NULL, 0u, NULL, false);
 }
 
 cflow_statechart_instance_status scxml_session_init_cmeta(
@@ -687,7 +912,7 @@ cflow_statechart_instance_status scxml_session_init_cmeta(
     }
     return scxml_session_init_model(
         session, config, SCXML_DATA_MODEL_CMETA,
-        options->initial_state, NULL, 0u);
+        options->initial_state, NULL, 0u, NULL, false);
 }
 
 cflow_statechart_instance_status scxml_session_init_cmeta_v2(
@@ -704,7 +929,49 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v2(
     return scxml_session_init_model(
         session, config, SCXML_DATA_MODEL_CMETA,
         options->initial_state, options->environment_overrides,
-        options->environment_override_count);
+        options->environment_override_count, NULL, false);
+}
+
+cflow_statechart_instance_status scxml_session_init_cmeta_v3(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v3 *options) {
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_SESSION_OPTIONS_ABI_V3 ||
+        options->struct_size < sizeof(*options) ||
+        options->initial_state == NULL ||
+        (options->environment_override_count != 0u &&
+         options->environment_overrides == NULL) ||
+        (options->data_resources != NULL &&
+         (!data_resource_adapter_valid(options->data_resources) ||
+          options->cbind_scratch_bytes == 0u ||
+          options->max_data_depth == 0u ||
+          options->max_data_container_items == 0u ||
+          options->max_data_buffer_bytes == 0u)))
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    return scxml_session_init_model(
+        session, config, SCXML_DATA_MODEL_CMETA,
+        options->initial_state, options->environment_overrides,
+        options->environment_override_count, options, false);
+}
+
+cflow_statechart_instance_status scxml_session_init_quickjs_model(
+    scxml_session *session, const scxml_session_config *config,
+    const scxml_quickjs_session_options_v1 *options) {
+    if (options == NULL ||
+        options->abi_version != SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 ||
+        options->struct_size < sizeof(*options) ||
+        options->initial_state == NULL)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    return scxml_session_init_model(
+        session, config, SCXML_DATA_MODEL_CMETA,
+        options->initial_state, NULL, 0u, NULL, true);
+}
+
+cflow_statechart_instance_status scxml_session_init_quickjs(
+    scxml_session *session, const scxml_session_config *config,
+    const scxml_quickjs_session_options_v1 *options) {
+    return scxml_quickjs_session_init(session, config, options);
 }
 
 cflow_mailbox_status scxml_session_try_send(

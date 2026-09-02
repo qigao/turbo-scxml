@@ -5,6 +5,7 @@
 #include <cflow/statechart.h>
 #include <cflow/statechart_instance.h>
 #include <cmeta/data.h>
+#include <cserde/cserde.h>
 #include <xml_parser/xml_parser.h>
 
 #include <stdbool.h>
@@ -22,6 +23,11 @@ extern "C" {
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
+#define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
+#define SCXML_DATA_RESOURCE_ADAPTER_ABI_V1 1u
+#define SCXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 1u
+#define SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 1u
+#define SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 1u
 #define SCXML_CMETA_DEFAULT_MAX_ITERATIONS 65536u
 
 #ifndef SCXML_PAYLOAD_MAX_ENTRIES
@@ -121,6 +127,126 @@ typedef struct scxml_cmeta_session_options_v2 {
     size_t environment_override_count;
 } scxml_cmeta_session_options_v2;
 
+typedef enum scxml_resource_status {
+    SCXML_RESOURCE_OK = 0,
+    SCXML_RESOURCE_NOT_FOUND,
+    SCXML_RESOURCE_TIMEOUT,
+    SCXML_RESOURCE_DENIED,
+    SCXML_RESOURCE_LIMIT_EXCEEDED,
+    SCXML_RESOURCE_INVALID_DATA,
+    SCXML_RESOURCE_FAILED
+} scxml_resource_status;
+
+/**
+ * One adapter-owned CSerde stream. A successful `open` publishes a READY
+ * reader and optional lease. TurboSCXML calls `close` exactly once after that
+ * success, including decode failure; the callback must release every backing
+ * object referenced by the reader.
+ */
+typedef struct scxml_data_resource {
+    cserde_reader reader;
+    void *lease;
+} scxml_data_resource;
+
+/**
+ * Synchronous host boundary for `<data src>`. The URI and expected descriptor
+ * are borrowed only for `open`; adapter operations and `user` remain borrowed
+ * through successful session destruction. The adapter must enforce resource,
+ * transport, authorization, and media-type policy before returning a reader.
+ */
+typedef struct scxml_data_resource_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_resource_status (*open)(
+        void *user, const char *uri, size_t uri_size,
+        const cmeta_data_desc *expected, scxml_data_resource *out);
+    void (*close)(void *user, scxml_data_resource *resource);
+} scxml_data_resource_adapter_v1;
+
+/**
+ * Versioned CMeta session provider with external data resources.
+ *
+ * V2 fields retain their semantics. A program containing `<data src>`
+ * requires a valid adapter and positive CBind scratch, depth, container-item,
+ * and per-value buffer limits. Adapter operations are copied; its user pointer
+ * remains borrowed until successful session destruction.
+ */
+typedef struct scxml_cmeta_session_options_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const void *initial_state;
+    const scxml_cmeta_environment_override *environment_overrides;
+    size_t environment_override_count;
+    const scxml_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t cbind_scratch_bytes;
+    size_t max_data_depth;
+    size_t max_data_container_items;
+    size_t max_data_buffer_bytes;
+} scxml_cmeta_session_options_v3;
+
+/** Adapter-owned immutable UTF-8 text returned during program admission. */
+typedef struct scxml_text_resource {
+    const char *data;
+    size_t size;
+    void *lease;
+} scxml_text_resource;
+
+/**
+ * Synchronous compile-time boundary for `<script src>`. URI and result views
+ * are borrowed only for the call. A successful `open` is paired with exactly
+ * one `close`, after TurboSCXML has copied the bounded source text.
+ */
+typedef struct scxml_text_resource_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_resource_status (*open)(
+        void *user, const char *uri, size_t uri_size,
+        size_t max_bytes, scxml_text_resource *out);
+    void (*close)(void *user, scxml_text_resource *resource);
+} scxml_text_resource_adapter_v1;
+
+/**
+ * Versioned limits for the opt-in `datamodel="quickjs-sandbox"` profile.
+ * No QuickJS ABI type crosses this boundary. Every size/time limit is a
+ * positive hard bound. The CMeta schema remains the session state authority.
+ * Signed and unsigned integers must stay within ECMAScript's exact safe
+ * integer range. Bool, integer, float, string, enum, struct, and one-level
+ * sequence values are admitted; unsupported or nested generic shapes fail
+ * compilation instead of failing during session execution.
+ */
+typedef struct scxml_quickjs_compile_options_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const cmeta_data_desc *root;
+    size_t max_source_bytes;
+    size_t max_instructions;
+    size_t max_operands;
+    size_t max_expression_depth;
+    size_t max_path_depth;
+    size_t max_literal_bytes;
+    size_t max_string_bytes;
+    size_t max_iterations;
+    size_t max_script_variables;
+    size_t max_heap_bytes;
+    size_t max_stack_bytes;
+    uint64_t max_eval_milliseconds;
+    size_t max_conversion_depth;
+    /** Cumulative import/export properties, including supplemental slots. */
+    size_t max_properties;
+    size_t max_array_items;
+    size_t max_snapshot_bytes;
+    const scxml_text_resource_adapter_v1 *script_resources;
+    void *script_resource_user;
+} scxml_quickjs_compile_options_v1;
+
+/** Initial CMeta object copied by one QuickJS-profile session. */
+typedef struct scxml_quickjs_session_options_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const void *initial_state;
+} scxml_quickjs_session_options_v1;
+
 typedef enum scxml_program_requirement {
     SCXML_REQUIREMENT_NONE = 0u,
     SCXML_REQUIREMENT_EVENT_IO = 1u << 0u,
@@ -132,7 +258,8 @@ typedef enum scxml_program_requirement {
     SCXML_REQUIREMENT_INVOKE_IDLOCATION = 1u << 6u,
     SCXML_REQUIREMENT_CONTENT = 1u << 7u,
     SCXML_REQUIREMENT_INVOKE_CONTENT = 1u << 8u,
-    SCXML_REQUIREMENT_LATE_BINDING = 1u << 9u
+    SCXML_REQUIREMENT_LATE_BINDING = 1u << 9u,
+    SCXML_REQUIREMENT_DATA_RESOURCE = 1u << 10u
 } scxml_program_requirement;
 
 typedef enum scxml_event_io_capability {
@@ -484,6 +611,10 @@ scxml_limits scxml_default_limits(void);
 scxml_cmeta_compile_options_v1
 scxml_cmeta_default_compile_options(const cmeta_data_desc *root);
 
+/** Return bounded QuickJS profile defaults with a borrowed CMeta root. */
+scxml_quickjs_compile_options_v1
+scxml_quickjs_default_compile_options(const cmeta_data_desc *root);
+
 /**
  * Validate and compile an SCXML Core document into one owning program.
  * `out` must be zero-initialized. Input and temporary XML/IR rows are copied;
@@ -509,6 +640,18 @@ scxml_status scxml_compile_cmeta(
     size_t input_size,
     const scxml_limits *limits,
     const scxml_cmeta_compile_options_v1 *options,
+    scxml_diagnostic *diagnostic);
+
+/**
+ * Compile exact `datamodel="quickjs-sandbox"`. Disabled builds return
+ * `SCXML_UNSUPPORTED_FEATURE` without loading a script resource.
+ */
+scxml_status scxml_compile_quickjs(
+    scxml_program *out,
+    const char *input,
+    size_t input_size,
+    const scxml_limits *limits,
+    const scxml_quickjs_compile_options_v1 *options,
     scxml_diagnostic *diagnostic);
 
 /** Destroy a quiescent program and its native Statechart/name mappings. */
@@ -614,6 +757,23 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v2(
     scxml_session *session,
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v2 *options);
+
+/**
+ * Initialize a CMeta session with an optional bounded `<data src>` provider.
+ * Missing or invalid provider configuration fails before attaching the native
+ * instance. Provider failures during binding raise `error.execution` and do
+ * not publish a partial destination value.
+ */
+cflow_statechart_instance_status scxml_session_init_cmeta_v3(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v3 *options);
+
+/** Initialize one session for a QuickJS-compiled program. */
+cflow_statechart_instance_status scxml_session_init_quickjs(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_quickjs_session_options_v1 *options);
 
 cflow_mailbox_status scxml_session_try_send(
     scxml_session *session, const cflow_event_view *event);

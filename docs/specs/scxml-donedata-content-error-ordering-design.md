@@ -33,7 +33,7 @@ completion transition 仍会立即完成选择，错误事件因此晚于 comple
 - completion Event envelope 只借用当前被消费 row 的标量文本或结构化对象；现有当前 Event
   生命周期结束前借用有效，随后 row 被释放。
 
-依赖保持单向 `TurboSCXML -> TurboUtils/CFlow/CMeta`。不增加回调到 CFlow 内部实现，也不
+依赖保持单向 `TurboSCXML -> Rocida/CFlow/CMeta`。不增加回调到 CFlow 内部实现，也不
 复制 StateChart 状态。
 
 ## 编译与执行模型

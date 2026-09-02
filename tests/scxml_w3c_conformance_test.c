@@ -2,7 +2,7 @@
 #include <scxml/scxml.h>
 #include <cflow/statechart_instance.h>
 #include <turbo_cmeta_data.h>
-#include <turbostl/typed.h>
+#include <rocida/stl/typed.h>
 #include <tlog.h>
 
 #include "tinytest.h"
@@ -27,11 +27,12 @@ enum {
     /* Test 417 completes two regions, their parallel, its parent, and root. */
     W3C_COMPLETION_CAPACITY = 5,
     W3C_MICROSTEP_LIMIT = 32,
+    W3C_SESSION_MAX_STORAGE_BYTES = 1024 * 1024,
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 157,
-    W3C_UNSUPPORTED_DOCUMENT_COUNT = 11,
+    W3C_PASS_DOCUMENT_COUNT = 168,
+    W3C_UNSUPPORTED_DOCUMENT_COUNT = 0,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -221,7 +222,63 @@ typedef struct w3c_cmeta_fixture_options {
     size_t max_iterations;
     const scxml_cmeta_environment_override *environment_overrides;
     size_t environment_override_count;
+    const scxml_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
 } w3c_cmeta_fixture_options;
+
+typedef struct w3c_data_resource_probe {
+    int64_t value;
+    size_t next_calls;
+    size_t open_calls;
+    size_t close_calls;
+} w3c_data_resource_probe;
+
+static cserde_status w3c_data_resource_next(
+    void *user, cserde_token *out) {
+    w3c_data_resource_probe *probe = (w3c_data_resource_probe *)user;
+    if (probe == NULL || out == NULL) return CSERDE_INVALID_ARGUMENT;
+    if (probe->next_calls++ != 0u) return CSERDE_DONE;
+    *out = (cserde_token){
+        .kind = CSERDE_SINT, .value.sint = probe->value};
+    return CSERDE_OK;
+}
+
+static const cserde_reader_ops w3c_data_resource_reader_ops = {
+    .struct_size = sizeof(cserde_reader_ops),
+    .abi_version = CSERDE_READER_OPS_ABI_VERSION,
+    .next = w3c_data_resource_next};
+
+static scxml_resource_status w3c_data_resource_open(
+    void *user, const char *uri, size_t uri_size,
+    const cmeta_data_desc *expected, scxml_data_resource *out) {
+    w3c_data_resource_probe *probe = (w3c_data_resource_probe *)user;
+    if (probe == NULL || uri == NULL || expected != &cmeta_data_int ||
+        out == NULL || uri_size != sizeof("mem:test552") - 1u ||
+        memcmp(uri, "mem:test552", uri_size) != 0)
+        return SCXML_RESOURCE_FAILED;
+    ++probe->open_calls;
+    probe->next_calls = 0u;
+    memset(out, 0, sizeof(*out));
+    if (cserde_reader_init(
+            &out->reader, &w3c_data_resource_reader_ops, probe) != CSERDE_OK)
+        return SCXML_RESOURCE_FAILED;
+    out->lease = probe;
+    return SCXML_RESOURCE_OK;
+}
+
+static void w3c_data_resource_close(
+    void *user, scxml_data_resource *resource) {
+    w3c_data_resource_probe *probe = (w3c_data_resource_probe *)user;
+    if (probe != NULL && resource != NULL && resource->lease == probe)
+        ++probe->close_calls;
+    if (resource != NULL) memset(resource, 0, sizeof(*resource));
+}
+
+static const scxml_data_resource_adapter_v1 w3c_data_resource_adapter = {
+    .abi_version = SCXML_DATA_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size = sizeof(scxml_data_resource_adapter_v1),
+    .open = w3c_data_resource_open,
+    .close = w3c_data_resource_close};
 
 typedef struct w3c_executor_blocker {
     atomic_bool entered;
@@ -236,7 +293,8 @@ typedef struct w3c_event_probe {
 Struct(w3c_cmeta_state,
     (tstr, invoke_id),
     (tstr, send_id),
-    (int, sequence)
+    (int, sequence),
+    (int, result)
 );
 
 static bool w3c_cmeta_state_copy(void *destination, const void *source) {
@@ -286,7 +344,9 @@ static const cmeta_data_field_desc w3c_cmeta_state_fields[] = {
     {"test.scxml.w3c.state.send-id", "send_id",
      offsetof(w3c_cmeta_state, send_id), &w3c_owned_string_desc},
     {"test.scxml.w3c.state.sequence", "sequence",
-     offsetof(w3c_cmeta_state, sequence), &cmeta_data_int}};
+     offsetof(w3c_cmeta_state, sequence), &cmeta_data_int},
+    {"test.scxml.w3c.state.result", "result",
+     offsetof(w3c_cmeta_state, result), &cmeta_data_int}};
 static const cmeta_data_struct_shape w3c_cmeta_state_shape = {
     .layout = StructMeta(w3c_cmeta_state),
     .fields = w3c_cmeta_state_fields,
@@ -3677,6 +3737,21 @@ static bool run_w3c_cmeta_fixture_with_schema(
             ? options->environment_overrides : NULL,
         .environment_override_count = options != NULL
             ? options->environment_override_count : 0u};
+    const scxml_cmeta_session_options_v3 resource_data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        .struct_size = sizeof(resource_data),
+        .initial_state = initial_state,
+        .environment_overrides = options != NULL
+            ? options->environment_overrides : NULL,
+        .environment_override_count = options != NULL
+            ? options->environment_override_count : 0u,
+        .data_resources = options != NULL ? options->data_resources : NULL,
+        .data_resource_user = options != NULL
+            ? options->data_resource_user : NULL,
+        .cbind_scratch_bytes = 256u,
+        .max_data_depth = 8u,
+        .max_data_container_items = 16u,
+        .max_data_buffer_bytes = 1024u};
     scxml_cmeta_compile_options_v1 compile_options =
         scxml_cmeta_default_compile_options(root);
     scxml_session_config config = {0};
@@ -3718,15 +3793,22 @@ static bool run_w3c_cmeta_fixture_with_schema(
         .completion_capacity = W3C_COMPLETION_CAPACITY,
         .microstep_limit = W3C_MICROSTEP_LIMIT,
         .effect_capacity = 2u,
+        .max_storage_bytes = W3C_SESSION_MAX_STORAGE_BYTES,
         .adapter_internal_event_capacity = 1u,
         .event_io = &event_io,
         .adapter_user = &probe};
     {
-        const cflow_statechart_instance_status init_status =
-            options != NULL && options->environment_override_count != 0u
-                ? scxml_session_init_cmeta_v2(
-                      &session, &config, &environment_data)
-                : scxml_session_init_cmeta(&session, &config, &data);
+        cflow_statechart_instance_status init_status;
+        if (options != NULL && options->data_resources != NULL)
+            init_status = scxml_session_init_cmeta_v3(
+                &session, &config, &resource_data);
+        else if (options != NULL &&
+                 options->environment_override_count != 0u)
+            init_status = scxml_session_init_cmeta_v2(
+                &session, &config, &environment_data);
+        else
+            init_status = scxml_session_init_cmeta(
+                &session, &config, &data);
         if (init_status != CFLOW_STATECHART_INSTANCE_OK) {
             info("fixture=%s session init status=%d error=%s", fixture_name,
                  (int)init_status, scxml_session_error(&session));
@@ -3862,6 +3944,17 @@ static bool run_w3c_cmeta_fixture_with_options(
 
 static bool run_w3c_cmeta_fixture(const char *fixture_name) {
     return run_w3c_cmeta_fixture_with_options(fixture_name, NULL);
+}
+
+static bool run_w3c_data_src_fixture(const char *fixture_name) {
+    w3c_data_resource_probe probe = {.value = 7};
+    const w3c_cmeta_fixture_options options = {
+        .data_resources = &w3c_data_resource_adapter,
+        .data_resource_user = &probe};
+    const bool succeeded =
+        run_w3c_cmeta_fixture_with_options(fixture_name, &options);
+    return succeeded && probe.open_calls == 1u &&
+           probe.close_calls == 1u;
 }
 
 typedef struct w3c_foreach_mutation_probe {
@@ -4932,6 +5025,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_w3c_fixture("test149.scxml");
     }
 
+    it("test 150 declares a missing foreach item variable") {
+        check_true(run_w3c_foreach_fixture("test150.scxml"));
+    }
+
+    it("test 151 declares a missing foreach index variable") {
+        check_true(run_w3c_foreach_fixture("test151.scxml"));
+    }
+
     it("test 158 executes one content block in document order") {
         check_w3c_fixture("test158.scxml");
     }
@@ -5243,6 +5344,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test279.scxml"));
     }
 
+    it("test 280 binds late data before its declaring state onentry") {
+        check_true(run_w3c_cmeta_fixture("test280.scxml"));
+    }
+
+    it("test 277 recovers from an illegal data initializer") {
+        check_true(run_w3c_cmeta_fixture("test277.scxml"));
+    }
+
     it("test 276 preserves a top-level value supplied at instantiation") {
         static const scxml_cmeta_environment_override overrides[] = {
             {"sequence", sizeof("sequence") - 1u}};
@@ -5259,6 +5368,14 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_true(run_w3c_cmeta_fixture("test550.scxml"));
     }
 
+    it("test 551 assigns inline data content at early binding time") {
+        check_true(run_w3c_cmeta_fixture("test551.scxml"));
+    }
+
+    it("test 552 loads data src at early binding time") {
+        check_true(run_w3c_data_src_fixture("test552.scxml"));
+    }
+
     it("test 487 raises error.execution for an unrepresentable value") {
         check_true(run_w3c_cmeta_fixture("test487.scxml"));
     }
@@ -5269,6 +5386,10 @@ suite("SCXML W3C-derived conformance regression corpus") {
 
     it("test 310 exposes In through the CMeta data model") {
         check_true(run_w3c_cmeta_fixture("test310.scxml"));
+    }
+
+    it("test 307 equates unbound data and missing loaded substructure") {
+        check_true(run_w3c_cmeta_fixture("test307.scxml"));
     }
 
     it("test 311 raises error.execution when a location cannot be evaluated") {
