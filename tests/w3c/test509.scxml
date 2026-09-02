@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml"
+       version="1.0" datamodel="cmeta" initial="waiting">
+  <state id="waiting">
+    <onentry>
+      <send event="test"
+            type="http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor"
+            targetexpr="_ioprocessors.basichttp.location"/>
+    </onentry>
+    <transition event="test" target="pass"/>
+    <transition event="*" target="fail"/>
+  </state>
+  <final id="pass"><onentry><send event="result.pass"/></onentry></final>
+  <final id="fail"><onentry><send event="result.fail"/></onentry></final>
+</scxml>
