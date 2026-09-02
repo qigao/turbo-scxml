@@ -20,6 +20,7 @@ typedef struct scxml_chttp_storage_layout {
     size_t endpoints;
     size_t endpoint_uris;
     size_t egress;
+    size_t cancel_tickets;
     size_t connection_uris;
     size_t authorities;
     size_t targets;
@@ -150,6 +151,10 @@ static bool calculate_storage_layout(
         !layout_take(&layout.total, _Alignof(scxml_chttp_egress_row),
                      config->egress_capacity,
                      sizeof(scxml_chttp_egress_row), &layout.egress) ||
+        !layout_take(&layout.total, _Alignof(scxml_chttp_cancel_ticket),
+                     config->egress_capacity,
+                     sizeof(scxml_chttp_cancel_ticket),
+                     &layout.cancel_tickets) ||
         !layout_take(&layout.total, 1u, config->egress_capacity,
                      string_stride, &layout.connection_uris) ||
         !layout_take(&layout.total, 1u, config->egress_capacity,
@@ -157,7 +162,8 @@ static bool calculate_storage_layout(
         !layout_take(&layout.total, 1u, config->egress_capacity,
                      string_stride, &layout.targets) ||
         !layout_take(&layout.total, 1u, config->egress_capacity,
-                     string_stride, &layout.send_ids) ||
+                     SCXML_EVENT_METADATA_CAPACITY + 1u,
+                     &layout.send_ids) ||
         !layout_take(&layout.total, 1u, config->egress_capacity,
                      config->max_encoded_body_bytes, &layout.bodies))
         return false;
@@ -319,6 +325,8 @@ static void processor_worker(void *user) {
             continue;
         }
         turbo_mutex_unlock(&processor->lock);
+        while (scxml_chttp_egress_cancel_one(processor)) {}
+        (void)scxml_chttp_egress_submit_one(processor);
         poll_status = chttp_async_client_poll(
             &processor->client, 0u, &completions);
         if (poll_status != TURBO_OK && poll_status != TURBO_ESHUTDOWN) {
@@ -369,6 +377,8 @@ int scxml_chttp_processor_init(
         (scxml_chttp_endpoint_row *)(void *)(storage + layout.endpoints);
     impl->egress =
         (scxml_chttp_egress_row *)(void *)(storage + layout.egress);
+    impl->cancel_tickets = (scxml_chttp_cancel_ticket *)(void *)(
+        storage + layout.cancel_tickets);
     impl->advertised_authority_size = authority_size;
     impl->base_path_size = base_path_size;
     memcpy(impl->advertised_authority, config->advertised_authority,
@@ -381,6 +391,7 @@ int scxml_chttp_processor_init(
         impl->endpoints[index].access_uri =
             (char *)(storage + layout.endpoint_uris + index * string_stride);
     for (index = 0u; index < config->egress_capacity; ++index) {
+        impl->egress[index].processor = impl;
         impl->egress[index].connection_uri =
             (char *)(storage + layout.connection_uris + index * string_stride);
         impl->egress[index].authority =
@@ -388,10 +399,12 @@ int scxml_chttp_processor_init(
         impl->egress[index].target =
             (char *)(storage + layout.targets + index * string_stride);
         impl->egress[index].send_id =
-            (char *)(storage + layout.send_ids + index * string_stride);
+            (char *)(storage + layout.send_ids +
+                     index * (SCXML_EVENT_METADATA_CAPACITY + 1u));
         impl->egress[index].body =
             (char *)(storage + layout.bodies +
                      index * config->max_encoded_body_bytes);
+        impl->cancel_tickets[index].processor = impl;
     }
     turbo_mutex_init(&impl->lock);
     if (impl->lock == NULL) {
@@ -631,7 +644,8 @@ static scxml_adapter_status composite_prepare_send(
             request->type, request->type_size,
             SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI,
             sizeof(SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI) - 1u))
-        return SCXML_ADAPTER_CLOSED;
+        return scxml_chttp_egress_prepare_send(
+            binding, request, out_ticket, out_error);
     return binding->downstream.prepare_send(
         binding->downstream_user, request, out_ticket, out_error);
 }
@@ -641,6 +655,8 @@ static scxml_adapter_status composite_prepare_cancel(
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     scxml_chttp_binding_impl *binding = (scxml_chttp_binding_impl *)user;
     bool open;
+    bool handled = false;
+    scxml_adapter_status status;
     if (binding == NULL || request == NULL || out_ticket == NULL ||
         out_error == NULL)
         return SCXML_ADAPTER_INVALID_CONTRACT;
@@ -654,6 +670,9 @@ static scxml_adapter_status composite_prepare_cancel(
     if ((binding->downstream.capabilities & SCXML_EVENT_IO_CAP_CANCEL) == 0u ||
         binding->downstream.prepare_cancel == NULL)
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    status = scxml_chttp_egress_prepare_cancel(
+        binding, request, out_ticket, out_error, &handled);
+    if (handled || status != SCXML_ADAPTER_ACCEPTED) return status;
     return binding->downstream.prepare_cancel(
         binding->downstream_user, request, out_ticket, out_error);
 }
@@ -664,8 +683,10 @@ static void composite_close(void *user) {
     if (binding == NULL || binding->processor == NULL) return;
     turbo_mutex_lock(&binding->processor->lock);
     if (binding->state == SCXML_CHTTP_BINDING_RESERVED ||
-        binding->state == SCXML_CHTTP_BINDING_ACTIVE)
+        binding->state == SCXML_CHTTP_BINDING_ACTIVE) {
         binding->state = SCXML_CHTTP_BINDING_CLOSING;
+        scxml_chttp_egress_close_binding_locked(binding);
+    }
     if (!binding->downstream_close_called) {
         binding->downstream_close_called = true;
         close_downstream = true;
@@ -759,6 +780,7 @@ int scxml_chttp_binding_init(
     impl->endpoint_index = index;
     impl->endpoint_generation = endpoint->generation;
     impl->state = SCXML_CHTTP_BINDING_RESERVED;
+    impl->next_commit_sequence = 1u;
     composite_capabilities = SCXML_EVENT_IO_CAP_SEND |
         SCXML_EVENT_IO_CAP_PAYLOAD | SCXML_EVENT_IO_CAP_CONTENT;
     if ((config->scxml_adapter->capabilities &
@@ -857,6 +879,7 @@ int scxml_chttp_binding_activate(
         impl->session = session;
         impl->program = program;
         impl->state = SCXML_CHTTP_BINDING_ACTIVE;
+        turbo_cond_signal(&impl->processor->wake);
     }
     turbo_mutex_unlock(&impl->processor->lock);
     return status;
@@ -908,12 +931,17 @@ bool scxml_chttp_processor_get_stats(
         }
     }
     *out_stats = (scxml_chttp_processor_stats){
+        .egress_accepted = impl->egress_accepted,
         .egress_completed = impl->egress_completed,
         .egress_failed = impl->egress_failed,
+        .egress_cancelled = impl->egress_cancelled,
+        .ingress_requests = impl->ingress_requests,
         .ingress_admitted = impl->ingress_admitted,
         .ingress_rejected = impl->ingress_rejected,
         .invariant_failures = impl->invariant_failures,
         .live_bindings = impl->live_bindings,
+        .queued_egress = impl->queued_egress,
+        .in_flight_egress = impl->in_flight_egress,
         .active_callbacks = active_callbacks,
         .outbound_references = outbound_references,
         .running = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING,

@@ -21,6 +21,16 @@ typedef enum scxml_chttp_binding_state {
 } scxml_chttp_binding_state;
 
 typedef struct scxml_chttp_binding_impl scxml_chttp_binding_impl;
+typedef struct scxml_chttp_processor_impl scxml_chttp_processor_impl;
+
+typedef enum scxml_chttp_egress_state {
+    SCXML_CHTTP_EGRESS_FREE = 0,
+    SCXML_CHTTP_EGRESS_RESERVED,
+    SCXML_CHTTP_EGRESS_READY,
+    SCXML_CHTTP_EGRESS_SUBMITTING,
+    SCXML_CHTTP_EGRESS_SUBMITTED,
+    SCXML_CHTTP_EGRESS_COMPLETING
+} scxml_chttp_egress_state;
 
 typedef struct scxml_chttp_endpoint_row {
     scxml_chttp_binding_impl *binding;
@@ -31,17 +41,34 @@ typedef struct scxml_chttp_endpoint_row {
 } scxml_chttp_endpoint_row;
 
 typedef struct scxml_chttp_egress_row {
+    scxml_chttp_processor_impl *processor;
     scxml_chttp_binding_impl *binding;
     uint32_t generation;
-    uint32_t state;
+    scxml_chttp_egress_state state;
     char *connection_uri;
     char *authority;
     char *target;
     char *send_id;
     char *body;
+    size_t body_size;
+    const char *media_type;
+    size_t media_type_size;
+    size_t send_id_size;
+    uint64_t delay_ms;
+    uint64_t due_ms;
+    uint64_t commit_sequence;
+    chttp_request request;
+    bool cancel_requested;
 } scxml_chttp_egress_row;
 
-typedef struct scxml_chttp_processor_impl {
+typedef struct scxml_chttp_cancel_ticket {
+    scxml_chttp_processor_impl *processor;
+    size_t target_index;
+    uint32_t target_generation;
+    bool reserved;
+} scxml_chttp_cancel_ticket;
+
+struct scxml_chttp_processor_impl {
     scxml_chttp_processor_config_v1 config;
     chttp_server server;
     chttp_async_client client;
@@ -70,13 +97,19 @@ typedef struct scxml_chttp_processor_impl {
     size_t base_path_size;
     scxml_chttp_endpoint_row *endpoints;
     scxml_chttp_egress_row *egress;
+    scxml_chttp_cancel_ticket *cancel_tickets;
     size_t live_bindings;
+    size_t queued_egress;
+    size_t in_flight_egress;
+    uint64_t egress_accepted;
     uint64_t egress_completed;
     uint64_t egress_failed;
+    uint64_t egress_cancelled;
+    uint64_t ingress_requests;
     uint64_t ingress_admitted;
     uint64_t ingress_rejected;
     uint64_t invariant_failures;
-} scxml_chttp_processor_impl;
+};
 
 struct scxml_chttp_binding_impl {
     scxml_chttp_processor_impl *processor;
@@ -92,6 +125,7 @@ struct scxml_chttp_binding_impl {
     const scxml_program *program;
     size_t active_callbacks;
     size_t outbound_references;
+    uint64_t next_commit_sequence;
     bool downstream_close_called;
 };
 
@@ -119,6 +153,8 @@ typedef struct scxml_chttp_decoded_form {
 void scxml_chttp_test_fail_next_worker_create(void);
 void scxml_chttp_test_delay_next_worker_exit(uint32_t delay_ms);
 void scxml_chttp_test_force_next_server_terminal_error(void);
+void scxml_chttp_test_fail_next_cancel_admission(void);
+void scxml_chttp_test_delay_next_completion_release(uint32_t delay_ms);
 
 scxml_adapter_status scxml_chttp_codec_encode(
     const scxml_send_request *request,
@@ -135,5 +171,21 @@ scxml_chttp_decode_status scxml_chttp_codec_decode_form(
     char *text_storage, size_t text_capacity,
     size_t *out_required_text_size,
     scxml_chttp_decoded_form *out);
+
+scxml_adapter_status scxml_chttp_egress_prepare_send(
+    scxml_chttp_binding_impl *binding,
+    const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket,
+    const char **out_error);
+scxml_adapter_status scxml_chttp_egress_prepare_cancel(
+    scxml_chttp_binding_impl *binding,
+    const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket,
+    const char **out_error,
+    bool *out_handled);
+void scxml_chttp_egress_close_binding_locked(
+    scxml_chttp_binding_impl *binding);
+bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor);
+bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor);
 
 #endif /* SCXML_CHTTP_EVENT_IO_INTERNAL_H */
