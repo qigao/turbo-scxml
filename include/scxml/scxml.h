@@ -55,6 +55,7 @@ typedef enum scxml_status {
 typedef struct scxml_limits {
     turbo_xml_limits xml;
     size_t max_states;
+    /** Maximum public compiled Event names; excludes one private routing slot. */
     size_t max_events;
     size_t max_transitions;
     size_t max_name_bytes;
@@ -833,6 +834,16 @@ cflow_mailbox_status scxml_session_try_send(
  */
 cflow_mailbox_status scxml_session_try_send_with_metadata(
     scxml_session *session, const cflow_event_view *event,
+    const scxml_event_metadata *metadata);
+/**
+ * Copy an arbitrarily named external Event and its bounded metadata. The
+ * incoming name is routed by the longest compiled hierarchical Event prefix;
+ * an otherwise unmatched name can select only a `*` transition. `_event.name`
+ * retains the complete incoming name during processing. Names longer than
+ * `SCXML_EVENT_METADATA_CAPACITY` bytes are rejected before admission.
+ */
+cflow_mailbox_status scxml_session_try_send_named_with_metadata(
+    scxml_session *session, const char *name, size_t name_size,
     const scxml_event_metadata *metadata);
 /**
  * Copy one returned invocation Event into the external FIFO with its live

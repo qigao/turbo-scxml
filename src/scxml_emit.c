@@ -2781,7 +2781,8 @@ static scxml_status emit_transition_targets(
 static scxml_status emit_transition_token(
     scxml_build *build, cflow_machine_state_id source,
     scxml_syntax_node transition_node, turbo_xml_string_view event_token,
-    bool has_event, cflow_machine_state_id completion_override,
+    bool has_event, cflow_event_id event_override,
+    cflow_machine_state_id completion_override,
     cflow_statechart_transition_id *out_transition) {
     const scxml_syntax_attribute target_attribute =
         scxml_analyze_find_attribute(transition_node, "target");
@@ -2814,6 +2815,9 @@ static scxml_status emit_transition_token(
         row.completion = completion_override;
     } else if (!has_event) {
         row.trigger = CFLOW_STATECHART_TRIGGER_EVENTLESS;
+    } else if (event_override != 0u) {
+        row.trigger = CFLOW_STATECHART_TRIGGER_EVENT;
+        row.event = event_override;
     } else {
         turbo_xml_string_view completed = {NULL, 0u};
         if (scxml_analyze_completion_token(event_token, &completed)) {
@@ -2912,7 +2916,7 @@ static scxml_status emit_transition_with_action(
     bool has_event, cflow_statechart_executable_id executable) {
     cflow_statechart_transition_id transition = 0u;
     scxml_status status = emit_transition_token(
-        build, source, transition_node, event_name, has_event, 0u,
+        build, source, transition_node, event_name, has_event, 0u, 0u,
         &transition);
     if (status != SCXML_OK) return status;
     if (executable != 0u) {
@@ -2923,6 +2927,23 @@ static scxml_status emit_transition_with_action(
     return SCXML_OK;
 }
 
+static scxml_status emit_private_external_transition_with_action(
+    scxml_build *build, cflow_machine_state_id source,
+    scxml_syntax_node transition_node,
+    cflow_statechart_executable_id executable) {
+    cflow_statechart_transition_id transition = 0u;
+    const turbo_xml_string_view empty = {NULL, 0u};
+    scxml_status status = emit_transition_token(
+        build, source, transition_node, empty, true,
+        build->external_unmatched_event, 0u, &transition);
+    if (status != SCXML_OK) return status;
+    if (executable != 0u)
+        build->transition_actions[build->transition_action_index++] =
+            (cflow_statechart_transition_action){
+                transition, executable, 0u};
+    return SCXML_OK;
+}
+
 static scxml_status emit_completion_transition_with_action(
     scxml_build *build, cflow_machine_state_id source,
     scxml_syntax_node transition_node, cflow_machine_state_id completion,
@@ -2930,7 +2951,7 @@ static scxml_status emit_completion_transition_with_action(
     cflow_statechart_transition_id transition = 0u;
     const turbo_xml_string_view empty = {NULL, 0u};
     scxml_status status = emit_transition_token(
-        build, source, transition_node, empty, true, completion,
+        build, source, transition_node, empty, true, 0u, completion,
         &transition);
     if (status != SCXML_OK) return status;
     if (executable != 0u)
@@ -3023,6 +3044,18 @@ scxml_status scxml_emit_transitions(scxml_build *build,
                     status = emit_transition_with_action(
                         build, source, child, event_name, true, executable);
                     if (status != SCXML_OK) return status;
+                }
+                for (cursor = 0u; ; ) {
+                    turbo_xml_string_view descriptor;
+                    if (!scxml_analyze_token_next(
+                            value, &cursor, &descriptor))
+                        break;
+                    if (descriptor.size != 1u || descriptor.data[0] != '*')
+                        continue;
+                    status = emit_private_external_transition_with_action(
+                        build, source, child, executable);
+                    if (status != SCXML_OK) return status;
+                    break;
                 }
                 for (cursor = 0u; cursor < build->state_name_index;
                      ++cursor) {

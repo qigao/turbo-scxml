@@ -1926,6 +1926,7 @@ static scxml_status analyze_transition(scxml_build *build,
     size_t token_count = 0u;
     size_t target_count = 0u;
     size_t descriptor_count = 0u;
+    size_t match_all_count = 0u;
     bool nonempty = false;
     scxml_status status;
 
@@ -1989,6 +1990,14 @@ static scxml_status analyze_transition(scxml_build *build,
                     "event descriptor wildcard must be '*' or a trailing '.*'");
             }
             ++descriptor_count;
+            if (match_all &&
+                !scxml_analyze_checked_add(
+                    match_all_count, 1u, &match_all_count)) {
+                return scxml_analyze_fail(
+                    build, SCXML_LIMIT_EXCEEDED,
+                    scxml_syntax_attribute_location(event_attribute),
+                    "wildcard Event descriptor count overflow");
+            }
             if (!match_all &&
                 !scxml_analyze_checked_add(counts->event_occurrences, 1u,
                              &counts->event_occurrences)) {
@@ -2010,6 +2019,14 @@ static scxml_status analyze_transition(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                           scxml_syntax_node_location(node),
                           "event descriptor count overflow");
+    }
+    if (!scxml_analyze_checked_add(
+            counts->external_unmatched_transition_rows, match_all_count,
+            &counts->external_unmatched_transition_rows)) {
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(node),
+            "private wildcard transition count overflow");
     }
     if (!scxml_analyze_checked_add(counts->transition_rows, token_count,
                      &counts->transition_rows)) {
@@ -2037,6 +2054,17 @@ static scxml_status analyze_transition(scxml_build *build,
                               scxml_syntax_attribute_location(target_attribute),
                               "descriptor target count overflow");
         }
+        if (!scxml_analyze_checked_multiply(
+                target_count, match_all_count, &emitted_target_count) ||
+            !scxml_analyze_checked_add(
+                counts->external_unmatched_target_rows,
+                emitted_target_count,
+                &counts->external_unmatched_target_rows)) {
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED,
+                scxml_syntax_attribute_location(target_attribute),
+                "private wildcard target count overflow");
+        }
     }
     if (condition_attribute.impl != NULL &&
         !scxml_analyze_checked_add(counts->guard_rows, token_count,
@@ -2052,6 +2080,15 @@ static scxml_status analyze_transition(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                           scxml_syntax_attribute_location(condition_attribute),
                           "descriptor guard count overflow");
+    }
+    if (condition_attribute.impl != NULL &&
+        !scxml_analyze_checked_add(
+            counts->external_unmatched_guard_rows, match_all_count,
+            &counts->external_unmatched_guard_rows)) {
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_attribute_location(condition_attribute),
+            "private wildcard guard count overflow");
     }
     status = analyze_executable_block(
         build, node, counts, false, &nonempty);
@@ -2070,6 +2107,15 @@ static scxml_status analyze_transition(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
                           scxml_syntax_node_location(node),
                           "descriptor action count overflow");
+    }
+    if (nonempty &&
+        !scxml_analyze_checked_add(
+            counts->external_unmatched_action_rows, match_all_count,
+            &counts->external_unmatched_action_rows)) {
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(node),
+            "private wildcard action count overflow");
     }
     return SCXML_OK;
 }

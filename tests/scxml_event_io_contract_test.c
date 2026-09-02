@@ -518,7 +518,6 @@ static host_pump_status host_router_pump(host_router *router) {
     host_message *selected = NULL;
     host_endpoint target = {0};
     host_endpoint source = {0};
-    cflow_event_view event = {0};
     scxml_event_metadata metadata = {0};
     cflow_mailbox_status mailbox_status = CFLOW_MAILBOX_INVALID_ARGUMENT;
     size_t index;
@@ -549,12 +548,10 @@ static host_pump_status host_router_pump(host_router *router) {
         .origin_size = strlen(source.location),
         .origin_type = HOST_ORIGIN_TYPE,
         .origin_type_size = sizeof(HOST_ORIGIN_TYPE) - 1u};
-    if (source.active && target.active && target.accessible &&
-        scxml_program_event(
-            target.program, snapshot.event, strlen(snapshot.event), &event)) {
-        mailbox_status = scxml_session_try_send_with_metadata(
-            target.session, &event, &metadata);
-    }
+    if (source.active && target.active && target.accessible)
+        mailbox_status = scxml_session_try_send_named_with_metadata(
+            target.session, snapshot.event, strlen(snapshot.event),
+            &metadata);
 
     turbo_mutex_lock(&router->lock);
     if (mailbox_status == CFLOW_MAILBOX_FULL) {
@@ -1393,6 +1390,101 @@ spec("SCXML host Event I/O adapter contract") {
         cflow_executor_destroy(&parent_executor);
         scxml_program_destroy(&child_program);
         scxml_program_destroy(&parent_program);
+        host_router_destroy(&router);
+    }
+
+    it("preserves the full incoming Event name while routing a compiled prefix") {
+        static const char receiver_source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='waiting'><transition "
+            "event='alarm.system' "
+            "cond='_event.name == &quot;alarm.system.disk.full&quot;' "
+            "target='done'/></state><final id='done'/></scxml>";
+        const scxml_cmeta_compile_options_v1 compile_options =
+            scxml_cmeta_default_compile_options(&HOST_CMETA_STATE_DESC);
+        const host_cmeta_state initial_data = {0};
+        const scxml_cmeta_session_options_v1 cmeta_data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(cmeta_data),
+            .initial_state = &initial_data};
+        host_router router;
+        host_adapter_context sender_adapter;
+        scxml_program receiver_program = {0};
+        scxml_program sender_program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session receiver = {0};
+        scxml_session sender = {0};
+        cflow_executor receiver_executor = {0};
+        cflow_executor sender_executor = {0};
+        scxml_session_config receiver_config;
+        scxml_session_config sender_config;
+        cflow_statechart_instance_stats stats = {0};
+        cflow_event_view go = {0};
+        char receiver_location[HOST_LOCATION_CAPACITY];
+        char sender_source[512];
+        size_t required = 0u;
+        size_t receiver_endpoint = SIZE_MAX;
+        size_t sender_endpoint = SIZE_MAX;
+
+        check_true(host_router_init(&router, HOST_MESSAGE_CAPACITY));
+        host_adapter_init(&sender_adapter, &router);
+        check_equal(scxml_compile_cmeta(
+                        &receiver_program, receiver_source,
+                        sizeof(receiver_source) - 1u, NULL,
+                        &compile_options, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&receiver_executor));
+        receiver_config = host_session_config(
+            &receiver_program, &receiver_executor);
+        check_equal(scxml_session_init_cmeta(
+                        &receiver, &receiver_config, &cmeta_data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_session_copy_location(
+                        &receiver, receiver_location,
+                        sizeof(receiver_location), &required),
+                    SCXML_LOCATION_OK);
+        check_true(host_router_register(
+            &router, &receiver, &receiver_program, true, NULL,
+            &receiver_endpoint));
+
+        check_true(snprintf(
+            sender_source, sizeof(sender_source),
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='go' target='sent'>"
+            "<send event='alarm.system.disk.full' target='%s'/>"
+            "</transition></state><state id='sent'/></scxml>",
+            receiver_location) > 0);
+        check_equal(host_compile(
+                        sender_source, &sender_program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&sender_executor));
+        sender_config = host_session_config(&sender_program, &sender_executor);
+        sender_config.event_io = &HOST_ADAPTER;
+        sender_config.adapter_user = &sender_adapter;
+        check_equal(scxml_session_init(&sender, &sender_config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(host_router_register(
+            &router, &sender, &sender_program, true, &sender_adapter,
+            &sender_endpoint));
+        check_true(scxml_program_event(&sender_program, "go", 2u, &go));
+        check_equal(scxml_session_try_send(&sender, &go), CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&sender_executor));
+        check_equal(host_router_pump(&router), HOST_PUMP_DELIVERED);
+        check_true(cflow_executor_wait_idle(&receiver_executor));
+        check_true(scxml_session_get_stats(&receiver, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+
+        check_equal(scxml_session_destroy(&sender),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(host_router_unregister(&router, sender_endpoint));
+        check_true(host_router_unregister(&router, receiver_endpoint));
+        check_equal(scxml_session_destroy(&receiver),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&sender_executor);
+        cflow_executor_destroy(&receiver_executor);
+        scxml_program_destroy(&sender_program);
+        scxml_program_destroy(&receiver_program);
         host_router_destroy(&router);
     }
 

@@ -1307,7 +1307,8 @@ static bool scxml_runtime_observe_event(
             session, event->completion, out_error);
     }
     if (event->event == NULL || event->event->id == 0u ||
-        event->event->id > session->program->event_name_count) {
+        (event->event->id > session->program->event_name_count &&
+         event->event->id != session->program->external_unmatched_event)) {
         *out_error = "SCXML observed Event is outside the program map";
         return false;
     }
@@ -1354,6 +1355,13 @@ static bool scxml_runtime_observe_event(
             turbo_mutex_unlock(&session->registry_lock);
             *out_error = "SCXML external Event metadata token is stale";
             return false;
+        }
+        if (row->name_size != 0u) {
+            memcpy(session->current_event_name, row->name, row->name_size);
+            session->current_event_name[row->name_size] = '\0';
+            session->system_values.event_name =
+                (scxml_expr_string_view){
+                    session->current_event_name, row->name_size};
         }
 #define SCXML_COPY_CURRENT(field)                                           \
         do {                                                                \
