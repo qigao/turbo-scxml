@@ -9,6 +9,7 @@ typedef struct provider_probe provider_probe;
 
 typedef struct provider_ticket {
     provider_probe *owner;
+    size_t ordinal;
     bool live;
 } provider_ticket;
 
@@ -17,6 +18,8 @@ struct provider_probe {
     size_t prepare_count;
     size_t commit_count;
     size_t discard_count;
+    size_t commit_order[4];
+    size_t discard_order[4];
     size_t reject_on_prepare;
     bool malformed_ticket;
     bool quiescent;
@@ -29,6 +32,8 @@ static void ticket_commit(void *user) {
     provider_ticket *ticket = (provider_ticket *)user;
     if (ticket == NULL || !ticket->live) return;
     ticket->live = false;
+    ticket->owner->commit_order[ticket->owner->commit_count] =
+        ticket->ordinal;
     ++ticket->owner->commit_count;
 }
 
@@ -36,6 +41,8 @@ static void ticket_discard(void *user) {
     provider_ticket *ticket = (provider_ticket *)user;
     if (ticket == NULL || !ticket->live) return;
     ticket->live = false;
+    ticket->owner->discard_order[ticket->owner->discard_count] =
+        ticket->ordinal;
     ++ticket->owner->discard_count;
 }
 
@@ -62,6 +69,7 @@ static scxml_adapter_status prepare_accept(
     }
     ticket = &probe->tickets[index];
     ticket->owner = probe;
+    ticket->ordinal = index + 1u;
     ticket->live = true;
     *out_ticket = (cflow_statechart_effect_ticket){
         .commit = ticket_commit,
@@ -103,6 +111,13 @@ static ccxml_status compile_program(
         program, source, (size_t)written, NULL, &diagnostic);
 }
 
+static ccxml_status compile_document(
+    ccxml_program *program, const char *source) {
+    ccxml_diagnostic diagnostic = {0};
+    return ccxml_compile(
+        program, source, strlen(source), NULL, &diagnostic);
+}
+
 static ccxml_status init_session(
     ccxml_session *session, const ccxml_program *program,
     provider_probe *probe) {
@@ -136,6 +151,46 @@ spec("CCXML session") {
         check_equal(probe.commit_count, (size_t)1);
         check_equal(probe.discard_count, (size_t)0);
         check_equal(probe.connection_id, "call-7");
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("commits prepared effects in document order") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(
+            compile_program(&program, "<accept/><accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(probe.commit_count, (size_t)2);
+        check_equal(probe.commit_order[0], (size_t)1);
+        check_equal(probe.commit_order[1], (size_t)2);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("selects the first exact transition in document order") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='connection.alerting'><exit/></transition>"
+            "<transition event='connection.alerting'><accept/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.prepare_count, (size_t)0);
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
         ccxml_program_destroy(&program);
@@ -180,21 +235,44 @@ spec("CCXML session") {
         ccxml_program program = {0};
         ccxml_session session = {0};
         provider_probe probe = {
-            .reject_on_prepare = 2u,
+            .reject_on_prepare = 3u,
             .quiescent = true};
         ccxml_event event = alerting_event();
 
         check_equal(
-            compile_program(&program, "<accept/><accept/>"), CCXML_OK);
+            compile_program(
+                &program, "<accept/><accept/><accept/>"), CCXML_OK);
         check_equal(init_session(&session, &program, &probe), CCXML_OK);
         check_equal(
             ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
-        check_equal(probe.prepare_count, (size_t)2);
+        check_equal(probe.prepare_count, (size_t)3);
         check_equal(probe.commit_count, (size_t)0);
-        check_equal(probe.discard_count, (size_t)1);
+        check_equal(probe.discard_count, (size_t)2);
+        check_equal(probe.discard_order[0], (size_t)2);
+        check_equal(probe.discard_order[1], (size_t)1);
         check_false(ccxml_session_is_terminated(&session));
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects an adapter with a missing prepare operation") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_telephony_adapter_v1 incomplete = provider_adapter;
+        ccxml_session_config config;
+        incomplete.prepare_accept = NULL;
+
+        check_equal(compile_program(&program, ""), CCXML_OK);
+        config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &incomplete,
+            .telephony_user = &probe};
+        check_equal(
+            ccxml_session_init(&session, &config), CCXML_INVALID_ARGUMENT);
+        check_null(session.impl);
+
         ccxml_program_destroy(&program);
     }
 
