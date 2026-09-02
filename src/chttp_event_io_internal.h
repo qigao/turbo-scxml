@@ -95,6 +95,10 @@ struct scxml_chttp_processor_impl {
     size_t advertised_authority_size;
     char *base_path;
     size_t base_path_size;
+    char *route_path;
+    char *ingress_text;
+    size_t ingress_text_capacity;
+    scxml_chttp_form_entry_view *ingress_entries;
     scxml_chttp_endpoint_row *endpoints;
     scxml_chttp_egress_row *egress;
     scxml_chttp_cancel_ticket *cancel_tickets;
@@ -171,6 +175,7 @@ scxml_chttp_decode_status scxml_chttp_codec_decode_form(
     char *text_storage, size_t text_capacity,
     size_t *out_required_text_size,
     scxml_chttp_decoded_form *out);
+bool scxml_chttp_codec_utf8_valid(const void *data, size_t size);
 
 scxml_adapter_status scxml_chttp_egress_prepare_send(
     scxml_chttp_binding_impl *binding,
@@ -187,5 +192,6 @@ void scxml_chttp_egress_close_binding_locked(
     scxml_chttp_binding_impl *binding);
 bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor);
 bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor);
+int scxml_chttp_ingress_register(scxml_chttp_processor_impl *processor);
 
 #endif /* SCXML_CHTTP_EVENT_IO_INTERNAL_H */

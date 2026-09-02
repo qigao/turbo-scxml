@@ -19,10 +19,10 @@ static bool checked_add(size_t left, size_t right, size_t *out) {
     return true;
 }
 
-static bool utf8_view_valid(const char *data, size_t size) {
+bool scxml_chttp_codec_utf8_valid(const void *data, size_t size) {
     if (size == 0u) return true;
     return data != NULL && memchr(data, '\0', size) == NULL &&
-           vstr_utf8_valid(vstr_from_buf(data, size));
+           vstr_utf8_valid(vstr_from_buf((const char *)data, size));
 }
 
 static bool form_unreserved(unsigned char value) {
@@ -37,7 +37,7 @@ static bool form_encoded_size(
     const char *data, size_t size, size_t limit, size_t *out) {
     size_t required = 0u;
     size_t index;
-    if (size > limit || !utf8_view_valid(data, size)) return false;
+    if (size > limit || !scxml_chttp_codec_utf8_valid(data, size)) return false;
     for (index = 0u; index < size; ++index) {
         const unsigned char value = (unsigned char)data[index];
         const size_t width = form_unreserved(value) || value == ' ' ? 1u : 3u;
@@ -121,7 +121,7 @@ static bool scalar_text(
     if (value->kind == SCXML_PAYLOAD_VALUE_STRING) {
         *out_data = value->data.string.data;
         *out_size = value->data.string.size;
-        return utf8_view_valid(*out_data, *out_size);
+        return scxml_chttp_codec_utf8_valid(*out_data, *out_size);
     }
     if (value->kind == SCXML_PAYLOAD_VALUE_BOOL)
         written = snprintf(storage, 64u, "%s",
@@ -208,7 +208,7 @@ scxml_adapter_status scxml_chttp_codec_encode(
                    content->kind == SCXML_CONTENT_XML_UTF8) {
             data = content->bytes;
             size = content->byte_count;
-            if (!utf8_view_valid(data, size))
+            if (!scxml_chttp_codec_utf8_valid(data, size))
                 return SCXML_ADAPTER_ERROR_EXECUTION;
             media_type = content->kind == SCXML_CONTENT_XML_UTF8
                 ? XML_MEDIA_TYPE : TEXT_MEDIA_TYPE;
@@ -340,7 +340,8 @@ static bool decode_component(
         if (value == 0u) return false;
         destination[destination_index++] = (char)value;
     }
-    if (!utf8_view_valid(destination, destination_index)) return false;
+    if (!scxml_chttp_codec_utf8_valid(destination, destination_index))
+        return false;
     *out_size = destination_index;
     return true;
 }
