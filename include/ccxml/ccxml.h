@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define CCXML_DIAGNOSTIC_CAPACITY 256u
+#define CCXML_TELEPHONY_ADAPTER_ABI_V1 1u
 
 typedef enum ccxml_status {
     CCXML_OK = 0,
@@ -53,6 +54,67 @@ ccxml_status ccxml_compile(
     ccxml_diagnostic *diagnostic);
 
 void ccxml_program_destroy(ccxml_program *program);
+
+/** Borrowed event fields valid only for one synchronous dispatch call. */
+typedef struct ccxml_event {
+    const char *name;
+    size_t name_size;
+    const char *connection_id;
+    size_t connection_id_size;
+} ccxml_event;
+
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_accept_request {
+    const char *connection_id;
+    size_t connection_id_size;
+} ccxml_accept_request;
+
+/**
+ * Versioned telephony bridge copied by session initialization.
+ *
+ * ACCEPTED transfers one move-only ticket with non-NULL commit and discard
+ * callbacks. All retained request bytes must be copied before prepare returns.
+ * Close is called exactly once after attachment. Destroy remains busy until
+ * is_quiescent reports that no callback can reach the borrowed session/user.
+ */
+typedef struct ccxml_telephony_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_adapter_status (*prepare_accept)(
+        void *user,
+        const ccxml_accept_request *request,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+    void (*close)(void *user);
+    bool (*is_quiescent)(void *user);
+} ccxml_telephony_adapter_v1;
+
+typedef struct ccxml_session_config {
+    /** Borrowed immutable program; it must outlive the session. */
+    const ccxml_program *program;
+    /** Operations are copied; user remains borrowed through destruction. */
+    const ccxml_telephony_adapter_v1 *telephony;
+    void *telephony_user;
+} ccxml_session_config;
+
+typedef struct ccxml_session {
+    void *impl;
+} ccxml_session;
+
+ccxml_status ccxml_session_init(
+    ccxml_session *session, const ccxml_session_config *config);
+
+/** Dispatch one event and commit or roll back the selected transition. */
+ccxml_status ccxml_session_dispatch(
+    ccxml_session *session, const ccxml_event *event);
+
+/** Stop accepting events and close the adapter exactly once. */
+void ccxml_session_close(ccxml_session *session);
+
+bool ccxml_session_is_terminated(const ccxml_session *session);
+
+/** Close and destroy when the adapter is quiescent; otherwise return BUSY. */
+ccxml_status ccxml_session_destroy(ccxml_session *session);
 
 #ifdef __cplusplus
 }

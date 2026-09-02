@@ -1,0 +1,257 @@
+#include <ccxml/ccxml.h>
+
+#include "tinytest.h"
+
+#include <stdio.h>
+#include <string.h>
+
+typedef struct provider_probe provider_probe;
+
+typedef struct provider_ticket {
+    provider_probe *owner;
+    bool live;
+} provider_ticket;
+
+struct provider_probe {
+    provider_ticket tickets[4];
+    size_t prepare_count;
+    size_t commit_count;
+    size_t discard_count;
+    size_t reject_on_prepare;
+    bool malformed_ticket;
+    bool quiescent;
+    size_t close_count;
+    char connection_id[64];
+    size_t connection_id_size;
+};
+
+static void ticket_commit(void *user) {
+    provider_ticket *ticket = (provider_ticket *)user;
+    if (ticket == NULL || !ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->commit_count;
+}
+
+static void ticket_discard(void *user) {
+    provider_ticket *ticket = (provider_ticket *)user;
+    if (ticket == NULL || !ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->discard_count;
+}
+
+static scxml_adapter_status prepare_accept(
+    void *user, const ccxml_accept_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    provider_ticket *ticket;
+    const size_t index = probe->prepare_count++;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_on_prepare != 0u &&
+        probe->prepare_count == probe->reject_on_prepare) {
+        if (out_error != NULL) *out_error = "rejected by test provider";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    probe->connection_id_size = request->connection_id_size;
+    memcpy(
+        probe->connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->connection_id[request->connection_id_size] = '\0';
+    if (probe->malformed_ticket) {
+        *out_ticket = (cflow_statechart_effect_ticket){0};
+        return SCXML_ADAPTER_ACCEPTED;
+    }
+    ticket = &probe->tickets[index];
+    ticket->owner = probe;
+    ticket->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = ticket_commit,
+        .discard = ticket_discard,
+        .user = ticket};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void provider_close(void *user) {
+    provider_probe *probe = (provider_probe *)user;
+    ++probe->close_count;
+}
+
+static bool provider_is_quiescent(void *user) {
+    const provider_probe *probe = (const provider_probe *)user;
+    return probe->quiescent;
+}
+
+static const ccxml_telephony_adapter_v1 provider_adapter = {
+    .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1,
+    .struct_size = sizeof(ccxml_telephony_adapter_v1),
+    .prepare_accept = prepare_accept,
+    .close = provider_close,
+    .is_quiescent = provider_is_quiescent};
+
+static ccxml_status compile_program(
+    ccxml_program *program, const char *actions) {
+    char source[1024];
+    ccxml_diagnostic diagnostic = {0};
+    const int written = snprintf(
+        source, sizeof(source),
+        "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+        "<eventprocessor><transition event='connection.alerting'>%s"
+        "</transition></eventprocessor></ccxml>",
+        actions);
+    if (written <= 0 || (size_t)written >= sizeof(source))
+        return CCXML_INVALID_ARGUMENT;
+    return ccxml_compile(
+        program, source, (size_t)written, NULL, &diagnostic);
+}
+
+static ccxml_status init_session(
+    ccxml_session *session, const ccxml_program *program,
+    provider_probe *probe) {
+    const ccxml_session_config config = {
+        .program = program,
+        .telephony = &provider_adapter,
+        .telephony_user = probe};
+    return ccxml_session_init(session, &config);
+}
+
+static ccxml_event alerting_event(void) {
+    const ccxml_event event = {
+        .name = "connection.alerting",
+        .name_size = sizeof("connection.alerting") - 1u,
+        .connection_id = "call-7",
+        .connection_id_size = sizeof("call-7") - 1u};
+    return event;
+}
+
+spec("CCXML session") {
+    it("commits an accepted telephony action") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_program(&program, "<accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(probe.prepare_count, (size_t)1);
+        check_equal(probe.commit_count, (size_t)1);
+        check_equal(probe.discard_count, (size_t)0);
+        check_equal(probe.connection_id, "call-7");
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("ignores an unmatched event without a provider effect") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = {
+            .name = "connection.connected",
+            .name_size = sizeof("connection.connected") - 1u};
+
+        check_equal(compile_program(&program, "<accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(probe.prepare_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects accept when the current event has no connection") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+        event.connection_id = NULL;
+        event.connection_id_size = 0u;
+
+        check_equal(compile_program(&program, "<accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(
+            ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+        check_equal(probe.prepare_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("discards earlier tickets when a later action is rejected") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {
+            .reject_on_prepare = 2u,
+            .quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(
+            compile_program(&program, "<accept/><accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(
+            ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+        check_equal(probe.prepare_count, (size_t)2);
+        check_equal(probe.commit_count, (size_t)0);
+        check_equal(probe.discard_count, (size_t)1);
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects an accepted action without a complete ticket") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {
+            .malformed_ticket = true,
+            .quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_program(&program, "<accept/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(
+            ccxml_session_dispatch(&session, &event),
+            CCXML_INVALID_CONTRACT);
+        check_equal(probe.commit_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("exit terminates and closes exactly once") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_program(&program, "<exit/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.close_count, (size_t)1);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_CLOSED);
+        ccxml_session_close(&session);
+        check_equal(probe.close_count, (size_t)1);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(probe.close_count, (size_t)1);
+        ccxml_program_destroy(&program);
+    }
+
+    it("keeps ownership while the provider is not quiescent") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {0};
+
+        check_equal(compile_program(&program, ""), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_destroy(&session), CCXML_BUSY);
+        check_not_null(session.impl);
+        check_equal(probe.close_count, (size_t)1);
+        probe.quiescent = true;
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_null(session.impl);
+        check_equal(probe.close_count, (size_t)1);
+
+        ccxml_program_destroy(&program);
+    }
+}

@@ -28,6 +28,16 @@ typedef struct ccxml_program_impl {
     size_t max_transition_actions;
 } ccxml_program_impl;
 
+typedef struct ccxml_session_impl {
+    const ccxml_program_impl *program;
+    ccxml_telephony_adapter_v1 telephony;
+    void *telephony_user;
+    cflow_statechart_effect_ticket *tickets;
+    size_t ticket_capacity;
+    bool closed;
+    bool terminated;
+} ccxml_session_impl;
+
 size_t ccxml_program_transition_count(const ccxml_program *program);
 const char *ccxml_program_transition_event(
     const ccxml_program *program, size_t index);

@@ -105,7 +105,8 @@ if(TURBOSCXML_ENABLE_QUICKJS)
 endif()
 
 add_library(turbo_ccxml STATIC
-  src/ccxml_program.c)
+  src/ccxml_program.c
+  src/ccxml_session.c)
 add_library(TurboSCXML::CCXML ALIAS turbo_ccxml)
 set_target_properties(turbo_ccxml PROPERTIES
   EXPORT_NAME CCXML
