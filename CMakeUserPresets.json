@@ -101,6 +101,7 @@
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/debug",
         "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
+        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON",
         "VCPKG_MANIFEST_FEATURES": "chttp"
       },
       "environment": {
@@ -128,6 +129,7 @@
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/release",
         "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
+        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON",
         "VCPKG_MANIFEST_FEATURES": "chttp"
       },
       "environment": {
