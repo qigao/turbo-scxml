@@ -133,4 +133,3 @@ The MVP is complete when tests prove:
 7. `<exit/>` terminates and closes exactly once;
 8. destroy waits for provider quiescence;
 9. the installed C and C++ consumer can include and link `TurboSCXML::CCXML`.
-

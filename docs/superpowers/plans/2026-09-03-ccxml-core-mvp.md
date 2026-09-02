@@ -195,7 +195,6 @@ Run `git diff origin/main...HEAD --check`, inspect `git diff --stat` and the com
 - [ ] **Step 5: Commit verification-only fixes if any**
 
 ```text
-git add <only files changed by a reproduced verification failure>
-git commit -m "fix(ccxml): harden core MVP contracts"
+git add tests/ccxml_session_test.c
+git commit -m "test(ccxml): lock transaction ordering contracts"
 ```
-
