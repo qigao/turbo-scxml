@@ -383,7 +383,7 @@ spec("TurboSCXML CHTTP processor and binding lifecycle") {
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&binding),
                         &request, &ticket, &error),
-                    SCXML_ADAPTER_CLOSED);
+                    SCXML_ADAPTER_ERROR_COMMUNICATION);
         check_equal(probe.prepare_send_calls, (size_t)1u);
 
         adapter->close(scxml_chttp_binding_adapter_user(&binding));

@@ -86,12 +86,17 @@ typedef struct scxml_chttp_binding_config_v1 {
 } scxml_chttp_binding_config_v1;
 
 typedef struct scxml_chttp_processor_stats {
+    uint64_t egress_accepted;
     uint64_t egress_completed;
     uint64_t egress_failed;
+    uint64_t egress_cancelled;
+    uint64_t ingress_requests;
     uint64_t ingress_admitted;
     uint64_t ingress_rejected;
     uint64_t invariant_failures;
     size_t live_bindings;
+    size_t queued_egress;
+    size_t in_flight_egress;
     size_t active_callbacks;
     size_t outbound_references;
     int running;
