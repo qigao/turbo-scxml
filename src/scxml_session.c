@@ -1406,6 +1406,60 @@ scxml_location_status scxml_session_copy_ioprocessor_location(
     return SCXML_LOCATION_OK;
 }
 
+static bool event_io_adapters_equal(
+    const scxml_event_io_adapter *left,
+    const scxml_event_io_adapter *right) {
+    return left != NULL && right != NULL &&
+        left->abi_version == right->abi_version &&
+        left->struct_size == right->struct_size &&
+        left->capabilities == right->capabilities &&
+        left->prepare_send == right->prepare_send &&
+        left->prepare_cancel == right->prepare_cancel &&
+        left->close == right->close &&
+        left->is_quiescent == right->is_quiescent;
+}
+
+bool scxml_session_matches_event_io(
+    const scxml_session *session,
+    const scxml_program *program,
+    const scxml_event_io_adapter *adapter,
+    const void *adapter_user,
+    const scxml_ioprocessor_descriptor *ioprocessor) {
+    scxml_session_impl *impl = session != NULL
+        ? (scxml_session_impl *)session->impl : NULL;
+    bool descriptor_found = false;
+    size_t index;
+    if (impl == NULL || program == NULL || program->impl == NULL ||
+        adapter == NULL || ioprocessor == NULL)
+        return false;
+    turbo_mutex_lock(&impl->registry_lock);
+    if (!impl->has_event_io ||
+        impl->program != (const scxml_program_impl *)program->impl ||
+        impl->adapter_user != adapter_user ||
+        !event_io_adapters_equal(&impl->event_io, adapter)) {
+        turbo_mutex_unlock(&impl->registry_lock);
+        return false;
+    }
+    for (index = 0u; index < impl->ioprocessor_count; ++index) {
+        const scxml_ioprocessor_descriptor *candidate =
+            &impl->ioprocessors[index];
+        if (ioprocessor_bytes_equal(
+                candidate->name, candidate->name_size,
+                ioprocessor->name, ioprocessor->name_size) &&
+            ioprocessor_bytes_equal(
+                candidate->type, candidate->type_size,
+                ioprocessor->type, ioprocessor->type_size) &&
+            ioprocessor_bytes_equal(
+                candidate->location, candidate->location_size,
+                ioprocessor->location, ioprocessor->location_size)) {
+            descriptor_found = true;
+            break;
+        }
+    }
+    turbo_mutex_unlock(&impl->registry_lock);
+    return descriptor_found;
+}
+
 const char *scxml_session_error(
     const scxml_session *session) {
     const scxml_session_impl *impl = session != NULL
