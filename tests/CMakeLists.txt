@@ -80,6 +80,12 @@ turboscxml_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
+  ccxml_program_test
+  ccxml_program_test.c
+  LIBS TurboSCXML::CCXML
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
   scxml_quickjs_test
   scxml_quickjs_test.c
   LIBS Rocida::STL

@@ -104,6 +104,26 @@ if(TURBOSCXML_ENABLE_QUICKJS)
   target_link_libraries(turbo_scxml PRIVATE qjs)
 endif()
 
+add_library(turbo_ccxml STATIC
+  src/ccxml_program.c)
+add_library(TurboSCXML::CCXML ALIAS turbo_ccxml)
+set_target_properties(turbo_ccxml PROPERTIES
+  EXPORT_NAME CCXML
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_ccxml PUBLIC c_std_11)
+target_compile_options(turbo_ccxml
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_ccxml
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_ccxml
+  PUBLIC TurboSCXML::SCXML
+  PRIVATE Rocida::XmlParser)
+
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   if(NOT TARGET Rocida::CHTTP)
     message(FATAL_ERROR
