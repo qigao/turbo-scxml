@@ -48,6 +48,8 @@ void scxml_emit_destroy_invocations(
     scxml_invocation_descriptor *invocations, size_t count);
 void scxml_emit_destroy_done_data(
     scxml_done_data_descriptor *descriptors, size_t count);
+void scxml_emit_destroy_custom_action_arguments(
+    scxml_custom_action_argument *arguments, size_t count);
 void scxml_emit_free_build(scxml_build *build);
 void *scxml_emit_allocate_rows(size_t count, size_t element_size);
 void scxml_emit_copy_program_names(

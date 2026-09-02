@@ -7,8 +7,13 @@
 
 int main(void) {
     const scxml_limits limits = scxml_default_limits();
+    const scxml_cmeta_compile_options_v2 cmeta_v2 =
+        scxml_cmeta_default_compile_options_v2(NULL);
     int valid = limits.max_states > 0u && limits.max_events > 0u &&
-                limits.max_transitions > 0u && limits.max_name_bytes > 0u;
+                limits.max_transitions > 0u && limits.max_name_bytes > 0u &&
+                cmeta_v2.abi_version == SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 &&
+                cmeta_v2.struct_size == sizeof(cmeta_v2) &&
+                cmeta_v2.actions == NULL && cmeta_v2.action_count == 0u;
 #if defined(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
     const scxml_quickjs_compile_options_v1 quickjs =
         scxml_quickjs_default_compile_options(NULL);

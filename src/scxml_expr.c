@@ -1,4 +1,5 @@
 #include "scxml_expr.h"
+#include "scxml_location.h"
 
 #include <query_vm.h>
 
@@ -118,6 +119,7 @@ typedef struct scxml_expr_program_impl {
     uint32_t operand_count;
     uint32_t register_count;
     expr_value_kind result_kind;
+    size_t max_path_depth;
     size_t max_string_bytes;
     qvm_limits_t qvm_limits;
     char *external_source;
@@ -730,6 +732,142 @@ static bool parser_parse_location_kind(expr_parser *parser, uint16_t target,
     return true;
 }
 
+typedef struct event_path_match {
+    const cmeta_data_desc *data;
+    expr_value_kind kind;
+    size_t visited;
+    bool found;
+    bool ambiguous;
+    bool limit_exceeded;
+} event_path_match;
+
+static const cmeta_data_desc *resolve_data_path(
+    const cmeta_data_desc *root, const char *path, size_t path_size,
+    size_t max_depth) {
+    const cmeta_data_desc *current = root;
+    size_t segment_begin = 0u;
+    size_t depth = 0u;
+    size_t index;
+    if (!cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
+        root->shape == NULL || path == NULL || path_size == 0u)
+        return NULL;
+    for (index = 0u; index <= path_size; ++index) {
+        const bool at_end = index == path_size;
+        const cmeta_data_struct_shape *shape;
+        const cmeta_data_field_desc *field;
+        if (!at_end && path[index] != '.') continue;
+        if (++depth > max_depth || current->kind != CMETA_DATA_STRUCT ||
+            current->shape == NULL)
+            return NULL;
+        shape = (const cmeta_data_struct_shape *)current->shape;
+        field = find_field_view(
+            shape, path + segment_begin, index - segment_begin);
+        if (field == NULL || !cmeta_data_desc_valid(field->value))
+            return NULL;
+        current = field->value;
+        if (at_end) return current;
+        segment_begin = index + 1u;
+    }
+    return NULL;
+}
+
+static void find_event_path_match(
+    const cmeta_data_desc *candidate, const char *path, size_t path_size,
+    size_t max_path_depth, size_t schema_depth, size_t visit_limit,
+    event_path_match *match) {
+    const cmeta_data_struct_shape *shape;
+    const cmeta_data_desc *resolved;
+    expr_value_kind kind;
+    size_t index;
+    if (match == NULL || match->ambiguous || match->limit_exceeded ||
+        schema_depth > max_path_depth || !cmeta_data_desc_valid(candidate) ||
+        candidate->kind != CMETA_DATA_STRUCT || candidate->shape == NULL)
+        return;
+    if (match->visited >= visit_limit) {
+        match->limit_exceeded = true;
+        return;
+    }
+    ++match->visited;
+    resolved = resolve_data_path(
+        candidate, path, path_size, max_path_depth);
+    if (resolved != NULL && desc_scalar_kind(resolved, &kind)) {
+        if (!match->found) {
+            match->data = resolved;
+            match->kind = kind;
+            match->found = true;
+        } else if (match->kind != kind) {
+            match->ambiguous = true;
+            return;
+        }
+    }
+    shape = (const cmeta_data_struct_shape *)candidate->shape;
+    for (index = 0u; index < shape->field_count; ++index) {
+        const cmeta_data_desc *field = shape->fields[index].value;
+        if (cmeta_data_desc_valid(field) &&
+            field->kind == CMETA_DATA_STRUCT)
+            find_event_path_match(
+                field, path, path_size, max_path_depth,
+                schema_depth + 1u, visit_limit, match);
+        if (match->ambiguous || match->limit_exceeded) return;
+    }
+}
+
+static bool parser_parse_event_data_location(
+    expr_parser *parser, uint16_t target, expr_node *out) {
+    const size_t path_begin = parser->token.offset;
+    size_t path_end = path_begin;
+    size_t depth = 0u;
+    size_t visit_limit;
+    expr_operand operand = {0};
+    event_path_match match = {0};
+    uint32_t operand_index;
+    while (parser->token.kind == EXPR_TOKEN_IDENT) {
+        if (depth >= parser->limits.max_path_depth)
+            return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
+                               parser->token.offset,
+                               "SCXML Event data path depth limit exceeded");
+        path_end = parser->token.offset + parser->token.size;
+        ++depth;
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_DOT) break;
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_IDENT)
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "SCXML Event data requires a field after '.'");
+    }
+    visit_limit = parser->limits.max_operands >
+            SIZE_MAX / parser->limits.max_path_depth
+        ? SIZE_MAX
+        : parser->limits.max_operands * parser->limits.max_path_depth;
+    find_event_path_match(
+        parser->root, parser->source + path_begin, path_end - path_begin,
+        parser->limits.max_path_depth, 0u, visit_limit, &match);
+    if (match.limit_exceeded)
+        return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED, path_begin,
+                           "SCXML Event data schema search limit exceeded");
+    if (!match.found || match.ambiguous)
+        return parser_fail(
+            parser,
+            match.ambiguous ? SCXML_EXPR_TYPE_MISMATCH
+                            : SCXML_EXPR_UNKNOWN_LOCATION,
+            path_begin,
+            match.ambiguous
+                ? "SCXML Event data path has ambiguous scalar types"
+                : "SCXML Event data field is unknown");
+    if (!parser_retain_string(
+            parser, path_begin, path_end - path_begin, &operand))
+        return false;
+    operand.kind = EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION;
+    operand.value_kind = match.kind;
+    operand.data = match.data;
+    out->kind = match.kind;
+    out->reg = target;
+    return parser_add_operand(parser, operand, &operand_index) &&
+           parser_emit_instruction(parser, QVM_OP_LOAD_PATH, target, 0u,
+                                   operand_index, 0u);
+}
+
 static bool parser_parse_location(expr_parser *parser, uint16_t target,
                                   expr_node *out) {
     return parser_parse_location_kind(
@@ -946,9 +1084,7 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                     parser, SCXML_EXPR_SYNTAX_ERROR,
                     parser->token.offset,
                     "_event.data requires a field after '.'");
-            return parser_parse_location_kind(
-                parser, target, out,
-                EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION);
+            return parser_parse_event_data_location(parser, target, out);
         }
         return parser_add_operand(parser, operand, &operand_index) &&
                parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target,
@@ -1478,6 +1614,7 @@ static scxml_expr_status expr_compile(
     impl->operand_count = (uint32_t)parser.operand_count;
     impl->register_count = (uint32_t)parser.max_register;
     impl->result_kind = emitted_kind;
+    impl->max_path_depth = limits.max_path_depth;
     impl->max_string_bytes = limits.max_string_bytes;
     impl->qvm_limits = qvm_default_limits();
     impl->qvm_limits.max_instructions = impl->instruction_count;
@@ -1708,24 +1845,33 @@ static const scxml_expr_string_view *system_event_field_view(
     }
 }
 
-static bool event_schema_admits_operand(
-    const cmeta_data_desc *event_schema,
-    const cmeta_data_desc *compiled_root,
-    const expr_operand *operand) {
-    const cmeta_data_struct_shape *shape;
-    const cmeta_data_field_desc *field;
-    if (!cmeta_data_desc_valid(event_schema) ||
-        !cmeta_data_desc_valid(compiled_root) ||
-        event_schema->kind != CMETA_DATA_STRUCT ||
-        compiled_root->kind != CMETA_DATA_STRUCT ||
-        event_schema->storage_type != compiled_root->storage_type ||
-        operand == NULL || operand->root_field == NULL)
+static bool read_event_data_location(
+    expr_eval_context *context, const expr_operand *operand,
+    qvm_value_t *out) {
+    scxml_location location = {0};
+    expr_operand resolved;
+    expr_value_kind kind;
+    if (context == NULL || operand == NULL || out == NULL ||
+        context->system_values == NULL ||
+        context->system_values->event_data_object == NULL ||
+        operand->value.string.data == NULL ||
+        operand->value.string.size == 0u ||
+        scxml_location_compile(
+            &location, operand->value.string.data,
+            operand->value.string.size,
+            context->system_values->event_data_schema,
+            context->program->max_path_depth, false, NULL) != SCXML_EXPR_OK ||
+        location.value == NULL ||
+        !desc_scalar_kind(location.value, &kind) ||
+        kind != operand->value_kind)
         return false;
-    shape = (const cmeta_data_struct_shape *)event_schema->shape;
-    field = cmeta_data_struct_find_field(
-        shape, operand->root_field->name);
-    return field != NULL && field->offset == operand->root_field->offset &&
-           field->value == operand->root_field->value;
+    resolved = *operand;
+    resolved.data = location.value;
+    resolved.offset = location.offset;
+    return read_location_at(
+        context, &resolved,
+        (const unsigned char *)context->system_values->event_data_object,
+        out);
 }
 
 static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
@@ -1798,18 +1944,7 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             context->failure_status = SCXML_EXPR_UNKNOWN_LOCATION;
             return 0;
         case EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION:
-            if (context->system_values == NULL ||
-                context->system_values->event_data_object == NULL ||
-                (context->system_values->event_data_schema !=
-                     context->program->root &&
-                 !event_schema_admits_operand(
-                     context->system_values->event_data_schema,
-                     context->program->root, operand)) ||
-                !read_location_at(
-                    context, operand,
-                    (const unsigned char *)
-                        context->system_values->event_data_object,
-                    out)) {
+            if (!read_event_data_location(context, operand, out)) {
                 context->failed = true;
                 return 0;
             }

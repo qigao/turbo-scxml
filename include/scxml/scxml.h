@@ -4,6 +4,7 @@
 #include <cflow/event.h>
 #include <cflow/statechart.h>
 #include <cflow/statechart_instance.h>
+#include <cmeta/cmeta.h>
 #include <cmeta/data.h>
 #include <cserde/cserde.h>
 #include <xml_parser/xml_parser.h>
@@ -21,6 +22,7 @@ extern "C" {
 #define SCXML_EVENT_METADATA_ABI 1u
 #define SCXML_EVENT_ENVELOPE_ABI 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
+#define SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
@@ -89,6 +91,39 @@ typedef struct scxml_cmeta_compile_options_v1 {
     /** Maximum items visited by one `<foreach>` invocation. */
     size_t max_iterations;
 } scxml_cmeta_compile_options_v1;
+
+/** One compile-scoped foreign executable element registration. */
+typedef struct scxml_cmeta_custom_action_v1 {
+    const char *namespace_uri;
+    size_t namespace_uri_size;
+    const char *local_name;
+    size_t local_name_size;
+    cmeta_callable callable;
+    /** Unqualified XML attribute names in callable parameter order. */
+    const char *const *parameter_names;
+    size_t parameter_count;
+} scxml_cmeta_custom_action_v1;
+
+/**
+ * CMeta compile provider with a bounded, compile-scoped custom action table.
+ * Rows and strings are borrowed only until compilation returns. Bound callable
+ * values are copied into the resulting program.
+ */
+typedef struct scxml_cmeta_compile_options_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const cmeta_data_desc *root;
+    size_t max_source_bytes;
+    size_t max_instructions;
+    size_t max_operands;
+    size_t max_expression_depth;
+    size_t max_path_depth;
+    size_t max_literal_bytes;
+    size_t max_string_bytes;
+    size_t max_iterations;
+    const scxml_cmeta_custom_action_v1 *actions;
+    size_t action_count;
+} scxml_cmeta_compile_options_v2;
 
 /**
  * Versioned per-session state provider for a CMeta-compiled program.
@@ -611,6 +646,10 @@ scxml_limits scxml_default_limits(void);
 scxml_cmeta_compile_options_v1
 scxml_cmeta_default_compile_options(const cmeta_data_desc *root);
 
+/** Return V2 bounded defaults with an empty custom action table. */
+scxml_cmeta_compile_options_v2
+scxml_cmeta_default_compile_options_v2(const cmeta_data_desc *root);
+
 /** Return bounded QuickJS profile defaults with a borrowed CMeta root. */
 scxml_quickjs_compile_options_v1
 scxml_quickjs_default_compile_options(const cmeta_data_desc *root);
@@ -640,6 +679,15 @@ scxml_status scxml_compile_cmeta(
     size_t input_size,
     const scxml_limits *limits,
     const scxml_cmeta_compile_options_v1 *options,
+    scxml_diagnostic *diagnostic);
+
+/** Compile exact `datamodel="cmeta"` with custom executable actions. */
+scxml_status scxml_compile_cmeta_v2(
+    scxml_program *out,
+    const char *input,
+    size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v2 *options,
     scxml_diagnostic *diagnostic);
 
 /**

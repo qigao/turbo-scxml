@@ -74,8 +74,20 @@ typedef enum scxml_step_kind {
     SCXML_STEP_EARLY_INITIALIZE,
     SCXML_STEP_LATE_INITIALIZE,
     SCXML_STEP_DONEDATA,
-    SCXML_STEP_SCRIPT
+    SCXML_STEP_SCRIPT,
+    SCXML_STEP_CUSTOM_ACTION
 } scxml_step_kind;
+
+typedef struct scxml_custom_action_argument {
+    scxml_expr_program expression;
+    const cmeta_type_desc *type;
+} scxml_custom_action_argument;
+
+typedef struct scxml_custom_action_descriptor {
+    cmeta_callable callable;
+    size_t argument_first;
+    size_t argument_count;
+} scxml_custom_action_descriptor;
 
 typedef struct scxml_script_descriptor {
     const char *source;
@@ -121,6 +133,12 @@ typedef struct scxml_effect_descriptor {
     scxml_expr_program data_expr;
     scxml_location id_location;
     scxml_content_descriptor content;
+    size_t internal_assignment_first;
+    size_t internal_assignment_count;
+    cmeta_data_field_desc *internal_fields;
+    cmeta_data_struct_shape internal_shape;
+    cmeta_data_desc internal_schema;
+    char *internal_schema_stable_id;
     union {
         scxml_send_request send;
         scxml_cancel_request cancel;
@@ -142,6 +160,7 @@ typedef struct scxml_step {
     size_t foreach_descriptor;
     size_t done_data;
     size_t script;
+    size_t custom_action;
 } scxml_step;
 
 typedef struct scxml_foreach_descriptor {
@@ -176,6 +195,8 @@ typedef struct scxml_block {
     const scxml_foreach_descriptor *foreach_descriptors;
     const struct scxml_invocation_descriptor *invocations;
     const struct scxml_done_data_descriptor *done_data;
+    const scxml_custom_action_descriptor *custom_actions;
+    const scxml_custom_action_argument *custom_action_arguments;
     size_t step_begin;
     size_t step_end;
     size_t step_storage_count;
@@ -186,6 +207,8 @@ typedef struct scxml_block {
     size_t foreach_storage_count;
     size_t invocation_storage_count;
     size_t done_data_storage_count;
+    size_t custom_action_storage_count;
+    size_t custom_action_argument_storage_count;
     size_t max_conditional_depth;
     cflow_event_id execution_error_event;
     const scxml_program_name *const *event_names_by_id;
@@ -284,6 +307,8 @@ typedef struct scxml_counts {
     size_t script_rows;
     size_t root_script_rows;
     size_t script_source_bytes;
+    size_t custom_action_rows;
+    size_t custom_action_argument_rows;
     uint32_t requirements;
 } scxml_counts;
 
@@ -292,6 +317,8 @@ typedef struct scxml_build {
     scxml_diagnostic *diagnostic;
     scxml_data_model data_model;
     const cmeta_data_desc *cmeta_root;
+    const scxml_cmeta_custom_action_v1 *custom_action_registry;
+    size_t custom_action_registry_count;
     scxml_expr_limits expression_limits;
     cflow_statechart_state *states;
     cflow_statechart_transition *transitions;
@@ -315,6 +342,8 @@ typedef struct scxml_build {
     scxml_invocation_descriptor *invocations;
     scxml_done_data_descriptor *done_data;
     scxml_script_descriptor *scripts;
+    scxml_custom_action_descriptor *custom_actions;
+    scxml_custom_action_argument *custom_action_arguments;
     scxml_scope_schema supplemental_scope;
     scxml_name_ref *invocation_names;
     char *log_storage;
@@ -374,6 +403,10 @@ typedef struct scxml_build {
     size_t script_capacity;
     size_t script_storage_index;
     size_t script_storage_capacity;
+    size_t custom_action_index;
+    size_t custom_action_capacity;
+    size_t custom_action_argument_index;
+    size_t custom_action_argument_capacity;
     size_t late_initializer_index;
     size_t data_initializer_count;
     size_t top_level_data_initializer_first;
@@ -425,6 +458,10 @@ typedef struct scxml_program_impl {
     scxml_done_data_descriptor *done_data;
     size_t done_data_count;
     scxml_script_descriptor *scripts;
+    scxml_custom_action_descriptor *custom_actions;
+    size_t custom_action_count;
+    scxml_custom_action_argument *custom_action_arguments;
+    size_t custom_action_argument_count;
     size_t script_count;
     size_t root_script_count;
     scxml_scope_schema supplemental_scope;

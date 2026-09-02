@@ -1,6 +1,7 @@
 #include <scxml/scxml.h>
 
 #include <cserde/cserde.h>
+#include <cmeta/cmeta.h>
 
 #include "tinytest.h"
 
@@ -10,6 +11,25 @@
 #include <string.h>
 
 enum { SCXML_TEST_TEXT_CAPACITY = 95u };
+
+static atomic_int custom_action_observed;
+
+typed_any_raw(
+    CMETA_EFFECT_IO, CMETA_PROP_DETERMINISTIC,
+    int, scxml_test_custom_action, (int value)) {
+    atomic_store_explicit(
+        &custom_action_observed, value, memory_order_relaxed);
+    return value;
+}
+
+static bool scxml_test_reject_custom_action(
+    const cmeta_callable *self, void *out,
+    const void *const *arguments) {
+    (void)self;
+    (void)out;
+    (void)arguments;
+    return false;
+}
 
 typedef struct scxml_owned_text {
     size_t size;
@@ -355,11 +375,16 @@ static const cmeta_data_desc failing_text_desc = {
     .buffer_ops = &failing_text_ops
 };
 
+static const cmeta_type_traits nested_data_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
 static const cmeta_type_desc nested_data_type = {
     .name = "scxml_nested_data",
     .size = sizeof(scxml_nested_data),
     .align = _Alignof(scxml_nested_data),
-    .kind = CMETA_T_OBJECT
+    .kind = CMETA_T_OBJECT,
+    .traits = &nested_data_traits
 };
 
 static const cmeta_data_field_desc nested_data_fields[] = {
@@ -1533,12 +1558,23 @@ spec("TurboSCXML public CMeta data model") {
     }
 
     it("runs CMeta finalize conditions, raises, sends, and cancels transactionally") {
+        static const char *const parameter_names[] = {"value"};
+        const scxml_cmeta_custom_action_v1 actions[] = {{
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .callable = scxml_test_custom_action,
+            .parameter_names = parameter_names,
+            .parameter_count = 1u}};
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
-            "datamodel='cmeta' initial='active'><state id='active'>"
+            "xmlns:a='urn:test:actions' datamodel='cmeta' initial='active'>"
+            "<state id='active'>"
             "<invoke id='child' type='urn:test'><finalize>"
             "<if cond='enabled &amp;&amp; _event.name == &quot;returned&quot;'>"
             "<assign location='count' expr='count + 1'/>"
+            "<a:record value='count + 10'/>"
             "<raise event='finalized'/>"
             "<send event='final.effect' id='final-send' delay='5ms'/>"
             "<cancel sendid='final-send'/><else/>"
@@ -1571,6 +1607,8 @@ spec("TurboSCXML public CMeta data model") {
             .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
             .struct_size = sizeof(data),
             .initial_state = &initial};
+        scxml_cmeta_compile_options_v2 options =
+            scxml_cmeta_default_compile_options_v2(&public_data_desc);
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_session session = {0};
@@ -1594,7 +1632,13 @@ spec("TurboSCXML public CMeta data model") {
             .invoke = &invoke,
             .invoke_user = &probe};
 
-        compile_status = compile_cmeta(source, &program, &diagnostic);
+        options.actions = actions;
+        options.action_count = sizeof(actions) / sizeof(actions[0]);
+        atomic_store_explicit(
+            &custom_action_observed, 0, memory_order_relaxed);
+        compile_status = scxml_compile_cmeta_v2(
+            &program, source, strlen(source), NULL,
+            &options, &diagnostic);
         if (compile_status != SCXML_OK)
             info("finalize compile diagnostic=%s", diagnostic.message);
         check_equal(compile_status, SCXML_OK);
@@ -1622,6 +1666,9 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(probe.send_id, "final-send", sizeof("final-send"));
         check_equal(probe.cancel_id, "final-send", sizeof("final-send"));
         check_equal(probe.delay_ms, UINT64_C(5));
+        check_equal(atomic_load_explicit(
+                        &custom_action_observed, memory_order_relaxed),
+                    11);
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
@@ -5841,6 +5888,248 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("invokes a registered foreign executable element through CMeta") {
+        static const char *const parameter_names[] = {"value"};
+        const scxml_cmeta_custom_action_v1 actions[] = {{
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .callable = scxml_test_custom_action,
+            .parameter_names = parameter_names,
+            .parameter_count = 1u}};
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<state id='active'><onentry><if cond='enabled'>"
+            "<a:record value='count + 1'/></if>"
+            "</onentry><transition target='success'/></state>"
+            "<final id='success'/></scxml>";
+        scxml_cmeta_compile_options_v2 options =
+            scxml_cmeta_default_compile_options_v2(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        options.actions = actions;
+        options.action_count = sizeof(actions) / sizeof(actions[0]);
+        atomic_store_explicit(
+            &custom_action_observed, 0, memory_order_relaxed);
+        check_equal(scxml_compile_cmeta_v2(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(atomic_load_explicit(
+                        &custom_action_observed, memory_order_relaxed),
+                    8);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects an unregistered foreign executable element") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<state id='active'><onentry><a:missing value='count'/>"
+            "</onentry></state></scxml>";
+        scxml_cmeta_compile_options_v2 options =
+            scxml_cmeta_default_compile_options_v2(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+
+        check_equal(scxml_compile_cmeta_v2(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
+    it("validates CMeta custom action registrations and element arguments") {
+        static const char *const parameter_names[] = {"value"};
+        const scxml_cmeta_custom_action_v1 action = {
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .callable = scxml_test_custom_action,
+            .parameter_names = parameter_names,
+            .parameter_count = 1u};
+        const scxml_cmeta_custom_action_v1 duplicates[] = {action, action};
+        static const char missing[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry><a:record/></onentry>"
+            "</state></scxml>";
+        static const char extra[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry>"
+            "<a:record value='count' extra='1'/></onentry>"
+            "</state></scxml>";
+        static const char child[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry>"
+            "<a:record value='count'><a:nested/></a:record></onentry>"
+            "</state></scxml>";
+        const char *invalid_elements[] = {missing, extra, child};
+        scxml_cmeta_compile_options_v2 options =
+            scxml_cmeta_default_compile_options_v2(&public_data_desc);
+        size_t index;
+
+        options.actions = &action;
+        options.action_count = 1u;
+        for (index = 0u;
+             index < sizeof(invalid_elements) / sizeof(invalid_elements[0]);
+             ++index) {
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            check_equal(scxml_compile_cmeta_v2(
+                            &program, invalid_elements[index],
+                            strlen(invalid_elements[index]), NULL,
+                            &options, &diagnostic),
+                        SCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+        options.actions = duplicates;
+        options.action_count = sizeof(duplicates) / sizeof(duplicates[0]);
+        {
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            check_equal(scxml_compile_cmeta_v2(
+                            &program, missing, strlen(missing), NULL,
+                            &options, &diagnostic),
+                        SCXML_INVALID_ARGUMENT);
+            check_null(program.impl);
+        }
+    }
+
+    it("raises error.execution when a CMeta custom action rejects invocation") {
+        static const char *const parameter_names[] = {"value"};
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta' "
+            "initial='active'><state id='active'><onentry>"
+            "<a:record value='count'/><raise event='must.not.run'/>"
+            "</onentry><transition event='error.execution' target='success'/>"
+            "<transition event='must.not.run' target='failed'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
+        scxml_cmeta_custom_action_v1 action = {
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .callable = scxml_test_custom_action,
+            .parameter_names = parameter_names,
+            .parameter_count = 1u};
+        scxml_cmeta_compile_options_v2 options =
+            scxml_cmeta_default_compile_options_v2(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        action.callable.invoke = scxml_test_reject_custom_action;
+        action.callable.dispatch = CMETA_CALLABLE_DISPATCH_ADAPTER;
+        options.actions = &action;
+        options.action_count = 1u;
+        check_equal(scxml_compile_cmeta_v2(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        scxml_program_destroy(&program);
+    }
+
+    it("publishes named internal send payload as structured event data") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='sending'>"
+            "<state id='sending'><onentry>"
+            "<send event='payload' target='#_internal' namelist='count'>"
+            "<param name='enabled' expr='count == 7'/></send>"
+            "</onentry><transition event='payload' "
+            "cond='_event.data.count == 7 &amp;&amp; "
+            "_event.data.enabled == true' target='success'/>"
+            "<transition event='error.execution' target='failed'/>"
+            "</state><final id='success'/><state id='failed'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        uint32_t requirements = 0u;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(scxml_program_requirements(&program, &requirements));
+        check_false((requirements & SCXML_REQUIREMENT_EVENT_IO) != 0u);
+        check_false((requirements & SCXML_REQUIREMENT_PAYLOAD) != 0u);
+        if ((requirements & SCXML_REQUIREMENT_EVENT_IO) == 0u) {
+            scxml_public_data initial = {
+                false, 7, SCXML_PUBLIC_SOURCE_GOOD};
+            scxml_session_config config = {
+                .program = &program,
+                .executor = &executor,
+                .external_event_capacity = 2u,
+                .internal_event_capacity = 4u,
+                .completion_capacity = 2u,
+                .microstep_limit = 32u,
+                .effect_capacity = 2u};
+            const scxml_cmeta_session_options_v1 data = {
+                .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+                .struct_size = sizeof(scxml_cmeta_session_options_v1),
+                .initial_state = &initial};
+            check_true(cflow_executor_serial_init(&executor));
+            check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            check_true(cflow_executor_wait_idle(&executor));
+            check_true(scxml_session_get_stats(&session, &stats));
+            check_true(stats.done);
+            check_false(stats.errored);
+            check_equal(scxml_session_destroy(&session),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            cflow_executor_destroy(&executor);
+        }
+        scxml_program_destroy(&program);
+    }
+
+    it("binds structured donedata content to the parent completion event") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='parent'>"
+            "<state id='parent' initial='work'>"
+            "<state id='work'><transition target='childDone'/></state>"
+            "<final id='childDone'><donedata>"
+            "<content expr='nested'/></donedata></final>"
+            "<transition event='done.state.parent' "
+            "cond='_event.data.invoke_id == &quot;snapshot&quot;' "
+            "target='success'/></state>"
+            "<final id='success'/><state id='failed'/></scxml>";
+        scxml_public_data initial = {
+            false, 7, SCXML_PUBLIC_SOURCE_GOOD};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        initial.nested.invoke_id.size = sizeof("snapshot") - 1u;
+        memcpy(initial.nested.invoke_id.data, "snapshot",
+               sizeof("snapshot") - 1u);
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        stats = run_to_idle(&program, initial);
+        check_true(stats.done);
+        check_false(stats.errored);
         scxml_program_destroy(&program);
     }
 

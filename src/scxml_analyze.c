@@ -560,6 +560,106 @@ static scxml_status require_scxml_element(scxml_build *build,
     return scxml_analyze_validate_element_attributes(build, node, kind);
 }
 
+const scxml_cmeta_custom_action_v1 *scxml_analyze_find_custom_action(
+    const scxml_build *build, scxml_syntax_node node) {
+    const turbo_xml_string_view namespace_uri =
+        scxml_syntax_node_namespace_uri(node);
+    const turbo_xml_string_view local_name =
+        scxml_syntax_node_local_name(node);
+    size_t index;
+    if (build == NULL || namespace_uri.data == NULL ||
+        namespace_uri.size == 0u ||
+        scxml_analyze_view_equal_raw(namespace_uri, SCXML_NAMESPACE))
+        return NULL;
+    for (index = 0u; index < build->custom_action_registry_count; ++index) {
+        const scxml_cmeta_custom_action_v1 *action =
+            &build->custom_action_registry[index];
+        if (action->namespace_uri_size == namespace_uri.size &&
+            action->local_name_size == local_name.size &&
+            memcmp(action->namespace_uri, namespace_uri.data,
+                   namespace_uri.size) == 0 &&
+            memcmp(action->local_name, local_name.data,
+                   local_name.size) == 0)
+            return action;
+    }
+    return NULL;
+}
+
+static scxml_status analyze_custom_action(
+    scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
+    const scxml_cmeta_custom_action_v1 *action =
+        scxml_analyze_find_custom_action(build, node);
+    size_t index, matched = 0u;
+    if (build->data_model != SCXML_DATA_MODEL_CMETA ||
+        build->quickjs_profile || action == NULL)
+        return scxml_analyze_fail(
+            build, SCXML_UNSUPPORTED_FEATURE,
+            scxml_syntax_node_location(node),
+            "foreign executable element has no CMeta action registration");
+    for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
+        const scxml_syntax_node child =
+            scxml_syntax_node_child_at(node, index);
+        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+             is_xml_whitespace(scxml_syntax_node_value(child))))
+            continue;
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_node_location(child),
+            "CMeta custom action must not contain child content");
+    }
+    for (index = 0u; index < scxml_syntax_node_attribute_count(node); ++index) {
+        const scxml_syntax_attribute attribute =
+            scxml_syntax_node_attribute_at(node, index);
+        const turbo_xml_string_view namespace_uri =
+            scxml_syntax_attribute_namespace_uri(attribute);
+        const turbo_xml_string_view name =
+            scxml_syntax_attribute_local_name(attribute);
+        size_t parameter;
+        bool found = false;
+        if (namespace_uri.size != 0u)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(attribute),
+                "CMeta custom action arguments must be unqualified");
+        for (parameter = 0u; parameter < action->parameter_count;
+             ++parameter) {
+            const char *expected = action->parameter_names[parameter];
+            if (strlen(expected) == name.size &&
+                memcmp(expected, name.data, name.size) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found ||
+            scxml_syntax_attribute_value(attribute).size == 0u)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(attribute),
+                "CMeta custom action has an unknown or empty argument");
+        ++matched;
+    }
+    if (matched != action->parameter_count)
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_node_location(node),
+            "CMeta custom action arguments do not match its callable");
+    if (!scxml_analyze_checked_add(
+            counts->executable_steps, 1u, &counts->executable_steps) ||
+        !scxml_analyze_checked_add(
+            counts->custom_action_rows, 1u,
+            &counts->custom_action_rows) ||
+        !scxml_analyze_checked_add(
+            counts->custom_action_argument_rows,
+            action->parameter_count,
+            &counts->custom_action_argument_rows))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(node),
+            "CMeta custom action descriptor count overflow");
+    return SCXML_OK;
+}
+
 size_t scxml_analyze_element_child_count(scxml_syntax_node node,
                                   scxml_element_kind wanted) {
     size_t count = 0u;
@@ -1033,11 +1133,33 @@ static scxml_status analyze_done_data(
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                                   scxml_syntax_node_location(child),
                                   "donedata content expr cannot have inline children");
-            if (content_expression_is_rich(build, expression))
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_attribute_location(expression),
-                    "structured donedata requires the completion payload ABI");
+            if (content_expression_is_rich(build, expression)) {
+                scxml_location location = {0};
+                scxml_expr_diagnostic diagnostic = {0};
+                const turbo_xml_string_view source =
+                    scxml_syntax_attribute_value(expression);
+                const cmeta_type_desc *type;
+                if (scxml_location_compile(
+                        &location, source.data, source.size,
+                        build->cmeta_root,
+                        build->expression_limits.max_path_depth, false,
+                        &diagnostic) != SCXML_EXPR_OK ||
+                    location.value == NULL ||
+                    location.value->kind != CMETA_DATA_STRUCT ||
+                    (type = location.value->storage_type) == NULL ||
+                    type->size > SCXML_EVENT_DATA_CAPACITY ||
+                    type->align > _Alignof(scxml_event_data_storage) ||
+                    (cmeta_type_require_traits(
+                         type, CMETA_TRAIT_TRIVIAL_COPY |
+                                   CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK &&
+                     cmeta_type_require_traits(
+                         type, CMETA_TRAIT_COPY | CMETA_TRAIT_DESTROY) !=
+                         CMETA_OK))
+                    return scxml_analyze_fail(
+                        build, SCXML_LIMIT_EXCEEDED,
+                        scxml_syntax_attribute_location(expression),
+                        "structured donedata exceeds the bounded completion object contract");
+            }
         } else {
             if (content_size > SCXML_EVENT_METADATA_CAPACITY ||
                 !scxml_analyze_checked_add(content_size, 1u, &retained) ||
@@ -1269,11 +1391,37 @@ static scxml_status analyze_send(scxml_build *build,
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_node_location(node),
                           "internal send content cannot be delayed");
-    if (payload_count != 0u && internal_target)
+    if (payload_count != 0u && internal_target &&
+        build->data_model != SCXML_DATA_MODEL_CMETA)
         return scxml_analyze_fail(
             build, SCXML_UNSUPPORTED_FEATURE,
             scxml_syntax_node_location(node),
-            "internal named-object payloads are not admitted by this scalar profile");
+            "internal named-object payloads require the CMeta data model");
+    if (payload_count != 0u && internal_target) {
+        const cmeta_type_desc *root_type = build->cmeta_root != NULL
+            ? build->cmeta_root->storage_type : NULL;
+        if (root_type == NULL ||
+            root_type->size > SCXML_EVENT_DATA_CAPACITY ||
+            root_type->align > _Alignof(scxml_event_data_storage) ||
+            (cmeta_type_require_traits(
+                 root_type, CMETA_TRAIT_TRIVIAL_COPY |
+                           CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK &&
+             cmeta_type_require_traits(
+                 root_type, CMETA_TRAIT_COPY |
+                                CMETA_TRAIT_DESTROY) != CMETA_OK))
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED,
+                scxml_syntax_node_location(node),
+                "internal named payload exceeds the bounded Event data contract");
+    }
+    if (payload_count != 0u && internal_target &&
+        !scxml_analyze_checked_add(
+            counts->assignment_rows, payload_count,
+            &counts->assignment_rows))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(node),
+            "internal payload assignment count overflow");
     if (!scxml_analyze_checked_add(counts->executable_steps, 1u,
                      &counts->executable_steps) ||
         !scxml_analyze_checked_add(counts->effect_rows, 1u, &counts->effect_rows) ||
@@ -1303,10 +1451,10 @@ static scxml_status analyze_send(scxml_build *build,
                           scxml_syntax_node_location(node),
                           "send expression count overflow");
     if (target_expr_attribute.impl != NULL || !internal_target ||
-        delay_ms != 0u || delay_expr_attribute.impl != NULL ||
-        payload_count != 0u)
+        delay_ms != 0u || delay_expr_attribute.impl != NULL)
         counts->requirements |= SCXML_REQUIREMENT_EVENT_IO;
-    if (payload_count != 0u ||
+    if ((payload_count != 0u &&
+         (target_expr_attribute.impl != NULL || !internal_target)) ||
         (has_data && !rich_content &&
          (target_expr_attribute.impl != NULL || !internal_target)))
         counts->requirements |= SCXML_REQUIREMENT_PAYLOAD;
@@ -1587,6 +1735,12 @@ static scxml_status analyze_conditional(
                 scxml_syntax_node_location(child),
                 "conditional text content is not supported");
         }
+        if (!scxml_analyze_view_equal_raw(
+                scxml_syntax_node_namespace_uri(child), SCXML_NAMESPACE)) {
+            status = analyze_custom_action(build, child, counts);
+            if (status != SCXML_OK) return status;
+            continue;
+        }
         status = require_scxml_element(build, child, &child_kind);
         if (status != SCXML_OK) return status;
         if (child_kind == SCXML_ELEMENT_ELSEIF ||
@@ -1682,6 +1836,12 @@ static scxml_status analyze_executable_content(
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
                               scxml_syntax_node_location(child),
                               "executable block text content is not supported");
+        }
+        if (!scxml_analyze_view_equal_raw(
+                scxml_syntax_node_namespace_uri(child), SCXML_NAMESPACE)) {
+            status = analyze_custom_action(build, child, counts);
+            if (status != SCXML_OK) return status;
+            continue;
         }
         status = require_scxml_element(build, child, &child_kind);
         if (status != SCXML_OK) return status;

@@ -62,7 +62,7 @@ typedef struct scxml_expr_system_values {
     scxml_expr_string_view event_origin_type;
     scxml_expr_string_view event_invoke_id;
     scxml_expr_string_view event_data;
-    /** Optional owned event object; schema is the root or a compatible subset. */
+    /** Optional owned event object described by its event-specific root schema. */
     const cmeta_data_desc *event_data_schema;
     const void *event_data_object;
     scxml_expr_string_view scxml_location;
