@@ -215,6 +215,9 @@ spec("TurboSCXML CHTTP processor and binding lifecycle") {
         config.max_event_name_bytes = 0u;
         check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
         config = test_processor_config();
+        config.max_event_name_bytes = SCXML_EVENT_METADATA_CAPACITY + 1u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
+        config = test_processor_config();
         config.max_form_name_bytes = 0u;
         check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
         config = test_processor_config();
@@ -246,6 +249,18 @@ spec("TurboSCXML CHTTP processor and binding lifecycle") {
         check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
         config = test_processor_config();
         config.server.network.command_capacity = 3u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
+        config = test_processor_config();
+        config.server.route_capacity = 0u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
+        config = test_processor_config();
+        config.server.max_route_param_count = 0u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
+        config = test_processor_config();
+        config.server.max_route_param_bytes = 45u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
+        config = test_processor_config();
+        config.server.max_target_bytes = 42u;
         check_equal(scxml_chttp_processor_init(&processor, &config), TURBO_EINVAL);
         config = test_processor_config();
         config.endpoint_capacity = SIZE_MAX;

@@ -125,6 +125,7 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
   add_library(turbo_scxml_chttp_event_io STATIC
     src/chttp_event_io_codec.c
     src/chttp_event_io_egress.c
+    src/chttp_event_io_ingress.c
     src/chttp_event_io.c)
   add_library(TurboSCXML::CHttpEventIO ALIAS turbo_scxml_chttp_event_io)
   set_target_properties(turbo_scxml_chttp_event_io PROPERTIES

@@ -17,6 +17,9 @@ typedef struct scxml_chttp_storage_layout {
     size_t total;
     size_t authority;
     size_t base_path;
+    size_t route_path;
+    size_t ingress_text;
+    size_t ingress_entries;
     size_t endpoints;
     size_t endpoint_uris;
     size_t egress;
@@ -87,6 +90,7 @@ static bool processor_config_valid(
     const scxml_chttp_processor_config_v1 *config,
     size_t *out_authority_size, size_t *out_base_path_size) {
     size_t index;
+    size_t endpoint_target_size;
     if (config == NULL || out_authority_size == NULL ||
         out_base_path_size == NULL ||
         config->abi_version != SCXML_CHTTP_ABI_V1 ||
@@ -94,10 +98,16 @@ static bool processor_config_valid(
         config->endpoint_capacity == 0u || config->egress_capacity == 0u ||
         config->max_access_uri_bytes == 0u ||
         config->max_event_name_bytes == 0u ||
+        config->max_event_name_bytes > SCXML_EVENT_METADATA_CAPACITY ||
         config->max_form_entry_count == 0u ||
         config->max_form_name_bytes == 0u ||
         config->max_form_value_bytes == 0u ||
         config->max_encoded_body_bytes == 0u ||
+        config->server.route_capacity == 0u ||
+        config->server.max_route_param_count == 0u ||
+        config->server.max_route_param_bytes <
+            (sizeof("endpoint") - 1u) +
+                (TURBO_UUID_STRING_SIZE - 1u) + 2u ||
         config->request_timeout_ms == 0u || config->worker_poll_ms == 0u ||
         config->resolve == NULL ||
         config->max_encoded_body_bytes >
@@ -113,6 +123,11 @@ static bool processor_config_valid(
             config->base_path,
             config->max_access_uri_bytes, out_base_path_size) ||
         config->base_path[0] != '/')
+        return false;
+    endpoint_target_size = *out_base_path_size +
+        (config->base_path[*out_base_path_size - 1u] == '/' ? 0u : 1u) +
+        (TURBO_UUID_STRING_SIZE - 1u);
+    if (config->server.max_target_bytes < endpoint_target_size)
         return false;
     for (index = 0u; index < *out_authority_size; ++index) {
         if (config->advertised_authority[index] == '/' ||
@@ -134,15 +149,33 @@ static bool calculate_storage_layout(
     scxml_chttp_storage_layout layout = {0};
     size_t authority_bytes;
     size_t base_path_bytes;
+    size_t route_path_bytes;
+    size_t ingress_text_bytes;
     size_t string_stride;
     if (config == NULL || out == NULL ||
         !checked_add(authority_size, 1u, &authority_bytes) ||
         !checked_add(base_path_size, 1u, &base_path_bytes) ||
+        !checked_add(base_path_size,
+                     config->base_path[base_path_size - 1u] == '/'
+                         ? sizeof(":endpoint")
+                         : sizeof("/:endpoint"),
+                     &route_path_bytes) ||
+        !checked_add(config->server.max_request_body_bytes, 1u,
+                     &ingress_text_bytes) ||
         !checked_add(config->max_access_uri_bytes, 1u, &string_stride) ||
         !layout_take(&layout.total, 1u, 1u, authority_bytes,
                      &layout.authority) ||
         !layout_take(&layout.total, 1u, 1u, base_path_bytes,
                      &layout.base_path) ||
+        !layout_take(&layout.total, 1u, 1u, route_path_bytes,
+                     &layout.route_path) ||
+        !layout_take(&layout.total, 1u, 1u, ingress_text_bytes,
+                     &layout.ingress_text) ||
+        !layout_take(&layout.total,
+                     _Alignof(scxml_chttp_form_entry_view),
+                     config->max_form_entry_count,
+                     sizeof(scxml_chttp_form_entry_view),
+                     &layout.ingress_entries) ||
         !layout_take(&layout.total, _Alignof(scxml_chttp_endpoint_row),
                      config->endpoint_capacity,
                      sizeof(scxml_chttp_endpoint_row), &layout.endpoints) ||
@@ -373,6 +406,11 @@ int scxml_chttp_processor_init(
     impl->config = *config;
     impl->advertised_authority = (char *)(storage + layout.authority);
     impl->base_path = (char *)(storage + layout.base_path);
+    impl->route_path = (char *)(storage + layout.route_path);
+    impl->ingress_text = (char *)(storage + layout.ingress_text);
+    impl->ingress_entries =
+        (scxml_chttp_form_entry_view *)(void *)(
+            storage + layout.ingress_entries);
     impl->endpoints =
         (scxml_chttp_endpoint_row *)(void *)(storage + layout.endpoints);
     impl->egress =
@@ -384,6 +422,15 @@ int scxml_chttp_processor_init(
     memcpy(impl->advertised_authority, config->advertised_authority,
            authority_size + 1u);
     memcpy(impl->base_path, config->base_path, base_path_size + 1u);
+    impl->ingress_text_capacity =
+        config->server.max_request_body_bytes + 1u;
+    (void)snprintf(
+        impl->route_path, base_path_size +
+            (impl->base_path[base_path_size - 1u] == '/'
+                 ? sizeof(":endpoint") : sizeof("/:endpoint")),
+        impl->base_path[base_path_size - 1u] == '/'
+            ? "%s:endpoint" : "%s/:endpoint",
+        impl->base_path);
     impl->config.advertised_authority = impl->advertised_authority;
     impl->config.base_path = impl->base_path;
     string_stride = config->max_access_uri_bytes + 1u;
@@ -421,6 +468,11 @@ int scxml_chttp_processor_init(
     }
     status = chttp_server_init(&impl->server, &config->server);
     if (status != TURBO_OK) goto fail;
+    status = scxml_chttp_ingress_register(impl);
+    if (status != TURBO_OK) {
+        (void)chttp_server_destroy(&impl->server);
+        goto fail;
+    }
     status = chttp_async_client_init(&impl->client, &config->client);
     if (status != TURBO_OK) {
         (void)chttp_server_destroy(&impl->server);
