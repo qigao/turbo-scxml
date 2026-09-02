@@ -147,16 +147,24 @@ static bool scalar_text(
 static bool encode_form(
     const scxml_send_request *request, codec_writer *writer) {
     size_t index;
-    if (request == NULL || writer == NULL || request->event == NULL ||
-        request->event_size == 0u ||
-        !writer_append_form_component(
-            writer, RESERVED_EVENT_NAME,
-            sizeof(RESERVED_EVENT_NAME) - 1u) ||
-        !writer_append_byte(writer, '=') ||
-        !writer_append_form_component(
-            writer, request->event, request->event_size))
+    bool wrote_entry = false;
+    bool wrote_reserved = false;
+    if (request == NULL || writer == NULL ||
+        (request->event == NULL && request->event_size != 0u))
         return false;
-    if (request->payload.kind == SCXML_PAYLOAD_NONE) return true;
+    if (request->event_size != 0u) {
+        if (!writer_append_form_component(
+                writer, RESERVED_EVENT_NAME,
+                sizeof(RESERVED_EVENT_NAME) - 1u) ||
+            !writer_append_byte(writer, '=') ||
+            !writer_append_form_component(
+                writer, request->event, request->event_size))
+            return false;
+        wrote_entry = true;
+        wrote_reserved = true;
+    }
+    if (request->payload.kind == SCXML_PAYLOAD_NONE)
+        return wrote_entry;
     if (request->payload.kind != SCXML_PAYLOAD_NAMED ||
         (request->payload.entry_count != 0u &&
          request->payload.entries == NULL))
@@ -166,22 +174,26 @@ static bool encode_form(
         char scalar_buffer[64];
         const char *value;
         size_t value_size;
+        const bool reserved = entry->name_size ==
+                sizeof(RESERVED_EVENT_NAME) - 1u &&
+            memcmp(entry->name, RESERVED_EVENT_NAME,
+                   entry->name_size) == 0;
         if (entry->name == NULL || entry->name_size == 0u ||
-            (entry->name_size == sizeof(RESERVED_EVENT_NAME) - 1u &&
-             memcmp(entry->name, RESERVED_EVENT_NAME,
-                    entry->name_size) == 0) ||
+            (reserved && wrote_reserved) ||
             entry->value.kind != SCXML_CONTENT_SCALAR ||
             !scalar_text(
                 &entry->value.scalar, scalar_buffer, sizeof(scalar_buffer),
                 &value, &value_size) ||
-            !writer_append_byte(writer, '&') ||
+            (wrote_entry && !writer_append_byte(writer, '&')) ||
             !writer_append_form_component(
                 writer, entry->name, entry->name_size) ||
             !writer_append_byte(writer, '=') ||
             !writer_append_form_component(writer, value, value_size))
             return false;
+        wrote_entry = true;
+        if (reserved) wrote_reserved = true;
     }
-    return true;
+    return wrote_entry;
 }
 
 static scxml_adapter_status copy_content_body(

@@ -96,6 +96,10 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  target_link_libraries(scxml_w3c_conformance_test PRIVATE
+    TurboSCXML::CHttpEventIO)
+  target_compile_definitions(scxml_w3c_conformance_test PRIVATE
+    TURBOSCXML_TEST_CHTTP_EVENT_IO=1)
   turboscxml_add_test(
     scxml_chttp_codec_test
     scxml_chttp_codec_test.c

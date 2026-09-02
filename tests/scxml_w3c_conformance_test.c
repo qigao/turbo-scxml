@@ -1,5 +1,8 @@
 #include <cflow/executor.h>
 #include <scxml/scxml.h>
+#if defined(TURBOSCXML_TEST_CHTTP_EVENT_IO)
+#include <scxml/chttp_event_io.h>
+#endif
 #include <cflow/statechart_instance.h>
 #include <turbo_cmeta_data.h>
 #include <rocida/stl/typed.h>
@@ -12,6 +15,10 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(TURBOSCXML_TEST_CHTTP_EVENT_IO)
+#include <turbo/clock.h>
+#include <turbo/error_codes.h>
+#endif
 #include <turbo/thread.h>
 
 #define W3C_FIXTURE_PATH_CAPACITY 512u
@@ -31,8 +38,9 @@ enum {
     W3C_UPSTREAM_TEST_DOCUMENT_COUNT = 202,
     W3C_UPSTREAM_MANDATORY_DOCUMENT_COUNT = 168,
     W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT = 34,
-    W3C_PASS_DOCUMENT_COUNT = 168,
+    W3C_PASS_DOCUMENT_COUNT = 181,
     W3C_UNSUPPORTED_DOCUMENT_COUNT = 0,
+    W3C_NOT_APPLICABLE_DOCUMENT_COUNT = 21,
     W3C_LOOPBACK_CAPACITY = 2,
     W3C_DELAYED_MESSAGE_CAPACITY = 2,
     W3C_NAMED_PAYLOAD_CAPACITY = 2,
@@ -4913,6 +4921,492 @@ cleanup:
     return succeeded;
 }
 
+#if defined(TURBOSCXML_TEST_CHTTP_EVENT_IO)
+typedef struct w3c_chttp_probe {
+    scxml_chttp_processor processor;
+    scxml_chttp_binding binding;
+    scxml_program program;
+    cflow_executor executor;
+    scxml_session session;
+    chttp_client client;
+    scxml_ioprocessor_descriptor descriptor;
+    w3c_result_probe result;
+    w3c_cmeta_state decoded_data;
+    bool executor_initialized;
+    bool client_initialized;
+    size_t downstream_ready;
+    size_t downstream_delivered;
+    size_t downstream_closes;
+    size_t requests;
+    chttp_method method;
+    size_t entry_count;
+    int decoded_param1;
+    char body[256];
+    size_t body_size;
+    char content_type[96];
+    char connection_uri[128];
+    char authority[96];
+    char target[256];
+    char downstream_event[W3C_EVENT_TEXT_CAPACITY];
+    unsigned int manual_status;
+} w3c_chttp_probe;
+
+static native_io_backend_kind w3c_chttp_backend(void) {
+#if defined(_WIN32)
+    return NATIVE_IO_BACKEND_IOCP;
+#elif defined(__linux__)
+    return NATIVE_IO_BACKEND_EPOLL;
+#else
+    return NATIVE_IO_BACKEND_KQUEUE;
+#endif
+}
+
+static cnet_client_config w3c_chttp_network(size_t connections) {
+    return (cnet_client_config){
+        .backend = w3c_chttp_backend(),
+        .connection_capacity = connections,
+        .command_capacity = 16u,
+        .request_capacity = 8u,
+        .completion_batch_capacity = 8u,
+        .event_capacity = 16u,
+        .max_send_bytes = 4096u,
+        .receive_buffer_bytes = 256u,
+        .connect_timeout_ms = 500u,
+        .read_timeout_ms = 500u,
+        .write_timeout_ms = 500u};
+}
+
+static chttp_server_config w3c_chttp_server_config(void) {
+    return (chttp_server_config){
+        .host = "127.0.0.1", .port = 0u, .backlog = 4u,
+        .network = w3c_chttp_network(4u),
+        .route_capacity = 4u, .middleware_capacity = 1u,
+        .max_route_middleware_count = 1u,
+        .max_route_param_count = 1u, .max_route_param_bytes = 64u,
+        .max_target_bytes = 256u,
+        .max_header_count = 8u, .max_header_bytes = 512u,
+        .max_request_body_bytes = 256u,
+        .max_response_header_count = 8u,
+        .max_response_header_bytes = 512u,
+        .max_response_body_bytes = 64u,
+        .session_capacity = 1u, .session_entry_capacity = 1u,
+        .max_session_key_bytes = 16u, .max_session_value_bytes = 16u,
+        .session_idle_timeout_ms = 1000u,
+        .session_cookie_name = "w3c_sid", .poll_slice_ms = 1u};
+}
+
+static chttp_client_config w3c_chttp_client_config(void) {
+    return (chttp_client_config){
+        .network = w3c_chttp_network(2u),
+        .request_capacity = 1u,
+        .max_start_line_bytes = 256u,
+        .max_header_count = 8u, .max_header_bytes = 512u,
+        .max_request_body_bytes = 256u,
+        .max_response_body_bytes = 64u,
+        .max_informational_responses = 1u};
+}
+
+static int w3c_chttp_resolve(
+    void *user, const char *uri, size_t uri_size,
+    scxml_chttp_resolved_target *out_target) {
+    static const char scheme[] = "http://";
+    w3c_chttp_probe *probe = (w3c_chttp_probe *)user;
+    const char *path;
+    size_t authority_size;
+    int written;
+    if (probe == NULL || uri == NULL || out_target == NULL ||
+        uri_size < sizeof(scheme) ||
+        memcmp(uri, scheme, sizeof(scheme) - 1u) != 0)
+        return 0;
+    path = memchr(
+        uri + sizeof(scheme) - 1u, '/',
+        uri_size - (sizeof(scheme) - 1u));
+    if (path == NULL) return 0;
+    authority_size = (size_t)(path - uri) - (sizeof(scheme) - 1u);
+    if (authority_size == 0u ||
+        authority_size >= sizeof(probe->authority) ||
+        uri_size - (size_t)(path - uri) >= sizeof(probe->target))
+        return 0;
+    memcpy(probe->authority, uri + sizeof(scheme) - 1u, authority_size);
+    probe->authority[authority_size] = '\0';
+    memcpy(probe->target, path, uri_size - (size_t)(path - uri));
+    probe->target[uri_size - (size_t)(path - uri)] = '\0';
+    written = snprintf(
+        probe->connection_uri, sizeof(probe->connection_uri),
+        "tcp://%s", probe->authority);
+    if (written < 0 || (size_t)written >= sizeof(probe->connection_uri))
+        return 0;
+    *out_target = (scxml_chttp_resolved_target){
+        probe->connection_uri, probe->authority, probe->target};
+    return 1;
+}
+
+static scxml_chttp_decode_status w3c_chttp_decode(
+    void *user, const scxml_chttp_ingress_view *ingress,
+    scxml_content_view *out_data) {
+    w3c_chttp_probe *probe = (w3c_chttp_probe *)user;
+    const char *content_type;
+    size_t index;
+    if (probe == NULL || ingress == NULL || ingress->request == NULL ||
+        out_data == NULL || ingress->content_size >= sizeof(probe->body))
+        return SCXML_CHTTP_DECODE_FAILED;
+    ++probe->requests;
+    probe->method = ingress->request->method;
+    probe->body_size = ingress->content_size;
+    if (ingress->content_size != 0u)
+        memcpy(probe->body, ingress->content, ingress->content_size);
+    probe->body[ingress->content_size] = '\0';
+    probe->entry_count = ingress->entry_count;
+    probe->decoded_param1 = 0;
+    for (index = 0u; index < ingress->entry_count; ++index) {
+        const scxml_chttp_form_entry_view *entry = &ingress->entries[index];
+        if (entry->name_size == sizeof("param1") - 1u &&
+            memcmp(entry->name, "param1", entry->name_size) == 0 &&
+            entry->value_size == 1u && entry->value[0] >= '0' &&
+            entry->value[0] <= '9')
+            probe->decoded_param1 = entry->value[0] - '0';
+    }
+    content_type =
+        chttp_server_request_header(ingress->request, "Content-Type");
+    snprintf(probe->content_type, sizeof(probe->content_type), "%s",
+             content_type != NULL ? content_type : "");
+    memset(&probe->decoded_data, 0, sizeof(probe->decoded_data));
+    probe->decoded_data.result = probe->decoded_param1;
+    *out_data = (scxml_content_view){
+        .kind = SCXML_CONTENT_CMETA,
+        .schema = &w3c_cmeta_state_desc,
+        .object = &probe->decoded_data};
+    return SCXML_CHTTP_DECODE_OK;
+}
+
+static void w3c_chttp_downstream_commit(void *user) {
+    w3c_chttp_probe *probe = (w3c_chttp_probe *)user;
+    if (probe == NULL) return;
+    ++probe->downstream_ready;
+    if (w3c_admit_external_event(
+            &probe->session, &probe->program,
+            probe->downstream_event))
+        ++probe->downstream_delivered;
+}
+
+static void w3c_chttp_downstream_discard(void *user) {
+    (void)user;
+}
+
+static scxml_adapter_status w3c_chttp_downstream_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    w3c_chttp_probe *probe = (w3c_chttp_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (w3c_send_is_result(request))
+        return w3c_capture_result_send(
+            &probe->result, request, out_ticket, out_error);
+    if (probe->downstream_ready != probe->downstream_delivered ||
+        request->event == NULL || request->event_size == 0u ||
+        request->event_size >= sizeof(probe->downstream_event))
+        return SCXML_ADAPTER_FULL;
+    memcpy(probe->downstream_event, request->event, request->event_size);
+    probe->downstream_event[request->event_size] = '\0';
+    *out_ticket = (cflow_statechart_effect_ticket){
+        w3c_chttp_downstream_commit,
+        w3c_chttp_downstream_discard, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status w3c_chttp_downstream_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    if (user == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_ticket = (cflow_statechart_effect_ticket){0};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void w3c_chttp_downstream_close(void *user) {
+    w3c_chttp_probe *probe = (w3c_chttp_probe *)user;
+    if (probe != NULL) ++probe->downstream_closes;
+}
+
+static bool w3c_chttp_downstream_quiescent(void *user) {
+    const w3c_chttp_probe *probe = (const w3c_chttp_probe *)user;
+    return probe != NULL && probe->downstream_closes != 0u;
+}
+
+static const scxml_event_io_adapter W3C_CHTTP_DOWNSTREAM = {
+    .abi_version = SCXML_ADAPTER_ABI,
+    .struct_size = sizeof(scxml_event_io_adapter),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND |
+        SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL |
+        SCXML_EVENT_IO_CAP_PAYLOAD | SCXML_EVENT_IO_CAP_CONTENT,
+    .prepare_send = w3c_chttp_downstream_send,
+    .prepare_cancel = w3c_chttp_downstream_cancel,
+    .close = w3c_chttp_downstream_close,
+    .is_quiescent = w3c_chttp_downstream_quiescent};
+
+static unsigned int w3c_chttp_post(
+    w3c_chttp_probe *probe, const char *body) {
+    const chttp_header header = {
+        "Content-Type", "application/x-www-form-urlencoded"};
+    const chttp_options options = {
+        .connection_uri = probe->connection_uri,
+        .authority = probe->authority,
+        .target = probe->target,
+        .headers = &header,
+        .header_count = 1u,
+        .body = body,
+        .body_size = strlen(body),
+        .timeout_ms = 1000u};
+    chttp_response response = {0};
+    chttp_error error = {0};
+    unsigned int status = 0u;
+    if (chttp_post(&probe->client, &options, &response, &error) == TURBO_OK)
+        status = response.status_code;
+    chttp_response_destroy(&response);
+    return status;
+}
+
+static bool w3c_chttp_body_is(
+    const w3c_chttp_probe *probe, const char *expected) {
+    const size_t size = expected != NULL ? strlen(expected) : 0u;
+    return probe != NULL && expected != NULL && probe->body_size == size &&
+        memcmp(probe->body, expected, size) == 0;
+}
+
+static bool w3c_chttp_witness(
+    const char *fixture_name, const w3c_chttp_probe *probe,
+    const scxml_chttp_processor_stats *stats) {
+    if (strcmp(probe->result.event, "result.pass") != 0 ||
+        probe->result.commits != 1u || probe->result.discards != 0u ||
+        stats->invariant_failures != 0u) {
+        return false;
+    }
+    if (strcmp(fixture_name, "test513.scxml") == 0)
+        return probe->manual_status == 204u && probe->requests == 1u &&
+            stats->ingress_admitted == 1u;
+    if (strcmp(fixture_name, "test577.scxml") == 0)
+        return probe->requests == 0u;
+    if (probe->requests != 1u || probe->method != CHTTP_METHOD_POST ||
+        stats->egress_completed != 1u || stats->ingress_admitted != 1u)
+        return false;
+    if (strcmp(fixture_name, "test201.scxml") == 0)
+        return w3c_chttp_body_is(probe, "_scxmleventname=event1");
+    if (strcmp(fixture_name, "test509.scxml") == 0 ||
+        strcmp(fixture_name, "test522.scxml") == 0 ||
+        strcmp(fixture_name, "test534.scxml") == 0)
+        return w3c_chttp_body_is(probe, "_scxmleventname=test");
+    if (strcmp(fixture_name, "test510.scxml") == 0)
+        return w3c_chttp_body_is(probe, "_scxmleventname=test");
+    if (strcmp(fixture_name, "test518.scxml") == 0)
+        return probe->entry_count == 1u && w3c_chttp_body_is(
+            probe, "_scxmleventname=test&sequence=2");
+    if (strcmp(fixture_name, "test519.scxml") == 0)
+        return probe->entry_count == 1u && w3c_chttp_body_is(
+            probe, "_scxmleventname=test&param1=1");
+    if (strcmp(fixture_name, "test520.scxml") == 0)
+        return w3c_chttp_body_is(probe, "this is some content") &&
+            strcmp(probe->content_type, "text/plain; charset=utf-8") == 0;
+    if (strcmp(fixture_name, "test531.scxml") == 0)
+        return w3c_chttp_body_is(probe, "_scxmleventname=test");
+    if (strcmp(fixture_name, "test532.scxml") == 0)
+        return w3c_chttp_body_is(probe, "some content");
+    if (strcmp(fixture_name, "test567.scxml") == 0)
+        return probe->entry_count == 1u && probe->decoded_param1 == 2 &&
+            w3c_chttp_body_is(
+                probe, "_scxmleventname=test&param1=2");
+    return false;
+}
+
+static bool run_w3c_chttp_fixture(const char *fixture_name) {
+    char path[W3C_FIXTURE_PATH_CAPACITY];
+    char *source = NULL;
+    size_t source_size = 0u;
+    w3c_chttp_probe probe = {0};
+    scxml_diagnostic diagnostic = {0};
+    scxml_chttp_processor_stats processor_stats = {0};
+    scxml_chttp_processor_config_v1 processor_config = {0};
+    scxml_chttp_binding_config_v1 binding_config = {0};
+    scxml_session_config session_config = {0};
+    const scxml_cmeta_compile_options_v1 compile_options =
+        scxml_cmeta_default_compile_options(&w3c_cmeta_state_desc);
+    const scxml_cmeta_session_options_v1 session_options = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(session_options),
+        .initial_state = &probe.decoded_data};
+    cflow_statechart_instance_stats session_stats = {0};
+    uint64_t deadline;
+    bool session_initialized = false;
+    bool expects_egress;
+    bool completed = false;
+    bool witnessed = false;
+    bool cleaned = true;
+    int written;
+    int status;
+    if (fixture_name == NULL) return false;
+    expects_egress = strcmp(fixture_name, "test513.scxml") != 0 &&
+        strcmp(fixture_name, "test577.scxml") != 0;
+    probe.decoded_data.sequence = 2;
+    written = snprintf(path, sizeof(path), "%s/%s",
+                       SCXML_W3C_FIXTURE_DIR, fixture_name);
+    if (written < 0 || (size_t)written >= sizeof(path)) return false;
+    source = tt_read_file(path, &source_size);
+    if (source == NULL ||
+        scxml_compile_cmeta(
+            &probe.program, source, source_size, NULL,
+            &compile_options, &diagnostic) != SCXML_OK) {
+        info("fixture=%s compile diagnostic=%s", fixture_name,
+             diagnostic.message);
+        goto cleanup;
+    }
+    processor_config = (scxml_chttp_processor_config_v1){
+        .abi_version = SCXML_CHTTP_ABI_V1,
+        .struct_size = sizeof(processor_config),
+        .server = w3c_chttp_server_config(),
+        .client = w3c_chttp_client_config(),
+        .advertised_authority = "127.0.0.1",
+        .base_path = "/w3c",
+        .endpoint_capacity = 1u, .egress_capacity = 4u,
+        .max_access_uri_bytes = 256u,
+        .max_event_name_bytes = 64u,
+        .max_form_entry_count = 8u,
+        .max_form_name_bytes = 64u,
+        .max_form_value_bytes = 128u,
+        .max_encoded_body_bytes = 256u,
+        .request_timeout_ms = 500u, .worker_poll_ms = 1u,
+        .resolve = w3c_chttp_resolve, .resolve_user = &probe};
+    if (scxml_chttp_processor_init(
+            &probe.processor, &processor_config) != TURBO_OK ||
+        scxml_chttp_processor_start(&probe.processor) != TURBO_OK)
+        goto cleanup;
+    binding_config = (scxml_chttp_binding_config_v1){
+        .abi_version = SCXML_CHTTP_ABI_V1,
+        .struct_size = sizeof(binding_config),
+        .scxml_adapter = &W3C_CHTTP_DOWNSTREAM,
+        .scxml_adapter_user = &probe,
+        .decode = w3c_chttp_decode, .decode_user = &probe};
+    if (scxml_chttp_binding_init(
+            &probe.binding, &probe.processor, &binding_config) != TURBO_OK ||
+        !scxml_chttp_binding_ioprocessor(
+            &probe.binding, &probe.descriptor) ||
+        probe.descriptor.location == NULL ||
+        probe.descriptor.location_size == 0u ||
+        !w3c_chttp_resolve(
+            &probe, probe.descriptor.location,
+            probe.descriptor.location_size,
+            &(scxml_chttp_resolved_target){0}))
+        goto cleanup;
+    if (!cflow_executor_serial_init(&probe.executor)) goto cleanup;
+    probe.executor_initialized = true;
+    session_config = (scxml_session_config){
+        .program = &probe.program, .executor = &probe.executor,
+        .external_event_capacity = 4u, .internal_event_capacity = 4u,
+        .completion_capacity = 2u, .microstep_limit = 16u,
+        .max_storage_bytes = W3C_SESSION_MAX_STORAGE_BYTES,
+        .effect_capacity = 4u, .adapter_internal_event_capacity = 4u,
+        .delayed_send_capacity = 2u,
+        .event_io = scxml_chttp_event_io_adapter(),
+        .adapter_user = scxml_chttp_binding_adapter_user(&probe.binding),
+        .ioprocessors = &probe.descriptor, .ioprocessor_count = 1u};
+    if (scxml_session_init_cmeta(
+            &probe.session, &session_config, &session_options) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (scxml_chttp_binding_activate(
+            &probe.binding, &probe.session, &probe.program) != TURBO_OK)
+        goto cleanup;
+    if (chttp_client_init(
+            &probe.client, &(chttp_client_config){
+                .network = w3c_chttp_network(2u),
+                .request_capacity = 1u,
+                .max_start_line_bytes = 256u,
+                .max_header_count = 8u, .max_header_bytes = 512u,
+                .max_request_body_bytes = 256u,
+                .max_response_body_bytes = 64u,
+                .max_informational_responses = 1u}) != TURBO_OK)
+        goto cleanup;
+    probe.client_initialized = true;
+    if (strcmp(fixture_name, "test513.scxml") == 0)
+        probe.manual_status = w3c_chttp_post(
+            &probe, "_scxmleventname=test&key1=value1");
+    deadline = turbo_monotonic_ms() + UINT64_C(3000);
+    do {
+        if (!cflow_executor_wait_idle(&probe.executor)) goto cleanup;
+        if (probe.downstream_ready > probe.downstream_delivered) {
+            if (!w3c_admit_external_event(
+                    &probe.session, &probe.program,
+                    probe.downstream_event))
+                goto cleanup;
+            ++probe.downstream_delivered;
+        }
+        if (!scxml_session_get_stats(&probe.session, &session_stats) ||
+            !scxml_chttp_processor_get_stats(
+                &probe.processor, &processor_stats))
+            goto cleanup;
+        if (session_stats.done && probe.result.commits == 1u &&
+            (!expects_egress || processor_stats.egress_completed == 1u))
+            break;
+        turbo_sleep_ms(1u);
+    } while (turbo_monotonic_ms() < deadline);
+    if (!session_stats.done || probe.result.commits != 1u ||
+        session_stats.errored ||
+        !cflow_executor_wait_idle(&probe.executor))
+        goto cleanup;
+    completed = true;
+
+cleanup:
+    if (probe.client_initialized &&
+        chttp_client_destroy(&probe.client, 1000u) != TURBO_OK)
+        cleaned = false;
+    if (session_initialized) {
+        deadline = turbo_monotonic_ms() + UINT64_C(2000);
+        do {
+            status = (int)scxml_session_destroy(&probe.session);
+            if (status == CFLOW_STATECHART_INSTANCE_OK) break;
+            turbo_sleep_ms(1u);
+        } while (turbo_monotonic_ms() < deadline);
+        if (status != CFLOW_STATECHART_INSTANCE_OK) cleaned = false;
+    } else if (probe.binding.impl != NULL) {
+        scxml_chttp_event_io_adapter()->close(
+            scxml_chttp_binding_adapter_user(&probe.binding));
+    }
+    if (probe.binding.impl != NULL &&
+        scxml_chttp_binding_destroy(&probe.binding) != TURBO_OK)
+        cleaned = false;
+    if (probe.processor.impl != NULL) {
+        if (scxml_chttp_processor_stop(&probe.processor, 1000u) != TURBO_OK)
+            cleaned = false;
+        if (scxml_chttp_processor_destroy(&probe.processor) != TURBO_OK)
+            cleaned = false;
+    }
+    if (probe.executor_initialized)
+        cflow_executor_destroy(&probe.executor);
+    scxml_program_destroy(&probe.program);
+    free(source);
+    witnessed = completed && w3c_chttp_witness(
+        fixture_name, &probe, &processor_stats);
+    if (!witnessed)
+        info("fixture=%s result=%s result_commits=%zu result_discards=%zu "
+             "requests=%zu body=%s status=%u egress_done=%llu "
+             "ingress_admitted=%llu invariant_failures=%llu cleaned=%d "
+             "completed=%d session_done=%d session_errored=%d",
+             fixture_name, probe.result.event, probe.result.commits,
+             probe.result.discards, probe.requests, probe.body,
+             probe.manual_status,
+             (unsigned long long)processor_stats.egress_completed,
+             (unsigned long long)processor_stats.ingress_admitted,
+             (unsigned long long)processor_stats.invariant_failures,
+             cleaned ? 1 : 0, completed ? 1 : 0,
+             session_stats.done ? 1 : 0,
+             session_stats.errored ? 1 : 0);
+    return witnessed && cleaned;
+}
+#endif
+
 suite("SCXML W3C-derived conformance regression corpus") {
     it("validates the complete strict upstream inventory") {
         w3c_manifest_stats stats = {0};
@@ -4927,7 +5421,7 @@ suite("SCXML W3C-derived conformance regression corpus") {
         check_equal(stats.unsupported,
                     (size_t)W3C_UNSUPPORTED_DOCUMENT_COUNT);
         check_equal(stats.not_applicable,
-                    (size_t)W3C_UPSTREAM_OPTIONAL_DOCUMENT_COUNT);
+                    (size_t)W3C_NOT_APPLICABLE_DOCUMENT_COUNT);
     }
 
     it("rejects duplicate inventory IDs") {
@@ -5692,4 +6186,45 @@ suite("SCXML W3C-derived conformance regression corpus") {
     it("test 413 starts in the root initial configuration") {
         check_w3c_fixture("test413.scxml");
     }
+#if defined(TURBOSCXML_TEST_CHTTP_EVENT_IO)
+    it("test 201 sends through the exact BasicHTTP processor type") {
+        check_true(run_w3c_chttp_fixture("test201.scxml"));
+    }
+    it("test 509 uses POST and delivers the resulting Event") {
+        check_true(run_w3c_chttp_fixture("test509.scxml"));
+    }
+    it("test 510 queues BasicHTTP input behind an internal Event") {
+        check_true(run_w3c_chttp_fixture("test510.scxml"));
+    }
+    it("test 513 acknowledges an admitted external POST") {
+        check_true(run_w3c_chttp_fixture("test513.scxml"));
+    }
+    it("test 518 maps namelist values to POST parameters") {
+        check_true(run_w3c_chttp_fixture("test518.scxml"));
+    }
+    it("test 519 maps param children to POST parameters") {
+        check_true(run_w3c_chttp_fixture("test519.scxml"));
+    }
+    it("test 520 sends content as the exact message body") {
+        check_true(run_w3c_chttp_fixture("test520.scxml"));
+    }
+    it("test 522 publishes a usable BasicHTTP location") {
+        check_true(run_w3c_chttp_fixture("test522.scxml"));
+    }
+    it("test 531 uses _scxmleventname as the Event name") {
+        check_true(run_w3c_chttp_fixture("test531.scxml"));
+    }
+    it("test 532 defaults an unnamed POST Event to HTTP.POST") {
+        check_true(run_w3c_chttp_fixture("test532.scxml"));
+    }
+    it("test 534 emits send event as _scxmleventname") {
+        check_true(run_w3c_chttp_fixture("test534.scxml"));
+    }
+    it("test 567 maps non-reserved POST content to Event data") {
+        check_true(run_w3c_chttp_fixture("test567.scxml"));
+    }
+    it("test 577 reports targetless BasicHTTP send failure") {
+        check_true(run_w3c_chttp_fixture("test577.scxml"));
+    }
+#endif
 }

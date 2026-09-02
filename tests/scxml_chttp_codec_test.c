@@ -94,6 +94,35 @@ suite("SCXML CHTTP BasicHTTP codec") {
         check_equal(body, expected, sizeof(expected) - 1u);
     }
 
+    it("accepts one reserved Event-name param when send event is absent") {
+        static const char expected[] = "_scxmleventname=test";
+        scxml_payload_entry entry = {
+            "_scxmleventname", sizeof("_scxmleventname") - 1u, {0}};
+        scxml_send_request request = {
+            .payload = {
+                .kind = SCXML_PAYLOAD_NAMED,
+                .entries = &entry,
+                .entry_count = 1u}};
+        char body[sizeof(expected) - 1u];
+        size_t size = 0u;
+        const char *type = NULL;
+        size_t type_size = 0u;
+
+        entry.value = scalar_string("test");
+        check_equal(scxml_chttp_encode_send_body(
+                        &request, body, sizeof(body), &size,
+                        &type, &type_size),
+                    SCXML_ADAPTER_ACCEPTED);
+        check_equal(size, sizeof(expected) - 1u);
+        check_equal(body, expected, sizeof(expected) - 1u);
+
+        request.payload = (scxml_payload_view){0};
+        check_equal(scxml_chttp_encode_send_body(
+                        &request, body, sizeof(body), &size,
+                        &type, &type_size),
+                    SCXML_ADAPTER_ERROR_EXECUTION);
+    }
+
     it("measures before writing and rejects invalid scalar strings") {
         scxml_payload_entry entry = {"value", 5u, {0}};
         scxml_send_request request = {
