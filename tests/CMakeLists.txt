@@ -94,3 +94,11 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     LIBS TurboSCXML::CHttpResource
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
 endif()
+
+if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  turboscxml_add_test(
+    scxml_chttp_codec_test
+    scxml_chttp_codec_test.c
+    LIBS TurboSCXML::CHttpEventIO
+    INCLUDES ${PROJECT_SOURCE_DIR}/src)
+endif()

@@ -10,6 +10,8 @@ option(TURBOSCXML_ENABLE_QUICKJS
   "Enable the bounded quickjs-sandbox SCXML data-model profile" OFF)
 option(TURBOSCXML_ENABLE_CHTTP_RESOURCE
   "Enable the optional blocking CHTTP SCXML resource adapter" OFF)
+option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO
+  "Build the optional CHTTP BasicHTTP Event I/O processor" OFF)
 
 if(NOT DEFINED ENV{ROCIDA_ROOT}
    OR "$ENV{ROCIDA_ROOT}" STREQUAL "")
@@ -115,6 +117,32 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
       Rocida::Core)
 endif()
 
+if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  if(NOT TARGET Rocida::CHTTP)
+    message(FATAL_ERROR
+      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Rocida::CHTTP")
+  endif()
+  add_library(turbo_scxml_chttp_event_io STATIC
+    src/chttp_event_io_codec.c)
+  add_library(TurboSCXML::CHttpEventIO ALIAS turbo_scxml_chttp_event_io)
+  set_target_properties(turbo_scxml_chttp_event_io PROPERTIES
+    EXPORT_NAME CHttpEventIO
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_scxml_chttp_event_io PUBLIC c_std_11)
+  target_compile_options(turbo_scxml_chttp_event_io
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_scxml_chttp_event_io
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbo_scxml_chttp_event_io
+    PUBLIC TurboSCXML::SCXML Rocida::CHTTP
+    PRIVATE Rocida::Core)
+endif()
+
 if(BUILD_TESTING)
   get_target_property(
     CFLOW_PUBLIC_LINKS Rocida::CFlow INTERFACE_LINK_LIBRARIES)
@@ -147,6 +175,18 @@ if(BUILD_TESTING)
         "TurboSCXML::CHttpResource dependency contract changed")
     endif()
   endif()
+  if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+    get_target_property(
+      TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS
+      turbo_scxml_chttp_event_io INTERFACE_LINK_LIBRARIES)
+    set(TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS
+      "TurboSCXML::SCXML;Rocida::CHTTP;$<LINK_ONLY:Rocida::Core>")
+    if(NOT TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS STREQUAL
+       TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS)
+      message(FATAL_ERROR
+        "TurboSCXML::CHttpEventIO dependency contract changed")
+    endif()
+  endif()
 
   if(NOT TARGET Rocida::TinyTest)
     message(FATAL_ERROR
@@ -169,6 +209,14 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
+if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  install(TARGETS turbo_scxml_chttp_event_io
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(
   FILES include/scxml/scxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
@@ -177,9 +225,16 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     FILES include/scxml/chttp_resource.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
+if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  install(
+    FILES include/scxml/chttp_event_io.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+endif()
 
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
+set(TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO
+  ${TURBOSCXML_ENABLE_CHTTP_EVENT_IO})
 set(TURBOSCXML_PACKAGE_HAS_QUICKJS
   ${TURBOSCXML_ENABLE_QUICKJS})
 configure_package_config_file(

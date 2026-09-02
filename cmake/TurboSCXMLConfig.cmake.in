@@ -29,10 +29,13 @@ set(TurboSCXML_SCXML_FOUND TRUE)
 set(TurboSCXML_QuickJS_FOUND @TURBOSCXML_PACKAGE_HAS_QUICKJS@)
 set(TurboSCXML_CHttpResource_FOUND
   @TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@)
-if(TurboSCXML_CHttpResource_FOUND AND NOT TARGET Rocida::CHTTP)
+set(TurboSCXML_CHttpEventIO_FOUND
+  @TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO@)
+if((TurboSCXML_CHttpResource_FOUND OR TurboSCXML_CHttpEventIO_FOUND)
+   AND NOT TARGET Rocida::CHTTP)
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
-    "This TurboSCXML package includes CHttpResource, but the selected "
+    "This TurboSCXML package includes a CHTTP component, but the selected "
     "Rocida SDK does not provide Rocida::CHTTP")
   return()
 endif()
