@@ -926,6 +926,18 @@ scxml_location_status scxml_session_copy_ioprocessor_location(
     const char *type, size_t type_size,
     char *out_location, size_t location_capacity,
     size_t *out_required_capacity);
+/**
+ * Verify that a live session retained the exact program, Event I/O adapter,
+ * adapter user, and processor descriptor supplied by an external binding.
+ * All arguments are borrowed and must remain live for the duration of the
+ * call. This query does not transfer ownership or activate the binding.
+ */
+bool scxml_session_matches_event_io(
+    const scxml_session *session,
+    const scxml_program *program,
+    const scxml_event_io_adapter *adapter,
+    const void *adapter_user,
+    const scxml_ioprocessor_descriptor *ioprocessor);
 const char *scxml_session_error(
     const scxml_session *session);
 

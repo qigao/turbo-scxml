@@ -85,6 +85,53 @@ typedef struct scxml_chttp_binding_config_v1 {
     void *decode_user;
 } scxml_chttp_binding_config_v1;
 
+typedef struct scxml_chttp_processor_stats {
+    uint64_t egress_completed;
+    uint64_t egress_failed;
+    uint64_t ingress_admitted;
+    uint64_t ingress_rejected;
+    uint64_t invariant_failures;
+    size_t live_bindings;
+    size_t active_callbacks;
+    size_t outbound_references;
+    int running;
+    int stopping;
+} scxml_chttp_processor_stats;
+
+int scxml_chttp_processor_init(
+    scxml_chttp_processor *processor,
+    const scxml_chttp_processor_config_v1 *config);
+int scxml_chttp_processor_start(scxml_chttp_processor *processor);
+/** Stop every phase against one timeout budget; zero waits without a limit. */
+int scxml_chttp_processor_stop(
+    scxml_chttp_processor *processor, uint32_t timeout_ms);
+int scxml_chttp_processor_destroy(scxml_chttp_processor *processor);
+
+int scxml_chttp_binding_init(
+    scxml_chttp_binding *binding,
+    scxml_chttp_processor *processor,
+    const scxml_chttp_binding_config_v1 *config);
+/**
+ * Return the immutable composite adapter owned by `binding`. Its optional
+ * delayed-send/cancel capabilities are present only when the downstream
+ * adapter supports both. The pointer remains valid until binding destruction.
+ */
+const scxml_event_io_adapter *scxml_chttp_binding_event_io_adapter(
+    const scxml_chttp_binding *binding);
+void *scxml_chttp_binding_adapter_user(scxml_chttp_binding *binding);
+bool scxml_chttp_binding_ioprocessor(
+    const scxml_chttp_binding *binding,
+    scxml_ioprocessor_descriptor *out_descriptor);
+int scxml_chttp_binding_activate(
+    scxml_chttp_binding *binding,
+    scxml_session *session,
+    const scxml_program *program);
+int scxml_chttp_binding_destroy(scxml_chttp_binding *binding);
+
+bool scxml_chttp_processor_get_stats(
+    const scxml_chttp_processor *processor,
+    scxml_chttp_processor_stats *out_stats);
+
 #ifdef __cplusplus
 }
 #endif
