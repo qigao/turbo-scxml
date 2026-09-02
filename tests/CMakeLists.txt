@@ -101,4 +101,8 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
     scxml_chttp_codec_test.c
     LIBS TurboSCXML::CHttpEventIO
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
+  turboscxml_add_test(
+    scxml_chttp_lifecycle_test
+    scxml_chttp_lifecycle_test.c
+    LIBS TurboSCXML::CHttpEventIO)
 endif()

@@ -90,6 +90,7 @@ typedef struct scxml_chttp_processor_stats {
     uint64_t ingress_requests;
     uint64_t ingress_admitted;
     uint64_t ingress_rejected;
+    uint64_t invariant_failures;
     size_t active_bindings;
     size_t queued_egress;
     size_t in_flight_egress;
