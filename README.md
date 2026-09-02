@@ -8,7 +8,8 @@ TurboSCXML 将 W3C SCXML 文档编译为 Rocida CFlow Statechart，并提供有�
 - Rocida 继续拥有 CFlow、CMeta、QueryVM、XmlParser、Core、STL 与 TinyTest。
 - 依赖方向固定为 `TurboSCXML -> installed Rocida`；Rocida 不依赖 TurboSCXML。
 - HTTP ingress/egress、认证、持久化和服务部署不属于解释器核心；可选
-  `TurboSCXML::CHttpResource` 仅负责受宿主授权的同步资源读取。
+  `TurboSCXML::CHttpResource` 负责受宿主授权的同步资源读取，
+  `TurboSCXML::CHttpEventIO` 提供有界 W3C BasicHTTP Event I/O 适配器。
 
 公开 C API 继续通过 `<scxml/scxml.h>` 提供，函数与类型保持 `scxml_*` 命名。CMake 消费目标为 `TurboSCXML::SCXML`。
 
@@ -47,6 +48,13 @@ cmake --build --preset install-linux-release-user
 `Rocida::CHTTP`。仓库提供独立的 `win-dev-chttp-user` 与
 `win-release-chttp-user` configure/build/test preset；该 feature 默认关闭，
 不会改变 `TurboSCXML::SCXML` 的依赖闭包。
+
+同一 CHTTP preset 也启用可选 `TURBOSCXML_ENABLE_CHTTP_EVENT_IO`，安装
+`<scxml/chttp_event_io.h>` 与 `TurboSCXML::CHttpEventIO`。它拥有真实 CHTTP
+listener/client/worker，并把必需的 SCXML Event Processor 委托给宿主 adapter；
+typed C resolver 负责目标授权，typed C decoder 负责把应用字段映射为 Event
+data。生命周期、HTTP 状态、backpressure、所有权与安全限制见
+[`docs/scxml-chttp-event-io.md`](docs/scxml-chttp-event-io.md)。
 
 ## 下游消费
 
