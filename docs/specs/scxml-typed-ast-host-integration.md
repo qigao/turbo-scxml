@@ -55,10 +55,12 @@ The session invocation registry remains the sole token-to-descriptor fact
 source. The Statechart owns managed state/configuration/queues; `scxml_program`
 owns immutable AST-derived semantic assets; adapters own external resources.
 
-Finalize reuses the normal executable interpreter over the host context.
-`<assign>` is admitted for the existing bounded CMeta assignment subset. A
-finalize error returns `FATAL`; partial state, Events, and tickets roll back as
-one host transaction.
+Finalize reuses the normal executable interpreter over the host context. The
+bounded CMeta profile admits the same supported executable subset in finalize
+as in ordinary executable blocks: `<if>`/`<elseif>`/`<else>`, `<foreach>`,
+`<raise>`, `<send>`, `<cancel>`, `<assign>`, and `<log>`. A finalize error
+returns `FATAL`; partial state, Events, and tickets roll back as one host
+transaction.
 
 ## Compatibility and Migration
 

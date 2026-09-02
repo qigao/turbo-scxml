@@ -198,6 +198,53 @@ static cflow_statechart_instance_stats run_foreach(
         program, values, value_count, item, index, total, NULL);
 }
 
+typedef struct foreach_finalize_probe {
+    uint64_t token;
+    size_t starts;
+    size_t cancels;
+} foreach_finalize_probe;
+
+static void foreach_finalize_ticket_done(void *user) {
+    (void)user;
+}
+
+static scxml_adapter_status foreach_finalize_prepare_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_finalize_probe *probe = (foreach_finalize_probe *)user;
+    if (probe == NULL || request == NULL || request->token == 0u ||
+        out_ticket == NULL || out_error == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    probe->token = request->token;
+    ++probe->starts;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        foreach_finalize_ticket_done, foreach_finalize_ticket_done, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status foreach_finalize_prepare_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_finalize_probe *probe = (foreach_finalize_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->cancels;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        foreach_finalize_ticket_done, foreach_finalize_ticket_done, probe};
+    *out_error = NULL;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void foreach_finalize_adapter_close(void *user) {
+    (void)user;
+}
+
+static bool foreach_finalize_adapter_quiescent(void *user) {
+    return user != NULL;
+}
+
 spec("TurboSCXML CMeta foreach") {
   it("auto-declares missing item and index variables") {
     static const char source[] =
@@ -632,18 +679,80 @@ spec("TurboSCXML CMeta foreach") {
     vec_destroy(&root.values);
   }
 
-  it("keeps CMeta foreach unavailable in finalize blocks") {
+  it("runs CMeta foreach and nested conditions in finalize blocks") {
     static const char source[] =
         "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
         "initial='work' datamodel='cmeta'><state id='work'>"
         "<invoke id='child'><finalize><foreach array='values' item='item'>"
-        "<assign location='total' expr='item'/></foreach></finalize>"
-        "</invoke></state></scxml>";
+        "<assign location='total' expr='item'/>"
+        "<if cond='item == 3'><raise event='finalized'/></if>"
+        "</foreach></finalize></invoke>"
+        "<transition event='returned'/>"
+        "<transition event='finalized' cond='total == 3' target='done'/>"
+        "</state><final id='done'/></scxml>";
+    static const int values[] = {1, 2, 3};
+    const scxml_invoke_adapter invoke = {
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(invoke),
+        .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
+        .prepare_start = foreach_finalize_prepare_start,
+        .prepare_cancel = foreach_finalize_prepare_cancel,
+        .close = foreach_finalize_adapter_close,
+        .is_quiescent = foreach_finalize_adapter_quiescent};
+    scxml_foreach_root initial = {.values = VecOf(int)};
+    const scxml_cmeta_session_options_v1 data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(data),
+        .initial_state = &initial};
+    foreach_finalize_probe probe = {0};
     scxml_program program = {0};
     scxml_diagnostic diagnostic = {0};
+    scxml_session session = {0};
+    cflow_executor executor = {0};
+    cflow_event_view returned = {0};
+    cflow_statechart_instance_stats stats = {0};
+    cflow_statechart_instance_status init_status;
+    scxml_session_config config = {
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = 2u,
+        .internal_event_capacity = 4u,
+        .completion_capacity = 2u,
+        .microstep_limit = 32u,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 2u,
+        .invocation_capacity = 1u,
+        .max_storage_bytes = FOREACH_TEST_MAX_STORAGE_BYTES,
+        .invoke = &invoke,
+        .invoke_user = &probe};
+    size_t value_index;
 
     check_equal(compile_foreach(source, &program, &diagnostic),
-                SCXML_UNSUPPORTED_FEATURE);
-    check_null(program.impl);
+                SCXML_OK);
+    check_equal(vec_init(&initial.values, 3u), STL_OK);
+    for (value_index = 0u; value_index < 3u; ++value_index)
+        check_equal(vec_push(&initial.values, &values[value_index]), STL_OK);
+    check_true(cflow_executor_serial_init(&executor));
+    init_status = scxml_session_init_cmeta(&session, &config, &data);
+    if (init_status != CFLOW_STATECHART_INSTANCE_OK)
+        info("finalize foreach session error=%s", scxml_session_error(&session));
+    check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_equal(probe.starts, (size_t)1u);
+    check_true(scxml_program_event(
+        &program, "returned", sizeof("returned") - 1u, &returned));
+    check_equal(scxml_session_report_invoke_event(
+                    &session, probe.token, &returned),
+                CFLOW_MAILBOX_OK);
+    check_true(cflow_executor_wait_idle(&executor));
+    check_true(scxml_session_get_stats(&session, &stats));
+    check_true(stats.done);
+    check_false(stats.errored);
+    check_equal(probe.cancels, (size_t)1u);
+    check_equal(scxml_session_destroy(&session),
+                CFLOW_STATECHART_INSTANCE_OK);
+    cflow_executor_destroy(&executor);
+    vec_destroy(&initial.values);
+    scxml_program_destroy(&program);
   }
 }

@@ -2105,7 +2105,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
-    it("admits literal invoke and restricted finalize with deterministic IR") {
+    it("admits literal invoke and finalize with deterministic IR") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='worker'><onentry><log label='entry'/></onentry>"
@@ -2190,7 +2190,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
-    it("rejects unsupported invoke data forms and unsafe finalize content") {
+    it("rejects unsupported invoke data forms and malformed finalize structure") {
         static const char root_invoke[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<invoke id='job'/><state id='worker'/></scxml>";
@@ -2224,7 +2224,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='worker'><invoke><content expr='payload'/>"
             "</invoke></state></scxml>";
-        static const char unsafe_finalize[] =
+        static const char finalize_raise[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='worker'><invoke><finalize><raise event='bad'/>"
             "</finalize></invoke></state></scxml>";
@@ -2247,16 +2247,14 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         const char *invalid[] = {
             root_invoke, orphan_finalize, duplicate_id, invalid_id,
             expression, idlocation, srcexpr, namelist, parameter, content,
-            unsafe_finalize, finalize_send, finalize_cancel,
             duplicate_finalize, bad_autoforward};
+        const char *valid_finalize[] = {
+            finalize_raise, finalize_send, finalize_cancel};
         const scxml_status expected[] = {
             SCXML_INVALID_STRUCTURE,
             SCXML_INVALID_STRUCTURE,
             SCXML_DUPLICATE_ID,
             SCXML_INVALID_STRUCTURE,
-            SCXML_UNSUPPORTED_FEATURE,
-            SCXML_UNSUPPORTED_FEATURE,
-            SCXML_UNSUPPORTED_FEATURE,
             SCXML_UNSUPPORTED_FEATURE,
             SCXML_UNSUPPORTED_FEATURE,
             SCXML_UNSUPPORTED_FEATURE,
@@ -2275,6 +2273,18 @@ suite("SCXML Core to native CFlow Statechart compiler") {
                         expected[index]);
             check_null(program.impl);
             check_true(diagnostic.location.byte_offset != 0u);
+        }
+
+        for (index = 0u;
+             index < sizeof(valid_finalize) / sizeof(valid_finalize[0]);
+             ++index) {
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            check_equal(compile_status(valid_finalize[index], &program,
+                                       &diagnostic),
+                        SCXML_OK);
+            check_not_null(program.impl);
+            scxml_program_destroy(&program);
         }
     }
 
