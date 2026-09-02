@@ -5,10 +5,21 @@
 #include "tinytest.h"
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
 #define FOREACH_TEST_MAX_STORAGE_BYTES (1024u * 1024u)
+
+static atomic_int foreach_action_observed;
+
+typed_any_raw(
+    CMETA_EFFECT_IO, CMETA_PROP_DETERMINISTIC,
+    int, scxml_test_foreach_action, (int value)) {
+    atomic_store_explicit(
+        &foreach_action_observed, value, memory_order_relaxed);
+    return value;
+}
 
 Struct(scxml_foreach_root,
     (TYPE(Vec, int), values),
@@ -400,6 +411,48 @@ spec("TurboSCXML CMeta foreach") {
     stats = run_foreach(&program, values, 3u, 0, 0u, 0);
     check_true(stats.done);
     check_false(stats.errored);
+    scxml_program_destroy(&program);
+  }
+
+  it("invokes a CMeta custom action inside foreach and if") {
+    static const char *const parameter_names[] = {"value"};
+    const scxml_cmeta_custom_action_v1 actions[] = {{
+        .namespace_uri = "urn:test:actions",
+        .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+        .local_name = "record",
+        .local_name_size = sizeof("record") - 1u,
+        .callable = scxml_test_foreach_action,
+        .parameter_names = parameter_names,
+        .parameter_count = 1u}};
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+        "xmlns:a='urn:test:actions' version='1.0' initial='work' "
+        "datamodel='cmeta'><state id='work'><onentry>"
+        "<foreach array='values' item='item' index='index'>"
+        "<if cond='index == 2'><a:record value='item'/></if>"
+        "</foreach></onentry><transition target='done'/></state>"
+        "<final id='done'/></scxml>";
+    const int values[] = {1, 2, 3};
+    scxml_cmeta_compile_options_v2 options =
+        scxml_cmeta_default_compile_options_v2(&foreach_root_data);
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    options.actions = actions;
+    options.action_count = sizeof(actions) / sizeof(actions[0]);
+    atomic_store_explicit(
+        &foreach_action_observed, 0, memory_order_relaxed);
+    check_equal(scxml_compile_cmeta_v2(
+                    &program, source, strlen(source), NULL,
+                    &options, &diagnostic),
+                SCXML_OK);
+    stats = run_foreach(&program, values, 3u, 0, 0u, 0);
+    check_true(stats.done);
+    check_false(stats.errored);
+    check_equal(atomic_load_explicit(
+                    &foreach_action_observed, memory_order_relaxed),
+                3);
     scxml_program_destroy(&program);
   }
 

@@ -123,6 +123,46 @@ content 边界转换为 `error.execution`。
 <transition cond="attempts + 1 &lt; maxAttempts" target="retry"/>
 ```
 
+CMeta profile 也支持编译期注册的自定义 executable action。元素由 namespace
+URI 和 local name 精确匹配；每个无 namespace 的 XML attribute 按注册顺序编译
+为 callable 参数表达式。首版支持 `bool`、`int`、`long`、`float`、`double`
+参数和返回值（返回值丢弃）：
+
+```c
+typed_any_raw(CMETA_EFFECT_IO, CMETA_PROP_DETERMINISTIC,
+              int, record_value, (int value)) {
+    observe(value);
+    return value;
+}
+
+static const char *const params[] = {"value"};
+const scxml_cmeta_custom_action_v1 actions[] = {{
+    .namespace_uri = "urn:example:actions",
+    .namespace_uri_size = sizeof("urn:example:actions") - 1u,
+    .local_name = "record",
+    .local_name_size = sizeof("record") - 1u,
+    .callable = record_value,
+    .parameter_names = params,
+    .parameter_count = 1u
+}};
+scxml_cmeta_compile_options_v2 options =
+    scxml_cmeta_default_compile_options_v2(&root_schema);
+options.actions = actions;
+options.action_count = sizeof(actions) / sizeof(actions[0]);
+```
+
+对应文档可在 `if`、`foreach`、`finalize` 等 executable-content 位置写
+`<a:record value="count + 1"/>`。未注册元素、参数缺失/多余、嵌套子内容和
+不支持的 callable signature 会在编译期拒绝；调用失败在运行时产生
+`error.execution`。
+
+内部 `<send target="#_internal">` 的 `namelist`/`param` 会形成结构化
+`_event.data`。结构类型的 `<donedata><content expr="...">` 将选中对象本身作为
+CMeta 根路径，例如 `expr="nested"` 由接收方读取为
+`_event.data.invoke_id`（即直接读取 `nested` 的字段）。两条路径都复制数据到
+session 拥有的有界存储，队列中
+不保留临时表达式 view。
+
 ## 提取来源与回滚
 
 初始源码从原 TurboUtils 仓库 HEAD `3b0c77a707ff8c5062f333c6f6208fee2510821f` 的 `cflow-scxml/` 提取；该目录最近一次内容变更来自提交 `f4bc1ea571ca0b7e5d989a5122c177e22cb474a3`。在 Rocida 完成依赖切换并通过独立安装消费验证前，原目录保留为回滚副本。

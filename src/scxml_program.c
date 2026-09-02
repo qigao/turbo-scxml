@@ -35,6 +35,25 @@ scxml_cmeta_default_compile_options(const cmeta_data_desc *root) {
     return options;
 }
 
+scxml_cmeta_compile_options_v2
+scxml_cmeta_default_compile_options_v2(const cmeta_data_desc *root) {
+    const scxml_cmeta_compile_options_v1 base =
+        scxml_cmeta_default_compile_options(root);
+    const scxml_cmeta_compile_options_v2 options = {
+        .abi_version = SCXML_CMETA_COMPILE_OPTIONS_ABI_V2,
+        .struct_size = sizeof(scxml_cmeta_compile_options_v2),
+        .root = base.root,
+        .max_source_bytes = base.max_source_bytes,
+        .max_instructions = base.max_instructions,
+        .max_operands = base.max_operands,
+        .max_expression_depth = base.max_expression_depth,
+        .max_path_depth = base.max_path_depth,
+        .max_literal_bytes = base.max_literal_bytes,
+        .max_string_bytes = base.max_string_bytes,
+        .max_iterations = base.max_iterations};
+    return options;
+}
+
 scxml_quickjs_compile_options_v1
 scxml_quickjs_default_compile_options(const cmeta_data_desc *root) {
     return scxml_quickjs_default_compile_options_impl(root);
@@ -46,6 +65,8 @@ static scxml_status compile_scxml_model(
     scxml_data_model data_model, const cmeta_data_desc *cmeta_root,
     const scxml_expr_limits *expression_limits,
     size_t cmeta_max_iterations,
+    const scxml_cmeta_custom_action_v1 *custom_actions,
+    size_t custom_action_count,
     const scxml_quickjs_compile_options_v1 *quickjs_options,
     scxml_diagnostic *diagnostic) {
     scxml_limits limits = limits_or_null != NULL
@@ -87,6 +108,8 @@ static scxml_status compile_scxml_model(
     build.diagnostic = diagnostic;
     build.data_model = data_model;
     build.cmeta_root = cmeta_root;
+    build.custom_action_registry = custom_actions;
+    build.custom_action_registry_count = custom_action_count;
     build.max_iterations = cmeta_max_iterations;
     build.quickjs_profile = quickjs_options != NULL;
     if (quickjs_options != NULL)
@@ -239,6 +262,7 @@ static scxml_status compile_scxml_model(
     needs_execution_error =
         counts.assignment_rows != 0u || counts.foreach_rows != 0u ||
         counts.dynamic_expression_rows != 0u || counts.script_rows != 0u ||
+        counts.custom_action_rows != 0u ||
         (data_model == SCXML_DATA_MODEL_CMETA &&
          (counts.conditional_branches != 0u || counts.guard_rows != 0u));
     if (((counts.requirements &
@@ -350,6 +374,11 @@ static scxml_status compile_scxml_model(
         counts.done_data_rows, sizeof(*build.done_data));
     build.scripts = scxml_emit_allocate_rows(
         counts.script_rows, sizeof(*build.scripts));
+    build.custom_actions = scxml_emit_allocate_rows(
+        counts.custom_action_rows, sizeof(*build.custom_actions));
+    build.custom_action_arguments = scxml_emit_allocate_rows(
+        counts.custom_action_argument_rows,
+        sizeof(*build.custom_action_arguments));
     if (!scxml_analyze_checked_multiply(
             counts.foreach_rows, 2u, &supplemental_capacity) ||
         (build.quickjs_profile &&
@@ -393,6 +422,9 @@ static scxml_status compile_scxml_model(
     build.done_data_capacity = counts.done_data_rows;
     build.script_capacity = counts.script_rows;
     build.script_storage_capacity = counts.script_source_bytes;
+    build.custom_action_capacity = counts.custom_action_rows;
+    build.custom_action_argument_capacity =
+        counts.custom_action_argument_rows;
     build.guard_capacity = guard_capacity;
     build.transition_target_capacity = transition_target_capacity;
     build.max_conditional_depth = counts.max_conditional_depth;
@@ -433,6 +465,10 @@ static scxml_status compile_scxml_model(
          (build.invocations == NULL || build.invocation_names == NULL)) ||
         (counts.done_data_rows != 0u && build.done_data == NULL) ||
         (counts.script_rows != 0u && build.scripts == NULL) ||
+        (counts.custom_action_rows != 0u &&
+         build.custom_actions == NULL) ||
+        (counts.custom_action_argument_rows != 0u &&
+         build.custom_action_arguments == NULL) ||
         (counts.log_label_bytes != 0u && build.log_storage == NULL) ||
         (counts.effect_string_bytes != 0u &&
          build.effect_storage == NULL) ||
@@ -738,6 +774,11 @@ static scxml_status compile_scxml_model(
     impl->done_data_count = build.done_data_index;
     impl->scripts = build.scripts;
     impl->script_count = build.script_index;
+    impl->custom_actions = build.custom_actions;
+    impl->custom_action_count = build.custom_action_index;
+    impl->custom_action_arguments = build.custom_action_arguments;
+    impl->custom_action_argument_count =
+        build.custom_action_argument_index;
     impl->root_script_count = build.root_script_count;
     impl->supplemental_scope = build.supplemental_scope;
     impl->log_storage = build.log_storage;
@@ -781,6 +822,8 @@ static scxml_status compile_scxml_model(
     build.invocations = NULL;
     build.done_data = NULL;
     build.scripts = NULL;
+    build.custom_actions = NULL;
+    build.custom_action_arguments = NULL;
     build.supplemental_scope = (scxml_scope_schema){0};
     build.log_storage = NULL;
     build.effect_storage = NULL;
@@ -834,6 +877,11 @@ cleanup:
         scxml_emit_destroy_done_data(impl->done_data, impl->done_data_count);
         free(impl->done_data);
         free(impl->scripts);
+        free(impl->custom_actions);
+        scxml_emit_destroy_custom_action_arguments(
+            impl->custom_action_arguments,
+            impl->custom_action_argument_count);
+        free(impl->custom_action_arguments);
         scxml_scope_schema_destroy(&impl->supplemental_scope);
         free(impl->name_storage);
         free(impl->log_storage);
@@ -879,7 +927,7 @@ scxml_status scxml_compile(
     scxml_diagnostic *diagnostic) {
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_NULL, NULL, NULL,
-        0u, NULL, diagnostic);
+        0u, NULL, 0u, NULL, diagnostic);
 }
 
 scxml_status scxml_compile_cmeta(
@@ -927,7 +975,106 @@ scxml_status scxml_compile_cmeta(
     }
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
-        options->root, &expression_limits, max_iterations, NULL, diagnostic);
+        options->root, &expression_limits, max_iterations,
+        NULL, 0u, NULL, diagnostic);
+}
+
+static bool custom_action_scalar_type_supported(
+    const cmeta_type_desc *type) {
+    return cmeta_type_equal(type, &cmeta_type_bool) ||
+           cmeta_type_equal(type, &cmeta_type_int) ||
+           cmeta_type_equal(type, &cmeta_type_long) ||
+           cmeta_type_equal(type, &cmeta_type_float) ||
+           cmeta_type_equal(type, &cmeta_type_double);
+}
+
+static bool custom_action_table_valid(
+    const scxml_cmeta_custom_action_v1 *actions, size_t count) {
+    size_t index;
+    if (count != 0u && actions == NULL) return false;
+    for (index = 0u; index < count; ++index) {
+        const scxml_cmeta_custom_action_v1 *action = &actions[index];
+        cmeta_callable bound;
+        const cmeta_sig_desc *signature;
+        size_t parameter, prior;
+        if (action->namespace_uri == NULL || action->namespace_uri_size == 0u ||
+            action->local_name == NULL || action->local_name_size == 0u ||
+            (action->parameter_count != 0u &&
+             action->parameter_names == NULL) ||
+            !cmeta_callable_bind(action->callable, &bound) ||
+            (signature = cmeta_callable_signature(bound)) == NULL ||
+            signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
+            signature->param_count != action->parameter_count ||
+            !custom_action_scalar_type_supported(signature->return_type))
+            return false;
+        for (parameter = 0u;
+             parameter < action->parameter_count; ++parameter) {
+            const char *name = action->parameter_names[parameter];
+            if (name == NULL || name[0] == '\0' ||
+                !custom_action_scalar_type_supported(
+                    signature->params[parameter]))
+                return false;
+            for (prior = 0u; prior < parameter; ++prior) {
+                if (strcmp(name, action->parameter_names[prior]) == 0)
+                    return false;
+            }
+        }
+        for (prior = 0u; prior < index; ++prior) {
+            const scxml_cmeta_custom_action_v1 *other = &actions[prior];
+            if (other->namespace_uri_size == action->namespace_uri_size &&
+                other->local_name_size == action->local_name_size &&
+                memcmp(other->namespace_uri, action->namespace_uri,
+                       action->namespace_uri_size) == 0 &&
+                memcmp(other->local_name, action->local_name,
+                       action->local_name_size) == 0)
+                return false;
+        }
+    }
+    return true;
+}
+
+scxml_status scxml_compile_cmeta_v2(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v2 *options,
+    scxml_diagnostic *diagnostic) {
+    scxml_expr_limits expression_limits;
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 ||
+        options->struct_size < sizeof(*options) ||
+        !cmeta_data_desc_valid(options->root) ||
+        options->root->kind != CMETA_DATA_STRUCT ||
+        options->root->storage_type == NULL ||
+        !cmeta_type_desc_valid(options->root->storage_type) ||
+        !cmeta_state_type_supported(options->root->storage_type) ||
+        !custom_action_table_valid(options->actions, options->action_count)) {
+        if (diagnostic != NULL) {
+            memset(diagnostic, 0, sizeof(*diagnostic));
+            diagnostic->status = SCXML_INVALID_ARGUMENT;
+            (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                           "%s", "invalid CMeta V2 compile provider");
+        }
+        return SCXML_INVALID_ARGUMENT;
+    }
+    expression_limits = (scxml_expr_limits){
+        options->max_source_bytes, options->max_instructions,
+        options->max_operands, options->max_expression_depth,
+        options->max_path_depth, options->max_literal_bytes,
+        options->max_string_bytes};
+    if (!scxml_expr_limits_valid(&expression_limits) ||
+        options->max_iterations == 0u) {
+        if (diagnostic != NULL) {
+            memset(diagnostic, 0, sizeof(*diagnostic));
+            diagnostic->status = SCXML_INVALID_ARGUMENT;
+            (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                           "%s", "invalid SCXML expression limits");
+        }
+        return SCXML_INVALID_ARGUMENT;
+    }
+    return compile_scxml_model(
+        out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
+        options->root, &expression_limits, options->max_iterations,
+        options->actions, options->action_count, NULL, diagnostic);
 }
 
 scxml_status scxml_program_compile_quickjs_model(
@@ -946,7 +1093,7 @@ scxml_status scxml_program_compile_quickjs_model(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        options, diagnostic);
+        NULL, 0u, options, diagnostic);
 }
 
 scxml_status scxml_compile_quickjs(
@@ -987,6 +1134,11 @@ void scxml_program_destroy(scxml_program *program) {
     scxml_emit_destroy_done_data(impl->done_data, impl->done_data_count);
     free(impl->done_data);
     free(impl->scripts);
+    free(impl->custom_actions);
+    scxml_emit_destroy_custom_action_arguments(
+        impl->custom_action_arguments,
+        impl->custom_action_argument_count);
+    free(impl->custom_action_arguments);
     scxml_scope_schema_destroy(&impl->supplemental_scope);
     free(impl->name_storage);
     free(impl->log_storage);

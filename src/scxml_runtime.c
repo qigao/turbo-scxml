@@ -4,6 +4,9 @@
 #include "scxml_quickjs.h"
 #include "scxml_session.h"
 
+#include <float.h>
+#include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 
 typedef enum scxml_execute_outcome {
@@ -1999,7 +2002,8 @@ static scxml_execute_outcome execute_send(
     const scxml_block *block,
     scxml_session_impl *session,
     const scxml_effect_descriptor *descriptor,
-    const cflow_statechart_executable_context *context,
+    const cflow_statechart_executable_context *original_context,
+    const void *state,
     const scxml_expr_system_values *system_values,
     const char **out_error) {
     static const char default_type[] =
@@ -2024,6 +2028,9 @@ static scxml_execute_outcome execute_send(
     scxml_adapter_status status;
     size_t registry_index = SIZE_MAX;
     bool duplicate = false;
+    cflow_statechart_executable_context evaluation = *original_context;
+    const cflow_statechart_executable_context *context = &evaluation;
+    evaluation.out_state = (void *)state;
     if (!descriptor->has_type_expr && materialized.type_size == 0u) {
         materialized.type = default_type;
         materialized.type_size = sizeof(default_type) - 1u;
@@ -2101,9 +2108,8 @@ static scxml_execute_outcome execute_send(
             payload.content = content;
         }
     }
-    if (descriptor->payload_count != 0u) {
-        if (internal_target ||
-            !materialize_effect_named_payload(
+    if (descriptor->payload_count != 0u && !internal_target) {
+        if (!materialize_effect_named_payload(
                 block, session, descriptor, context, system_values,
                 &payload))
             return raise_block_execution_error(block, context, out_error);
@@ -2122,7 +2128,8 @@ static scxml_execute_outcome execute_send(
             ? (cflow_event_id)dynamic_event->id : descriptor->event_id;
         const cflow_event_view raised = {
             event_id, &cmeta_type_bool, &null_value};
-        if (descriptor->content.kind == SCXML_CONTENT_INVALID)
+        if (descriptor->content.kind == SCXML_CONTENT_INVALID &&
+            descriptor->payload_count == 0u)
             return context->raise_internal(
                        context->raise_user, &raised, out_error)
                 ? SCXML_EXECUTE_CONTINUE : SCXML_EXECUTE_FATAL;
@@ -2144,6 +2151,46 @@ static scxml_execute_outcome execute_send(
                 scxml_runtime_release_event_metadata(metadata_row);
                 return raise_block_execution_error(
                     block, context, out_error);
+            }
+            if (descriptor->payload_count != 0u) {
+                size_t assignment;
+                if (descriptor->internal_assignment_first >
+                        block->assignment_storage_count ||
+                    descriptor->internal_assignment_count !=
+                        descriptor->payload_count ||
+                    descriptor->internal_assignment_count >
+                        block->assignment_storage_count -
+                            descriptor->internal_assignment_first ||
+                    !cmeta_data_desc_valid(&descriptor->internal_schema) ||
+                    !scxml_runtime_copy_event_data_object(
+                        session->program->cmeta_root,
+                        metadata_row->data_object.bytes,
+                        context->out_state)) {
+                    scxml_runtime_release_event_metadata(metadata_row);
+                    return raise_block_execution_error(
+                        block, context, out_error);
+                }
+                metadata_row->data_schema = session->program->cmeta_root;
+                metadata_row->data_object_live = true;
+                for (assignment = 0u;
+                     assignment < descriptor->internal_assignment_count;
+                     ++assignment) {
+                    scxml_expr_diagnostic diagnostic = {0};
+                    if (scxml_assign_apply_from_with_system(
+                            &block->assignments[
+                                descriptor->internal_assignment_first +
+                                assignment],
+                            context->out_state,
+                            metadata_row->data_object.bytes,
+                            evaluate_cmeta_executable_active,
+                            (void *)context, system_values,
+                            &diagnostic) != SCXML_EXPR_OK) {
+                        scxml_runtime_release_event_metadata(metadata_row);
+                        return raise_block_execution_error(
+                            block, context, out_error);
+                    }
+                }
+                metadata_row->data_schema = &descriptor->internal_schema;
             }
             if (!context->raise_internal_tagged(
                     context->raise_user, &raised, token, out_error)) {
@@ -2631,6 +2678,24 @@ static scxml_execute_outcome materialize_done_data_scalar(
     return SCXML_EXECUTE_CONTINUE;
 }
 
+static scxml_execute_outcome materialize_done_data_cmeta(
+    scxml_done_data_materialization *operation) {
+    const scxml_location *location = &operation->descriptor->content.location;
+    scxml_expr_diagnostic diagnostic = {0};
+    if (location->value == NULL ||
+        scxml_expr_require_data_bound(
+            operation->system_values, location->offset,
+            location->storage_size, &diagnostic) != SCXML_EXPR_OK ||
+        !scxml_runtime_copy_event_data_object(
+            location->value, operation->slot->data_object.bytes,
+            (const unsigned char *)operation->state + location->offset))
+        return fail_done_data_expression(operation);
+    operation->slot->data_schema = location->value;
+    operation->slot->data_object_live = true;
+    operation->slot->state = SCXML_COMPLETION_DATA_READY;
+    return SCXML_EXECUTE_CONTINUE;
+}
+
 static scxml_execute_outcome materialize_done_data_inline(
     scxml_done_data_materialization *operation) {
     const size_t byte_count = operation->descriptor->content.byte_count;
@@ -2679,6 +2744,8 @@ static scxml_execute_outcome materialize_done_data(
         return materialize_done_data_object(&operation);
     if (operation.descriptor->content.kind == SCXML_CONTENT_SCALAR)
         return materialize_done_data_scalar(&operation);
+    if (operation.descriptor->content.kind == SCXML_CONTENT_CMETA)
+        return materialize_done_data_cmeta(&operation);
     if (operation.descriptor->content.kind == SCXML_CONTENT_TEXT_UTF8 ||
         operation.descriptor->content.kind == SCXML_CONTENT_XML_UTF8)
         return materialize_done_data_inline(&operation);
@@ -2819,6 +2886,111 @@ static void settle_supplemental_block(
     session->supplemental_checkpoint_live = false;
 }
 
+typedef union scxml_custom_action_scalar {
+    bool boolean;
+    int integer;
+    long long_integer;
+    float real32;
+    double real64;
+} scxml_custom_action_scalar;
+
+static bool materialize_custom_action_argument(
+    const scxml_custom_action_argument *argument,
+    const void *state,
+    const cflow_statechart_executable_context *context,
+    const scxml_expr_system_values *system_values,
+    scxml_custom_action_scalar *storage) {
+    scxml_expr_value value = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    if (argument == NULL || storage == NULL ||
+        scxml_expr_evaluate_value_with_system(
+            &argument->expression, state,
+            evaluate_cmeta_executable_active, (void *)context,
+            system_values, &value, &diagnostic) != SCXML_EXPR_OK)
+        return false;
+    if (cmeta_type_equal(argument->type, &cmeta_type_bool) &&
+        value.kind == SCXML_EXPR_VALUE_BOOL) {
+        storage->boolean = value.data.boolean;
+        return true;
+    }
+    if (cmeta_type_equal(argument->type, &cmeta_type_int) &&
+        value.kind == SCXML_EXPR_VALUE_SINT &&
+        value.data.sint >= INT_MIN && value.data.sint <= INT_MAX) {
+        storage->integer = (int)value.data.sint;
+        return true;
+    }
+    if (cmeta_type_equal(argument->type, &cmeta_type_long) &&
+        value.kind == SCXML_EXPR_VALUE_SINT &&
+        value.data.sint >= LONG_MIN && value.data.sint <= LONG_MAX) {
+        storage->long_integer = (long)value.data.sint;
+        return true;
+    }
+    if (cmeta_type_equal(argument->type, &cmeta_type_float) &&
+        value.kind == SCXML_EXPR_VALUE_FLOAT &&
+        isfinite(value.data.number) &&
+        value.data.number >= -FLT_MAX && value.data.number <= FLT_MAX) {
+        storage->real32 = (float)value.data.number;
+        return true;
+    }
+    if (cmeta_type_equal(argument->type, &cmeta_type_double) &&
+        value.kind == SCXML_EXPR_VALUE_FLOAT) {
+        storage->real64 = value.data.number;
+        return true;
+    }
+    return false;
+}
+
+static scxml_execute_outcome execute_custom_action(
+    const scxml_block *block, const scxml_step *step,
+    const cflow_statechart_executable_context *context,
+    const void *state,
+    const scxml_expr_system_values *system_values,
+    const char **out_error) {
+    const scxml_custom_action_descriptor *descriptor;
+    const cmeta_sig_desc *signature;
+    scxml_custom_action_scalar argument_storage[3] = {{0}};
+    const void *arguments[3] = {NULL, NULL, NULL};
+    scxml_custom_action_scalar result = {0};
+    size_t index;
+    if (block->custom_actions == NULL ||
+        step->custom_action >= block->custom_action_storage_count) {
+        *out_error = "SCXML custom action descriptor is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
+    descriptor = &block->custom_actions[step->custom_action];
+    signature = cmeta_callable_signature(descriptor->callable);
+    if (signature == NULL || signature->param_count > 3u ||
+        descriptor->argument_count != signature->param_count ||
+        descriptor->argument_first >
+            block->custom_action_argument_storage_count ||
+        descriptor->argument_count >
+            block->custom_action_argument_storage_count -
+                descriptor->argument_first ||
+        (descriptor->argument_count != 0u &&
+         block->custom_action_arguments == NULL)) {
+        *out_error = "SCXML custom action signature is invalid";
+        return SCXML_EXECUTE_FATAL;
+    }
+    for (index = 0u; index < descriptor->argument_count; ++index) {
+        const scxml_custom_action_argument *argument =
+            &block->custom_action_arguments[
+                descriptor->argument_first + index];
+        if (!cmeta_type_equal(argument->type, signature->params[index])) {
+            *out_error = "SCXML custom action argument type is invalid";
+            return SCXML_EXECUTE_FATAL;
+        }
+        if (!materialize_custom_action_argument(
+                argument, state, context, system_values,
+                &argument_storage[index]))
+            return raise_block_execution_error(block, context, out_error);
+        arguments[index] = &argument_storage[index];
+    }
+    if (!cmeta_callable_invoke(
+            &descriptor->callable, &result, arguments))
+        return raise_block_execution_error(block, context, out_error);
+    return SCXML_EXECUTE_CONTINUE;
+}
+
 static scxml_execute_outcome execute_scxml_range(
     const scxml_block *block,
     scxml_session_impl *session,
@@ -2857,6 +3029,7 @@ static scxml_execute_outcome execute_scxml_range(
             outcome = step->kind == SCXML_STEP_SEND
                 ? execute_send(
                       block, session, &block->effects[step->effect], context,
+                      mutable_state_read(mutable_state, context),
                       system_values, out_error)
                 : execute_cancel(
                       block, session, &block->effects[step->effect], context,
@@ -2890,6 +3063,12 @@ static scxml_execute_outcome execute_scxml_range(
                     evaluate_cmeta_executable_active, (void *)context,
                     system_values, out_error))
                 return raise_block_execution_error(block, context, out_error);
+        } else if (step->kind == SCXML_STEP_CUSTOM_ACTION) {
+            const scxml_execute_outcome outcome = execute_custom_action(
+                block, step, context,
+                mutable_state_read(mutable_state, context),
+                system_values, out_error);
+            if (outcome != SCXML_EXECUTE_CONTINUE) return outcome;
         } else if (step->kind == SCXML_STEP_ASSIGN) {
             scxml_expr_diagnostic diagnostic = {0};
             void *state;

@@ -33,6 +33,8 @@ scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node);
 bool scxml_analyze_is_state_element(scxml_element_kind kind);
 scxml_syntax_attribute scxml_analyze_find_attribute(
     scxml_syntax_node node, const char *local_name);
+const scxml_cmeta_custom_action_v1 *scxml_analyze_find_custom_action(
+    const scxml_build *build, scxml_syntax_node node);
 scxml_status scxml_analyze_validate_element_attributes(
     scxml_build *build, scxml_syntax_node node, scxml_element_kind kind);
 size_t scxml_analyze_element_child_count(

@@ -940,6 +940,151 @@ scxml_status scxml_emit_compile_cmeta_owned_string_location(
                       scxml_syntax_attribute_location(attribute), message);
 }
 
+static const cmeta_data_field_desc *find_root_data_field(
+    const cmeta_data_desc *root, const char *name, size_t name_size) {
+    const cmeta_data_struct_shape *shape;
+    size_t index;
+    if (root == NULL || root->kind != CMETA_DATA_STRUCT ||
+        root->shape == NULL || name == NULL || name_size == 0u)
+        return NULL;
+    shape = (const cmeta_data_struct_shape *)root->shape;
+    for (index = 0u; index < shape->field_count; ++index) {
+        const cmeta_data_field_desc *field = &shape->fields[index];
+        if (field->name != NULL && strlen(field->name) == name_size &&
+            memcmp(field->name, name, name_size) == 0)
+            return field;
+    }
+    return NULL;
+}
+
+static scxml_status emit_internal_payload_assignment(
+    scxml_build *build, turbo_xml_string_view name,
+    turbo_xml_string_view source, turbo_xml_location location) {
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_status expression_status;
+    char message[SCXML_DIAGNOSTIC_CAPACITY];
+    if (build->assignment_index >= build->assignment_capacity)
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED, location,
+            "internal send assignment exceeded admitted storage");
+    expression_status = scxml_assign_compile_with_scope(
+        &build->assignments[build->assignment_index],
+        name.data, name.size, source.data, source.size,
+        build->cmeta_root, &build->supplemental_scope,
+        resolve_cmeta_condition_state, build, &build->expression_limits,
+        SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
+    if (expression_status != SCXML_EXPR_OK) {
+        const scxml_status status =
+            expression_status == SCXML_EXPR_LIMIT_EXCEEDED
+                ? SCXML_LIMIT_EXCEEDED
+                : expression_status == SCXML_EXPR_ALLOCATION_FAILED
+                    ? SCXML_ALLOCATION_FAILED : SCXML_INVALID_STRUCTURE;
+        (void)snprintf(
+            message, sizeof(message),
+            "CMeta internal send payload byte %zu: %s",
+            diagnostic.byte_offset,
+            diagnostic.message[0] != '\0'
+                ? diagnostic.message : "assignment compilation failed");
+        return scxml_analyze_fail(build, status, location, message);
+    }
+    ++build->assignment_index;
+    return SCXML_OK;
+}
+
+static scxml_status initialize_internal_payload_schema(
+    scxml_build *build, scxml_effect_descriptor *descriptor,
+    size_t effect_index) {
+    static const char display_name[] = "SCXML internal send data";
+    static const char suffix_prefix[] = "#scxml-internal-send-";
+    const cmeta_data_struct_shape *root_shape =
+        (const cmeta_data_struct_shape *)build->cmeta_root->shape;
+    char suffix[sizeof(suffix_prefix) + 3u * sizeof(size_t)];
+    int suffix_size;
+    size_t root_size, stable_id_size, index, offset;
+    if (descriptor->payload_count == 0u) return SCXML_OK;
+    descriptor->internal_fields = (cmeta_data_field_desc *)
+        scxml_emit_allocate_rows(
+            descriptor->payload_count, sizeof(*descriptor->internal_fields));
+    if (descriptor->internal_fields == NULL)
+        return scxml_analyze_fail(
+            build, SCXML_ALLOCATION_FAILED, (turbo_xml_location){0},
+            "unable to allocate internal send schema storage");
+    root_size = strlen(build->cmeta_root->stable_id);
+    suffix_size = snprintf(
+        suffix, sizeof(suffix), "%s%zu", suffix_prefix, effect_index);
+    if (suffix_size < 0 || (size_t)suffix_size >= sizeof(suffix) ||
+        !scxml_analyze_checked_add(root_size, (size_t)suffix_size,
+                                   &stable_id_size))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+            "internal send schema identifier exceeds the size bound");
+    for (index = 0u; index < descriptor->payload_count; ++index) {
+        const scxml_payload_descriptor *payload =
+            &build->payloads[descriptor->payload_first + index];
+        const cmeta_data_field_desc *field = find_root_data_field(
+            build->cmeta_root, payload->name, payload->name_size);
+        size_t prior;
+        if (field == NULL)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE, (turbo_xml_location){0},
+                "internal send payload name is not a top-level CMeta field");
+        for (prior = 0u; prior < index; ++prior) {
+            if (descriptor->internal_fields[prior].name == field->name)
+                return scxml_analyze_fail(
+                    build, SCXML_INVALID_STRUCTURE,
+                    (turbo_xml_location){0},
+                    "internal send payload names must be unique");
+        }
+        descriptor->internal_fields[index] = *field;
+        if (!scxml_analyze_checked_add(
+                stable_id_size, payload->name_size + 1u,
+                &stable_id_size))
+            return scxml_analyze_fail(
+                build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+                "internal send schema identifier exceeds the size bound");
+    }
+    if (!scxml_analyze_checked_add(stable_id_size, 1u, &stable_id_size))
+        return scxml_analyze_fail(
+            build, SCXML_LIMIT_EXCEEDED, (turbo_xml_location){0},
+            "internal send schema identifier exceeds the size bound");
+    descriptor->internal_schema_stable_id = (char *)malloc(stable_id_size);
+    if (descriptor->internal_schema_stable_id == NULL)
+        return scxml_analyze_fail(
+            build, SCXML_ALLOCATION_FAILED, (turbo_xml_location){0},
+            "unable to allocate internal send schema identifier");
+    memcpy(descriptor->internal_schema_stable_id,
+           build->cmeta_root->stable_id, root_size);
+    memcpy(descriptor->internal_schema_stable_id + root_size,
+           suffix, (size_t)suffix_size);
+    offset = root_size + (size_t)suffix_size;
+    for (index = 0u; index < descriptor->payload_count; ++index) {
+        const scxml_payload_descriptor *payload =
+            &build->payloads[descriptor->payload_first + index];
+        descriptor->internal_schema_stable_id[offset++] = ':';
+        memcpy(descriptor->internal_schema_stable_id + offset,
+               payload->name, payload->name_size);
+        offset += payload->name_size;
+    }
+    descriptor->internal_schema_stable_id[offset] = '\0';
+    descriptor->internal_shape = (cmeta_data_struct_shape){
+        .layout = root_shape->layout,
+        .fields = descriptor->internal_fields,
+        .field_count = descriptor->payload_count};
+    descriptor->internal_schema = (cmeta_data_desc){
+        .struct_size = sizeof(cmeta_data_desc),
+        .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+        .stable_id = descriptor->internal_schema_stable_id,
+        .display_name = display_name,
+        .kind = CMETA_DATA_STRUCT,
+        .storage_type = build->cmeta_root->storage_type,
+        .shape = &descriptor->internal_shape};
+    if (!cmeta_data_desc_valid(&descriptor->internal_schema))
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED, (turbo_xml_location){0},
+            "internal send subset schema failed validation");
+    return SCXML_OK;
+}
+
 static scxml_status emit_send_step(scxml_build *build,
                                          scxml_syntax_node node) {
     const scxml_syntax_attribute event_attribute = scxml_analyze_find_attribute(node, "event");
@@ -976,10 +1121,17 @@ static scxml_status emit_send_step(scxml_build *build,
                           scxml_syntax_node_location(node),
                           "send exceeded admitted descriptor storage");
     }
+    target = target_attribute.impl != NULL
+                 ? scxml_syntax_attribute_value(target_attribute)
+                 : (turbo_xml_string_view){NULL, 0u};
     descriptor = &build->effects[effect];
     descriptor->kind = SCXML_EFFECT_SEND;
+    descriptor->internal_target =
+        scxml_analyze_view_equal_raw(target, "#_internal") ||
+        scxml_analyze_view_equal_raw(target, "_internal");
     descriptor->event_id = event != NULL ? (cflow_event_id)event->id : 0u;
     descriptor->payload_first = build->payload_index;
+    descriptor->internal_assignment_first = build->assignment_index;
     if (!retain_effect_attribute(
             build, event_attribute, &descriptor->request.send.event,
             &descriptor->request.send.event_size) ||
@@ -1075,6 +1227,12 @@ static scxml_status emit_send_step(scxml_build *build,
                                   namelist_attribute),
                 "send namelist", &payload->expression);
             if (status != SCXML_OK) return status;
+            if (descriptor->internal_target) {
+                status = emit_internal_payload_assignment(
+                    build, token, token,
+                    scxml_syntax_attribute_location(namelist_attribute));
+                if (status != SCXML_OK) return status;
+            }
             ++build->payload_index;
         }
     }
@@ -1113,6 +1271,15 @@ static scxml_status emit_send_step(scxml_build *build,
                     build, expression, "send param", &payload->expression,
                     SCXML_EXPR_VALUE_INVALID);
             if (status != SCXML_OK) return status;
+            if (descriptor->internal_target) {
+                const scxml_syntax_attribute source_attribute =
+                    location.impl != NULL ? location : expression;
+                status = emit_internal_payload_assignment(
+                    build, scxml_syntax_attribute_value(name),
+                    scxml_syntax_attribute_value(source_attribute),
+                    scxml_syntax_attribute_location(source_attribute));
+                if (status != SCXML_OK) return status;
+            }
             ++build->payload_index;
             continue;
         }
@@ -1129,12 +1296,12 @@ static scxml_status emit_send_step(scxml_build *build,
     }
     descriptor->payload_count =
         build->payload_index - descriptor->payload_first;
-    target = target_attribute.impl != NULL
-                 ? scxml_syntax_attribute_value(target_attribute)
-                 : (turbo_xml_string_view){NULL, 0u};
-    descriptor->internal_target =
-        scxml_analyze_view_equal_raw(target, "#_internal") ||
-        scxml_analyze_view_equal_raw(target, "_internal");
+    descriptor->internal_assignment_count =
+        build->assignment_index - descriptor->internal_assignment_first;
+    if (descriptor->internal_target && descriptor->payload_count != 0u) {
+        status = initialize_internal_payload_schema(build, descriptor, effect);
+        if (status != SCXML_OK) return status;
+    }
     ++build->effect_index;
     ++build->step_index;
     build->steps[step] = (scxml_step){
@@ -1797,11 +1964,11 @@ scxml_status scxml_emit_done_data(
             }
             descriptor->assignment_count =
                 build->assignment_index - descriptor->assignment_first;
-            if (param_count != 0u &&
+            if ((param_count != 0u || descriptor->fields != NULL) &&
                 (status = finalize_done_data_schema_id(
                      build, descriptor)) != SCXML_OK)
                 return status;
-            if (param_count != 0u &&
+            if ((param_count != 0u || descriptor->fields != NULL) &&
                 !cmeta_data_desc_valid(&descriptor->schema))
                 return scxml_analyze_fail(
                     build, SCXML_NATIVE_IR_REJECTED,
@@ -1909,9 +2076,98 @@ static scxml_status emit_foreach_step(scxml_build *build,
     return SCXML_OK;
 }
 
+static scxml_expr_value_kind custom_action_value_kind(
+    const cmeta_type_desc *type) {
+    if (cmeta_type_equal(type, &cmeta_type_bool))
+        return SCXML_EXPR_VALUE_BOOL;
+    if (cmeta_type_equal(type, &cmeta_type_int) ||
+        cmeta_type_equal(type, &cmeta_type_long))
+        return SCXML_EXPR_VALUE_SINT;
+    if (cmeta_type_equal(type, &cmeta_type_float) ||
+        cmeta_type_equal(type, &cmeta_type_double))
+        return SCXML_EXPR_VALUE_FLOAT;
+    return SCXML_EXPR_VALUE_INVALID;
+}
+
+static scxml_syntax_attribute find_custom_action_attribute(
+    scxml_syntax_node node, const char *name) {
+    const size_t name_size = strlen(name);
+    size_t index;
+    for (index = 0u; index < scxml_syntax_node_attribute_count(node); ++index) {
+        const scxml_syntax_attribute attribute =
+            scxml_syntax_node_attribute_at(node, index);
+        const turbo_xml_string_view local_name =
+            scxml_syntax_attribute_local_name(attribute);
+        if (scxml_syntax_attribute_namespace_uri(attribute).size == 0u &&
+            local_name.size == name_size &&
+            memcmp(local_name.data, name, name_size) == 0)
+            return attribute;
+    }
+    return (scxml_syntax_attribute){0};
+}
+
+static scxml_status emit_custom_action_step(
+    scxml_build *build, scxml_syntax_node node) {
+    const scxml_cmeta_custom_action_v1 *registration =
+        scxml_analyze_find_custom_action(build, node);
+    const size_t step_index = build->step_index;
+    const size_t action_index = build->custom_action_index;
+    scxml_custom_action_descriptor *descriptor;
+    cmeta_callable bound;
+    const cmeta_sig_desc *signature;
+    size_t parameter;
+    if (registration == NULL ||
+        step_index >= build->step_capacity ||
+        action_index >= build->custom_action_capacity ||
+        !cmeta_callable_bind(registration->callable, &bound) ||
+        (signature = cmeta_callable_signature(bound)) == NULL ||
+        registration->parameter_count != signature->param_count ||
+        build->custom_action_argument_index >
+            build->custom_action_argument_capacity ||
+        registration->parameter_count >
+            build->custom_action_argument_capacity -
+                build->custom_action_argument_index)
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            scxml_syntax_node_location(node),
+            "CMeta custom action exceeded admitted storage");
+    descriptor = &build->custom_actions[action_index];
+    descriptor->callable = bound;
+    descriptor->argument_first = build->custom_action_argument_index;
+    descriptor->argument_count = registration->parameter_count;
+    for (parameter = 0u; parameter < registration->parameter_count;
+         ++parameter) {
+        scxml_custom_action_argument *argument =
+            &build->custom_action_arguments[
+                build->custom_action_argument_index];
+        const scxml_syntax_attribute attribute =
+            find_custom_action_attribute(
+                node, registration->parameter_names[parameter]);
+        const scxml_expr_value_kind kind =
+            custom_action_value_kind(signature->params[parameter]);
+        scxml_status status;
+        argument->type = signature->params[parameter];
+        status = scxml_emit_compile_cmeta_value_program(
+            build, attribute, "custom action argument",
+            &argument->expression, kind);
+        if (status != SCXML_OK) return status;
+        ++build->custom_action_argument_index;
+    }
+    ++build->custom_action_index;
+    ++build->step_index;
+    build->steps[step_index] = (scxml_step){
+        .kind = SCXML_STEP_CUSTOM_ACTION,
+        .next = build->step_index,
+        .custom_action = action_index};
+    return SCXML_OK;
+}
+
 static scxml_status emit_executable_node(
     scxml_build *build, scxml_syntax_node node) {
     const scxml_element_kind kind = scxml_analyze_element_kind(node);
+    if (!scxml_analyze_view_equal_raw(
+            scxml_syntax_node_namespace_uri(node), SCXML_NAMESPACE))
+        return emit_custom_action_step(build, node);
     if (kind == SCXML_ELEMENT_RAISE) return emit_raise_step(build, node);
     if (kind == SCXML_ELEMENT_SEND) return emit_send_step(build, node);
     if (kind == SCXML_ELEMENT_CANCEL) return emit_cancel_step(build, node);
@@ -1934,6 +2190,7 @@ static scxml_status emit_executable_block(
     const size_t first_step = build->step_index;
     const size_t first_log_byte = build->log_storage_index;
     const size_t first_effect = build->effect_index;
+    const size_t first_custom_action = build->custom_action_index;
     const cflow_statechart_executable_id executable =
         (cflow_statechart_executable_id)(executable_index + 1u);
     size_t index;
@@ -1959,6 +2216,8 @@ static scxml_status emit_executable_block(
         .payloads = build->payloads,
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = first_step,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -1968,6 +2227,9 @@ static scxml_status emit_executable_block(
         .payload_storage_count = build->payload_capacity,
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     build->executables[executable_index] = (cflow_statechart_executable){
@@ -1977,7 +2239,8 @@ static scxml_status emit_executable_block(
             : &cmeta_type_bool,
         CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL |
             (build->log_storage_index != first_log_byte ||
-             build->effect_index != first_effect
+             build->effect_index != first_effect ||
+             build->custom_action_index != first_custom_action
                  ? CMETA_EFFECT_IO : CMETA_EFFECT_PURE),
         CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS};
     build->bindings[executable_index] = (cflow_statechart_executable_binding){
@@ -2020,6 +2283,8 @@ static scxml_status emit_invoke_lifecycle_block(
         .payloads = build->payloads,
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = step_index,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -2029,6 +2294,9 @@ static scxml_status emit_invoke_lifecycle_block(
         .payload_storage_count = build->payload_capacity,
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     build->executables[executable_index] = (cflow_statechart_executable){
@@ -2071,6 +2339,8 @@ static scxml_status emit_finalize_block(
         .payloads = build->payloads,
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = first_step,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -2080,6 +2350,9 @@ static scxml_status emit_finalize_block(
         .payload_storage_count = build->payload_capacity,
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     *out_block = &build->blocks[block_index];
@@ -2140,6 +2413,8 @@ static scxml_status emit_late_initializer_block(
         .payloads = build->payloads,
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = step_index,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -2149,6 +2424,9 @@ static scxml_status emit_late_initializer_block(
         .payload_storage_count = build->payload_capacity,
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     build->executables[executable_index] = (cflow_statechart_executable){
@@ -2217,6 +2495,8 @@ static scxml_status emit_early_initializer_block(
         .payloads = build->payloads,
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = step_index,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -2226,6 +2506,9 @@ static scxml_status emit_early_initializer_block(
         .payload_storage_count = build->payload_capacity,
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     build->executables[executable_index] = (cflow_statechart_executable){
@@ -2274,6 +2557,8 @@ static scxml_status emit_done_data_block(
         .foreach_descriptors = build->foreach_descriptors,
         .invocations = build->invocations,
         .done_data = build->done_data,
+        .custom_actions = build->custom_actions,
+        .custom_action_arguments = build->custom_action_arguments,
         .step_begin = step_index,
         .step_end = build->step_index,
         .step_storage_count = build->step_capacity,
@@ -2284,6 +2569,9 @@ static scxml_status emit_done_data_block(
         .foreach_storage_count = build->foreach_capacity,
         .invocation_storage_count = build->invocation_capacity,
         .done_data_storage_count = build->done_data_capacity,
+        .custom_action_storage_count = build->custom_action_capacity,
+        .custom_action_argument_storage_count =
+            build->custom_action_argument_capacity,
         .execution_error_event = build->execution_error_event,
         .max_conditional_depth = build->max_conditional_depth};
     build->executables[executable_index] = (cflow_statechart_executable){
@@ -2812,6 +3100,8 @@ void scxml_emit_destroy_effects(scxml_effect_descriptor *effects, size_t count) 
         scxml_expr_program_destroy(&effects[index].delay_expr);
         scxml_expr_program_destroy(&effects[index].send_id_expr);
         scxml_expr_program_destroy(&effects[index].data_expr);
+        free(effects[index].internal_fields);
+        free(effects[index].internal_schema_stable_id);
     }
 }
 
@@ -2850,6 +3140,14 @@ void scxml_emit_destroy_done_data(
     }
 }
 
+void scxml_emit_destroy_custom_action_arguments(
+    scxml_custom_action_argument *arguments, size_t count) {
+    size_t index;
+    if (arguments == NULL) return;
+    for (index = 0u; index < count; ++index)
+        scxml_expr_program_destroy(&arguments[index].expression);
+}
+
 void scxml_emit_free_build(scxml_build *build) {
     free(build->states);
     free(build->transitions);
@@ -2879,6 +3177,11 @@ void scxml_emit_free_build(scxml_build *build) {
     free(build->invocations);
     scxml_emit_destroy_done_data(build->done_data, build->done_data_capacity);
     free(build->done_data);
+    scxml_emit_destroy_custom_action_arguments(
+        build->custom_action_arguments,
+        build->custom_action_argument_capacity);
+    free(build->custom_action_arguments);
+    free(build->custom_actions);
     free(build->scripts);
     scxml_scope_schema_destroy(&build->supplemental_scope);
     free(build->invocation_names);
