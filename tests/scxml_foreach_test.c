@@ -1,5 +1,5 @@
 #include <scxml/scxml.h>
-#include <turbostl/typed.h>
+#include <rocida/stl/typed.h>
 
 #include "scxml_foreach.h"
 #include "tinytest.h"
@@ -142,9 +142,10 @@ static scxml_status compile_foreach_with_options(
         program, source, strlen(source), NULL, options, diagnostic);
 }
 
-static cflow_statechart_instance_stats run_foreach(
+static cflow_statechart_instance_stats run_foreach_with_event(
     const scxml_program *program, const int *values,
-    size_t value_count, int item, size_t index, int total) {
+    size_t value_count, int item, size_t index, int total,
+    const char *event_name) {
     scxml_foreach_root initial = {
         .values = VecOf(int), .item = item, .index = index, .total = total};
     cflow_executor executor = {0};
@@ -157,6 +158,7 @@ static cflow_statechart_instance_stats run_foreach(
         .internal_event_capacity = 4u,
         .completion_capacity = 2u,
         .microstep_limit = 32u,
+        .effect_capacity = 1u,
         .max_storage_bytes = FOREACH_TEST_MAX_STORAGE_BYTES
     };
     scxml_cmeta_session_options_v1 data = {
@@ -164,6 +166,7 @@ static cflow_statechart_instance_stats run_foreach(
         .struct_size = sizeof(scxml_cmeta_session_options_v1),
         .initial_state = &initial
     };
+    cflow_event_view event = {0};
     size_t value_index;
 
     check_equal(vec_init(&initial.values, value_count), STL_OK);
@@ -173,6 +176,13 @@ static cflow_statechart_instance_stats run_foreach(
     check_equal(scxml_session_init_cmeta(&session, &config, &data),
                 CFLOW_STATECHART_INSTANCE_OK);
     check_true(cflow_executor_wait_idle(&executor));
+    if (event_name != NULL) {
+        check_true(scxml_program_event(
+            program, event_name, strlen(event_name), &event));
+        check_equal(scxml_session_try_send(&session, &event),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+    }
     check_true(scxml_session_get_stats(&session, &stats));
     check_equal(scxml_session_destroy(&session),
                 CFLOW_STATECHART_INSTANCE_OK);
@@ -181,7 +191,79 @@ static cflow_statechart_instance_stats run_foreach(
     return stats;
 }
 
+static cflow_statechart_instance_stats run_foreach(
+    const scxml_program *program, const int *values,
+    size_t value_count, int item, size_t index, int total) {
+    return run_foreach_with_event(
+        program, values, value_count, item, index, total, NULL);
+}
+
 spec("TurboSCXML CMeta foreach") {
+  it("auto-declares missing item and index variables") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='work' datamodel='cmeta'><state id='work'><onentry>"
+        "<foreach array='values' item='auto_item' index='auto_index'>"
+        "<assign location='total' expr='auto_item'/></foreach>"
+        "</onentry><transition cond='total == 3 &amp;&amp; auto_item == 3 "
+        "&amp;&amp; auto_index == 2' target='done'/></state>"
+        "<final id='done'/></scxml>";
+    const int values[] = {1, 2, 3};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    check_equal(compile_foreach(source, &program, &diagnostic),
+                SCXML_OK);
+    stats = run_foreach(&program, values, 3u, 0, 0u, 0);
+    check_true(stats.done);
+    check_false(stats.errored);
+    scxml_program_destroy(&program);
+  }
+
+  it("rejects conflicting auto-declared foreach variable types") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='work' datamodel='cmeta'><state id='work'><onentry>"
+        "<foreach array='values' item='auto_value'>"
+        "<assign location='total' expr='auto_value'/></foreach>"
+        "<foreach array='values' item='item' index='auto_value'>"
+        "<assign location='total' expr='item'/></foreach>"
+        "</onentry></state></scxml>";
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+
+    check_equal(compile_foreach(source, &program, &diagnostic),
+                SCXML_INVALID_STRUCTURE);
+    check_null(program.impl);
+  }
+
+  it("rolls back auto-declared variables when their executable block fails") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "initial='ready' datamodel='cmeta'><state id='ready'><onentry>"
+        "<foreach array='values' item='auto_item' index='auto_index'>"
+        "<assign location='total' expr='auto_item'/></foreach></onentry>"
+        "<transition event='go' target='work'/></state>"
+        "<state id='work'><onentry>"
+        "<foreach array='values' item='auto_item' index='auto_index'>"
+        "<assign location='total' expr='4294967295'/></foreach></onentry>"
+        "<transition event='error.execution' cond='total == 3 &amp;&amp; "
+        "auto_item == 3 &amp;&amp; auto_index == 2' target='done'/></state>"
+        "<final id='done'/></scxml>";
+    const int values[] = {1, 2, 3};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    check_equal(compile_foreach(source, &program, &diagnostic), SCXML_OK);
+    stats = run_foreach_with_event(
+        &program, values, 3u, 0, 0u, 0, "go");
+    check_true(stats.done);
+    check_false(stats.errored);
+    scxml_program_destroy(&program);
+  }
+
   it("iterates the entry snapshot after the source sequence changes") {
     const int initial_values[] = {1, 2};
     const int appended = 3;
@@ -223,6 +305,31 @@ spec("TurboSCXML CMeta foreach") {
     scxml_foreach_value_destroy(&program, &value);
     scxml_foreach_snapshot_destroy(&program, &snapshot);
     vec_destroy(&root.values);
+  }
+
+  it("rejects a foreach item whose late declaration has not entered") {
+    static const char source[] =
+        "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+        "datamodel='cmeta' binding='late' initial='before'>"
+        "<state id='before'><onentry>"
+        "<foreach array='values' item='item'><raise event='observed'/>"
+        "</foreach></onentry>"
+        "<transition event='error.execution' target='done'/>"
+        "<transition event='observed' target='failed'/></state>"
+        "<state id='owner'><datamodel>"
+        "<data id='item' expr='0'/></datamodel></state>"
+        "<final id='done'/><state id='failed'/></scxml>";
+    const int values[] = {1};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_statechart_instance_stats stats;
+
+    check_equal(compile_foreach(source, &program, &diagnostic),
+                SCXML_OK);
+    stats = run_foreach(&program, values, 1u, 9, 0u, 0);
+    check_true(stats.done);
+    check_false(stats.errored);
+    scxml_program_destroy(&program);
   }
 
   it("assigns items and zero-based indexes in declared sequence order") {
@@ -453,6 +560,76 @@ spec("TurboSCXML CMeta foreach") {
         check_equal(status, SCXML_INVALID_STRUCTURE);
         check_null(program.impl);
     }
+  }
+
+  it("rejects a corrupted runtime item location kind before assignment") {
+    const int element = 1;
+    scxml_foreach_root root = {.values = VecOf(int)};
+    scxml_foreach_program program = {0};
+    scxml_foreach_snapshot snapshot = {0};
+    scxml_foreach_value value = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    check_equal(vec_init(&root.values, 1u), STL_OK);
+    check_equal(vec_push(&root.values, &element), STL_OK);
+    check_equal(scxml_foreach_compile(
+                    &program,
+                    "values", sizeof("values") - 1u,
+                    "item", sizeof("item") - 1u,
+                    NULL, 0u, &foreach_root_data, 4u, 4u,
+                    &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_open(
+                    &program, &root, &snapshot, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_value_init(
+                    &program, &value, &diagnostic),
+                SCXML_EXPR_OK);
+
+    program.item.kind = (scxml_location_kind)UINT32_MAX;
+    check_equal(scxml_foreach_next(
+                    &program, &root, &snapshot, &value, 0u,
+                    &diagnostic),
+                SCXML_EXPR_INVALID_ARGUMENT);
+
+    scxml_foreach_value_destroy(&program, &value);
+    scxml_foreach_snapshot_destroy(&program, &snapshot);
+    vec_destroy(&root.values);
+  }
+
+  it("rejects a corrupted runtime index location kind before assignment") {
+    const int element = 1;
+    scxml_foreach_root root = {.values = VecOf(int)};
+    scxml_foreach_program program = {0};
+    scxml_foreach_snapshot snapshot = {0};
+    scxml_foreach_value value = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    check_equal(vec_init(&root.values, 1u), STL_OK);
+    check_equal(vec_push(&root.values, &element), STL_OK);
+    check_equal(scxml_foreach_compile(
+                    &program,
+                    "values", sizeof("values") - 1u,
+                    "item", sizeof("item") - 1u,
+                    "index", sizeof("index") - 1u,
+                    &foreach_root_data, 4u, 4u, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_open(
+                    &program, &root, &snapshot, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_foreach_value_init(
+                    &program, &value, &diagnostic),
+                SCXML_EXPR_OK);
+
+    program.index.kind = (scxml_location_kind)UINT32_MAX;
+    check_equal(scxml_foreach_next(
+                    &program, &root, &snapshot, &value, 0u,
+                    &diagnostic),
+                SCXML_EXPR_INVALID_ARGUMENT);
+
+    scxml_foreach_value_destroy(&program, &value);
+    scxml_foreach_snapshot_destroy(&program, &snapshot);
+    vec_destroy(&root.values);
   }
 
   it("keeps CMeta foreach unavailable in finalize blocks") {

@@ -6,32 +6,39 @@ include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-if(NOT DEFINED ENV{TURBOUTILS_ROOT}
-   OR "$ENV{TURBOUTILS_ROOT}" STREQUAL "")
+option(TURBOSCXML_ENABLE_QUICKJS
+  "Enable the bounded quickjs-sandbox SCXML data-model profile" OFF)
+option(TURBOSCXML_ENABLE_CHTTP_RESOURCE
+  "Enable the optional blocking CHTTP SCXML resource adapter" OFF)
+
+if(NOT DEFINED ENV{ROCIDA_ROOT}
+   OR "$ENV{ROCIDA_ROOT}" STREQUAL "")
   message(FATAL_ERROR
-    "TURBOUTILS_ROOT must name the installed TurboUtils profile")
+    "ROCIDA_ROOT must name the installed Rocida profile")
 endif()
-file(TO_CMAKE_PATH "$ENV{TURBOUTILS_ROOT}" TURBOUTILS_ROOT_PATH)
-if(NOT IS_DIRECTORY "${TURBOUTILS_ROOT_PATH}")
+file(TO_CMAKE_PATH "$ENV{ROCIDA_ROOT}" ROCIDA_ROOT_PATH)
+if(NOT IS_DIRECTORY "${ROCIDA_ROOT_PATH}")
   message(FATAL_ERROR
-    "TURBOUTILS_ROOT is not a directory: $ENV{TURBOUTILS_ROOT}")
+    "ROCIDA_ROOT is not a directory: $ENV{ROCIDA_ROOT}")
 endif()
 
-unset(TurboUtils_DIR CACHE)
-unset(TurboUtils_DIR)
-find_package(TurboUtils 1.1 CONFIG REQUIRED
-  PATHS "${TURBOUTILS_ROOT_PATH}"
+unset(Rocida_DIR CACHE)
+unset(Rocida_DIR)
+find_package(Rocida 1.1 CONFIG REQUIRED
+  PATHS "${ROCIDA_ROOT_PATH}"
   NO_DEFAULT_PATH)
 
 foreach(required_target IN ITEMS
-    TurboUtils::CFlow
-    TurboUtils::CMeta
-    TurboUtils::XmlParser
-    TurboUtils::Core
-    TurboUtils::QueryVM)
+    Rocida::CFlow
+    Rocida::CMeta
+    Rocida::CSerde
+    Rocida::CBind
+    Rocida::XmlParser
+    Rocida::Core
+    Rocida::QueryVM)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
-      "TurboUtils SDK does not provide required target: ${required_target}")
+      "Rocida SDK does not provide required target: ${required_target}")
   endif()
 endforeach()
 
@@ -46,7 +53,9 @@ add_library(turbo_scxml STATIC
   src/scxml_assign.c
   src/scxml_location.c
   src/scxml_sequence.c
-  src/scxml_foreach.c)
+  src/scxml_scope.c
+  src/scxml_foreach.c
+  src/scxml_quickjs.c)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 
 set_target_properties(turbo_scxml PROPERTIES
@@ -63,33 +72,85 @@ target_include_directories(turbo_scxml
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turbo_scxml
   PUBLIC
-    TurboUtils::CFlow
-    TurboUtils::CMeta
-    TurboUtils::XmlParser
+    Rocida::CFlow
+    Rocida::CMeta
+    Rocida::CSerde
+    Rocida::XmlParser
   PRIVATE
-    TurboUtils::Core
-    TurboUtils::QueryVM)
+    Rocida::Core
+    Rocida::CBind
+    Rocida::QueryVM)
+target_compile_definitions(turbo_scxml
+  PUBLIC TURBOSCXML_HAS_QUICKJS=$<BOOL:${TURBOSCXML_ENABLE_QUICKJS}>)
+if(TURBOSCXML_ENABLE_QUICKJS)
+  find_package(qjs CONFIG REQUIRED)
+  target_link_libraries(turbo_scxml PRIVATE qjs)
+endif()
+
+if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+  if(NOT TARGET Rocida::CHTTP)
+    message(FATAL_ERROR
+      "TURBOSCXML_ENABLE_CHTTP_RESOURCE requires Rocida::CHTTP")
+  endif()
+  add_library(turbo_scxml_chttp_resource STATIC
+    src/scxml_chttp_resource.c)
+  add_library(TurboSCXML::CHttpResource ALIAS turbo_scxml_chttp_resource)
+  set_target_properties(turbo_scxml_chttp_resource PROPERTIES
+    EXPORT_NAME CHttpResource
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_scxml_chttp_resource PUBLIC c_std_11)
+  target_compile_options(turbo_scxml_chttp_resource
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_scxml_chttp_resource
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_scxml_chttp_resource
+    PUBLIC
+      TurboSCXML::SCXML
+      Rocida::CHTTP
+    PRIVATE
+      Rocida::Core)
+endif()
 
 if(BUILD_TESTING)
   get_target_property(
-    CFLOW_PUBLIC_LINKS TurboUtils::CFlow INTERFACE_LINK_LIBRARIES)
+    CFLOW_PUBLIC_LINKS Rocida::CFlow INTERFACE_LINK_LIBRARIES)
   if(CFLOW_PUBLIC_LINKS MATCHES "XmlParser|cxml|CSerde|SCXML")
     message(FATAL_ERROR
-      "TurboUtils::CFlow must remain independent of XML, CSerde, and SCXML")
+      "Rocida::CFlow must remain independent of XML, CSerde, and SCXML")
   endif()
 
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "TurboUtils::CFlow;TurboUtils::CMeta;TurboUtils::XmlParser;$<LINK_ONLY:TurboUtils::Core>;$<LINK_ONLY:TurboUtils::QueryVM>")
+    "Rocida::CFlow;Rocida::CMeta;Rocida::CSerde;Rocida::XmlParser;$<LINK_ONLY:Rocida::Core>;$<LINK_ONLY:Rocida::CBind>;$<LINK_ONLY:Rocida::QueryVM>")
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
+  endif()
   if(NOT TURBOSCXML_PUBLIC_LINKS STREQUAL TURBOSCXML_EXPECTED_LINKS)
     message(FATAL_ERROR
       "TurboSCXML::SCXML dependency contract changed")
   endif()
 
-  if(NOT TARGET TurboUtils::TinyTest)
+  if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+    get_target_property(
+      TURBOSCXML_CHTTP_PUBLIC_LINKS
+      turbo_scxml_chttp_resource INTERFACE_LINK_LIBRARIES)
+    set(TURBOSCXML_CHTTP_EXPECTED_LINKS
+      "TurboSCXML::SCXML;Rocida::CHTTP;$<LINK_ONLY:Rocida::Core>")
+    if(NOT TURBOSCXML_CHTTP_PUBLIC_LINKS STREQUAL
+       TURBOSCXML_CHTTP_EXPECTED_LINKS)
+      message(FATAL_ERROR
+        "TurboSCXML::CHttpResource dependency contract changed")
+    endif()
+  endif()
+
+  if(NOT TARGET Rocida::TinyTest)
     message(FATAL_ERROR
-      "BUILD_TESTING requires TurboUtils::TinyTest in the selected SDK")
+      "BUILD_TESTING requires Rocida::TinyTest in the selected SDK")
   endif()
   add_subdirectory(tests)
 endif()
@@ -100,11 +161,27 @@ install(TARGETS turbo_scxml
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+  install(TARGETS turbo_scxml_chttp_resource
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(
-  DIRECTORY include/scxml
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-  FILES_MATCHING PATTERN "*.h")
+  FILES include/scxml/scxml.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+  install(
+    FILES include/scxml/chttp_resource.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+endif()
 
+set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
+  ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
+set(TURBOSCXML_PACKAGE_HAS_QUICKJS
+  ${TURBOSCXML_ENABLE_QUICKJS})
 configure_package_config_file(
   cmake/TurboSCXMLConfig.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/TurboSCXMLConfig.cmake

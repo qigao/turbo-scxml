@@ -10,7 +10,7 @@ function(turboscxml_add_test target source)
     C_EXTENSIONS OFF)
   target_link_libraries(${target} PRIVATE
     TurboSCXML::SCXML
-    TurboUtils::TinyTest
+    Rocida::TinyTest
     ${TEST_LIBS})
   if(TEST_INCLUDES)
     target_include_directories(${target} PRIVATE ${TEST_INCLUDES})
@@ -22,7 +22,7 @@ function(turboscxml_add_test target source)
 endfunction()
 
 turboscxml_add_test(scxml_test scxml_test.c
-  LIBS TurboUtils::Core
+  LIBS Rocida::Core
   DEFINITIONS
     SCXML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
@@ -34,7 +34,7 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_event_io_contract_test
   scxml_event_io_contract_test.c
-  LIBS TurboUtils::Core
+  LIBS Rocida::Core
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
@@ -47,14 +47,14 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
-  LIBS TurboUtils::Core TurboUtils::STL
+  LIBS Rocida::Core Rocida::STL
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 turboscxml_add_test(
   scxml_expr_test
   scxml_expr_test.c
-  LIBS TurboUtils::CMeta
+  LIBS Rocida::CMeta
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
@@ -64,17 +64,33 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_sequence_test
   scxml_sequence_test.c
-  LIBS TurboUtils::STL
+  LIBS Rocida::STL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_foreach_test
   scxml_foreach_test.c
-  LIBS TurboUtils::STL
+  LIBS Rocida::STL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_managed_foreach_test
   scxml_managed_foreach_test.c
-  LIBS TurboUtils::STL
+  LIBS Rocida::STL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
+  scxml_quickjs_test
+  scxml_quickjs_test.c
+  LIBS Rocida::STL
+  INCLUDES ${PROJECT_SOURCE_DIR}/src
+  DEFINITIONS
+    SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+
+if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+  turboscxml_add_test(
+    scxml_chttp_resource_test
+    scxml_chttp_resource_test.c
+    LIBS TurboSCXML::CHttpResource
+    INCLUDES ${PROJECT_SOURCE_DIR}/src)
+endif()

@@ -73,8 +73,15 @@ typedef enum scxml_step_kind {
     SCXML_STEP_INVOKE_EXIT,
     SCXML_STEP_EARLY_INITIALIZE,
     SCXML_STEP_LATE_INITIALIZE,
-    SCXML_STEP_DONEDATA
+    SCXML_STEP_DONEDATA,
+    SCXML_STEP_SCRIPT
 } scxml_step_kind;
+
+typedef struct scxml_script_descriptor {
+    const char *source;
+    size_t source_size;
+    bool root;
+} scxml_script_descriptor;
 
 typedef enum scxml_effect_kind {
     SCXML_EFFECT_SEND = 1,
@@ -134,6 +141,7 @@ typedef struct scxml_step {
     size_t late_initializer;
     size_t foreach_descriptor;
     size_t done_data;
+    size_t script;
 } scxml_step;
 
 typedef struct scxml_foreach_descriptor {
@@ -141,6 +149,14 @@ typedef struct scxml_foreach_descriptor {
     size_t step_begin;
     size_t step_end;
 } scxml_foreach_descriptor;
+
+typedef struct scxml_data_binding_descriptor {
+    size_t assignment;
+    size_t offset;
+    size_t storage_size;
+    size_t late_initializer;
+    bool read_only_system;
+} scxml_data_binding_descriptor;
 
 typedef struct scxml_branch {
     cflow_machine_state_id state;
@@ -265,6 +281,9 @@ typedef struct scxml_counts {
     size_t transition_action_rows;
     size_t invocation_rows;
     size_t invocation_string_bytes;
+    size_t script_rows;
+    size_t root_script_rows;
+    size_t script_source_bytes;
     uint32_t requirements;
 } scxml_counts;
 
@@ -291,13 +310,17 @@ typedef struct scxml_build {
     scxml_effect_descriptor *effects;
     scxml_payload_descriptor *payloads;
     scxml_assign_program *assignments;
+    scxml_data_binding_descriptor *data_bindings;
     scxml_foreach_descriptor *foreach_descriptors;
     scxml_invocation_descriptor *invocations;
     scxml_done_data_descriptor *done_data;
+    scxml_script_descriptor *scripts;
+    scxml_scope_schema supplemental_scope;
     scxml_name_ref *invocation_names;
     char *log_storage;
     char *effect_storage;
     char *invocation_storage;
+    char *script_storage;
     scxml_name_ref *state_names;
     scxml_name_ref *event_names;
     scxml_name_ref *event_occurrences;
@@ -319,6 +342,7 @@ typedef struct scxml_build {
     size_t effect_index;
     size_t payload_index;
     size_t assignment_index;
+    size_t data_binding_index;
     size_t foreach_index;
     size_t log_storage_index;
     size_t effect_storage_index;
@@ -327,6 +351,7 @@ typedef struct scxml_build {
     size_t effect_capacity;
     size_t payload_capacity;
     size_t assignment_capacity;
+    size_t data_binding_capacity;
     size_t foreach_capacity;
     size_t max_iterations;
     size_t log_storage_capacity;
@@ -343,12 +368,20 @@ typedef struct scxml_build {
     size_t invocation_capacity;
     size_t done_data_index;
     size_t done_data_capacity;
+    size_t script_index;
+    size_t script_variable_count;
+    size_t root_script_count;
+    size_t script_capacity;
+    size_t script_storage_index;
+    size_t script_storage_capacity;
     size_t late_initializer_index;
     size_t data_initializer_count;
     size_t top_level_data_initializer_first;
     size_t top_level_data_initializer_count;
     uint32_t requirements;
     bool late_binding;
+    bool quickjs_profile;
+    scxml_quickjs_compile_options_v1 quickjs_options;
     cflow_event_id execution_error_event;
 } scxml_build;
 
@@ -377,6 +410,8 @@ typedef struct scxml_program_impl {
     size_t max_payload_entries;
     scxml_assign_program *assignments;
     size_t assignment_count;
+    scxml_data_binding_descriptor *data_bindings;
+    size_t data_binding_count;
     size_t data_initializer_count;
     size_t top_level_data_initializer_first;
     size_t top_level_data_initializer_count;
@@ -389,19 +424,27 @@ typedef struct scxml_program_impl {
     size_t invocation_count;
     scxml_done_data_descriptor *done_data;
     size_t done_data_count;
+    scxml_script_descriptor *scripts;
+    size_t script_count;
+    size_t root_script_count;
+    scxml_scope_schema supplemental_scope;
     const char *document_name;
     size_t document_name_size;
     char *name_storage;
     char *log_storage;
     char *effect_storage;
     char *invocation_storage;
+    char *script_storage;
     cflow_event_id execution_error_event;
     cflow_event_id communication_error_event;
     uint32_t requirements;
+    bool quickjs_profile;
+    scxml_quickjs_compile_options_v1 quickjs_options;
     bool null_value;
 } scxml_program_impl;
 
 typedef struct scxml_session_impl scxml_session_impl;
+typedef struct scxml_quickjs_runtime scxml_quickjs_runtime;
 
 typedef struct scxml_session_binding_user {
     const scxml_block *block;
@@ -555,7 +598,24 @@ struct scxml_session_impl {
     size_t late_initializer_count;
     size_t *environment_override_assignments;
     size_t environment_override_count;
+    scxml_data_resource_adapter_v1 data_resources;
+    void *data_resource_user;
+    void *data_decode_allocation;
+    void *data_decode_storage;
+    size_t data_decode_storage_size;
+    void *cbind_scratch;
+    cbind_context cbind;
+    bool has_data_resources;
     bool late_initializer_ticket_pending;
+    void *supplemental_committed_allocation;
+    void *supplemental_staged_allocation;
+    void *supplemental_checkpoint_allocation;
+    scxml_scope_view supplemental_committed;
+    scxml_scope_view supplemental_staged;
+    scxml_scope_view supplemental_checkpoint;
+    bool supplemental_transaction_pending;
+    bool supplemental_checkpoint_live;
+    scxml_quickjs_runtime *quickjs_runtime;
     char *system_name;
     char session_id[TURBO_UUID_STRING_SIZE];
     char scxml_location[sizeof("#_scxml_") - 1u +

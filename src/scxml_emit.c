@@ -1,4 +1,7 @@
 #include "scxml_emit.h"
+#include "scxml_quickjs.h"
+
+#include <limits.h>
 #include "scxml_analyze.h"
 #include "scxml_runtime.h"
 
@@ -189,6 +192,144 @@ static scxml_status decode_cmeta_attribute_source(
     return SCXML_OK;
 }
 
+static scxml_status collect_supplemental_location(
+    scxml_build *build, scxml_syntax_attribute attribute,
+    const char *subject, const cmeta_data_desc *value) {
+    char *name = NULL;
+    size_t name_size = 0u;
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_status expression_status;
+    scxml_status status;
+    size_t slot = SIZE_MAX;
+    bool conflict = false;
+    char message[SCXML_DIAGNOSTIC_CAPACITY];
+    status = decode_cmeta_attribute_source(
+        build, attribute, subject, &name, &name_size);
+    if (status != SCXML_OK) return status;
+    expression_status = scxml_location_compile(
+        &location, name, name_size, build->cmeta_root,
+        build->expression_limits.max_path_depth, true, &diagnostic);
+    if (expression_status == SCXML_EXPR_OK) {
+        const bool matches = location.value != NULL &&
+            location.value->storage_type != NULL &&
+            cmeta_type_equal(location.value->storage_type,
+                             value->storage_type) &&
+            location.storage_size == value->storage_type->size;
+        free(name);
+        return matches
+            ? SCXML_OK
+            : scxml_analyze_fail(
+                  build, SCXML_INVALID_STRUCTURE,
+                  scxml_syntax_attribute_location(attribute),
+                  "foreach location type conflicts with its inferred type");
+    }
+    if (expression_status != SCXML_EXPR_UNKNOWN_LOCATION) {
+        free(name);
+        return scxml_analyze_fail(
+            build,
+            expression_status == SCXML_EXPR_LIMIT_EXCEEDED
+                ? SCXML_LIMIT_EXCEEDED : SCXML_INVALID_STRUCTURE,
+            scxml_syntax_attribute_location(attribute),
+            diagnostic.message[0] != '\0'
+                ? diagnostic.message : "foreach location is invalid");
+    }
+    if (memchr(name, '.', name_size) != NULL) {
+        free(name);
+        return SCXML_OK;
+    }
+    if (name[0] == '_') {
+        free(name);
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_attribute_location(attribute),
+            "foreach cannot auto-declare a system variable");
+    }
+    if (!scxml_scope_register(
+            &build->supplemental_scope, name, name_size, value,
+            &slot, &conflict)) {
+        (void)snprintf(
+            message, sizeof(message),
+            conflict
+                ? "foreach supplemental variable '%.*s' has conflicting types"
+                : "unable to retain bounded foreach supplemental variable '%.*s'",
+            (int)(name_size > (size_t)INT_MAX ? (size_t)INT_MAX : name_size),
+            name);
+        free(name);
+        return scxml_analyze_fail(
+            build,
+            conflict ? SCXML_INVALID_STRUCTURE : SCXML_ALLOCATION_FAILED,
+            scxml_syntax_attribute_location(attribute), message);
+    }
+    free(name);
+    return SCXML_OK;
+}
+
+static scxml_status collect_supplemental_node(
+    scxml_build *build, scxml_syntax_node node) {
+    size_t child_index;
+    if (scxml_analyze_element_kind(node) == SCXML_ELEMENT_FOREACH) {
+        const scxml_syntax_attribute array_attribute =
+            scxml_analyze_find_attribute(node, "array");
+        const scxml_syntax_attribute item_attribute =
+            scxml_analyze_find_attribute(node, "item");
+        const scxml_syntax_attribute index_attribute =
+            scxml_analyze_find_attribute(node, "index");
+        scxml_sequence_program sequence = {0};
+        scxml_expr_diagnostic diagnostic = {0};
+        char *array = NULL;
+        size_t array_size = 0u;
+        scxml_status status = decode_cmeta_attribute_source(
+            build, array_attribute, "foreach array", &array, &array_size);
+        scxml_expr_status expression_status;
+        const cmeta_data_desc *element_data;
+        if (status != SCXML_OK) return status;
+        expression_status = scxml_sequence_compile(
+            &sequence, array, array_size, build->cmeta_root,
+            build->expression_limits.max_path_depth, &diagnostic);
+        free(array);
+        if (expression_status != SCXML_EXPR_OK)
+            return scxml_analyze_fail(
+                build,
+                expression_status == SCXML_EXPR_LIMIT_EXCEEDED
+                    ? SCXML_LIMIT_EXCEEDED : SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(array_attribute),
+                diagnostic.message[0] != '\0'
+                    ? diagnostic.message : "foreach array is invalid");
+        element_data = scxml_scope_find_data_for_type(
+            build->cmeta_root, sequence.element_type,
+            build->expression_limits.max_path_depth);
+        if (element_data == NULL)
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(item_attribute),
+                "foreach element type has no CMeta data descriptor");
+        status = collect_supplemental_location(
+            build, item_attribute, "foreach item", element_data);
+        if (status != SCXML_OK) return status;
+        if (index_attribute.impl != NULL) {
+            status = collect_supplemental_location(
+                build, index_attribute, "foreach index", &cmeta_data_size);
+            if (status != SCXML_OK) return status;
+        }
+    }
+    for (child_index = 0u;
+         child_index < scxml_syntax_node_child_count(node); ++child_index) {
+        const scxml_status status = collect_supplemental_node(
+            build, scxml_syntax_node_child_at(node, child_index));
+        if (status != SCXML_OK) return status;
+    }
+    return SCXML_OK;
+}
+
+scxml_status scxml_emit_collect_supplemental_scope(
+    scxml_build *build, scxml_syntax_node root) {
+    if (build == NULL || build->data_model != SCXML_DATA_MODEL_CMETA ||
+        build->cmeta_root == NULL)
+        return SCXML_OK;
+    return collect_supplemental_node(build, root);
+}
+
 static scxml_status compile_cmeta_condition_program(
     scxml_build *build, scxml_syntax_attribute condition,
     scxml_expr_program *program) {
@@ -201,10 +342,33 @@ static scxml_status compile_cmeta_condition_program(
     status = decode_cmeta_attribute_source(
         build, condition, "condition", &source, &source_size);
     if (status != SCXML_OK) return status;
-    expression_status = scxml_expr_compile_value(
-        program, source, source_size,
-        build->cmeta_root, resolve_cmeta_condition_state, build,
-        &build->expression_limits, &expression_diagnostic);
+    if (build->quickjs_profile) {
+        char quickjs_diagnostic[SCXML_EXPR_DIAGNOSTIC_CAPACITY] = {0};
+        const scxml_quickjs_status quickjs_status =
+            scxml_quickjs_validate_expression(
+                &build->quickjs_options, source, source_size,
+                quickjs_diagnostic, sizeof(quickjs_diagnostic));
+        expression_status = quickjs_status == SCXML_QUICKJS_OK
+            ? scxml_expr_compile_external(
+                  program, source, source_size, SCXML_EXPR_VALUE_BOOL,
+                  scxml_quickjs_evaluate_expression,
+                  &build->expression_limits, &expression_diagnostic)
+            : quickjs_status == SCXML_QUICKJS_LIMIT_EXCEEDED
+                ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_SYNTAX_ERROR;
+        if (quickjs_status != SCXML_QUICKJS_OK)
+            (void)snprintf(
+                expression_diagnostic.message,
+                sizeof(expression_diagnostic.message), "%s",
+                quickjs_diagnostic[0] != '\0'
+                    ? quickjs_diagnostic : "QuickJS expression is invalid");
+    } else {
+        expression_status = scxml_expr_compile_value_with_scope_policy(
+            program, source, source_size,
+            build->cmeta_root, &build->supplemental_scope,
+            SCXML_EXPR_PATH_RUNTIME_MISSING, SCXML_EXPR_VALUE_BOOL,
+            resolve_cmeta_condition_state, build,
+            &build->expression_limits, &expression_diagnostic);
+    }
     free(source);
     if (expression_status == SCXML_EXPR_OK)
         return SCXML_OK;
@@ -216,7 +380,9 @@ static scxml_status compile_cmeta_condition_program(
         status = SCXML_INVALID_STRUCTURE;
     (void)snprintf(
         message, sizeof(message),
-        "CMeta condition byte %zu: %s", expression_diagnostic.byte_offset,
+        "%s condition byte %zu: %s",
+        build->quickjs_profile ? "QuickJS" : "CMeta",
+        expression_diagnostic.byte_offset,
         expression_diagnostic.message[0] != '\0'
             ? expression_diagnostic.message
             : "expression compilation failed");
@@ -237,10 +403,31 @@ scxml_status scxml_emit_compile_cmeta_value_program(
     status = decode_cmeta_attribute_source(
         build, attribute, subject, &source, &source_size);
     if (status != SCXML_OK) return status;
-    expression_status = scxml_expr_compile_value(
-        program, source, source_size, build->cmeta_root,
-        resolve_cmeta_condition_state, build,
-        &build->expression_limits, &diagnostic);
+    if (build->quickjs_profile) {
+        char quickjs_diagnostic[SCXML_EXPR_DIAGNOSTIC_CAPACITY] = {0};
+        const scxml_quickjs_status quickjs_status =
+            scxml_quickjs_validate_expression(
+                &build->quickjs_options, source, source_size,
+                quickjs_diagnostic, sizeof(quickjs_diagnostic));
+        expression_status = quickjs_status == SCXML_QUICKJS_OK
+            ? scxml_expr_compile_external(
+                  program, source, source_size, required_kind,
+                  scxml_quickjs_evaluate_expression,
+                  &build->expression_limits, &diagnostic)
+            : quickjs_status == SCXML_QUICKJS_LIMIT_EXCEEDED
+                ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_SYNTAX_ERROR;
+        if (quickjs_status != SCXML_QUICKJS_OK)
+            (void)snprintf(
+                diagnostic.message, sizeof(diagnostic.message), "%s",
+                quickjs_diagnostic[0] != '\0'
+                    ? quickjs_diagnostic : "QuickJS expression is invalid");
+    } else {
+        expression_status = scxml_expr_compile_value_with_scope(
+            program, source, source_size, build->cmeta_root,
+            &build->supplemental_scope,
+            resolve_cmeta_condition_state, build,
+            &build->expression_limits, &diagnostic);
+    }
     free(source);
     if (expression_status == SCXML_EXPR_OK &&
         (required_kind == SCXML_EXPR_VALUE_INVALID ||
@@ -258,8 +445,9 @@ scxml_status scxml_emit_compile_cmeta_value_program(
             ? SCXML_ALLOCATION_FAILED
             : SCXML_INVALID_STRUCTURE;
     (void)snprintf(
-        message, sizeof(message), "CMeta %s byte %zu: %s",
-        subject, diagnostic.byte_offset,
+        message, sizeof(message), "%s %s byte %zu: %s",
+        build->quickjs_profile ? "QuickJS" : "CMeta", subject,
+        diagnostic.byte_offset,
         diagnostic.message[0] != '\0'
             ? diagnostic.message : "expression compilation failed");
     return scxml_analyze_fail(build, status, scxml_syntax_attribute_location(attribute),
@@ -364,6 +552,157 @@ bool scxml_emit_evaluate_session_transition_guard(
 }
 
 static scxml_status emit_executable_node(scxml_build *build, scxml_syntax_node node);
+
+static bool text_resource_adapter_valid(
+    const scxml_text_resource_adapter_v1 *adapter) {
+    return adapter != NULL &&
+        adapter->abi_version == SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->open != NULL && adapter->close != NULL;
+}
+
+static scxml_status emit_script_descriptor(
+    scxml_build *build, scxml_syntax_node node, bool root,
+    size_t *out_script) {
+    const scxml_syntax_attribute source_attribute =
+        scxml_analyze_find_attribute(node, "src");
+    const char *source = NULL;
+    size_t source_size = 0u;
+    char *uri = NULL;
+    size_t uri_size = 0u;
+    scxml_text_resource resource = {0};
+    bool resource_open = false;
+    scxml_status status = SCXML_OK;
+    scxml_quickjs_status quickjs_status;
+    char diagnostic[SCXML_DIAGNOSTIC_CAPACITY] = {0};
+    char *stored;
+    size_t required;
+    if (build == NULL || out_script == NULL ||
+        build->script_index >= build->script_capacity)
+        return SCXML_NATIVE_IR_REJECTED;
+    if (source_attribute.impl != NULL) {
+        if (!text_resource_adapter_valid(
+                build->quickjs_options.script_resources))
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(source_attribute),
+                "script src requires a valid compile-time text provider");
+        status = decode_cmeta_attribute_source(
+            build, source_attribute, "script src", &uri, &uri_size);
+        if (status != SCXML_OK) return status;
+        if (build->quickjs_options.script_resources->open(
+                build->quickjs_options.script_resource_user,
+                uri, uri_size, build->quickjs_options.max_source_bytes,
+                &resource) != SCXML_RESOURCE_OK) {
+            free(uri);
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(source_attribute),
+                "script source could not be acquired during admission");
+        }
+        resource_open = true;
+        source = resource.data;
+        source_size = resource.size;
+        if ((source_size != 0u && source == NULL) ||
+            source_size > build->quickjs_options.max_source_bytes) {
+            status = source_size > build->quickjs_options.max_source_bytes
+                ? SCXML_LIMIT_EXCEEDED : SCXML_INVALID_STRUCTURE;
+            goto cleanup;
+        }
+    } else {
+        const turbo_xml_string_view inline_source =
+            scxml_syntax_node_text(node);
+        source = inline_source.data != NULL ? inline_source.data : "";
+        source_size = inline_source.size;
+    }
+    quickjs_status = scxml_quickjs_validate_source(
+        &build->quickjs_options, source, source_size,
+        diagnostic, sizeof(diagnostic));
+    if (quickjs_status != SCXML_QUICKJS_OK) {
+        status = scxml_analyze_fail(
+            build,
+            quickjs_status == SCXML_QUICKJS_LIMIT_EXCEEDED
+                ? SCXML_LIMIT_EXCEEDED : SCXML_INVALID_STRUCTURE,
+            scxml_syntax_node_location(node),
+            diagnostic[0] != '\0' ? diagnostic
+                                  : "script syntax validation failed");
+        goto cleanup;
+    }
+    quickjs_status = scxml_quickjs_collect_script_variables(
+        &build->supplemental_scope, build->cmeta_root,
+        source, source_size, build->quickjs_options.max_script_variables,
+        &build->script_variable_count, diagnostic, sizeof(diagnostic));
+    if (quickjs_status != SCXML_QUICKJS_OK) {
+        status = scxml_analyze_fail(
+            build,
+            quickjs_status == SCXML_QUICKJS_LIMIT_EXCEEDED
+                ? SCXML_LIMIT_EXCEEDED
+                : quickjs_status == SCXML_QUICKJS_ALLOCATION_FAILED
+                    ? SCXML_ALLOCATION_FAILED : SCXML_INVALID_STRUCTURE,
+            scxml_syntax_node_location(node),
+            diagnostic[0] != '\0'
+                ? diagnostic : "script variables could not be retained");
+        goto cleanup;
+    }
+    if (!scxml_analyze_checked_add(source_size, 1u, &required) ||
+        build->script_storage_index > build->script_storage_capacity ||
+        required > build->script_storage_capacity -
+                       build->script_storage_index) {
+        status = scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            scxml_syntax_node_location(node),
+            "script exceeded admitted source storage");
+        goto cleanup;
+    }
+    stored = build->script_storage + build->script_storage_index;
+    if (source_size != 0u) memcpy(stored, source, source_size);
+    stored[source_size] = '\0';
+    build->script_storage_index += required;
+    *out_script = build->script_index;
+    build->scripts[build->script_index++] = (scxml_script_descriptor){
+        stored, source_size, root};
+    if (root) ++build->root_script_count;
+cleanup:
+    if (resource_open)
+        build->quickjs_options.script_resources->close(
+            build->quickjs_options.script_resource_user, &resource);
+    free(uri);
+    return status;
+}
+
+static scxml_status emit_script_step(
+    scxml_build *build, scxml_syntax_node node) {
+    const size_t step = build->step_index;
+    size_t script;
+    scxml_status status;
+    if (step >= build->step_capacity)
+        return SCXML_NATIVE_IR_REJECTED;
+    status = emit_script_descriptor(build, node, false, &script);
+    if (status != SCXML_OK) return status;
+    ++build->step_index;
+    build->steps[step] = (scxml_step){
+        .kind = SCXML_STEP_SCRIPT,
+        .next = build->step_index,
+        .script = script};
+    return SCXML_OK;
+}
+
+scxml_status scxml_emit_root_scripts(
+    scxml_build *build, scxml_syntax_node root) {
+    size_t index;
+    for (index = 0u; index < scxml_syntax_node_child_count(root); ++index) {
+        const scxml_syntax_node child =
+            scxml_syntax_node_child_at(root, index);
+        size_t script;
+        scxml_status status;
+        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
+            scxml_analyze_element_kind(child) != SCXML_ELEMENT_SCRIPT)
+            continue;
+        status = emit_script_descriptor(build, child, true, &script);
+        if (status != SCXML_OK) return status;
+    }
+    return SCXML_OK;
+}
 
 static scxml_status emit_raise_step(
     scxml_build *build, scxml_syntax_node node) {
@@ -479,16 +818,38 @@ scxml_status scxml_emit_compile_cmeta_payload_token(
     if (source.size > build->expression_limits.max_source_bytes)
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED, location,
                           "CMeta payload location byte limit exceeded");
-    expression_status = scxml_location_compile(
-        &compiled_location, source.data, source.size, build->cmeta_root,
-        build->expression_limits.max_path_depth, false,
-        &diagnostic);
-    if (expression_status == SCXML_EXPR_OK) {
-        diagnostic = (scxml_expr_diagnostic){0};
-        expression_status = scxml_expr_compile_value(
-            program, source.data, source.size, build->cmeta_root,
-            resolve_cmeta_condition_state, build,
-            &build->expression_limits, &diagnostic);
+    if (build->quickjs_profile) {
+        char quickjs_diagnostic[SCXML_EXPR_DIAGNOSTIC_CAPACITY] = {0};
+        const scxml_quickjs_status quickjs_status =
+            scxml_quickjs_validate_expression(
+                &build->quickjs_options, source.data, source.size,
+                quickjs_diagnostic, sizeof(quickjs_diagnostic));
+        expression_status = quickjs_status == SCXML_QUICKJS_OK
+            ? scxml_expr_compile_external(
+                  program, source.data, source.size,
+                  SCXML_EXPR_VALUE_INVALID,
+                  scxml_quickjs_evaluate_expression,
+                  &build->expression_limits, &diagnostic)
+            : quickjs_status == SCXML_QUICKJS_LIMIT_EXCEEDED
+                ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_SYNTAX_ERROR;
+        if (quickjs_status != SCXML_QUICKJS_OK)
+            (void)snprintf(
+                diagnostic.message, sizeof(diagnostic.message), "%s",
+                quickjs_diagnostic[0] != '\0'
+                    ? quickjs_diagnostic : "QuickJS expression is invalid");
+    } else {
+        expression_status = scxml_location_compile(
+            &compiled_location, source.data, source.size, build->cmeta_root,
+            build->expression_limits.max_path_depth, false,
+            &diagnostic);
+        if (expression_status == SCXML_EXPR_OK) {
+            diagnostic = (scxml_expr_diagnostic){0};
+            expression_status = scxml_expr_compile_value_with_scope(
+                program, source.data, source.size, build->cmeta_root,
+                &build->supplemental_scope,
+                resolve_cmeta_condition_state, build,
+                &build->expression_limits, &diagnostic);
+        }
     }
     if (expression_status == SCXML_EXPR_OK)
         return SCXML_OK;
@@ -498,7 +859,8 @@ scxml_status scxml_emit_compile_cmeta_payload_token(
             ? SCXML_ALLOCATION_FAILED
             : SCXML_INVALID_STRUCTURE;
     (void)snprintf(
-        message, sizeof(message), "CMeta %s byte %zu: %s", subject,
+        message, sizeof(message), "%s %s byte %zu: %s",
+        build->quickjs_profile ? "QuickJS" : "CMeta", subject,
         diagnostic.byte_offset,
         diagnostic.message[0] != '\0'
             ? diagnostic.message : "expression compilation failed");
@@ -667,7 +1029,8 @@ static scxml_status emit_send_step(scxml_build *build,
         status = scxml_emit_compile_cmeta_value_program(
             build, delay_expr_attribute, "send delayexpr",
             &descriptor->delay_expr,
-            SCXML_EXPR_VALUE_INVALID);
+            build->quickjs_profile
+                ? SCXML_EXPR_VALUE_SINT : SCXML_EXPR_VALUE_INVALID);
         if (status != SCXML_OK) return status;
         kind = scxml_expr_program_value_kind(
             &descriptor->delay_expr);
@@ -951,12 +1314,20 @@ static scxml_status emit_assign_step(scxml_build *build,
         free(location);
         return status;
     }
-    assignment_status = scxml_assign_compile(
-        &build->assignments[assignment], location, location_size,
-        expression, expression_size, build->cmeta_root,
-        resolve_cmeta_condition_state, build,
-        &build->expression_limits, SCXML_ASSIGN_LOCATION_RUNTIME,
-        &assignment_diagnostic);
+    assignment_status = build->quickjs_profile
+        ? scxml_assign_compile_quickjs_with_scope(
+              &build->assignments[assignment], location, location_size,
+              expression, expression_size, build->cmeta_root,
+              &build->supplemental_scope, &build->quickjs_options,
+              &build->expression_limits, SCXML_ASSIGN_LOCATION_RUNTIME,
+              &assignment_diagnostic)
+        : scxml_assign_compile_with_scope(
+              &build->assignments[assignment], location, location_size,
+              expression, expression_size, build->cmeta_root,
+              &build->supplemental_scope,
+              resolve_cmeta_condition_state, build,
+              &build->expression_limits, SCXML_ASSIGN_LOCATION_RUNTIME,
+              &assignment_diagnostic);
     free(location);
     free(expression);
     if (assignment_status != SCXML_EXPR_OK) {
@@ -989,6 +1360,7 @@ static scxml_status emit_data_initializer(
     scxml_build *build, scxml_syntax_node data) {
     const scxml_syntax_attribute location = scxml_analyze_find_attribute(data, "id");
     const scxml_syntax_attribute expression = scxml_analyze_find_attribute(data, "expr");
+    const scxml_syntax_attribute source = scxml_analyze_find_attribute(data, "src");
     scxml_expr_diagnostic diagnostic = {0};
     scxml_expr_status expression_status;
     scxml_status status;
@@ -996,28 +1368,74 @@ static scxml_status emit_data_initializer(
     size_t location_size = 0u;
     char *expression_source = NULL;
     size_t expression_size = 0u;
+    char *resource_source = NULL;
+    size_t resource_size = 0u;
     char message[SCXML_DIAGNOSTIC_CAPACITY];
-    if (build->assignment_index >= build->assignment_capacity)
+    if (build->assignment_index >= build->assignment_capacity ||
+        build->data_binding_index >= build->data_binding_capacity)
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                           scxml_syntax_node_location(data),
                           "data initializer exceeded admitted storage");
     status = decode_cmeta_attribute_source(
         build, location, "data id", &location_source, &location_size);
     if (status != SCXML_OK) return status;
-    status = decode_cmeta_attribute_source(
-        build, expression, "data expr", &expression_source,
-        &expression_size);
-    if (status != SCXML_OK) {
-        free(location_source);
-        return status;
+    if (source.impl != NULL) {
+        status = decode_cmeta_attribute_source(
+            build, source, "data src", &resource_source, &resource_size);
+        if (status == SCXML_OK) {
+            expression_status = scxml_assign_compile_external(
+                &build->assignments[build->assignment_index],
+                location_source, location_size, resource_source,
+                resource_size, build->cmeta_root,
+                &build->expression_limits, &diagnostic);
+        } else {
+            free(location_source);
+            return status;
+        }
+    } else if (expression.impl != NULL) {
+        status = decode_cmeta_attribute_source(
+            build, expression, "data expr", &expression_source,
+            &expression_size);
+        if (status == SCXML_OK) {
+            expression_status = build->quickjs_profile
+                ? scxml_assign_compile_quickjs_with_scope(
+                      &build->assignments[build->assignment_index],
+                      location_source, location_size, expression_source,
+                      expression_size, build->cmeta_root,
+                      &build->supplemental_scope, &build->quickjs_options,
+                      &build->expression_limits,
+                      SCXML_ASSIGN_LOCATION_STRICT, &diagnostic)
+                : scxml_assign_compile_with_scope(
+                      &build->assignments[build->assignment_index],
+                      location_source, location_size, expression_source,
+                      expression_size, build->cmeta_root,
+                      &build->supplemental_scope,
+                      resolve_cmeta_condition_state, build,
+                      &build->expression_limits,
+                      SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
+        } else {
+            free(location_source);
+            return status;
+        }
+    } else {
+        const turbo_xml_string_view literal =
+            scxml_syntax_serialized_children(data);
+        if (literal.data == NULL || literal.size == 0u) {
+            free(location_source);
+            return scxml_analyze_fail(
+                build, SCXML_NATIVE_IR_REJECTED,
+                scxml_syntax_node_location(data),
+                "CMeta inline data content mismatched admission");
+        }
+        expression_status = scxml_assign_compile_string_literal(
+            &build->assignments[build->assignment_index],
+            location_source, location_size, literal.data, literal.size,
+            build->cmeta_root, &build->expression_limits,
+            SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     }
-    expression_status = scxml_assign_compile(
-        &build->assignments[build->assignment_index],
-        location_source, location_size, expression_source, expression_size,
-        build->cmeta_root, resolve_cmeta_condition_state, build,
-        &build->expression_limits, SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     free(location_source);
     free(expression_source);
+    free(resource_source);
     if (expression_status != SCXML_EXPR_OK) {
         const scxml_status public_status =
             expression_status == SCXML_EXPR_LIMIT_EXCEEDED
@@ -1034,7 +1452,36 @@ static scxml_status emit_data_initializer(
         return scxml_analyze_fail(build, public_status,
                           scxml_syntax_node_location(data), message);
     }
+    build->data_bindings[build->data_binding_index] =
+        (scxml_data_binding_descriptor){
+            .assignment = build->assignment_index,
+            .late_initializer = SIZE_MAX};
+    if (!scxml_assign_destination_range(
+            &build->assignments[build->assignment_index],
+            &build->data_bindings[build->data_binding_index].offset,
+            &build->data_bindings[build->data_binding_index].storage_size)) {
+        if (!scxml_assign_destination_is_read_only_system(
+                &build->assignments[build->assignment_index]))
+            return scxml_analyze_fail(
+                build, SCXML_NATIVE_IR_REJECTED,
+                scxml_syntax_node_location(data),
+                "CMeta data initializer destination range is invalid");
+        build->data_bindings[build->data_binding_index].read_only_system =
+            true;
+    } else if (build->cmeta_root == NULL ||
+               build->cmeta_root->storage_type == NULL ||
+               build->data_bindings[build->data_binding_index].offset >
+                   build->cmeta_root->storage_type->size ||
+               build->data_bindings[build->data_binding_index].storage_size >
+                   build->cmeta_root->storage_type->size -
+                       build->data_bindings[build->data_binding_index].offset) {
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            scxml_syntax_node_location(data),
+            "CMeta data initializer destination exceeds root storage");
+    }
     ++build->assignment_index;
+    ++build->data_binding_index;
     return SCXML_OK;
 }
 
@@ -1150,11 +1597,20 @@ static scxml_status emit_done_data_param(
         free(name_source);
         return status;
     }
-    expression_status = scxml_assign_compile(
-        &build->assignments[build->assignment_index],
-        name_source, name_size, value_source, value_size,
-        build->cmeta_root, resolve_cmeta_condition_state, build,
-        &build->expression_limits, SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
+    expression_status = build->quickjs_profile
+        ? scxml_assign_compile_quickjs_with_scope(
+              &build->assignments[build->assignment_index],
+              name_source, name_size, value_source, value_size,
+              build->cmeta_root, &build->supplemental_scope,
+              &build->quickjs_options, &build->expression_limits,
+              SCXML_ASSIGN_LOCATION_STRICT, &diagnostic)
+        : scxml_assign_compile_with_scope(
+              &build->assignments[build->assignment_index],
+              name_source, name_size, value_source, value_size,
+              build->cmeta_root, &build->supplemental_scope,
+              resolve_cmeta_condition_state, build,
+              &build->expression_limits,
+              SCXML_ASSIGN_LOCATION_STRICT, &diagnostic);
     free(name_source);
     free(value_source);
     if (expression_status != SCXML_EXPR_OK) {
@@ -1409,9 +1865,10 @@ static scxml_status emit_foreach_step(scxml_build *build,
         }
     }
     descriptor = &build->foreach_descriptors[foreach_index];
-    foreach_status = scxml_foreach_compile(
+    foreach_status = scxml_foreach_compile_with_scope(
         &descriptor->program, array, array_size, item, item_size,
         index, index_size, build->cmeta_root,
+        &build->supplemental_scope,
         build->expression_limits.max_path_depth,
         build->max_iterations, &foreach_diagnostic);
     free(array);
@@ -1460,6 +1917,7 @@ static scxml_status emit_executable_node(
     if (kind == SCXML_ELEMENT_CANCEL) return emit_cancel_step(build, node);
     if (kind == SCXML_ELEMENT_LOG) return emit_log_step(build, node);
     if (kind == SCXML_ELEMENT_ASSIGN) return emit_assign_step(build, node);
+    if (kind == SCXML_ELEMENT_SCRIPT) return emit_script_step(build, node);
     if (kind == SCXML_ELEMENT_FOREACH) return emit_foreach_step(build, node);
     if (kind == SCXML_ELEMENT_IF) return emit_conditional_step(build, node);
     return scxml_analyze_fail(
@@ -1639,13 +2097,24 @@ static scxml_status emit_late_initializer_block(
     const size_t initializer_index = build->late_initializer_index;
     const cflow_statechart_executable_id executable =
         (cflow_statechart_executable_id)(executable_index + 1u);
+    const size_t binding_first = build->data_binding_index;
     size_t assignment_first;
     size_t assignment_count;
+    size_t binding;
     scxml_status status;
     *out_executable = 0u;
     status = emit_datamodel_assignments(
         build, datamodel, &assignment_first, &assignment_count);
     if (status != SCXML_OK || assignment_count == 0u) return status;
+    if (binding_first > build->data_binding_index ||
+        build->data_binding_index - binding_first != assignment_count)
+        return scxml_analyze_fail(
+            build, SCXML_NATIVE_IR_REJECTED,
+            scxml_syntax_node_location(datamodel),
+            "late data binding descriptors mismatched assignments");
+    for (binding = binding_first;
+         binding < build->data_binding_index; ++binding)
+        build->data_bindings[binding].late_initializer = initializer_index;
     if (top_level) {
         build->top_level_data_initializer_first = assignment_first;
         build->top_level_data_initializer_count = assignment_count;
@@ -1704,22 +2173,41 @@ static scxml_status emit_early_initializer_block(
     const size_t step_index = build->step_index;
     const cflow_statechart_executable_id executable =
         (cflow_statechart_executable_id)(executable_index + 1u);
-    if (build->data_initializer_count == 0u) {
+    size_t script;
+    if (build->data_initializer_count == 0u &&
+        build->root_script_count == 0u) {
         *out_executable = 0u;
         return SCXML_OK;
     }
-    if (step_index >= build->step_capacity) {
+    if (build->data_initializer_count != 0u &&
+        step_index >= build->step_capacity) {
         return scxml_analyze_fail(
             build, SCXML_NATIVE_IR_REJECTED,
             (turbo_xml_location){0u, 0u, 0u},
             "early initializer exceeded admitted storage");
     }
-    build->steps[step_index] = (scxml_step){
-        .kind = SCXML_STEP_EARLY_INITIALIZE,
-        .next = step_index + 1u,
-        .assignment = 0u,
-        .assignment_count = build->data_initializer_count};
-    ++build->step_index;
+    if (build->data_initializer_count != 0u) {
+        build->steps[build->step_index] = (scxml_step){
+            .kind = SCXML_STEP_EARLY_INITIALIZE,
+            .next = build->step_index + 1u,
+            .assignment = 0u,
+            .assignment_count = build->data_initializer_count};
+        ++build->step_index;
+    }
+    for (script = 0u; script < build->root_script_count; ++script) {
+        if (build->step_index >= build->step_capacity ||
+            script >= build->script_index ||
+            !build->scripts[script].root)
+            return scxml_analyze_fail(
+                build, SCXML_NATIVE_IR_REJECTED,
+                (turbo_xml_location){0u, 0u, 0u},
+                "root script exceeded admitted startup storage");
+        build->steps[build->step_index] = (scxml_step){
+            .kind = SCXML_STEP_SCRIPT,
+            .next = build->step_index + 1u,
+            .script = script};
+        ++build->step_index;
+    }
     build->blocks[block_index] = (scxml_block){
         .state_type = build->cmeta_root->storage_type,
         .steps = build->steps,
@@ -1829,7 +2317,8 @@ scxml_status scxml_emit_state_executables(scxml_build *build,
                           "SCXML state has no native owner for executable content");
     }
     if (is_root && !build->late_binding &&
-        build->data_initializer_count != 0u) {
+        (build->data_initializer_count != 0u ||
+         build->root_script_count != 0u)) {
         cflow_statechart_executable_id executable = 0u;
         const scxml_status status =
             emit_early_initializer_block(build, &executable);
@@ -1857,6 +2346,17 @@ scxml_status scxml_emit_state_executables(scxml_build *build,
                 break;
             }
         }
+    }
+    if (is_root && build->late_binding &&
+        build->root_script_count != 0u) {
+        cflow_statechart_executable_id executable = 0u;
+        const scxml_status status =
+            emit_early_initializer_block(build, &executable);
+        if (status != SCXML_OK) return status;
+        build->state_actions[build->state_action_index++] =
+            (cflow_statechart_state_action){
+                owner, CFLOW_STATECHART_STATE_ACTION_ENTRY,
+                executable, entry_order++};
     }
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
@@ -2373,15 +2873,19 @@ void scxml_emit_free_build(scxml_build *build) {
     free(build->payloads);
     scxml_emit_destroy_assignments(build->assignments, build->assignment_capacity);
     free(build->assignments);
+    free(build->data_bindings);
     free(build->foreach_descriptors);
     scxml_emit_destroy_invocations(build->invocations, build->invocation_capacity);
     free(build->invocations);
     scxml_emit_destroy_done_data(build->done_data, build->done_data_capacity);
     free(build->done_data);
+    free(build->scripts);
+    scxml_scope_schema_destroy(&build->supplemental_scope);
     free(build->invocation_names);
     free(build->log_storage);
     free(build->effect_storage);
     free(build->invocation_storage);
+    free(build->script_storage);
     free(build->state_names);
     free(build->event_names);
     free(build->event_occurrences);

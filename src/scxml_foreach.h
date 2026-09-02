@@ -39,9 +39,26 @@ scxml_expr_status scxml_foreach_compile(
     size_t max_iterations,
     scxml_expr_diagnostic *diagnostic);
 
+scxml_expr_status scxml_foreach_compile_with_scope(
+    scxml_foreach_program *out,
+    const char *array, size_t array_size,
+    const char *item, size_t item_size,
+    const char *index_or_null, size_t index_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    size_t max_path_depth, size_t max_iterations,
+    scxml_expr_diagnostic *diagnostic);
+
 scxml_expr_status scxml_foreach_open(
     const scxml_foreach_program *program,
     void *staged_root, scxml_foreach_snapshot *snapshot,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_foreach_open_with_system(
+    const scxml_foreach_program *program,
+    void *staged_root,
+    const scxml_expr_system_values *system_values,
+    scxml_foreach_snapshot *snapshot,
     scxml_expr_diagnostic *diagnostic);
 
 void scxml_foreach_snapshot_destroy(
@@ -61,6 +78,13 @@ scxml_expr_status scxml_foreach_next(
     const scxml_foreach_program *program,
     void *staged_root, const scxml_foreach_snapshot *snapshot,
     scxml_foreach_value *value, size_t iteration,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_foreach_next_with_system(
+    const scxml_foreach_program *program,
+    void *staged_root, const scxml_foreach_snapshot *snapshot,
+    scxml_foreach_value *value, size_t iteration,
+    const scxml_expr_system_values *system_values,
     scxml_expr_diagnostic *diagnostic);
 
 #endif

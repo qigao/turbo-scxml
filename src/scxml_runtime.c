@@ -1,6 +1,7 @@
 #include "scxml_runtime.h"
 #include "scxml_analyze.h"
 #include "scxml_program.h"
+#include "scxml_quickjs.h"
 #include "scxml_session.h"
 
 #include <stdlib.h>
@@ -502,7 +503,8 @@ static bool materialize_invocation_payload(
         invocation->content.kind != SCXML_CONTENT_SCALAR) {
         out->kind = SCXML_PAYLOAD_CONTENT;
         return scxml_runtime_materialize_content_descriptor(
-            &invocation->content, context->state, &out->content);
+            &invocation->content, context->state,
+            &session->system_values, &out->content);
     }
     if (invocation->content.kind == SCXML_CONTENT_SCALAR) {
         if (!evaluate_invocation_value(
@@ -538,6 +540,7 @@ static bool materialize_invocation_payload(
 static bool restore_invocation_id_location(
     const scxml_invocation_descriptor *descriptor,
     const void *published_state, void *staged_state,
+    const scxml_expr_system_values *system_values,
     const char *id, size_t id_size, bool *out_restored) {
     scxml_expr_diagnostic diagnostic = {0};
     const unsigned char *previous = NULL;
@@ -549,6 +552,11 @@ static bool restore_invocation_id_location(
         staged_state == NULL || id == NULL || out_restored == NULL ||
         !descriptor->has_id_location ||
         descriptor->id_location.value == NULL)
+        return false;
+    if (scxml_expr_require_data_bound(
+            system_values, descriptor->id_location.offset,
+            descriptor->id_location.storage_size, &diagnostic) !=
+        SCXML_EXPR_OK)
         return false;
     if (cmeta_data_buffer_read(
             descriptor->id_location.value,
@@ -823,7 +831,8 @@ scxml_runtime_start_pending_invocations(
             id_size = (size_t)written;
             if (!restore_invocation_id_location(
                     descriptor, published_state,
-                    staged_state, id, id_size, &restored)) {
+                    staged_state, &session->system_values,
+                    id, id_size, &restored)) {
                 if (!restored) {
                     *out_error =
                         "SCXML invocation idlocation rollback failed";
@@ -1889,6 +1898,7 @@ static bool materialize_effect_named_payload(
 
 bool scxml_runtime_materialize_content_descriptor(
     const scxml_content_descriptor *descriptor, const void *state,
+    const scxml_expr_system_values *system_values,
     scxml_content_view *out) {
     if (descriptor == NULL || out == NULL) return false;
     *out = (scxml_content_view){0};
@@ -1903,6 +1913,10 @@ bool scxml_runtime_materialize_content_descriptor(
     }
     if (descriptor->kind == SCXML_CONTENT_CMETA) {
         if (state == NULL || descriptor->location.value == NULL)
+            return false;
+        if (scxml_expr_require_data_bound(
+                system_values, descriptor->location.offset,
+                descriptor->location.storage_size, NULL) != SCXML_EXPR_OK)
             return false;
         out->kind = SCXML_CONTENT_CMETA;
         out->schema = descriptor->location.value;
@@ -1951,6 +1965,7 @@ bool scxml_runtime_scalar_value_to_text(
 static bool materialize_send_id_location(
     scxml_session_impl *session,
     const scxml_effect_descriptor *descriptor, void *staged_state,
+    const scxml_expr_system_values *system_values,
     scxml_send_request *request, char *storage, size_t capacity) {
     scxml_expr_diagnostic diagnostic = {0};
     uint64_t token;
@@ -1958,6 +1973,11 @@ static bool materialize_send_id_location(
     if (!descriptor->has_id_location) return true;
     if (session == NULL || staged_state == NULL || request == NULL ||
         storage == NULL || capacity == 0u)
+        return false;
+    if (scxml_expr_require_data_bound(
+            system_values, descriptor->id_location.offset,
+            descriptor->id_location.storage_size, &diagnostic) !=
+        SCXML_EXPR_OK)
         return false;
     token = session->next_send_token;
     if (token == 0u) return false;
@@ -2069,7 +2089,8 @@ static scxml_execute_outcome execute_send(
             .scalar = scalar};
     } else if (descriptor->content.kind != SCXML_CONTENT_INVALID) {
         if (!scxml_runtime_materialize_content_descriptor(
-                &descriptor->content, context->out_state, &content))
+                &descriptor->content, context->out_state,
+                system_values, &content))
             return raise_block_execution_error(block, context, out_error);
     }
     if (content.kind != SCXML_CONTENT_INVALID) {
@@ -2092,7 +2113,8 @@ static scxml_execute_outcome execute_send(
         materialized.delay_ms != 0u)
         return raise_block_execution_error(block, context, out_error);
     if (!materialize_send_id_location(
-            session, descriptor, context->out_state, &materialized,
+            session, descriptor, context->out_state, system_values,
+            &materialized,
             id_storage, sizeof(id_storage)))
         return raise_block_execution_error(block, context, out_error);
     if (internal_target && request->delay_ms == 0u) {
@@ -2307,6 +2329,46 @@ static scxml_execute_outcome raise_block_execution_error(
     return SCXML_EXECUTE_BLOCK_ABORTED;
 }
 
+static scxml_expr_status apply_external_data_initializer(
+    const scxml_assign_program *assignment,
+    scxml_session_impl *session, void *state,
+    scxml_expr_diagnostic *diagnostic) {
+    const cmeta_data_desc *destination = NULL;
+    const char *uri = NULL;
+    size_t uri_size = 0u;
+    scxml_data_resource resource = {0};
+    scxml_resource_status resource_status;
+    scxml_expr_status status;
+    if (assignment == NULL || session == NULL || state == NULL ||
+        !session->has_data_resources ||
+        !scxml_assign_external_source(
+            assignment, &uri, &uri_size, &destination) ||
+        uri == NULL || uri_size == 0u || destination == NULL ||
+        session->data_resources.open == NULL ||
+        session->data_resources.close == NULL ||
+        session->data_decode_storage == NULL ||
+        session->data_decode_storage_size == 0u)
+        return SCXML_EXPR_INVALID_ARGUMENT;
+    resource_status = session->data_resources.open(
+        session->data_resource_user, uri, uri_size, destination, &resource);
+    if (resource_status != SCXML_RESOURCE_OK)
+        return resource_status == SCXML_RESOURCE_LIMIT_EXCEEDED
+            ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
+    if (resource.reader.state != CSERDE_READER_READY ||
+        resource.reader.ops == NULL) {
+        session->data_resources.close(
+            session->data_resource_user, &resource);
+        return SCXML_EXPR_EVALUATION_ERROR;
+    }
+    status = scxml_assign_apply_external(
+        assignment, &resource.reader, &session->cbind,
+        session->data_decode_storage, session->data_decode_storage_size,
+        state, diagnostic);
+    session->data_resources.close(
+        session->data_resource_user, &resource);
+    return status;
+}
+
 static bool apply_data_initializers(
     const scxml_block *block, scxml_session_impl *session,
     const cflow_statechart_executable_context *context,
@@ -2323,7 +2385,8 @@ static bool apply_data_initializers(
             CMETA_OK;
     void *snapshot;
     size_t assignment;
-    if (block == NULL || context == NULL || state == NULL ||
+    if (count == 0u) return true;
+    if (block == NULL || state == NULL ||
         system_values == NULL || out_error == NULL ||
         block->assignments == NULL || state_type == NULL ||
         state_type->size == 0u || first > block->assignment_storage_count ||
@@ -2345,6 +2408,9 @@ static bool apply_data_initializers(
         const size_t index = first + assignment;
         scxml_expr_diagnostic diagnostic = {0};
         scxml_expr_status status;
+        const cmeta_data_desc *external_destination = NULL;
+        const char *external_uri = NULL;
+        size_t external_uri_size = 0u;
         if (scxml_session_data_initializer_is_overridden(session, index))
             continue;
         if (trivial_state) {
@@ -2354,9 +2420,16 @@ static bool apply_data_initializers(
             free(snapshot);
             return false;
         }
-        status = scxml_assign_apply_with_system(
-            &block->assignments[index], state, is_active, active_user,
-            system_values, &diagnostic);
+        if (scxml_assign_external_source(
+                &block->assignments[index], &external_uri,
+                &external_uri_size, &external_destination)) {
+            status = apply_external_data_initializer(
+                &block->assignments[index], session, state, &diagnostic);
+        } else {
+            status = scxml_assign_apply_with_system(
+                &block->assignments[index], state, is_active, active_user,
+                system_values, &diagnostic);
+        }
         if (status != SCXML_EXPR_OK) {
             if (trivial_state) {
                 memcpy(state, snapshot, state_type->size);
@@ -2366,11 +2439,17 @@ static bool apply_data_initializers(
             }
         }
         if (!trivial_state) state_type->traits->destroy(snapshot);
-        if (status != SCXML_EXPR_OK &&
-            raise_block_execution_error(block, context, out_error) !=
+        if (status != SCXML_EXPR_OK) {
+            if (context == NULL) {
+                *out_error = "SCXML startup data initializer failed";
+                free(snapshot);
+                return false;
+            }
+            if (raise_block_execution_error(block, context, out_error) !=
                 SCXML_EXECUTE_BLOCK_ABORTED) {
-            free(snapshot);
-            return false;
+                free(snapshot);
+                return false;
+            }
         }
     }
     free(snapshot);
@@ -2652,6 +2731,94 @@ static void discard_late_initializer(void *user) {
     session->late_initializer_ticket_pending = false;
 }
 
+static void swap_scope_storage(
+    scxml_scope_view *left, scxml_scope_view *right) {
+    unsigned char *storage = left->storage;
+    unsigned char *bound = left->bound;
+    left->storage = right->storage;
+    left->bound = right->bound;
+    right->storage = storage;
+    right->bound = bound;
+}
+
+static void commit_supplemental_scope(void *user) {
+    scxml_session_impl *session = (scxml_session_impl *)user;
+    if (session == NULL || !session->supplemental_transaction_pending)
+        return;
+    swap_scope_storage(
+        &session->supplemental_committed,
+        &session->supplemental_staged);
+    scxml_scope_view_clear(&session->supplemental_staged);
+    session->supplemental_transaction_pending = false;
+}
+
+static void discard_supplemental_scope(void *user) {
+    scxml_session_impl *session = (scxml_session_impl *)user;
+    if (session == NULL || !session->supplemental_transaction_pending)
+        return;
+    scxml_scope_view_clear(&session->supplemental_staged);
+    session->supplemental_transaction_pending = false;
+}
+
+static bool begin_supplemental_block(
+    scxml_session_impl *session,
+    const cflow_statechart_executable_context *context,
+    scxml_expr_system_values *system_values,
+    const char **out_error) {
+    cflow_statechart_effect_ticket ticket;
+    if (session == NULL || session->program == NULL ||
+        session->program->supplemental_scope.slot_count == 0u)
+        return true;
+    if (context == NULL || context->stage_effect == NULL ||
+        system_values == NULL || out_error == NULL ||
+        session->supplemental_checkpoint_live) {
+        if (out_error != NULL)
+            *out_error = "SCXML supplemental scope context is invalid";
+        return false;
+    }
+    if (!session->supplemental_transaction_pending) {
+        if (!scxml_scope_view_copy(
+                &session->supplemental_staged,
+                &session->supplemental_committed)) {
+            *out_error = "SCXML supplemental scope staging failed";
+            return false;
+        }
+        session->supplemental_transaction_pending = true;
+        ticket = (cflow_statechart_effect_ticket){
+            commit_supplemental_scope,
+            discard_supplemental_scope, session};
+        if (!context->stage_effect(
+                context->effect_user, &ticket, out_error)) {
+            scxml_scope_view_clear(&session->supplemental_staged);
+            session->supplemental_transaction_pending = false;
+            return false;
+        }
+    }
+    if (!scxml_scope_view_copy(
+            &session->supplemental_checkpoint,
+            &session->supplemental_staged)) {
+        *out_error = "SCXML supplemental block checkpoint failed";
+        return false;
+    }
+    session->supplemental_checkpoint_live = true;
+    system_values->supplemental = &session->supplemental_staged;
+    return true;
+}
+
+static void settle_supplemental_block(
+    scxml_session_impl *session, bool succeeded) {
+    if (session == NULL || !session->supplemental_checkpoint_live) return;
+    if (succeeded) {
+        scxml_scope_view_clear(&session->supplemental_checkpoint);
+    } else {
+        scxml_scope_view_clear(&session->supplemental_staged);
+        swap_scope_storage(
+            &session->supplemental_staged,
+            &session->supplemental_checkpoint);
+    }
+    session->supplemental_checkpoint_live = false;
+}
+
 static scxml_execute_outcome execute_scxml_range(
     const scxml_block *block,
     scxml_session_impl *session,
@@ -2708,6 +2875,21 @@ static scxml_execute_outcome execute_scxml_range(
             }
             TURBO_LOG_DEBUG(
                 tlog_peek_default(), "cflow.scxml", step->label);
+        } else if (step->kind == SCXML_STEP_SCRIPT) {
+            void *state;
+            if (session == NULL || session->program == NULL ||
+                step->script >= session->program->script_count) {
+                *out_error = "SCXML script descriptor is invalid";
+                return SCXML_EXECUTE_FATAL;
+            }
+            state = mutable_state_get(mutable_state, out_error);
+            if (state == NULL) return SCXML_EXECUTE_FATAL;
+            if (!scxml_quickjs_execute_script(
+                    session, &session->program->scripts[step->script], state,
+                    &session->supplemental_staged,
+                    evaluate_cmeta_executable_active, (void *)context,
+                    system_values, out_error))
+                return raise_block_execution_error(block, context, out_error);
         } else if (step->kind == SCXML_STEP_ASSIGN) {
             scxml_expr_diagnostic diagnostic = {0};
             void *state;
@@ -2807,8 +2989,8 @@ static scxml_execute_outcome execute_scxml_range(
             }
             state = mutable_state_get(mutable_state, out_error);
             if (state == NULL) return SCXML_EXECUTE_FATAL;
-            if (scxml_foreach_open(
-                    &descriptor->program, state,
+            if (scxml_foreach_open_with_system(
+                    &descriptor->program, state, system_values,
                     &snapshot, &diagnostic) !=
                 SCXML_EXPR_OK)
                 return raise_block_execution_error(block, context, out_error);
@@ -2822,9 +3004,9 @@ static scxml_execute_outcome execute_scxml_range(
             }
             for (iteration = 0u; iteration < snapshot.length; ++iteration) {
                 scxml_execute_outcome outcome;
-                if (scxml_foreach_next(
+                if (scxml_foreach_next_with_system(
                         &descriptor->program, state, &snapshot,
-                        &value, iteration, &diagnostic) !=
+                        &value, iteration, system_values, &diagnostic) !=
                     SCXML_EXPR_OK) {
                     scxml_foreach_value_destroy(
                         &descriptor->program, &value);
@@ -2977,12 +3159,19 @@ static bool execute_scxml_block_impl(
         *out_error = "SCXML state copy construction failed";
         return false;
     }
+    if (!begin_supplemental_block(
+            session, context, &system_values, out_error)) {
+        if (!trivial_state)
+            block->state_type->traits->destroy(context->out_state);
+        return false;
+    }
     mutable_state.value = context->out_state;
     outcome = execute_scxml_range(
         block, session, context, &mutable_state, &system_values,
         block->step_begin, block->step_end,
         0u, false, out_error);
     if (outcome == SCXML_EXECUTE_FATAL) {
+        settle_supplemental_block(session, false);
         if (session != NULL) session->failed_send_id_restore_live = false;
         if (!trivial_state) {
             block->state_type->traits->destroy(context->out_state);
@@ -2991,6 +3180,7 @@ static bool execute_scxml_block_impl(
     }
     if (outcome == SCXML_EXECUTE_BLOCK_ABORTED) {
         scxml_expr_diagnostic diagnostic = {0};
+        settle_supplemental_block(session, false);
         if (trivial_state) {
             memcpy(context->out_state, context->state,
                    block->state_type->size);
@@ -3011,6 +3201,8 @@ static bool execute_scxml_block_impl(
             *out_error = "SCXML failed send idlocation restore failed";
             return false;
         }
+    } else {
+        settle_supplemental_block(session, true);
     }
     if (session != NULL) session->failed_send_id_restore_live = false;
     return true;

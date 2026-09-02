@@ -1,6 +1,24 @@
 {
   "name": "turboscxml",
   "version-semver": "0.1.0",
-  "dependencies": [],
+  "dependencies": [
+    "c-ares",
+    "llhttp",
+    "openssl"
+  ],
+  "features": {
+    "chttp": {
+      "description": "Enable the optional CHTTP resource adapter; its transport dependency closure is provided by Rocida"
+    },
+    "quickjs": {
+      "description": "Bounded quickjs-sandbox SCXML data-model profile",
+      "dependencies": [
+        {
+          "name": "quickjs-ng",
+          "default-features": false
+        }
+      ]
+    }
+  },
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01"
 }

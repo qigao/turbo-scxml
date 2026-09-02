@@ -6,14 +6,14 @@
 
 **Architecture:** Compile five responsibility-oriented C translation units. `src/scxml_impl.h` owns the shared private data model; each module header declares only the cross-module functions owned by its matching `.c` file. Module-local helpers remain `static`, while cross-module names use an `scxml_<module>_*` prefix. These headers stay private and are not installed.
 
-**Tech Stack:** C11, CMake/Ninja, TurboUtils CFlow/CMeta/QueryVM/XmlParser, TinyTest.
+**Tech Stack:** C11, CMake/Ninja, Rocida CFlow/CMeta/QueryVM/XmlParser, TinyTest.
 
 **Spec:** `docs/specs/scxml-core-design.md`
 
 ## Global Constraints
 
 - Keep `<scxml/scxml.h>`, `scxml_*`, and `SCXML_*` as the public SCXML contract.
-- Keep real TurboUtils CFlow and CMeta types named `cflow_*` and `cmeta_*`.
+- Keep real Rocida CFlow and CMeta types named `cflow_*` and `cmeta_*`.
 - Do not change state ownership, allocation, locking, callback semantics, or error mapping during extraction.
 - Compile `scxml_analyze.c`, `scxml_runtime.c`, `scxml_emit.c`, `scxml_program.c`, and `scxml_session.c` independently.
 - Keep shared structures in `scxml_impl.h`, cross-module declarations in the owning private module header, and all other helpers `static`.
@@ -173,7 +173,7 @@
 
 - [x] **Step 2: Reconfigure, build, and run the install consumer**
 
-  Configure `tests/install_consumer` with `TURBOSCXML_ROOT` and `TURBOUTILS_ROOT` set to the matching Release roots, build it with Ninja, then run `turboscxml_install_consumer.exe`.
+  Configure `tests/install_consumer` with `TURBOSCXML_ROOT` and `ROCIDA_ROOT` set to the matching Release roots, build it with Ninja, then run `turboscxml_install_consumer.exe`.
 
   Expected: configure, compile, and link succeed; the executable exits with code 0 because every default limit checked by `main.c` is nonzero.
 

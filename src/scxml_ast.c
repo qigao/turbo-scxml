@@ -92,6 +92,7 @@ static scxml_element_kind element_kind(turbo_xml_string_view name) {
     if (view_equal(name, "datamodel")) return SCXML_ELEMENT_DATAMODEL;
     if (view_equal(name, "data")) return SCXML_ELEMENT_DATA;
     if (view_equal(name, "donedata")) return SCXML_ELEMENT_DONEDATA;
+    if (view_equal(name, "script")) return SCXML_ELEMENT_SCRIPT;
     return SCXML_ELEMENT_UNKNOWN;
 }
 
@@ -128,11 +129,14 @@ static scxml_attribute_kind attribute_kind(turbo_xml_string_view name) {
     return SCXML_ATTRIBUTE_UNKNOWN;
 }
 
-static bool source_is_scxml_content(turbo_xml_node source) {
-    return turbo_xml_node_type(source) == TURBO_XML_ELEMENT &&
-        view_equal(turbo_xml_node_namespace_uri(source), SCXML_AST_NAMESPACE) &&
-        element_kind(turbo_xml_node_local_name(source)) ==
-            SCXML_ELEMENT_CONTENT;
+static bool source_has_serialized_children(turbo_xml_node source) {
+    scxml_element_kind kind;
+    if (turbo_xml_node_type(source) != TURBO_XML_ELEMENT ||
+        !view_equal(turbo_xml_node_namespace_uri(source), SCXML_AST_NAMESPACE))
+        return false;
+    kind = element_kind(turbo_xml_node_local_name(source));
+    return kind == SCXML_ELEMENT_CONTENT || kind == SCXML_ELEMENT_DATA ||
+           kind == SCXML_ELEMENT_SCRIPT;
 }
 
 static bool measure_view(
@@ -148,7 +152,7 @@ static scxml_status measure_serialized_children(
     size_t serialized_size = 0u;
     size_t retained_size;
     turbo_xml_status xml_status;
-    if (!source_is_scxml_content(source)) return SCXML_OK;
+    if (!source_has_serialized_children(source)) return SCXML_OK;
     xml_status = turbo_xml_serialize_children(
         source, NULL, 0u, limits->max_storage_bytes, &serialized_size);
     if (xml_status != TURBO_XML_OK) {
@@ -259,7 +263,7 @@ static scxml_status write_serialized_children(
     size_t serialized_size = 0u;
     const size_t capacity =
         writer->impl->storage_size - writer->storage_index;
-    if (!source_is_scxml_content(source)) return SCXML_OK;
+    if (!source_has_serialized_children(source)) return SCXML_OK;
     node->serialized_children.data =
         writer->impl->storage + writer->storage_index;
     xml_status = turbo_xml_serialize_children(

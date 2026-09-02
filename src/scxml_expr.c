@@ -55,6 +55,8 @@ typedef enum expr_value_kind {
 
 typedef enum expr_operand_kind {
     EXPR_OPERAND_LOCATION = 1,
+    EXPR_OPERAND_SUPPLEMENTAL_LOCATION,
+    EXPR_OPERAND_UNRESOLVED_LOCATION,
     EXPR_OPERAND_SINT,
     EXPR_OPERAND_UINT,
     EXPR_OPERAND_FLOAT,
@@ -90,6 +92,7 @@ typedef struct expr_operand {
     const cmeta_data_desc *data;
     const cmeta_data_field_desc *root_field;
     size_t offset;
+    size_t slot;
     union {
         int64_t sint;
         uint64_t uint;
@@ -104,7 +107,10 @@ typedef struct expr_operand {
 } expr_operand;
 
 typedef struct scxml_expr_program_impl {
+    bool external;
     const cmeta_data_desc *root;
+    const scxml_scope_slot *supplemental_slots;
+    size_t supplemental_count;
     qvm_instruction_t *instructions;
     expr_operand *operands;
     char *literal_storage;
@@ -114,6 +120,9 @@ typedef struct scxml_expr_program_impl {
     expr_value_kind result_kind;
     size_t max_string_bytes;
     qvm_limits_t qvm_limits;
+    char *external_source;
+    size_t external_source_size;
+    scxml_expr_external_evaluate_fn external_evaluate;
 } scxml_expr_program_impl;
 
 typedef struct expr_node {
@@ -127,6 +136,7 @@ typedef struct expr_parser {
     size_t cursor;
     expr_token token;
     const cmeta_data_desc *root;
+    const scxml_scope_schema *supplemental;
     scxml_expr_resolve_state_fn resolve_state;
     void *resolve_user;
     scxml_expr_limits limits;
@@ -142,6 +152,8 @@ typedef struct expr_parser {
     size_t literal_storage_index;
     size_t expression_depth;
     size_t max_register;
+    scxml_expr_path_policy path_policy;
+    expr_value_kind unresolved_kind;
     bool emit;
     scxml_expr_status status;
 } expr_parser;
@@ -153,6 +165,7 @@ typedef struct expr_eval_context {
     void *active_user;
     const scxml_expr_system_values *system_values;
     bool failed;
+    scxml_expr_status failure_status;
 } expr_eval_context;
 
 static void expr_clear_diagnostic(
@@ -175,6 +188,26 @@ static scxml_expr_status expr_report(
                            "%s", message);
     }
     return status;
+}
+
+scxml_expr_status scxml_expr_require_data_bound(
+    const scxml_expr_system_values *values,
+    size_t offset, size_t storage_size,
+    scxml_expr_diagnostic *diagnostic) {
+    bool bound = false;
+    if (storage_size == 0u)
+        return expr_report(
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
+            "CMeta data location has invalid storage");
+    if (values == NULL || values->is_data_bound == NULL)
+        return expr_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
+    if (!values->is_data_bound(
+            values->data_bound_user, offset, storage_size, &bound) ||
+        !bound)
+        return expr_report(
+            diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
+            "CMeta data location is unbound");
+    return expr_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
 
 static bool parser_fail(expr_parser *parser,
@@ -477,10 +510,133 @@ static const cmeta_data_field_desc *find_field_view(
 
 static bool parser_parse_or(expr_parser *, uint16_t, expr_node *);
 
+static bool parser_parse_unresolved_location(
+    expr_parser *parser, uint16_t target, expr_node *out,
+    size_t path_begin, size_t depth) {
+    expr_operand operand = {0};
+    uint32_t operand_index;
+    size_t path_end = path_begin;
+    size_t path_size;
+    while (parser->token.kind == EXPR_TOKEN_IDENT) {
+        if (depth >= parser->limits.max_path_depth)
+            return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
+                               parser->token.offset,
+                               "SCXML location path depth limit exceeded");
+        path_end = parser->token.offset + parser->token.size;
+        ++depth;
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_DOT) break;
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_IDENT)
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "SCXML location requires a field after '.'");
+    }
+    if (path_end < path_begin)
+        return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED, path_begin,
+                           "SCXML unresolved path size overflow");
+    path_size = path_end - path_begin;
+    if (!parser_retain_string(parser, path_begin, path_size, &operand))
+        return false;
+    operand.kind = EXPR_OPERAND_UNRESOLVED_LOCATION;
+    operand.value_kind = parser->unresolved_kind;
+    out->kind = parser->unresolved_kind;
+    out->reg = target;
+    return parser_add_operand(parser, operand, &operand_index) &&
+           parser_emit_instruction(parser, QVM_OP_LOAD_PATH, target, 0u,
+                                   operand_index, 0u);
+}
+
+static bool parser_parse_supplemental_location(
+    expr_parser *parser, uint16_t target, expr_node *out,
+    size_t slot_index, const scxml_scope_slot *slot,
+    size_t path_begin) {
+    const cmeta_data_desc *desc = slot->value;
+    size_t offset = 0u;
+    size_t depth = 1u;
+    expr_operand operand = {
+        .kind = EXPR_OPERAND_SUPPLEMENTAL_LOCATION,
+        .slot = slot_index};
+    uint32_t operand_index;
+    parser_next(parser);
+    while (parser->token.kind == EXPR_TOKEN_DOT) {
+        const cmeta_data_struct_shape *shape;
+        const cmeta_data_field_desc *field;
+        size_t next_offset;
+        if (depth >= parser->limits.max_path_depth)
+            return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
+                               parser->token.offset,
+                               "SCXML location path depth limit exceeded");
+        parser_next(parser);
+        if (parser->token.kind != EXPR_TOKEN_IDENT)
+            return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
+                               parser->token.offset,
+                               "SCXML location requires a field after '.'");
+        if (!cmeta_data_desc_valid(desc) || desc->storage_type == NULL)
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "SCXML supplemental descriptor is invalid");
+        if (desc->kind != CMETA_DATA_STRUCT || desc->shape == NULL) {
+            if (parser->path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING)
+                return parser_parse_unresolved_location(
+                    parser, target, out, path_begin, depth);
+            return parser_fail(parser, SCXML_EXPR_UNKNOWN_LOCATION,
+                               parser->token.offset,
+                               "SCXML location traverses a non-struct value");
+        }
+        shape = (const cmeta_data_struct_shape *)desc->shape;
+        field = find_field_view(
+            shape, parser->source + parser->token.offset,
+            parser->token.size);
+        if (field == NULL) {
+            if (parser->path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING)
+                return parser_parse_unresolved_location(
+                    parser, target, out, path_begin, depth);
+            return parser_fail(parser, SCXML_EXPR_UNKNOWN_LOCATION,
+                               parser->token.offset,
+                               "SCXML location field is unknown");
+        }
+        if (!cmeta_data_desc_valid(field->value) ||
+            field->value->storage_type == NULL ||
+            field->offset > desc->storage_type->size ||
+            field->value->storage_type->size >
+                desc->storage_type->size - field->offset ||
+            offset > SIZE_MAX - field->offset)
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "SCXML location descriptor bounds are invalid");
+        next_offset = offset + field->offset;
+        if (next_offset > slot->value->storage_type->size ||
+            field->value->storage_type->size >
+                slot->value->storage_type->size - next_offset)
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "SCXML location exceeds supplemental storage");
+        offset = next_offset;
+        desc = field->value;
+        ++depth;
+        parser_next(parser);
+    }
+    if (!desc_scalar_kind(desc, &out->kind))
+        return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                           parser->token.offset,
+                           "SCXML location is not a readable scalar");
+    operand.value_kind = out->kind;
+    operand.data = desc;
+    operand.offset = offset;
+    if (!parser_add_operand(parser, operand, &operand_index) ||
+        !parser_emit_instruction(parser, QVM_OP_LOAD_PATH, target, 0u,
+                                 operand_index, 0u))
+        return false;
+    out->reg = target;
+    return true;
+}
+
 static bool parser_parse_location_kind(expr_parser *parser, uint16_t target,
                                        expr_node *out,
                                        expr_operand_kind operand_kind) {
     const cmeta_data_desc *desc = parser->root;
+    const size_t path_begin = parser->token.offset;
     size_t offset = 0u;
     size_t depth = 0u;
     expr_operand operand = {0};
@@ -493,17 +649,43 @@ static bool parser_parse_location_kind(expr_parser *parser, uint16_t target,
             return parser_fail(parser, SCXML_EXPR_LIMIT_EXCEEDED,
                                parser->token.offset,
                                "SCXML location path depth limit exceeded");
-        if (!cmeta_data_desc_valid(desc) || desc->kind != CMETA_DATA_STRUCT)
+        if (!cmeta_data_desc_valid(desc) || desc->storage_type == NULL)
+            return parser_fail(parser, SCXML_EXPR_TYPE_MISMATCH,
+                               parser->token.offset,
+                               "SCXML location descriptor is invalid");
+        if (desc->kind != CMETA_DATA_STRUCT || desc->shape == NULL) {
+            if (parser->path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING &&
+                operand_kind == EXPR_OPERAND_LOCATION)
+                return parser_parse_unresolved_location(
+                    parser, target, out, path_begin, depth);
             return parser_fail(parser, SCXML_EXPR_UNKNOWN_LOCATION,
                                parser->token.offset,
                                "SCXML location traverses a non-struct value");
+        }
         shape = (const cmeta_data_struct_shape *)desc->shape;
         field = find_field_view(shape, parser->source + parser->token.offset,
                                 parser->token.size);
-        if (field == NULL)
+        if (field == NULL && depth == 0u &&
+            operand_kind == EXPR_OPERAND_LOCATION &&
+            parser->supplemental != NULL) {
+            size_t slot_index = SIZE_MAX;
+            const scxml_scope_slot *slot = scxml_scope_find(
+                parser->supplemental,
+                parser->source + parser->token.offset,
+                parser->token.size, &slot_index);
+            if (slot != NULL)
+                return parser_parse_supplemental_location(
+                    parser, target, out, slot_index, slot, path_begin);
+        }
+        if (field == NULL) {
+            if (parser->path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING &&
+                operand_kind == EXPR_OPERAND_LOCATION)
+                return parser_parse_unresolved_location(
+                    parser, target, out, path_begin, depth);
             return parser_fail(parser, SCXML_EXPR_UNKNOWN_LOCATION,
                                parser->token.offset,
                                "SCXML location field is unknown");
+        }
         if (!cmeta_data_desc_valid(field->value) ||
             field->value->storage_type == NULL ||
             field->offset > desc->storage_type->size ||
@@ -1174,6 +1356,7 @@ static void expr_program_impl_destroy(
     free(impl->instructions);
     free(impl->operands);
     free(impl->literal_storage);
+    free(impl->external_source);
     free(impl);
 }
 
@@ -1181,6 +1364,9 @@ static scxml_expr_status expr_compile(
     scxml_expr_program *out,
     const char *source, size_t source_size,
     const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_path_policy path_policy,
+    scxml_expr_value_kind unresolved_kind,
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
     const scxml_expr_limits *limits_or_null,
@@ -1200,6 +1386,11 @@ static scxml_expr_status expr_compile(
     if (out == NULL || out->impl != NULL || source == NULL || source_size == 0u ||
         !cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
         root->storage_type == NULL || resolve_state == NULL ||
+        (path_policy != SCXML_EXPR_PATH_STRICT &&
+         path_policy != SCXML_EXPR_PATH_RUNTIME_MISSING) ||
+        (path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING &&
+         (unresolved_kind < SCXML_EXPR_VALUE_BOOL ||
+          unresolved_kind > SCXML_EXPR_VALUE_STRING)) ||
         !scxml_expr_limits_valid(&limits))
         return expr_report(diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
                            0u, "invalid SCXML expression compile arguments");
@@ -1211,6 +1402,9 @@ static scxml_expr_status expr_compile(
     parser.source = source;
     parser.source_size = source_size;
     parser.root = root;
+    parser.supplemental = supplemental;
+    parser.path_policy = path_policy;
+    parser.unresolved_kind = (expr_value_kind)unresolved_kind;
     parser.resolve_state = resolve_state;
     parser.resolve_user = resolve_user;
     parser.limits = limits;
@@ -1251,6 +1445,9 @@ static scxml_expr_status expr_compile(
     parser.source = source;
     parser.source_size = source_size;
     parser.root = root;
+    parser.supplemental = supplemental;
+    parser.path_policy = path_policy;
+    parser.unresolved_kind = (expr_value_kind)unresolved_kind;
     parser.resolve_state = resolve_state;
     parser.resolve_user = resolve_user;
     parser.limits = limits;
@@ -1273,6 +1470,10 @@ static scxml_expr_status expr_compile(
                            "SCXML expression emission mismatched admission");
     }
     impl->root = root;
+    impl->supplemental_slots = supplemental != NULL
+        ? supplemental->slots : NULL;
+    impl->supplemental_count = supplemental != NULL
+        ? supplemental->slot_count : 0u;
     impl->instruction_count = (uint32_t)parser.instruction_count;
     impl->operand_count = (uint32_t)parser.operand_count;
     impl->register_count = (uint32_t)parser.max_register;
@@ -1307,8 +1508,9 @@ scxml_expr_status scxml_expr_compile(
     void *resolve_user,
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic) {
-    return expr_compile(out, source, source_size, root, resolve_state,
-                        resolve_user, limits, diagnostic, true);
+    return expr_compile(out, source, source_size, root, NULL,
+                        SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
+                        resolve_state, resolve_user, limits, diagnostic, true);
 }
 
 scxml_expr_status scxml_expr_compile_value(
@@ -1319,8 +1521,78 @@ scxml_expr_status scxml_expr_compile_value(
     void *resolve_user,
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic) {
-    return expr_compile(out, source, source_size, root, resolve_state,
+    return expr_compile(out, source, source_size, root, NULL,
+                        SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
+                        resolve_state, resolve_user, limits, diagnostic, false);
+}
+
+scxml_expr_status scxml_expr_compile_value_with_scope(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic) {
+    return expr_compile(out, source, source_size, root, supplemental,
+                        SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
+                        resolve_state, resolve_user, limits, diagnostic, false);
+}
+
+scxml_expr_status scxml_expr_compile_value_with_scope_policy(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_path_policy path_policy,
+    scxml_expr_value_kind unresolved_kind,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic) {
+    return expr_compile(out, source, source_size, root, supplemental,
+                        path_policy, unresolved_kind, resolve_state,
                         resolve_user, limits, diagnostic, false);
+}
+
+scxml_expr_status scxml_expr_compile_external(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    scxml_expr_value_kind expected_kind,
+    scxml_expr_external_evaluate_fn evaluate,
+    const scxml_expr_limits *limits_or_null,
+    scxml_expr_diagnostic *diagnostic) {
+    const scxml_expr_limits limits = limits_or_null != NULL
+        ? *limits_or_null : scxml_expr_default_limits();
+    scxml_expr_program_impl *impl;
+    if (out == NULL || out->impl != NULL || source == NULL ||
+        source_size == 0u || source_size > limits.max_source_bytes ||
+        evaluate == NULL || !scxml_expr_limits_valid(&limits))
+        return expr_report(
+            diagnostic,
+            source_size > limits.max_source_bytes
+                ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_INVALID_ARGUMENT,
+            0u, "invalid external expression program");
+    impl = (scxml_expr_program_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL)
+        return expr_report(diagnostic, SCXML_EXPR_ALLOCATION_FAILED, 0u,
+                           "external expression allocation failed");
+    impl->external_source = (char *)malloc(source_size);
+    if (impl->external_source == NULL) {
+        free(impl);
+        return expr_report(diagnostic, SCXML_EXPR_ALLOCATION_FAILED, 0u,
+                           "external expression source allocation failed");
+    }
+    memcpy(impl->external_source, source, source_size);
+    impl->external = true;
+    impl->external_source_size = source_size;
+    impl->external_evaluate = evaluate;
+    impl->result_kind = (expr_value_kind)expected_kind;
+    impl->max_string_bytes = limits.max_string_bytes;
+    out->impl = impl;
+    expr_clear_diagnostic(diagnostic);
+    return SCXML_EXPR_OK;
 }
 
 scxml_expr_value_kind
@@ -1467,12 +1739,64 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
     }
     operand = &context->program->operands[index];
     switch (operand->kind) {
-        case EXPR_OPERAND_LOCATION:
+        case EXPR_OPERAND_LOCATION: {
+            scxml_expr_status bound_status;
+            if (operand->data == NULL ||
+                operand->data->storage_type == NULL) {
+                context->failed = true;
+                return 0;
+            }
+            bound_status = scxml_expr_require_data_bound(
+                context->system_values, operand->offset,
+                operand->data->storage_type->size, NULL);
+            if (bound_status != SCXML_EXPR_OK) {
+                context->failed = true;
+                context->failure_status = bound_status;
+                return 0;
+            }
             if (!read_location_at(context, operand, context->root, out)) {
                 context->failed = true;
                 return 0;
             }
             return 1;
+        }
+        case EXPR_OPERAND_SUPPLEMENTAL_LOCATION: {
+            const cmeta_data_desc *slot_value = NULL;
+            const void *slot_object = NULL;
+            if (context->system_values == NULL ||
+                context->system_values->supplemental == NULL ||
+                context->system_values->supplemental->schema == NULL ||
+                context->system_values->supplemental->schema->slots !=
+                    context->program->supplemental_slots ||
+                context->system_values->supplemental->schema->slot_count !=
+                    context->program->supplemental_count ||
+                !scxml_scope_view_read(
+                    context->system_values->supplemental, operand->slot,
+                    &slot_value, &slot_object) ||
+                operand->data == NULL ||
+                operand->data->storage_type == NULL ||
+                operand->offset > slot_value->storage_type->size ||
+                operand->data->storage_type->size >
+                    slot_value->storage_type->size - operand->offset ||
+                !read_location_at(
+                    context, operand,
+                    (const unsigned char *)slot_object, out)) {
+                context->failed = true;
+                if (context->system_values != NULL &&
+                    context->system_values->supplemental != NULL &&
+                    context->system_values->supplemental->schema != NULL &&
+                    operand->slot < context->system_values->supplemental->schema->slot_count &&
+                    context->system_values->supplemental->bound != NULL &&
+                    context->system_values->supplemental->bound[operand->slot] == 0u)
+                    context->failure_status = SCXML_EXPR_UNKNOWN_LOCATION;
+                return 0;
+            }
+            return 1;
+        }
+        case EXPR_OPERAND_UNRESOLVED_LOCATION:
+            context->failed = true;
+            context->failure_status = SCXML_EXPR_UNKNOWN_LOCATION;
+            return 0;
         case EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION:
             if (context->system_values == NULL ||
                 context->system_values->event_data_object == NULL ||
@@ -2002,6 +2326,7 @@ static scxml_expr_status expr_evaluate(
     context.active_user = active_user;
     context.system_values = system_values;
     context.failed = false;
+    context.failure_status = SCXML_EXPR_OK;
     ops.resolve = expr_resolve;
     ops.truthy = expr_truthy;
     ops.binary = expr_binary;
@@ -2016,7 +2341,10 @@ static scxml_expr_status expr_evaluate(
     if (context.failed || status != QVM_STATUS_OK ||
         result.type != (int)impl->result_kind)
         return expr_report(diagnostic,
-                           SCXML_EXPR_EVALUATION_ERROR,
+                           context.failed &&
+                                   context.failure_status != SCXML_EXPR_OK
+                               ? context.failure_status
+                               : SCXML_EXPR_EVALUATION_ERROR,
                            qvm_diagnostic.instruction,
                            context.failed
                                ? "SCXML expression operand resolution failed"
@@ -2047,6 +2375,19 @@ static scxml_expr_status expr_evaluate_condition(
         expr_clear_diagnostic(diagnostic);
         return expr_report(diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
                            0u, "invalid CMeta condition evaluation arguments");
+    }
+    if (impl->external) {
+        scxml_expr_value external = {0};
+        status = impl->external_evaluate(
+            impl->external_source, impl->external_source_size,
+            SCXML_EXPR_VALUE_BOOL, root_object, is_active, active_user,
+            system_values, &external, diagnostic);
+        if (status != SCXML_EXPR_OK) return status;
+        if (external.kind != SCXML_EXPR_VALUE_BOOL)
+            return expr_report(diagnostic, SCXML_EXPR_TYPE_MISMATCH, 0u,
+                               "external condition did not produce bool");
+        *out_value = external.data.boolean;
+        return SCXML_EXPR_OK;
     }
     status = expr_evaluate(program, root_object, is_active, active_user,
                            system_values, &result, diagnostic);
@@ -2095,6 +2436,17 @@ static scxml_expr_status expr_evaluate_public_value(
         expr_clear_diagnostic(diagnostic);
         return expr_report(diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
                            0u, "invalid CMeta value evaluation arguments");
+    }
+    {
+        const scxml_expr_program_impl *impl =
+            program != NULL
+                ? (const scxml_expr_program_impl *)program->impl : NULL;
+        if (impl != NULL && impl->external)
+            return impl->external_evaluate(
+                impl->external_source, impl->external_source_size,
+                (scxml_expr_value_kind)impl->result_kind,
+                root_object, is_active, active_user, system_values,
+                out_value, diagnostic);
     }
     status = expr_evaluate(program, root_object, is_active, active_user,
                            system_values, &result, diagnostic);

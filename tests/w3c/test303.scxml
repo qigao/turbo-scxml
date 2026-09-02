@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scxml xmlns="http://www.w3.org/2005/07/scxml" version="1.0"
+       datamodel="quickjs-sandbox" initial="s0">
+  <datamodel>
+    <data id="value" expr="0"/>
+  </datamodel>
+  <state id="s0">
+    <onentry>
+      <assign location="value" expr="2"/>
+      <script>var value = 1;</script>
+    </onentry>
+    <transition cond="value == 1" target="pass"/>
+    <transition target="fail"/>
+  </state>
+  <final id="pass"/>
+  <state id="fail"/>
+</scxml>

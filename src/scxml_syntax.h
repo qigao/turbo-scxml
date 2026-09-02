@@ -50,6 +50,12 @@ static inline turbo_xml_string_view scxml_syntax_node_value(
         ? node.impl->value : (turbo_xml_string_view){NULL, 0u};
 }
 
+static inline turbo_xml_string_view scxml_syntax_node_text(
+    scxml_syntax_node node) {
+    return node.impl != NULL
+        ? node.impl->text : (turbo_xml_string_view){NULL, 0u};
+}
+
 static inline size_t scxml_syntax_node_child_count(
     scxml_syntax_node node) {
     return node.impl != NULL ? node.impl->child_count : 0u;
@@ -109,12 +115,24 @@ static inline scxml_syntax_attribute scxml_syntax_node_find_attribute(
     return result;
 }
 
+static inline turbo_xml_string_view scxml_syntax_serialized_children(
+    scxml_syntax_node node) {
+    if (node.impl == NULL ||
+        (node.impl->kind != SCXML_ELEMENT_CONTENT &&
+         node.impl->kind != SCXML_ELEMENT_DATA))
+        return (turbo_xml_string_view){NULL, 0u};
+    return (turbo_xml_string_view){
+        node.impl->serialized_children.data,
+        node.impl->serialized_children.size};
+}
+
 static inline turbo_xml_status scxml_syntax_serialize_children(
     scxml_syntax_node node, char *output, size_t output_capacity,
     size_t max_bytes, size_t *out_size) {
     size_t required_capacity;
     if (node.impl == NULL || out_size == NULL ||
-        node.impl->kind != SCXML_ELEMENT_CONTENT)
+        (node.impl->kind != SCXML_ELEMENT_CONTENT &&
+         node.impl->kind != SCXML_ELEMENT_DATA))
         return TURBO_XML_INVALID_ARGUMENT;
     if (node.impl->serialized_children.size > max_bytes)
         return TURBO_XML_LIMIT_EXCEEDED;
