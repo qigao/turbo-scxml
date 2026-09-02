@@ -95,6 +95,7 @@ static int validate_processor_config(
     size_t endpoint_rows_size;
     size_t endpoint_uri_size;
     size_t egress_rows_size;
+    size_t cancel_rows_size;
     size_t egress_strings_per_row;
     size_t egress_strings_size;
     size_t total;
@@ -137,6 +138,9 @@ static int validate_processor_config(
         !checked_multiply(config->egress_capacity,
                           sizeof(scxml_chttp_egress_row),
                           &egress_rows_size) ||
+        !checked_multiply(config->egress_capacity,
+                          sizeof(scxml_chttp_cancel_ticket),
+                          &cancel_rows_size) ||
         !checked_multiply(access_stride, 3u, &egress_strings_per_row) ||
         !checked_add(egress_strings_per_row, body_stride,
                      &egress_strings_per_row) ||
@@ -145,6 +149,8 @@ static int validate_processor_config(
         !checked_add(endpoint_rows_size, endpoint_uri_size, &total) ||
         !checked_align(total, _Alignof(scxml_chttp_egress_row), &total) ||
         !checked_add(total, egress_rows_size, &total) ||
+        !checked_align(total, _Alignof(scxml_chttp_cancel_ticket), &total) ||
+        !checked_add(total, cancel_rows_size, &total) ||
         !checked_add(total, egress_strings_size, &total) ||
         !checked_add(total, authority_size + 1u, &total) ||
         !checked_add(total, base_path_size + 1u, &total))
@@ -173,6 +179,14 @@ static void initialize_storage(
     impl->egress = (scxml_chttp_egress_row *)(cursor + row_offset);
     cursor += row_offset +
         config->egress_capacity * sizeof(scxml_chttp_egress_row);
+    {
+        size_t offset = (size_t)(cursor - (unsigned char *)impl->storage);
+        checked_align(offset, _Alignof(scxml_chttp_cancel_ticket), &offset);
+        impl->cancel_tickets = (scxml_chttp_cancel_ticket *)
+            ((unsigned char *)impl->storage + offset);
+        cursor = (unsigned char *)(impl->cancel_tickets +
+            config->egress_capacity);
+    }
     for (index = 0u; index < config->endpoint_capacity; ++index) {
         scxml_chttp_binding_impl *binding = &impl->bindings[index];
         binding->processor = impl;
@@ -182,6 +196,8 @@ static void initialize_storage(
     }
     for (index = 0u; index < config->egress_capacity; ++index) {
         scxml_chttp_egress_row *row = &impl->egress[index];
+        impl->cancel_tickets[index].processor = impl;
+        row->processor = impl;
         row->connection_uri = (char *)cursor;
         cursor += impl->egress_string_stride;
         row->authority = (char *)cursor;
@@ -278,34 +294,6 @@ int scxml_chttp_processor_init(
     return TURBO_OK;
 }
 
-static void processor_worker(void *user) {
-    scxml_chttp_processor_impl *impl =
-        (scxml_chttp_processor_impl *)user;
-    int status = TURBO_OK;
-    for (;;) {
-        bool stop;
-        size_t completions = 0u;
-        turbo_mutex_lock(&impl->mutex);
-        stop = impl->stop_requested;
-        turbo_mutex_unlock(&impl->mutex);
-        if (stop) break;
-        status = chttp_async_client_poll(
-            &impl->client, impl->worker_poll_ms, &completions);
-        if (status != TURBO_OK && status != TURBO_ESHUTDOWN) break;
-    }
-    if (status == TURBO_OK || status == TURBO_ESHUTDOWN)
-        status = chttp_async_client_stop(
-            &impl->client, impl->stop_timeout_ms);
-    if (status == TURBO_OK) {
-        status = chttp_async_client_destroy(&impl->client);
-        if (status == TURBO_OK) impl->client_destroyed = true;
-    }
-    turbo_mutex_lock(&impl->mutex);
-    impl->worker_status = status;
-    turbo_cond_broadcast(&impl->condition);
-    turbo_mutex_unlock(&impl->mutex);
-}
-
 int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     scxml_chttp_processor_impl *impl;
     int status;
@@ -319,7 +307,8 @@ int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     turbo_mutex_unlock(&impl->mutex);
     status = chttp_server_start(&impl->server);
     if (status != TURBO_OK) return status;
-    status = turbo_thread_create(&impl->worker, processor_worker, impl);
+    status = turbo_thread_create(
+        &impl->worker, scxml_chttp_egress_worker, impl);
     if (status != TURBO_OK) {
         (void)chttp_server_stop(&impl->server, 0u);
         return status;
@@ -529,7 +518,9 @@ static scxml_adapter_status composite_prepare_send(
     downstream = binding->downstream;
     downstream_user = binding->downstream_user;
     turbo_mutex_unlock(&binding->processor->mutex);
-    if (is_basic_http_type(request)) return SCXML_ADAPTER_CLOSED;
+    if (is_basic_http_type(request))
+        return scxml_chttp_egress_prepare_send(
+            binding, request, out_ticket, out_error);
     return downstream.prepare_send(
         downstream_user, request, out_ticket, out_error);
 }
@@ -541,6 +532,8 @@ static scxml_adapter_status composite_prepare_cancel(
         (scxml_chttp_binding_impl *)user;
     scxml_event_io_adapter downstream;
     void *downstream_user;
+    bool handled = false;
+    scxml_adapter_status status;
     if (out_error != NULL) *out_error = NULL;
     if (binding == NULL || request == NULL || out_ticket == NULL)
         return SCXML_ADAPTER_INVALID_CONTRACT;
@@ -554,6 +547,9 @@ static scxml_adapter_status composite_prepare_cancel(
     downstream = binding->downstream;
     downstream_user = binding->downstream_user;
     turbo_mutex_unlock(&binding->processor->mutex);
+    status = scxml_chttp_egress_prepare_cancel(
+        binding, request, out_ticket, out_error, &handled);
+    if (handled) return status;
     return downstream.prepare_cancel(
         downstream_user, request, out_ticket, out_error);
 }
@@ -569,6 +565,7 @@ static void composite_close(void *user) {
         !binding->downstream_closed) {
         binding->downstream_closed = true;
         binding->state = SCXML_CHTTP_BINDING_CLOSING;
+        scxml_chttp_egress_close_binding_locked(binding);
         close_callback = binding->downstream.close;
         downstream_user = binding->downstream_user;
     }

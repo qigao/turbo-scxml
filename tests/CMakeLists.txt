@@ -105,4 +105,9 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
     scxml_chttp_lifecycle_test
     scxml_chttp_lifecycle_test.c
     LIBS TurboSCXML::CHttpEventIO)
+  turboscxml_add_test(
+    scxml_chttp_egress_test
+    scxml_chttp_egress_test.c
+    LIBS TurboSCXML::CHttpEventIO
+    INCLUDES ${PROJECT_SOURCE_DIR}/src)
 endif()

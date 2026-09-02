@@ -273,6 +273,7 @@ spec("TurboSCXML CHTTP processor lifecycle") {
         const char *error = NULL;
         scxml_send_request send_request = {
             .event = "go", .event_size = 2u,
+            .target = "http://target", .target_size = 13u,
             .type = SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI,
             .type_size = sizeof(SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI) - 1u};
         scxml_cancel_request cancel_request = {
@@ -290,8 +291,9 @@ spec("TurboSCXML CHTTP processor lifecycle") {
         check_equal(composite->prepare_send(
                         scxml_chttp_binding_adapter_user(&binding),
                         &send_request, &ticket, &error),
-                    SCXML_ADAPTER_CLOSED);
+                    SCXML_ADAPTER_ACCEPTED);
         check_equal(probe.sends, (size_t)0u);
+        ticket.discard(ticket.user);
         send_request.type = NULL;
         send_request.type_size = 0u;
         check_equal(composite->prepare_send(

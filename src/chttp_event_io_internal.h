@@ -25,7 +25,8 @@ typedef enum scxml_chttp_egress_state {
     SCXML_CHTTP_EGRESS_RESERVED,
     SCXML_CHTTP_EGRESS_READY,
     SCXML_CHTTP_EGRESS_SUBMITTING,
-    SCXML_CHTTP_EGRESS_SUBMITTED
+    SCXML_CHTTP_EGRESS_SUBMITTED,
+    SCXML_CHTTP_EGRESS_COMPLETING
 } scxml_chttp_egress_state;
 
 typedef struct scxml_chttp_processor_impl scxml_chttp_processor_impl;
@@ -51,6 +52,7 @@ typedef struct scxml_chttp_binding_impl {
 } scxml_chttp_binding_impl;
 
 typedef struct scxml_chttp_egress_row {
+    scxml_chttp_processor_impl *processor;
     scxml_chttp_egress_state state;
     uint32_t generation;
     scxml_chttp_binding_impl *binding;
@@ -59,12 +61,23 @@ typedef struct scxml_chttp_egress_row {
     char *target;
     char *body;
     size_t body_size;
+    const char *content_type;
+    size_t content_type_size;
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t send_id_size;
+    uint64_t delay_ms;
     uint64_t due_ms;
     uint64_t commit_sequence;
     chttp_request request;
+    bool cancel_requested;
 } scxml_chttp_egress_row;
+
+typedef struct scxml_chttp_cancel_ticket {
+    scxml_chttp_processor_impl *processor;
+    size_t target_slot;
+    uint32_t target_generation;
+    bool reserved;
+} scxml_chttp_cancel_ticket;
 
 struct scxml_chttp_processor_impl {
     turbo_mutex_t mutex;
@@ -99,6 +112,7 @@ struct scxml_chttp_processor_impl {
     size_t egress_string_stride;
     scxml_chttp_binding_impl *bindings;
     scxml_chttp_egress_row *egress;
+    scxml_chttp_cancel_ticket *cancel_tickets;
     void *storage;
     size_t live_bindings;
     scxml_chttp_processor_stats stats;
@@ -123,5 +137,16 @@ scxml_chttp_decode_status scxml_chttp_decode_form_body(
     scxml_chttp_form_entry_view *entries, size_t entry_capacity,
     size_t max_event_name_bytes, size_t max_form_name_bytes,
     size_t max_form_value_bytes, scxml_chttp_decoded_form *out);
+
+scxml_adapter_status scxml_chttp_egress_prepare_send(
+    scxml_chttp_binding_impl *binding, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error);
+scxml_adapter_status scxml_chttp_egress_prepare_cancel(
+    scxml_chttp_binding_impl *binding, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error,
+    bool *out_handled);
+void scxml_chttp_egress_close_binding_locked(
+    scxml_chttp_binding_impl *binding);
+void scxml_chttp_egress_worker(void *user);
 
 #endif
