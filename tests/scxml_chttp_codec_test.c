@@ -99,6 +99,44 @@ spec("TurboSCXML pure BasicHTTP codec") {
         check_equal(body[0], 'x');
     }
 
+    it("accepts one reserved Event-name param when send event is absent") {
+        static const char expected[] = "_scxmleventname=test";
+        scxml_payload_entry entries[2] = {
+            {"_scxmleventname", sizeof("_scxmleventname") - 1u, {0}},
+            {"_scxmleventname", sizeof("_scxmleventname") - 1u, {0}}};
+        scxml_send_request request = {
+            .payload = {.kind = SCXML_PAYLOAD_NAMED,
+                        .entries = entries, .entry_count = 1u}};
+        const scxml_chttp_codec_limits limits = codec_limits();
+        scxml_chttp_encoded_body encoded = {0};
+        char body[sizeof(expected)] = {0};
+        size_t required = 0u;
+
+        entries[0].value = scalar_string("test", 4u);
+        entries[1].value = scalar_string("other", 5u);
+        check_equal(scxml_chttp_codec_encode(
+                        &request, &limits, body, sizeof(body),
+                        &required, &encoded),
+                    SCXML_ADAPTER_ACCEPTED);
+        check_equal(required, sizeof(expected) - 1u);
+        check_equal(encoded.body_size, sizeof(expected) - 1u);
+        check_equal(body, expected, sizeof(expected) - 1u);
+
+        request.payload = (scxml_payload_view){0};
+        check_equal(scxml_chttp_codec_encode(
+                        &request, &limits, body, sizeof(body),
+                        &required, &encoded),
+                    SCXML_ADAPTER_ERROR_EXECUTION);
+
+        request.payload = (scxml_payload_view){
+            .kind = SCXML_PAYLOAD_NAMED,
+            .entries = entries, .entry_count = 2u};
+        check_equal(scxml_chttp_codec_encode(
+                        &request, &limits, body, sizeof(body),
+                        &required, &encoded),
+                    SCXML_ADAPTER_ERROR_EXECUTION);
+    }
+
     it("formats floating point payloads independently of the numeric locale") {
         const scxml_payload_entry entry = {
             "f", 1u, {.kind = SCXML_CONTENT_SCALAR,

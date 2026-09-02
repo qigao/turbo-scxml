@@ -184,6 +184,7 @@ scxml_adapter_status scxml_chttp_codec_encode(
     size_t required = 0u;
     size_t field_count = 0u;
     size_t index;
+    bool has_reserved_event = false;
     char *cursor;
     if (out != NULL) memset(out, 0, sizeof(*out));
     if (out_required_body_size != NULL) *out_required_body_size = 0u;
@@ -245,6 +246,7 @@ scxml_adapter_status scxml_chttp_codec_encode(
                 limits->max_event_name_bytes))
             return SCXML_ADAPTER_ERROR_EXECUTION;
         field_count = 1u;
+        has_reserved_event = true;
     } else if (request->event != NULL) {
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
@@ -259,22 +261,32 @@ scxml_adapter_status scxml_chttp_codec_encode(
             const char *value;
             size_t value_size;
             char scalar_storage[64];
-            if ((entry->name_size == sizeof(RESERVED_EVENT_NAME) - 1u &&
-                 entry->name != NULL &&
-                 memcmp(entry->name, RESERVED_EVENT_NAME,
-                        entry->name_size) == 0) ||
+            const bool is_reserved = entry->name != NULL &&
+                entry->name_size == sizeof(RESERVED_EVENT_NAME) - 1u &&
+                memcmp(entry->name, RESERVED_EVENT_NAME,
+                       entry->name_size) == 0;
+            if ((is_reserved && has_reserved_event) ||
                 entry->value.kind != SCXML_CONTENT_SCALAR ||
                 !scalar_text(
                     &entry->value.scalar, scalar_storage, &value, &value_size) ||
+                (is_reserved && value_size == 0u) ||
                 !add_form_field_size(
                     &required, field_count != 0u,
                     entry->name, entry->name_size,
-                    limits->max_form_name_bytes,
-                    value, value_size, limits->max_form_value_bytes))
+                    is_reserved
+                        ? sizeof(RESERVED_EVENT_NAME) - 1u
+                        : limits->max_form_name_bytes,
+                    value, value_size,
+                    is_reserved
+                        ? limits->max_event_name_bytes
+                        : limits->max_form_value_bytes))
                 return SCXML_ADAPTER_ERROR_EXECUTION;
+            if (is_reserved) has_reserved_event = true;
             ++field_count;
         }
     }
+    if (field_count == 0u)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
     *out_required_body_size = required;
     if (required > limits->max_encoded_body_bytes)
         return SCXML_ADAPTER_ERROR_EXECUTION;

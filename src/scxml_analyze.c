@@ -1333,10 +1333,11 @@ static scxml_status analyze_send(scxml_build *build,
         &param_count);
     if (status != SCXML_OK) return status;
     if (!has_data && event_attribute.impl == NULL &&
-        event_expr_attribute.impl == NULL)
+        event_expr_attribute.impl == NULL &&
+        namelist_attribute.impl == NULL && param_count == 0u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_node_location(node),
-                          "send requires exactly one event, eventexpr, or content");
+                          "send requires an event, eventexpr, content, namelist, or param");
     if (has_data &&
         (namelist_attribute.impl != NULL || param_count != 0u))
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,

@@ -5,8 +5,8 @@ These fixtures are local transformations of documents from the
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
 documents, 168 are mandatory and 34 optional. TurboSCXML records all 168
-mandatory local transformations as PASS and records all 34 optional-profile
-documents as N/A. Passing this corpus is
+mandatory local transformations and 13 BasicHTTP optional transformations as
+PASS; the remaining 21 optional-profile documents are N/A. Passing this corpus is
 not W3C certification and is not, by itself, a claim of complete SCXML
 processor conformance.
 
@@ -30,7 +30,7 @@ Status meanings are strict:
   implemented or testable TurboSCXML profile. The row states the missing
   assertion rather than silently omitting it.
 - `N/A` is reserved for optional profiles that TurboSCXML does not claim,
-  currently ECMAScript, XPath, and BasicHTTP-specific behavior.
+  currently ECMAScript and XPath behavior.
 
 The current CMeta `<donedata><param>` profile is deliberately narrower than
 the complete W3C failure semantics. Successful params are materialized from
@@ -694,8 +694,32 @@ lets a host register the exact address exposed through
 `scxml_event_io_contract_test` demonstrates bounded routing and delivery
 through only public APIs. Tests 189-192, 347-354, 495-496, and 500-501 therefore
 exercise the logical SCXML Event Processor contract with that strict local host.
-This evidence does not make the library alone a standalone network service and
-does not claim the optional BasicHTTP Event Processor profile.
+This evidence does not make the core library alone a standalone network
+service. When `TURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON`, the optional CHTTP module
+does provide a bounded BasicHTTP Event I/O Processor and the same strict
+conformance executable adds these real loopback witnesses:
+
+| Local fixture | Upstream source | Assertion preserved |
+| --- | --- | --- |
+| `test201.scxml` | [test201.txml](https://www.w3.org/Voice/2013/scxml-irp/201/test201.txml) | The exact BasicHTTP type dispatches one POST that returns as `event1`. |
+| `test509.scxml` | [test509.txml](https://www.w3.org/Voice/2013/scxml-irp/509/test509.txml) | The access URI accepts POST and delivers the resulting Event. |
+| `test510.scxml` | [test510.txml](https://www.w3.org/Voice/2013/scxml-irp/510/test510.txml) | A raised internal Event is selected before the asynchronously admitted HTTP Event. |
+| `test513.scxml` | [test513.txt](https://www.w3.org/Voice/2013/scxml-irp/513/test513.txt) | A well-formed externally submitted request receives 204 only after admission. |
+| `test518.scxml` | [test518.txml](https://www.w3.org/Voice/2013/scxml-irp/518/test518.txml) | `namelist="sequence"` produces the exact form field `sequence=2`. |
+| `test519.scxml` | [test519.txml](https://www.w3.org/Voice/2013/scxml-irp/519/test519.txml) | A `param1` child produces the exact form field `param1=1`. |
+| `test520.scxml` | [test520.txml](https://www.w3.org/Voice/2013/scxml-irp/520/test520.txml) | Inline content is the exact raw POST body `this is some content`. |
+| `test522.scxml` | [test522.txml](https://www.w3.org/Voice/2013/scxml-irp/522/test522.txml) | `_ioprocessors.basichttp.location` is nonempty and usable for loopback delivery. |
+| `test531.scxml` | [test531.txml](https://www.w3.org/Voice/2013/scxml-irp/531/test531.txml) | `_scxmleventname=test` selects the admitted Event name `test`. |
+| `test532.scxml` | [test532.txml](https://www.w3.org/Voice/2013/scxml-irp/532/test532.txml) | An absent reserved name defaults the admitted Event to `HTTP.POST`. |
+| `test534.scxml` | [test534.txml](https://www.w3.org/Voice/2013/scxml-irp/534/test534.txml) | `send/@event="test"` emits the reserved `_scxmleventname=test` field. |
+| `test567.scxml` | [test567.txml](https://www.w3.org/Voice/2013/scxml-irp/567/test567.txml) | Non-reserved `param1=2` is decoded into typed `_event.data`. |
+| `test577.scxml` | [test577.txml](https://www.w3.org/Voice/2013/scxml-irp/577/test577.txml) | A BasicHTTP send without a target raises `error.communication`; the unrelated external sentinel is omitted. |
+
+The harness starts a real loopback server and client, installs the generated
+`basichttp` descriptor before session initialization, activates the reserved
+binding afterward, records the HTTP method and body at ingress, and requires a
+single committed `result.pass`. It does not replace transport observations with
+source-text checks or a fake Event I/O adapter.
 
 The upstream suite page offers the tests under the
 [W3C Test Suite License](https://www.w3.org/copyright/test-suite/) or the
