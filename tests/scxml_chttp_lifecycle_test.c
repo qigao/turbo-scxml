@@ -356,7 +356,8 @@ spec("TurboSCXML CHTTP processor lifecycle") {
         config = test_binding_config(&probe);
         config.decode = NULL;
         check_equal(scxml_chttp_binding_init(
-                        &binding, &processor, &config), TURBO_EINVAL);
+                        &binding, &processor, &config), TURBO_OK);
+        close_and_destroy_binding(&binding, &probe);
         incomplete.close = NULL;
         config = test_binding_config(&probe);
         config.scxml_adapter = &incomplete;

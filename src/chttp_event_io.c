@@ -98,6 +98,9 @@ static int validate_processor_config(
     size_t cancel_rows_size;
     size_t egress_strings_per_row;
     size_t egress_strings_size;
+    size_t route_path_size;
+    size_t ingress_storage_size;
+    size_t ingress_entries_size;
     size_t total;
     size_t uri_required;
     if (config == NULL || out_authority_size == NULL ||
@@ -153,7 +156,21 @@ static int validate_processor_config(
         !checked_add(total, cancel_rows_size, &total) ||
         !checked_add(total, egress_strings_size, &total) ||
         !checked_add(total, authority_size + 1u, &total) ||
-        !checked_add(total, base_path_size + 1u, &total))
+        !checked_add(total, base_path_size + 1u, &total) ||
+        !checked_add(base_path_size,
+                     config->base_path[base_path_size - 1u] == '/'
+                         ? sizeof(":endpoint")
+                         : sizeof("/:endpoint"),
+                     &route_path_size) ||
+        !checked_add(config->server.max_request_body_bytes, 1u,
+                     &ingress_storage_size) ||
+        !checked_multiply(config->max_form_entry_count,
+                          sizeof(scxml_chttp_form_entry_view),
+                          &ingress_entries_size) ||
+        !checked_add(total, route_path_size, &total) ||
+        !checked_add(total, ingress_storage_size, &total) ||
+        !checked_align(total, _Alignof(scxml_chttp_form_entry_view), &total) ||
+        !checked_add(total, ingress_entries_size, &total))
         return TURBO_ERANGE;
     *out_authority_size = authority_size;
     *out_base_path_size = base_path_size;
@@ -213,6 +230,28 @@ static void initialize_storage(
     cursor += impl->advertised_authority_size + 1u;
     impl->base_path = (char *)cursor;
     memcpy(impl->base_path, config->base_path, impl->base_path_size + 1u);
+    cursor += impl->base_path_size + 1u;
+    impl->route_path = (char *)cursor;
+    if (impl->base_path[impl->base_path_size - 1u] == '/')
+        snprintf(impl->route_path,
+                 impl->base_path_size + sizeof(":endpoint"),
+                 "%s:endpoint", impl->base_path);
+    else
+        snprintf(impl->route_path,
+                 impl->base_path_size + sizeof("/:endpoint"),
+                 "%s/:endpoint", impl->base_path);
+    cursor += strlen(impl->route_path) + 1u;
+    impl->ingress_storage = (char *)cursor;
+    impl->ingress_storage_capacity =
+        config->server.max_request_body_bytes + 1u;
+    cursor += impl->ingress_storage_capacity;
+    {
+        size_t offset = (size_t)(cursor - (unsigned char *)impl->storage);
+        checked_align(
+            offset, _Alignof(scxml_chttp_form_entry_view), &offset);
+        impl->ingress_entries = (scxml_chttp_form_entry_view *)
+            ((unsigned char *)impl->storage + offset);
+    }
 }
 
 static void cleanup_initialized_processor(scxml_chttp_processor_impl *impl) {
@@ -281,6 +320,11 @@ int scxml_chttp_processor_init(
         return TURBO_ENOMEM;
     }
     status = chttp_server_init(&impl->server, &config->server);
+    if (status != TURBO_OK) {
+        cleanup_initialized_processor(impl);
+        return status;
+    }
+    status = scxml_chttp_ingress_register(impl);
     if (status != TURBO_OK) {
         cleanup_initialized_processor(impl);
         return status;
@@ -449,7 +493,7 @@ int scxml_chttp_binding_init(
     if (binding == NULL || processor == NULL || processor->impl == NULL ||
         config == NULL || config->abi_version != SCXML_CHTTP_ABI_V1 ||
         config->struct_size < sizeof(*config) ||
-        !adapter_valid(config->scxml_adapter) || config->decode == NULL)
+        !adapter_valid(config->scxml_adapter))
         return TURBO_EINVAL;
     if (binding->impl != NULL) return TURBO_EALREADY;
     impl = (scxml_chttp_processor_impl *)processor->impl;

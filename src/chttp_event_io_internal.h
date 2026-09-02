@@ -100,6 +100,10 @@ struct scxml_chttp_processor_impl {
     size_t advertised_authority_size;
     char *base_path;
     size_t base_path_size;
+    char *route_path;
+    char *ingress_storage;
+    size_t ingress_storage_capacity;
+    scxml_chttp_form_entry_view *ingress_entries;
     size_t endpoint_capacity;
     size_t egress_capacity;
     size_t max_access_uri_bytes;
@@ -148,5 +152,6 @@ scxml_adapter_status scxml_chttp_egress_prepare_cancel(
 void scxml_chttp_egress_close_binding_locked(
     scxml_chttp_binding_impl *binding);
 void scxml_chttp_egress_worker(void *user);
+int scxml_chttp_ingress_register(scxml_chttp_processor_impl *processor);
 
 #endif
