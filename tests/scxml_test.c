@@ -880,6 +880,10 @@ suite("SCXML Core to native CFlow Statechart compiler") {
     }
 
     it("copies the stable SCXML Event I/O location without partial output") {
+        static const char scxml_type[] =
+            "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+        static const char basic_type_literal[] =
+            "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor";
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='only'/></scxml>";
@@ -890,8 +894,21 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_session_config config = {0};
         char location[64] = "unchanged";
         char repeated[64] = {0};
+        char basic_location[64] = "unchanged";
+        char basic_name[] = "basichttp";
+        char basic_type[] =
+            "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor";
+        char basic_uri[] = "http://127.0.0.1:43123/scxml/session-a";
+        scxml_ioprocessor_descriptor basic_http = {
+            .name = basic_name,
+            .name_size = sizeof(basic_name) - 1u,
+            .type = basic_type,
+            .type_size = sizeof(basic_type) - 1u,
+            .location = basic_uri,
+            .location_size = sizeof(basic_uri) - 1u};
         size_t required = 0u;
         size_t repeated_required = 0u;
+        size_t basic_required = 0u;
 
         check_equal(compile_status(source, &program, &diagnostic),
                     SCXML_OK);
@@ -902,9 +919,14 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             .external_event_capacity = 1u,
             .internal_event_capacity = 1u,
             .completion_capacity = 1u,
-            .microstep_limit = 8u};
+            .microstep_limit = 8u,
+            .ioprocessors = &basic_http,
+            .ioprocessor_count = 1u};
         check_equal(scxml_session_init(&session, &config),
                     CFLOW_STATECHART_INSTANCE_OK);
+        basic_name[0] = 'x';
+        basic_type[0] = 'x';
+        basic_uri[0] = 'x';
 
         check_equal(scxml_session_copy_location(
                         &session, NULL, 0u, &required),
@@ -927,6 +949,43 @@ suite("SCXML Core to native CFlow Statechart compiler") {
                     SCXML_LOCATION_OK);
         check_equal(repeated_required, required);
         check_equal(repeated, location);
+        check_equal(scxml_session_copy_ioprocessor_location(
+                        &session, scxml_type, sizeof(scxml_type) - 1u,
+                        repeated, sizeof(repeated), &repeated_required),
+                    SCXML_LOCATION_OK);
+        check_equal(repeated, location);
+        check_equal(scxml_session_copy_ioprocessor_location(
+                        &session, basic_type_literal,
+                        sizeof(basic_type_literal) - 1u,
+                        NULL, 0u, &basic_required),
+                    SCXML_LOCATION_TOO_SMALL);
+        check_equal(basic_required,
+                    sizeof("http://127.0.0.1:43123/scxml/session-a"));
+        check_equal(scxml_session_copy_ioprocessor_location(
+                        &session, basic_type_literal,
+                        sizeof(basic_type_literal) - 1u,
+                        basic_location, basic_required - 1u,
+                        &repeated_required),
+                    SCXML_LOCATION_TOO_SMALL);
+        check_equal(basic_location, "unchanged");
+        check_equal(scxml_session_copy_ioprocessor_location(
+                        &session, basic_type_literal,
+                        sizeof(basic_type_literal) - 1u,
+                        basic_location, sizeof(basic_location),
+                        &basic_required),
+                    SCXML_LOCATION_OK);
+        check_equal(basic_location,
+                    "http://127.0.0.1:43123/scxml/session-a");
+        memcpy(basic_location, "unchanged", sizeof("unchanged"));
+        repeated_required = 17u;
+        check_equal(scxml_session_copy_ioprocessor_location(
+                        &session, "urn:test:missing",
+                        sizeof("urn:test:missing") - 1u,
+                        basic_location, sizeof(basic_location),
+                        &repeated_required),
+                    SCXML_LOCATION_INVALID_ARGUMENT);
+        check_equal(basic_location, "unchanged");
+        check_equal(repeated_required, (size_t)17u);
 
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
@@ -934,6 +993,87 @@ suite("SCXML Core to native CFlow Statechart compiler") {
                         &session, repeated, sizeof(repeated),
                         &repeated_required),
                     SCXML_LOCATION_INVALID_ARGUMENT);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects invalid configured Event I/O processor descriptors") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='only'/></scxml>";
+        static const char scxml_type[] =
+            "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+        scxml_program program = {0};
+        scxml_session session = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executor = {0};
+        scxml_ioprocessor_descriptor rows[2] = {
+            {
+                .name = "basichttp", .name_size = 9u,
+                .type = "urn:test:one", .type_size = 12u,
+                .location = "http://one", .location_size = 10u},
+            {
+                .name = "vendor", .name_size = 6u,
+                .type = "urn:test:two", .type_size = 12u,
+                .location = "http://two", .location_size = 10u}};
+        scxml_session_config config = {0};
+
+        check_equal(compile_status(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        config = (scxml_session_config){
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 8u,
+            .ioprocessors = rows,
+            .ioprocessor_count = 2u};
+
+        rows[1].name = rows[0].name;
+        rows[1].name_size = rows[0].name_size;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        check_null(session.impl);
+        rows[1].name = "vendor";
+        rows[1].name_size = 6u;
+        rows[1].type = rows[0].type;
+        rows[1].type_size = rows[0].type_size;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        rows[1].type = "urn:test:two";
+        rows[1].type_size = 12u;
+
+        config.ioprocessor_count = 1u;
+        rows[0].name = "1invalid";
+        rows[0].name_size = 8u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        rows[0].name = NULL;
+        rows[0].name_size = 9u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        rows[0].name = "scxml";
+        rows[0].name_size = 5u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        rows[0].name = "basichttp";
+        rows[0].name_size = 9u;
+        rows[0].type = scxml_type;
+        rows[0].type_size = sizeof(scxml_type) - 1u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        rows[0].type = "urn:test:one";
+        rows[0].type_size = 12u;
+        rows[0].location_size = SCXML_EVENT_METADATA_CAPACITY + 1u;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED);
+        rows[0].location_size = 10u;
+        config.ioprocessor_count = SIZE_MAX;
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED);
+        check_null(session.impl);
+
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
     }

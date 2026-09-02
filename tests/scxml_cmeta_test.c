@@ -1775,6 +1775,15 @@ spec("TurboSCXML public CMeta data model") {
     }
 
     it("binds one owned external event envelope through eventless stabilization") {
+        static const scxml_ioprocessor_descriptor basic_http = {
+            .name = "basichttp",
+            .name_size = sizeof("basichttp") - 1u,
+            .type = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor",
+            .type_size = sizeof(
+                "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor") - 1u,
+            .location = "http://127.0.0.1:43123/scxml/session-a",
+            .location_size = sizeof(
+                "http://127.0.0.1:43123/scxml/session-a") - 1u};
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='armed'>"
@@ -1785,7 +1794,9 @@ spec("TurboSCXML public CMeta data model") {
             "&amp;&amp; _event.origintype == &quot;scxml&quot; "
             "&amp;&amp; _event.invokeid == &quot;worker&quot; "
             "&amp;&amp; _event.data == &quot;payload&quot; "
-            "&amp;&amp; _ioprocessors.scxml.location != &quot;&quot;' "
+            "&amp;&amp; _ioprocessors.scxml.location != &quot;&quot; "
+            "&amp;&amp; _ioprocessors.basichttp.location == "
+            "&quot;http://127.0.0.1:43123/scxml/session-a&quot;' "
             "target='matched'/></state><state id='matched'>"
             "<transition cond='_event.name == &quot;go&quot; "
             "&amp;&amp; _event.data == &quot;payload&quot;' target='done'/>"
@@ -1818,7 +1829,9 @@ spec("TurboSCXML public CMeta data model") {
             .external_event_capacity = 2u,
             .internal_event_capacity = 2u,
             .completion_capacity = 2u,
-            .microstep_limit = 16u};
+            .microstep_limit = 16u,
+            .ioprocessors = &basic_http,
+            .ioprocessor_count = 1u};
         const scxml_cmeta_session_options_v1 data = {
             .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
             .struct_size = sizeof(scxml_cmeta_session_options_v1),

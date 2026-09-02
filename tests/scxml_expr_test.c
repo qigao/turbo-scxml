@@ -631,6 +631,39 @@ spec("TurboSCXML private SCXML expressions") {
   }
 
   it("resolves only the bounded current SCXML event name") {
+    static const scxml_ioprocessor_descriptor ioprocessors[] = {
+        {
+            .name = "scxml", .name_size = sizeof("scxml") - 1u,
+            .type = "http://www.w3.org/TR/scxml/#SCXMLEventProcessor",
+            .type_size = sizeof(
+                "http://www.w3.org/TR/scxml/#SCXMLEventProcessor") - 1u,
+            .location = "#_scxml_session", .location_size = 15u},
+        {
+            .name = "basichttp", .name_size = sizeof("basichttp") - 1u,
+            .type = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor",
+            .type_size = sizeof(
+                "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor") - 1u,
+            .location = "http://127.0.0.1:43123/scxml/session-a",
+            .location_size = sizeof(
+                "http://127.0.0.1:43123/scxml/session-a") - 1u},
+        {
+            .name = "basic-http", .name_size = sizeof("basic-http") - 1u,
+            .type = "urn:test:hyphen",
+            .type_size = sizeof("urn:test:hyphen") - 1u,
+            .location = "hyphen-location",
+            .location_size = sizeof("hyphen-location") - 1u},
+        {
+            .name = "vendor.name", .name_size = sizeof("vendor.name") - 1u,
+            .type = "urn:test:dot",
+            .type_size = sizeof("urn:test:dot") - 1u,
+            .location = "dot-location",
+            .location_size = sizeof("dot-location") - 1u},
+        {
+            .name = "\xCE\xB4", .name_size = sizeof("\xCE\xB4") - 1u,
+            .type = "urn:test:unicode",
+            .type_size = sizeof("urn:test:unicode") - 1u,
+            .location = "unicode-location",
+            .location_size = sizeof("unicode-location") - 1u}};
     const scxml_expr_system_values system_values = {
         .event_name = {"go", 2u},
         .event_type = {"external", 8u},
@@ -639,7 +672,8 @@ spec("TurboSCXML private SCXML expressions") {
         .event_origin_type = {"scxml", 5u},
         .event_invoke_id = {"job", 3u},
         .event_data = {"payload", 7u},
-        .scxml_location = {"#_scxml_session", 15u}
+        .ioprocessors = ioprocessors,
+        .ioprocessor_count = sizeof(ioprocessors) / sizeof(ioprocessors[0])
     };
     const scxml_expr_system_values missing_event = {0};
     scxml_expr_program program = {0};
@@ -666,13 +700,12 @@ spec("TurboSCXML private SCXML expressions") {
 
     check_equal(compile_expression(
                     &program,
-                    "_event.type == \"external\" && "
-                    "_event.sendid == \"s1\" && "
-                    "_event.origin == \"peer\" && "
-                    "_event.origintype == \"scxml\" && "
-                    "_event.invokeid == \"job\" && "
-                    "_event.data == \"payload\" && "
-                    "_ioprocessors.scxml.location == \"#_scxml_session\"",
+                    "_ioprocessors.basic-http.location == "
+                    "\"hyphen-location\" && "
+                    "_ioprocessors.vendor.name.location == "
+                    "\"dot-location\" && "
+                    "_ioprocessors.\xCE\xB4.location == "
+                    "\"unicode-location\"",
                     NULL, &diagnostic),
                 SCXML_EXPR_OK);
     check_equal(scxml_expr_evaluate_with_system(
@@ -680,6 +713,37 @@ spec("TurboSCXML private SCXML expressions") {
                     &system_values, &result, &diagnostic),
                 SCXML_EXPR_OK);
     check_true(result);
+    scxml_expr_program_destroy(&program);
+
+    check_equal(compile_expression(
+                    &program,
+                    "_event.type == \"external\" && "
+                    "_event.sendid == \"s1\" && "
+                    "_event.origin == \"peer\" && "
+                    "_event.origintype == \"scxml\" && "
+                    "_event.invokeid == \"job\" && "
+                    "_event.data == \"payload\" && "
+                    "_ioprocessors.scxml.location == \"#_scxml_session\" && "
+                    "_ioprocessors.basichttp.location == "
+                    "\"http://127.0.0.1:43123/scxml/session-a\"",
+                    NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &system_values, &result, &diagnostic),
+                SCXML_EXPR_OK);
+    check_true(result);
+    scxml_expr_program_destroy(&program);
+
+    check_equal(compile_expression(
+                    &program,
+                    "_ioprocessors.vendor.location == \"missing\"",
+                    NULL, &diagnostic),
+                SCXML_EXPR_OK);
+    check_equal(scxml_expr_evaluate_with_system(
+                    &program, &root, state_is_active, &states,
+                    &system_values, &result, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
     scxml_expr_program_destroy(&program);
 
     check_equal(compile_value_expression(
@@ -796,6 +860,13 @@ spec("TurboSCXML private SCXML expressions") {
   }
 
   it("reports startup system-variable bindings") {
+    static const scxml_ioprocessor_descriptor ioprocessors[] = {{
+        .name = "scxml", .name_size = sizeof("scxml") - 1u,
+        .type = "http://www.w3.org/TR/scxml/#SCXMLEventProcessor",
+        .type_size = sizeof(
+            "http://www.w3.org/TR/scxml/#SCXMLEventProcessor") - 1u,
+        .location = "#_scxml_session",
+        .location_size = sizeof("#_scxml_session") - 1u}};
     static const char *const expressions[] = {
         "isBound(_name)",
         "isBound(_sessionid)",
@@ -804,8 +875,8 @@ spec("TurboSCXML private SCXML expressions") {
     const scxml_expr_system_values bound = {
         .name = {"", 0u},
         .session_id = {"session", sizeof("session") - 1u},
-        .scxml_location = {
-            "#_scxml_session", sizeof("#_scxml_session") - 1u}
+        .ioprocessors = ioprocessors,
+        .ioprocessor_count = sizeof(ioprocessors) / sizeof(ioprocessors[0])
     };
     state_fixture states = {false};
     size_t index;

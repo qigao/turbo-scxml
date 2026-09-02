@@ -1,6 +1,7 @@
 #ifndef SCXML_EXPR_H
 #define SCXML_EXPR_H
 
+#include <scxml/scxml.h>
 #include <cflow/machine.h>
 #include <cmeta/data.h>
 
@@ -65,7 +66,8 @@ typedef struct scxml_expr_system_values {
     /** Optional owned event object described by its event-specific root schema. */
     const cmeta_data_desc *event_data_schema;
     const void *event_data_object;
-    scxml_expr_string_view scxml_location;
+    const scxml_ioprocessor_descriptor *ioprocessors;
+    size_t ioprocessor_count;
     scxml_expr_is_data_bound_fn is_data_bound;
     void *data_bound_user;
     scxml_scope_view *supplemental;

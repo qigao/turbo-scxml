@@ -1514,8 +1514,9 @@ static bool quickjs_install_system_values(
     JSValue global = JS_GetGlobalObject(context);
     JSValue event = JS_UNDEFINED;
     JSValue processors = JS_UNDEFINED;
-    JSValue scxml = JS_UNDEFINED;
+    JSValue processor = JS_UNDEFINED;
     JSValue in_function = JS_UNDEFINED;
+    size_t processor_index;
     bool ok = false;
     if (JS_IsException(global) || values == NULL || active == NULL)
         goto cleanup;
@@ -1572,17 +1573,29 @@ static bool quickjs_install_system_values(
         if (defined < 0) goto cleanup;
     }
     processors = JS_NewObject(context);
-    scxml = JS_NewObject(context);
-    if (JS_IsException(processors) || JS_IsException(scxml) ||
-        quickjs_define_read_only(
-            context, scxml, "location",
-            quickjs_system_string(context, values->scxml_location)) < 0)
+    if (JS_IsException(processors) ||
+        (values->ioprocessor_count != 0u &&
+         values->ioprocessors == NULL))
         goto cleanup;
-    {
-        const int defined =
-            quickjs_define_read_only(context, processors, "scxml", scxml);
-        scxml = JS_UNDEFINED;
-        if (defined < 0) goto cleanup;
+    for (processor_index = 0u;
+         processor_index < values->ioprocessor_count;
+         ++processor_index) {
+        const scxml_ioprocessor_descriptor *descriptor =
+            &values->ioprocessors[processor_index];
+        const scxml_expr_string_view location = {
+            descriptor->location, descriptor->location_size};
+        processor = JS_NewObject(context);
+        if (JS_IsException(processor) || descriptor->name == NULL ||
+            quickjs_define_read_only(
+                context, processor, "location",
+                quickjs_system_string(context, location)) < 0)
+            goto cleanup;
+        {
+            const int defined = quickjs_define_read_only(
+                context, processors, descriptor->name, processor);
+            processor = JS_UNDEFINED;
+            if (defined < 0) goto cleanup;
+        }
     }
     {
         const int defined = quickjs_define_read_only(
@@ -1603,7 +1616,7 @@ static bool quickjs_install_system_values(
 cleanup:
     if (!JS_IsUndefined(event)) JS_FreeValue(context, event);
     if (!JS_IsUndefined(processors)) JS_FreeValue(context, processors);
-    if (!JS_IsUndefined(scxml)) JS_FreeValue(context, scxml);
+    if (!JS_IsUndefined(processor)) JS_FreeValue(context, processor);
     if (!JS_IsUndefined(in_function)) JS_FreeValue(context, in_function);
     JS_FreeValue(context, global);
     return ok;

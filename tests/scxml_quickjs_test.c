@@ -449,7 +449,9 @@ static cflow_statechart_instance_stats quickjs_run_to_idle_with_options(
     const char *source,
     const scxml_quickjs_compile_options_v1 *compile_options,
     const void *initial,
-    cflow_statechart_instance_status *out_init_status) {
+    cflow_statechart_instance_status *out_init_status,
+    const scxml_ioprocessor_descriptor *ioprocessors,
+    size_t ioprocessor_count) {
     const scxml_quickjs_session_options_v1 session_options = {
         SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1,
         sizeof(scxml_quickjs_session_options_v1),
@@ -467,7 +469,9 @@ static cflow_statechart_instance_stats quickjs_run_to_idle_with_options(
         .completion_capacity = 2u,
         .microstep_limit = 32u,
         .effect_capacity = 2u,
-        .max_storage_bytes = 64u * 1024u};
+        .max_storage_bytes = 64u * 1024u,
+        .ioprocessors = ioprocessors,
+        .ioprocessor_count = ioprocessor_count};
 
     {
         const scxml_status compile_status = scxml_compile_quickjs(
@@ -496,7 +500,7 @@ static cflow_statechart_instance_stats quickjs_run_to_idle_with_root(
     const scxml_quickjs_compile_options_v1 compile_options =
         scxml_quickjs_default_compile_options(root);
     return quickjs_run_to_idle_with_options(
-        source, &compile_options, initial, out_init_status);
+        source, &compile_options, initial, out_init_status, NULL, 0u);
 }
 
 static cflow_statechart_instance_stats quickjs_run_to_idle(
@@ -623,14 +627,25 @@ spec("SCXML optional QuickJS sandbox profile") {
     }
 
     it("evaluates ECMAScript data and guards with read-only SCXML system values") {
+        static const scxml_ioprocessor_descriptor basic_http = {
+            .name = "basichttp",
+            .name_size = sizeof("basichttp") - 1u,
+            .type = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor",
+            .type_size = sizeof(
+                "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor") - 1u,
+            .location = "http://127.0.0.1:43123/scxml/session-a",
+            .location_size = sizeof(
+                "http://127.0.0.1:43123/scxml/session-a") - 1u};
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "name='sandbox-machine' datamodel='quickjs-sandbox'>"
             "<datamodel><data id='value' "
             "expr='[1,2,3].map(x =&gt; x * 2)[1]'/></datamodel>"
             "<script>_name=0; _ioprocessors.scxml.location=0; "
+            "_ioprocessors.basichttp.location=0; "
             "if(_name === 0 || "
-            "_ioprocessors.scxml.location === 0) throw 1;"
+            "_ioprocessors.scxml.location === 0 || "
+            "_ioprocessors.basichttp.location === 0) throw 1;"
             "</script>"
             "<state id='start'><transition "
             "cond='value === 4 &amp;&amp; _name === &quot;sandbox-machine&quot; "
@@ -638,13 +653,20 @@ spec("SCXML optional QuickJS sandbox profile") {
             "&amp;&amp; _sessionid.length &gt; 0 "
             "&amp;&amp; typeof _event === &quot;undefined&quot; "
             "&amp;&amp; _ioprocessors.scxml.location.indexOf(&quot;#_scxml_&quot;) === 0 "
+            "&amp;&amp; _ioprocessors.basichttp.location === "
+            "&quot;http://127.0.0.1:43123/scxml/session-a&quot; "
             "&amp;&amp; In(&quot;start&quot;)' target='pass'/>"
             "<transition target='fail'/></state>"
             "<final id='pass'/><state id='fail'/></scxml>";
         cflow_statechart_instance_status init_status =
             CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
-        const cflow_statechart_instance_stats stats = quickjs_run_to_idle(
-            source, (quickjs_test_state){0}, &init_status);
+        const quickjs_test_state initial = {0};
+        const scxml_quickjs_compile_options_v1 compile_options =
+            scxml_quickjs_default_compile_options(&quickjs_test_data);
+        const cflow_statechart_instance_stats stats =
+            quickjs_run_to_idle_with_options(
+                source, &compile_options, &initial, &init_status,
+                &basic_http, 1u);
 
         check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
         check_true(stats.done);
@@ -923,7 +945,7 @@ spec("SCXML optional QuickJS sandbox profile") {
         options.max_eval_milliseconds = QUICKJS_TEST_DEADLINE_MILLISECONDS;
 
         stats = quickjs_run_to_idle_with_options(
-            source, &options, &initial, &init_status);
+            source, &options, &initial, &init_status, NULL, 0u);
         check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
         check_true(stats.done);
         check_false(stats.errored);
@@ -1006,7 +1028,7 @@ spec("SCXML optional QuickJS sandbox profile") {
         options.max_eval_milliseconds = 5000u;
 
         stats = quickjs_run_to_idle_with_options(
-            source, &options, &initial, &init_status);
+            source, &options, &initial, &init_status, NULL, 0u);
         check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
         check_true(stats.done);
         check_false(stats.errored);

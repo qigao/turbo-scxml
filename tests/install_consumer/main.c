@@ -7,6 +7,7 @@
 
 int main(void) {
     const scxml_limits limits = scxml_default_limits();
+    const scxml_ioprocessor_descriptor descriptor = {0};
     const scxml_cmeta_compile_options_v2 cmeta_v2 =
         scxml_cmeta_default_compile_options_v2(NULL);
     int valid = limits.max_states > 0u && limits.max_events > 0u &&
@@ -14,6 +15,10 @@ int main(void) {
                 cmeta_v2.abi_version == SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 &&
                 cmeta_v2.struct_size == sizeof(cmeta_v2) &&
                 cmeta_v2.actions == NULL && cmeta_v2.action_count == 0u &&
+                descriptor.name == NULL &&
+                scxml_session_copy_ioprocessor_location(
+                    NULL, NULL, 0u, NULL, 0u, NULL) ==
+                    SCXML_LOCATION_INVALID_ARGUMENT &&
                 scxml_session_try_send_named_with_metadata(
                     NULL, NULL, 0u, NULL) ==
                     CFLOW_MAILBOX_INVALID_ARGUMENT;
