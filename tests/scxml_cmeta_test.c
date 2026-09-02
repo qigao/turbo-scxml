@@ -1686,6 +1686,63 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("binds configured Event I/O processors as immutable system values") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='active'><onentry>"
+            "<assign location='_ioprocessors.basichttp.location' "
+            "expr='&quot;changed&quot;'/></onentry>"
+            "<transition event='error.execution' "
+            "cond='isBound(_ioprocessors) &amp;&amp; "
+            "_ioprocessors.scxml.location != &quot;&quot; &amp;&amp; "
+            "_ioprocessors.basichttp.location == "
+            "&quot;http://127.0.0.1:43123/scxml/session-a&quot;' "
+            "target='done'/></state><final id='done'/></scxml>";
+        static const scxml_ioprocessor_descriptor basic_http = {
+            .name = "basichttp",
+            .name_size = sizeof("basichttp") - 1u,
+            .type = "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor",
+            .type_size = sizeof(
+                "http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor") - 1u,
+            .location = "http://127.0.0.1:43123/scxml/session-a",
+            .location_size = sizeof(
+                "http://127.0.0.1:43123/scxml/session-a") - 1u};
+        const scxml_public_data initial = {
+            true, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 2u,
+            .microstep_limit = 16u,
+            .max_storage_bytes = 64u * 1024u,
+            .ioprocessors = &basic_http,
+            .ioprocessor_count = 1u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("owns structured event data through eventless stabilization") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "

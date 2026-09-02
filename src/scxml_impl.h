@@ -21,6 +21,9 @@
 #include <string.h>
 
 #define SCXML_NAMESPACE "http://www.w3.org/2005/07/scxml"
+#define SCXML_SCXML_IOPROCESSOR_NAME "scxml"
+#define SCXML_SCXML_IOPROCESSOR_TYPE \
+    "http://www.w3.org/TR/scxml/#SCXMLEventProcessor"
 #define SCXML_DEFAULT_MAX_STATES 65536u
 #define SCXML_DEFAULT_MAX_EVENTS 65536u
 #define SCXML_DEFAULT_MAX_TRANSITIONS 1048576u
@@ -622,8 +625,9 @@ struct scxml_session_impl {
     scxml_quickjs_runtime *quickjs_runtime;
     char *system_name;
     char session_id[TURBO_UUID_STRING_SIZE];
-    char scxml_location[sizeof("#_scxml_") - 1u +
-                        TURBO_UUID_STRING_SIZE];
+    void *ioprocessor_storage;
+    scxml_ioprocessor_descriptor *ioprocessors;
+    size_t ioprocessor_count;
     char current_event_name[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char current_event_send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char current_event_origin[SCXML_EVENT_METADATA_CAPACITY + 1u];

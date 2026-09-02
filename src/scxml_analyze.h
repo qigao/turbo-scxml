@@ -5,6 +5,7 @@
 
 bool scxml_analyze_checked_add(size_t left, size_t right, size_t *out);
 bool scxml_analyze_checked_multiply(size_t left, size_t right, size_t *out);
+bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name);
 bool scxml_analyze_attach_event_content(
     scxml_session_impl *session,
     scxml_external_event_metadata_row *row,
