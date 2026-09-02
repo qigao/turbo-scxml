@@ -666,6 +666,9 @@ struct scxml_session_impl {
     char session_id[TURBO_UUID_STRING_SIZE];
     char scxml_location[sizeof("#_scxml_") - 1u +
                         TURBO_UUID_STRING_SIZE];
+    void *ioprocessor_storage;
+    scxml_ioprocessor_descriptor *ioprocessors;
+    size_t ioprocessor_count;
     char current_event_name[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char current_event_send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char current_event_origin[SCXML_EVENT_METADATA_CAPACITY + 1u];

@@ -326,6 +326,16 @@ typedef enum scxml_location_status {
     SCXML_LOCATION_TOO_SMALL
 } scxml_location_status;
 
+/** Immutable Event I/O processor identity supplied when a session is built. */
+typedef struct scxml_ioprocessor_descriptor {
+    const char *name;
+    size_t name_size;
+    const char *type;
+    size_t type_size;
+    const char *location;
+    size_t location_size;
+} scxml_ioprocessor_descriptor;
+
 #ifndef SCXML_EVENT_METADATA_CAPACITY
 #define SCXML_EVENT_METADATA_CAPACITY 256u
 #endif
@@ -635,6 +645,13 @@ typedef struct scxml_session_config {
     /** Ops are copied; invoke_user remains borrowed through destruction. */
     const scxml_invoke_adapter *invoke;
     void *invoke_user;
+    /**
+     * Borrowed descriptors copied during initialization. The built-in
+     * `scxml` processor is always synthesized by the session. Each configured
+     * name is a unique XML NCName; types are unique nonempty byte strings.
+     */
+    const scxml_ioprocessor_descriptor *ioprocessors;
+    size_t ioprocessor_count;
 } scxml_session_config;
 
 typedef struct scxml_session {
@@ -899,6 +916,16 @@ bool scxml_session_get_invoke_stats(
 scxml_location_status scxml_session_copy_location(
     const scxml_session *session, char *out_location,
     size_t location_capacity, size_t *out_required_capacity);
+/**
+ * Copy the immutable Event I/O address registered for an exact processor
+ * type. `out_required_capacity` includes the trailing NUL. Short and NULL
+ * output buffers write no partial string.
+ */
+scxml_location_status scxml_session_copy_ioprocessor_location(
+    const scxml_session *session,
+    const char *type, size_t type_size,
+    char *out_location, size_t location_capacity,
+    size_t *out_required_capacity);
 const char *scxml_session_error(
     const scxml_session *session);
 

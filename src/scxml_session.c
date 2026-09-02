@@ -5,6 +5,10 @@
 #include "scxml_runtime.h"
 #include "scxml_quickjs.h"
 
+static const char SCXML_IOPROCESSOR_NAME[] = "scxml";
+static const char SCXML_IOPROCESSOR_TYPE[] =
+    "http://www.w3.org/TR/scxml/#SCXMLEventProcessor";
+
 static bool event_io_adapter_valid(
     const scxml_event_io_adapter *adapter) {
     const uint64_t known = SCXML_EVENT_IO_CAP_SEND |
@@ -126,6 +130,7 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->binding_users);
     free(impl->bindings);
     free(impl->system_name);
+    free(impl->ioprocessor_storage);
     free(impl->payload_scratch);
     free(impl->cbind_scratch);
     free(impl->data_decode_allocation);
@@ -488,6 +493,135 @@ static cflow_statechart_instance_status completion_projection_limits(
     return CFLOW_STATECHART_INSTANCE_OK;
 }
 
+static bool ioprocessor_bytes_equal(
+    const char *left, size_t left_size,
+    const char *right, size_t right_size) {
+    return left_size == right_size &&
+           (left_size == 0u || memcmp(left, right, left_size) == 0);
+}
+
+static cflow_statechart_instance_status retain_ioprocessors(
+    scxml_session_impl *impl,
+    const scxml_ioprocessor_descriptor *configured,
+    size_t configured_count) {
+    const size_t core_name_size = sizeof(SCXML_IOPROCESSOR_NAME) - 1u;
+    const size_t core_type_size = sizeof(SCXML_IOPROCESSOR_TYPE) - 1u;
+    const size_t core_location_size = strlen(impl->scxml_location);
+    size_t row_count;
+    size_t row_bytes;
+    size_t string_bytes = 0u;
+    size_t total_bytes;
+    size_t index;
+    unsigned char *allocation;
+    char *cursor;
+
+    if (!scxml_analyze_checked_add(configured_count, 1u, &row_count) ||
+        !scxml_analyze_checked_multiply(
+            row_count, sizeof(scxml_ioprocessor_descriptor), &row_bytes))
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+    if (configured_count != 0u && configured == NULL)
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+
+#define ADD_IOPROCESSOR_STRING_BYTES(byte_count)                            \
+    do {                                                                    \
+        size_t bytes_with_nul;                                              \
+        if (!scxml_analyze_checked_add((byte_count), 1u, &bytes_with_nul) || \
+            !scxml_analyze_checked_add(                                     \
+                string_bytes, bytes_with_nul, &string_bytes))               \
+            return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;                \
+    } while (0)
+
+    ADD_IOPROCESSOR_STRING_BYTES(core_name_size);
+    ADD_IOPROCESSOR_STRING_BYTES(core_type_size);
+    ADD_IOPROCESSOR_STRING_BYTES(core_location_size);
+    for (index = 0u; index < configured_count; ++index) {
+        const scxml_ioprocessor_descriptor *row = &configured[index];
+        size_t prior;
+        turbo_xml_string_view name;
+        if (row->name == NULL || row->name_size == 0u ||
+            row->type == NULL || row->type_size == 0u ||
+            row->location == NULL || row->location_size == 0u)
+            return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        if (row->name_size > SCXML_EVENT_METADATA_CAPACITY ||
+            row->type_size > SCXML_EVENT_METADATA_CAPACITY ||
+            row->location_size > SCXML_EVENT_METADATA_CAPACITY)
+            return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+        name = (turbo_xml_string_view){row->name, row->name_size};
+        if (!scxml_analyze_is_xml_ncname(name) ||
+            memchr(row->type, '\0', row->type_size) != NULL ||
+            memchr(row->location, '\0', row->location_size) != NULL ||
+            ioprocessor_bytes_equal(
+                row->name, row->name_size,
+                SCXML_IOPROCESSOR_NAME, core_name_size) ||
+            ioprocessor_bytes_equal(
+                row->type, row->type_size,
+                SCXML_IOPROCESSOR_TYPE, core_type_size))
+            return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        for (prior = 0u; prior < index; ++prior) {
+            const scxml_ioprocessor_descriptor *candidate =
+                &configured[prior];
+            if (ioprocessor_bytes_equal(
+                    row->name, row->name_size,
+                    candidate->name, candidate->name_size) ||
+                ioprocessor_bytes_equal(
+                    row->type, row->type_size,
+                    candidate->type, candidate->type_size))
+                return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        }
+        ADD_IOPROCESSOR_STRING_BYTES(row->name_size);
+        ADD_IOPROCESSOR_STRING_BYTES(row->type_size);
+        ADD_IOPROCESSOR_STRING_BYTES(row->location_size);
+    }
+#undef ADD_IOPROCESSOR_STRING_BYTES
+
+    if (!scxml_analyze_checked_add(row_bytes, string_bytes, &total_bytes))
+        return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
+    allocation = (unsigned char *)calloc(total_bytes, 1u);
+    if (allocation == NULL)
+        return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
+    impl->ioprocessor_storage = allocation;
+    impl->ioprocessors = (scxml_ioprocessor_descriptor *)allocation;
+    impl->ioprocessor_count = row_count;
+    cursor = (char *)(allocation + row_bytes);
+
+#define COPY_IOPROCESSOR_STRING(target, source, byte_count) \
+    do {                                                     \
+        (target) = cursor;                                   \
+        memcpy(cursor, (source), (byte_count));              \
+        cursor[(byte_count)] = '\0';                         \
+        cursor += (byte_count) + 1u;                         \
+    } while (0)
+
+    impl->ioprocessors[0].name_size = core_name_size;
+    impl->ioprocessors[0].type_size = core_type_size;
+    impl->ioprocessors[0].location_size = core_location_size;
+    COPY_IOPROCESSOR_STRING(
+        impl->ioprocessors[0].name,
+        SCXML_IOPROCESSOR_NAME, core_name_size);
+    COPY_IOPROCESSOR_STRING(
+        impl->ioprocessors[0].type,
+        SCXML_IOPROCESSOR_TYPE, core_type_size);
+    COPY_IOPROCESSOR_STRING(
+        impl->ioprocessors[0].location,
+        impl->scxml_location, core_location_size);
+    for (index = 0u; index < configured_count; ++index) {
+        const scxml_ioprocessor_descriptor *source = &configured[index];
+        scxml_ioprocessor_descriptor *target = &impl->ioprocessors[index + 1u];
+        target->name_size = source->name_size;
+        target->type_size = source->type_size;
+        target->location_size = source->location_size;
+        COPY_IOPROCESSOR_STRING(target->name, source->name, source->name_size);
+        COPY_IOPROCESSOR_STRING(target->type, source->type, source->type_size);
+        COPY_IOPROCESSOR_STRING(
+            target->location, source->location, source->location_size);
+    }
+#undef COPY_IOPROCESSOR_STRING
+
+    impl->system_values.ioprocessors = impl->ioprocessors;
+    impl->system_values.ioprocessor_count = impl->ioprocessor_count;
+    return CFLOW_STATECHART_INSTANCE_OK;
+}
+
 static cflow_statechart_instance_status scxml_session_init_model(
     scxml_session *session,
     const scxml_session_config *config,
@@ -516,6 +650,8 @@ static cflow_statechart_instance_status scxml_session_init_model(
     bool initialized_cmeta_state_managed = false;
     if (session == NULL || session->impl != NULL || config == NULL ||
         config->program == NULL || config->program->impl == NULL ||
+        (config->ioprocessor_count != 0u &&
+         config->ioprocessors == NULL) ||
         !event_io_adapter_valid(config->event_io) ||
         !invoke_adapter_valid(config->invoke))
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
@@ -631,15 +767,20 @@ static cflow_statechart_instance_status scxml_session_init_model(
     impl->system_values.session_id =
         (scxml_expr_string_view){
             impl->session_id, TURBO_UUID_STRING_LENGTH};
-    impl->system_values.scxml_location =
-        (scxml_expr_string_view){
-            impl->scxml_location, strlen(impl->scxml_location)};
+    status = retain_ioprocessors(
+        impl, config->ioprocessors, config->ioprocessor_count);
+    if (status != CFLOW_STATECHART_INSTANCE_OK) {
+        session_free_storage(impl);
+        free(impl);
+        return status;
+    }
     scxml_runtime_clear_current_event_metadata(impl);
     if (data_model == SCXML_DATA_MODEL_CMETA) {
         if (program->document_name_size != 0u) {
             impl->system_name =
                 (char *)malloc(program->document_name_size);
             if (impl->system_name == NULL) {
+                session_free_storage(impl);
                 free(impl);
                 return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
             }
@@ -1226,17 +1367,41 @@ bool scxml_session_get_invoke_stats(
 scxml_location_status scxml_session_copy_location(
     const scxml_session *session, char *out_location,
     size_t location_capacity, size_t *out_required_capacity) {
+    return scxml_session_copy_ioprocessor_location(
+        session,
+        SCXML_IOPROCESSOR_TYPE, sizeof(SCXML_IOPROCESSOR_TYPE) - 1u,
+        out_location, location_capacity, out_required_capacity);
+}
+
+scxml_location_status scxml_session_copy_ioprocessor_location(
+    const scxml_session *session,
+    const char *type, size_t type_size,
+    char *out_location, size_t location_capacity,
+    size_t *out_required_capacity) {
     const scxml_session_impl *impl = session != NULL
         ? (const scxml_session_impl *)session->impl : NULL;
+    const scxml_ioprocessor_descriptor *row = NULL;
     size_t required;
-    if (impl == NULL || out_required_capacity == NULL)
+    size_t index;
+    if (impl == NULL || type == NULL || type_size == 0u ||
+        out_required_capacity == NULL)
         return SCXML_LOCATION_INVALID_ARGUMENT;
-    required = impl->system_values.scxml_location.size + 1u;
+    for (index = 0u; index < impl->ioprocessor_count; ++index) {
+        const scxml_ioprocessor_descriptor *candidate =
+            &impl->ioprocessors[index];
+        if (ioprocessor_bytes_equal(
+                type, type_size, candidate->type, candidate->type_size)) {
+            row = candidate;
+            break;
+        }
+    }
+    if (row == NULL) return SCXML_LOCATION_INVALID_ARGUMENT;
+    required = row->location_size + 1u;
     if (out_location == NULL || location_capacity < required) {
         *out_required_capacity = required;
         return SCXML_LOCATION_TOO_SMALL;
     }
-    memcpy(out_location, impl->scxml_location, required);
+    memcpy(out_location, row->location, required);
     *out_required_capacity = required;
     return SCXML_LOCATION_OK;
 }

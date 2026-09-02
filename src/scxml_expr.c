@@ -1,4 +1,5 @@
 #include "scxml_expr.h"
+#include "scxml_analyze.h"
 #include "scxml_location.h"
 
 #include <query_vm.h>
@@ -78,7 +79,7 @@ typedef enum expr_operand_kind {
     EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID,
     EXPR_OPERAND_SYSTEM_EVENT_DATA,
     EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION,
-    EXPR_OPERAND_SYSTEM_SCXML_LOCATION
+    EXPR_OPERAND_SYSTEM_IOPROCESSOR_LOCATION
 } expr_operand_kind;
 
 typedef struct expr_token {
@@ -423,6 +424,72 @@ static bool parser_retain_string(expr_parser *parser, size_t offset,
         parser->literal_storage_index += size;
     }
     parser->retained_string_bytes += size;
+    return true;
+}
+
+static bool ioprocessor_property_follow(char value) {
+    return expr_space(value) || value == ')' || value == '!' ||
+           value == '+' || value == '-' || value == '*' || value == '/' ||
+           value == '%' || value == '=' || value == '<' || value == '>' ||
+           value == '&' || value == '|';
+}
+
+static bool ioprocessor_scan_boundary(char value) {
+    return value == '(' || value == ')' || value == '!' || value == '+' ||
+           value == '*' || value == '/' || value == '%' || value == '=' ||
+           value == '<' || value == '>' || value == '&' || value == '|' ||
+           value == '\'' || value == '"';
+}
+
+static bool parser_retain_ioprocessor_name(
+    expr_parser *parser, expr_operand *operand) {
+    static const char property[] = "location";
+    size_t name_offset = parser->cursor;
+    size_t scan;
+    size_t selected_name_size = 0u;
+    size_t selected_end = 0u;
+    turbo_xml_string_view selected_name;
+    while (name_offset < parser->source_size &&
+           expr_space(parser->source[name_offset]))
+        ++name_offset;
+    for (scan = name_offset; scan < parser->source_size; ++scan) {
+        size_t property_offset;
+        size_t property_end;
+        size_t name_end;
+        if (ioprocessor_scan_boundary(parser->source[scan])) break;
+        if (parser->source[scan] != '.') continue;
+        property_offset = scan + 1u;
+        while (property_offset < parser->source_size &&
+               expr_space(parser->source[property_offset]))
+            ++property_offset;
+        if (sizeof(property) - 1u >
+                parser->source_size - property_offset ||
+            memcmp(parser->source + property_offset,
+                   property, sizeof(property) - 1u) != 0)
+            continue;
+        property_end = property_offset + sizeof(property) - 1u;
+        if (property_end < parser->source_size &&
+            !ioprocessor_property_follow(parser->source[property_end]))
+            continue;
+        name_end = scan;
+        while (name_end > name_offset &&
+               expr_space(parser->source[name_end - 1u]))
+            --name_end;
+        selected_name_size = name_end - name_offset;
+        selected_end = property_end;
+    }
+    selected_name = (turbo_xml_string_view){
+        parser->source + name_offset, selected_name_size};
+    if (selected_end == 0u ||
+        !scxml_analyze_is_xml_ncname(selected_name))
+        return parser_fail(
+            parser, SCXML_EXPR_UNKNOWN_LOCATION, name_offset,
+            "_ioprocessors requires .<name>.location");
+    if (!parser_retain_string(
+            parser, name_offset, selected_name_size, operand))
+        return false;
+    parser->cursor = selected_end;
+    parser_next(parser);
     return true;
 }
 
@@ -1098,36 +1165,13 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
         if (parser->token.kind != EXPR_TOKEN_DOT) {
             return parser_fail(
                 parser, SCXML_EXPR_UNKNOWN_LOCATION, offset,
-                "_ioprocessors requires .scxml.location");
+                "_ioprocessors requires .<name>.location");
         }
-        parser_next(parser);
-        if (parser->token.kind != EXPR_TOKEN_IDENT ||
-            !token_text_equal(parser, "scxml")) {
-            return parser_fail(
-                parser, SCXML_EXPR_UNKNOWN_LOCATION,
-                parser->token.offset,
-                "_ioprocessors requires .scxml.location");
-        }
-        parser_next(parser);
-        if (parser->token.kind != EXPR_TOKEN_DOT) {
-            return parser_fail(
-                parser, SCXML_EXPR_UNKNOWN_LOCATION,
-                parser->token.offset,
-                "_ioprocessors requires .scxml.location");
-        }
-        parser_next(parser);
-        if (parser->token.kind != EXPR_TOKEN_IDENT ||
-            !token_text_equal(parser, "location")) {
-            return parser_fail(
-                parser, SCXML_EXPR_UNKNOWN_LOCATION,
-                parser->token.offset,
-                "_ioprocessors requires .scxml.location");
-        }
-        operand.kind = EXPR_OPERAND_SYSTEM_SCXML_LOCATION;
+        if (!parser_retain_ioprocessor_name(parser, &operand)) return false;
+        operand.kind = EXPR_OPERAND_SYSTEM_IOPROCESSOR_LOCATION;
         operand.value_kind = EXPR_VALUE_STRING;
         out->kind = EXPR_VALUE_STRING;
         out->reg = target;
-        parser_next(parser);
         return parser_add_operand(parser, operand, &operand_index) &&
                parser_emit_instruction(parser, QVM_OP_LOAD_CONST, target,
                                        0u, operand_index, 0u);
@@ -2012,8 +2056,13 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
                 view = &context->system_values->name;
             else if (operand->kind == EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND)
                 view = &context->system_values->session_id;
-            else
-                view = &context->system_values->scxml_location;
+            else {
+                make_value(out, EXPR_VALUE_BOOL);
+                out->boolean =
+                    context->system_values->ioprocessors != NULL &&
+                    context->system_values->ioprocessor_count != 0u;
+                return 1;
+            }
             make_value(out, EXPR_VALUE_BOOL);
             out->boolean = view->data != NULL;
             return 1;
@@ -2026,8 +2075,7 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
         case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN:
         case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE:
         case EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID:
-        case EXPR_OPERAND_SYSTEM_EVENT_DATA:
-        case EXPR_OPERAND_SYSTEM_SCXML_LOCATION: {
+        case EXPR_OPERAND_SYSTEM_EVENT_DATA: {
             const scxml_expr_string_view *view;
             if (context->system_values == NULL) {
                 context->failed = true;
@@ -2037,9 +2085,6 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
                 view = &context->system_values->name;
             } else if (operand->kind == EXPR_OPERAND_SYSTEM_SESSION_ID) {
                 view = &context->system_values->session_id;
-            } else if (operand->kind ==
-                       EXPR_OPERAND_SYSTEM_SCXML_LOCATION) {
-                view = &context->system_values->scxml_location;
             } else {
                 view = system_event_field_view(
                     context->system_values, operand->kind);
@@ -2056,6 +2101,43 @@ static int expr_resolve(void *user, uint32_t index, qvm_value_t *out) {
             make_value(out, EXPR_VALUE_STRING);
             out->str = view->data;
             out->length = view->size;
+            return 1;
+        }
+        case EXPR_OPERAND_SYSTEM_IOPROCESSOR_LOCATION: {
+            const scxml_ioprocessor_descriptor *row = NULL;
+            size_t row_index;
+            if (context->system_values == NULL ||
+                (context->system_values->ioprocessor_count != 0u &&
+                 context->system_values->ioprocessors == NULL)) {
+                context->failed = true;
+                return 0;
+            }
+            for (row_index = 0u;
+                 row_index < context->system_values->ioprocessor_count;
+                 ++row_index) {
+                const scxml_ioprocessor_descriptor *candidate =
+                    &context->system_values->ioprocessors[row_index];
+                if (candidate->name_size == operand->value.string.size &&
+                    (candidate->name_size == 0u ||
+                     memcmp(candidate->name, operand->value.string.data,
+                            candidate->name_size) == 0)) {
+                    row = candidate;
+                    break;
+                }
+            }
+            if (row == NULL) {
+                context->failed = true;
+                context->failure_status = SCXML_EXPR_UNKNOWN_LOCATION;
+                return 0;
+            }
+            if (row->location == NULL ||
+                row->location_size > context->program->max_string_bytes) {
+                context->failed = true;
+                return 0;
+            }
+            make_value(out, EXPR_VALUE_STRING);
+            out->str = row->location;
+            out->length = row->location_size;
             return 1;
         }
     }

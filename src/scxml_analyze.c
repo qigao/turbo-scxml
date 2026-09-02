@@ -274,7 +274,7 @@ static bool is_ncname_char(uint32_t codepoint) {
            (codepoint >= 0x203fu && codepoint <= 0x2040u);
 }
 
-static bool is_xml_ncname(turbo_xml_string_view name) {
+bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name) {
     size_t cursor = 0u;
     uint32_t codepoint;
     if (is_empty_view(name) ||
@@ -344,7 +344,7 @@ bool scxml_analyze_parse_null_in_condition(
     skip_xml_space(value, &cursor);
     if (cursor == value.size || value.data[cursor++] != ')') return false;
     skip_xml_space(value, &cursor);
-    return cursor == value.size && is_xml_ncname(*out_state);
+    return cursor == value.size && scxml_analyze_is_xml_ncname(*out_state);
 }
 
 scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node) {
@@ -756,7 +756,7 @@ bool scxml_analyze_completion_token(turbo_xml_string_view token,
     }
     state_name->data = token.data + sizeof(prefix) - 1u;
     state_name->size = token.size - (sizeof(prefix) - 1u);
-    return is_xml_ncname(*state_name);
+    return scxml_analyze_is_xml_ncname(*state_name);
 }
 
 bool scxml_analyze_completion_descriptor_matches(
@@ -1303,7 +1303,7 @@ static scxml_status analyze_send(scxml_build *build,
                           "send idlocation must be non-empty");
     if ((target_attribute.impl != NULL && target.size == 0u) ||
         (type_attribute.impl != NULL && type.size == 0u) ||
-        (id_attribute.impl != NULL && !is_xml_ncname(id))) {
+        (id_attribute.impl != NULL && !scxml_analyze_is_xml_ncname(id))) {
         scxml_syntax_attribute owner = target_attribute.impl != NULL &&
                                             target.size == 0u
                                         ? target_attribute
@@ -1481,7 +1481,7 @@ static scxml_status analyze_cancel(scxml_build *build,
     if (status != SCXML_OK) return status;
     if ((sendid_attribute.impl == NULL) ==
             (sendid_expr_attribute.impl == NULL) ||
-        (sendid_attribute.impl != NULL && !is_xml_ncname(sendid))) {
+        (sendid_attribute.impl != NULL && !scxml_analyze_is_xml_ncname(sendid))) {
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
             sendid_attribute.impl != NULL
@@ -2212,7 +2212,7 @@ static scxml_status analyze_invoke(
                               "dynamic invoke id or done Event exceeds metadata limit");
         }
     }
-    if (id_attribute.impl != NULL && !is_xml_ncname(id)) {
+    if (id_attribute.impl != NULL && !scxml_analyze_is_xml_ncname(id)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_attribute_location(id_attribute),
                           "invoke id must be an XML NCName");
@@ -2552,7 +2552,8 @@ scxml_status scxml_analyze_state(scxml_build *build,
                           "state count overflow");
     }
     if (id_attribute.impl != NULL &&
-        !is_xml_ncname(scxml_syntax_attribute_value(id_attribute))) {
+        !scxml_analyze_is_xml_ncname(
+            scxml_syntax_attribute_value(id_attribute))) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_attribute_location(id_attribute),
                           "SCXML state id must be an XML NCName");

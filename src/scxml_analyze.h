@@ -27,6 +27,7 @@ scxml_status scxml_analyze_fail(
     scxml_build *build, scxml_status status,
     turbo_xml_location location, const char *message);
 bool scxml_analyze_is_xml_nmtoken(turbo_xml_string_view token);
+bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name);
 bool scxml_analyze_parse_null_in_condition(
     turbo_xml_string_view value, turbo_xml_string_view *out_state);
 scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node);
