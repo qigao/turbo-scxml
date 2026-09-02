@@ -29,8 +29,16 @@ Status meanings are strict:
 - `UNSUPPORTED` means a mandatory upstream document remains outside the
   implemented or testable TurboSCXML profile. The row states the missing
   assertion rather than silently omitting it.
-- `N/A` is reserved for optional profiles that TurboSCXML does not claim,
-  currently ECMAScript and XPath behavior.
+- `N/A` is reserved for optional profiles that TurboSCXML does not claim.
+  The current inventory contains ECMAScript and adjacent optional Event I/O
+  behavior; it contains no XPath-specific assertion rows.
+
+XPath is not a TurboSCXML roadmap gap. The XPath Data Model was marked at risk
+in the [2014 Candidate Recommendation](https://www.w3.org/TR/2014/CR-scxml-20140313/)
+and its normative profile was removed before the
+[2015 Recommendation](https://www.w3.org/TR/2015/REC-scxml-20150901/).
+Rocida XML XPath queries remain an independent general XML capability and do
+not imply an SCXML XPath data-model claim.
 
 The current CMeta `<donedata><param>` profile is deliberately narrower than
 the complete W3C failure semantics. Successful params are materialized from

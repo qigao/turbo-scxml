@@ -32,6 +32,20 @@ and system-variable work supersedes only the original feature cutoff below;
 it does not supersede the dependency, ownership, transaction, limit, or error
 decisions in this document.
 
+### Data-model scope
+
+TurboSCXML supports the required SCXML null data model and the project-defined,
+opt-in CMeta data model. XPath is deliberately not a TurboSCXML data-model
+target: its profile was marked at risk in the
+[2014 Candidate Recommendation](https://www.w3.org/TR/2014/CR-scxml-20140313/)
+and removed from the normative data-model definitions in the
+[2015 Recommendation](https://www.w3.org/TR/2015/REC-scxml-20150901/).
+The XPath query API supplied by Rocida XmlParser remains available to XML
+consumers, but parser query support is not treated as an SCXML expression,
+location, mutation, system-variable, or scripting profile. Missing XPath
+support must therefore not be reported as a TurboSCXML conformance gap or
+roadmap item.
+
 ## Original phase scope
 
 This phase adds two independently linkable Rocida libraries:
