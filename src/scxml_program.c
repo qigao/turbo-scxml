@@ -99,6 +99,7 @@ static scxml_status compile_scxml_model(
     size_t guard_capacity = 0u;
     size_t transition_action_capacity = 0u;
     size_t descriptor_extra_multiplier = 0u;
+    size_t event_capacity = 0u;
     size_t supplemental_capacity = 0u;
     char *name_cursor;
     bool needs_execution_error = false;
@@ -276,6 +277,14 @@ static scxml_status compile_scxml_model(
                             "reserved SCXML error event count overflow");
         goto cleanup;
     }
+    if (!scxml_analyze_checked_add(
+            counts.event_occurrences, 1u, &event_capacity)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(root),
+            "private external Event count overflow");
+        goto cleanup;
+    }
     transition_capacity = counts.transition_rows;
     transition_target_capacity = counts.transition_target_rows;
     guard_capacity = counts.guard_rows;
@@ -312,6 +321,27 @@ static scxml_status compile_scxml_model(
             goto cleanup;
         }
     }
+    if (!scxml_analyze_checked_add(
+            transition_capacity,
+            counts.external_unmatched_transition_rows,
+            &transition_capacity) ||
+        !scxml_analyze_checked_add(
+            transition_target_capacity,
+            counts.external_unmatched_target_rows,
+            &transition_target_capacity) ||
+        !scxml_analyze_checked_add(
+            guard_capacity, counts.external_unmatched_guard_rows,
+            &guard_capacity) ||
+        !scxml_analyze_checked_add(
+            transition_action_capacity,
+            counts.external_unmatched_action_rows,
+            &transition_action_capacity)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(root),
+            "private wildcard expansion overflow");
+        goto cleanup;
+    }
     if (!scxml_analyze_checked_add(counts.state_action_rows,
                      transition_action_capacity,
                      &action_ref_count) ||
@@ -338,7 +368,7 @@ static scxml_status compile_scxml_model(
         transition_target_capacity, sizeof(*build.transition_targets));
     build.guards = scxml_emit_allocate_rows(guard_capacity, sizeof(*build.guards));
     build.events =
-        scxml_emit_allocate_rows(counts.event_occurrences, sizeof(*build.events));
+        scxml_emit_allocate_rows(event_capacity, sizeof(*build.events));
     build.executables = scxml_emit_allocate_rows(counts.executable_blocks,
                                       sizeof(*build.executables));
     build.state_actions = scxml_emit_allocate_rows(counts.state_action_rows,
@@ -446,9 +476,9 @@ static scxml_status compile_scxml_model(
         (guard_capacity != 0u &&
          (build.guards == NULL || build.guard_bindings == NULL ||
           build.guard_users == NULL)) ||
+        build.events == NULL ||
         (counts.event_occurrences != 0u &&
-          (build.events == NULL || build.event_names == NULL ||
-           build.event_occurrences == NULL)) ||
+          (build.event_names == NULL || build.event_occurrences == NULL)) ||
         (counts.executable_blocks != 0u &&
          (build.executables == NULL || build.bindings == NULL)) ||
         (counts.block_rows != 0u && build.blocks == NULL) ||
@@ -528,6 +558,17 @@ static scxml_status compile_scxml_model(
         scxml_analyze_collect_reserved_error_events(&build, scxml_syntax_node_location(root));
     status = scxml_analyze_build_event_names(&build, build.event_occurrence_index);
     if (status != SCXML_OK) goto cleanup;
+    if (build.event_name_count >= CFLOW_MACHINE_MAX_EVENTS) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED,
+            scxml_syntax_node_location(root),
+            "SCXML Event count leaves no native private external Event slot");
+        goto cleanup;
+    }
+    build.external_unmatched_event =
+        (cflow_event_id)(build.event_name_count + 1u);
+    build.events[build.event_name_count] = (cflow_event_type){
+        build.external_unmatched_event, &cmeta_type_bool};
     if (needs_execution_error) {
         const turbo_xml_string_view execution_name = {
             SCXML_ERROR_EXECUTION_EVENT,
@@ -646,7 +687,7 @@ static scxml_status compile_scxml_model(
     definition.states = build.states;
     definition.state_count = build.state_index;
     definition.events = build.events;
-    definition.event_count = build.event_name_count;
+    definition.event_count = build.event_name_count + 1u;
     definition.guards = build.guards;
     definition.guard_count = build.guard_index;
     definition.executables = build.executables;
@@ -686,12 +727,11 @@ static scxml_status compile_scxml_model(
     impl->event_names = scxml_emit_allocate_rows(build.event_name_count,
                                       sizeof(*impl->event_names));
     impl->event_names_by_id = scxml_emit_allocate_rows(
-        build.event_name_count, sizeof(*impl->event_names_by_id));
+        build.event_name_count + 1u, sizeof(*impl->event_names_by_id));
     impl->name_storage = name_bytes != 0u ? (char *)malloc(name_bytes) : NULL;
     if ((build.state_name_index != 0u && impl->state_names == NULL) ||
         (build.event_name_count != 0u && impl->event_names == NULL) ||
-        (build.event_name_count != 0u &&
-         impl->event_names_by_id == NULL) ||
+        impl->event_names_by_id == NULL ||
         (name_bytes != 0u && impl->name_storage == NULL)) {
         status = scxml_analyze_fail(&build, SCXML_ALLOCATION_FAILED,
                             scxml_syntax_node_location(root),
@@ -713,6 +753,9 @@ static scxml_status compile_scxml_model(
     }
     impl->state_name_count = build.state_name_index;
     impl->event_name_count = build.event_name_count;
+    impl->external_unmatched_event = build.external_unmatched_event;
+    impl->external_unmatched_name = (scxml_program_name){
+        "", 0u, build.external_unmatched_event};
     impl->data_model = data_model;
     impl->cmeta_root = cmeta_root;
     impl->requirements = build.requirements;
@@ -792,7 +835,8 @@ static scxml_status compile_scxml_model(
     for (index = 0u; index < impl->guard_binding_count; ++index) {
         impl->guard_users[index].event_names_by_id =
             impl->event_names_by_id;
-        impl->guard_users[index].event_name_count = impl->event_name_count;
+        impl->guard_users[index].event_name_count =
+            impl->event_name_count + 1u;
         impl->guard_users[index].system_values.name =
             (scxml_expr_string_view){
                 impl->document_name, impl->document_name_size};
@@ -802,7 +846,7 @@ static scxml_status compile_scxml_model(
             (scxml_block *)impl->bindings[index].user;
         if (block != NULL) {
             block->event_names_by_id = impl->event_names_by_id;
-            block->event_name_count = impl->event_name_count;
+            block->event_name_count = impl->event_name_count + 1u;
             block->system_values.name =
                 (scxml_expr_string_view){
                     impl->document_name, impl->document_name_size};
@@ -846,6 +890,8 @@ static scxml_status compile_scxml_model(
         }
         impl->event_names_by_id[id - 1u] = &impl->event_names[index];
     }
+    impl->event_names_by_id[impl->external_unmatched_event - 1u] =
+        &impl->external_unmatched_name;
     out->impl = impl;
     impl = NULL;
     status = SCXML_OK;

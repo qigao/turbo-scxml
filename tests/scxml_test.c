@@ -137,6 +137,59 @@ static scxml_status compile_status(const char *source,
                                diagnostic);
 }
 
+static bool run_named_external_event(
+    const char *source, const char *event_name,
+    bool expected_done, uint64_t expected_completed) {
+    scxml_program program = {0};
+    scxml_session session = {0};
+    scxml_diagnostic diagnostic = {0};
+    cflow_executor executor = {0};
+    cflow_statechart_instance_stats stats = {0};
+    scxml_session_config config = {0};
+    scxml_event_metadata metadata = {
+        .abi_version = SCXML_EVENT_METADATA_ABI,
+        .struct_size = sizeof(metadata)};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+
+    if (source == NULL || event_name == NULL ||
+        compile_status(source, &program, &diagnostic) != SCXML_OK ||
+        !cflow_executor_serial_init(&executor))
+        goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = 2u,
+        .internal_event_capacity = 2u,
+        .completion_capacity = 2u,
+        .microstep_limit = 16u};
+    if (scxml_session_init(&session, &config) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (scxml_session_try_send_named_with_metadata(
+            &session, event_name, strlen(event_name), &metadata) !=
+            CFLOW_MAILBOX_OK ||
+        !cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats))
+        goto cleanup;
+    succeeded = stats.done == expected_done && !stats.errored &&
+        stats.external_accepted == UINT64_C(1) &&
+        stats.external_completed == expected_completed &&
+        stats.external_failed == UINT64_C(0) &&
+        stats.external_pending == 0u && stats.external_in_flight == 0u;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    return succeeded;
+}
+
 typedef struct scxml_adapter_probe {
     size_t close_calls;
     size_t prepare_send_calls;
@@ -497,6 +550,87 @@ cleanup:
 }
 
 suite("SCXML Core to native CFlow Statechart compiler") {
+    it("routes an unseen hierarchical external Event through its longest compiled prefix") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='alarm.system' "
+            "target='done'/><transition event='alarm' target='fail'/>"
+            "</state><final id='done'/><state id='fail'/></scxml>";
+
+        check_true(run_named_external_event(
+            source, "alarm.system.disk.full", true, UINT64_C(1)));
+    }
+
+    it("routes a wholly unseen external Event only through wildcard transitions") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='*' target='done'/>"
+            "</state><final id='done'/></scxml>";
+
+        check_true(run_named_external_event(
+            source, "vendor.device.changed", true, UINT64_C(1)));
+    }
+
+    it("consumes an unmatched external Event when no wildcard transition exists") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='known' target='done'/>"
+            "</state><final id='done'/></scxml>";
+
+        check_true(run_named_external_event(
+            source, "vendor.ignored", false, UINT64_C(1)));
+    }
+
+    it("keeps private Event routing hidden and rejects invalid named admission") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='*' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        scxml_program program = {0};
+        scxml_session session = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executor = {0};
+        cflow_event_view hidden = {0};
+        scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(metadata)};
+        scxml_session_config config = {0};
+        char oversized[SCXML_EVENT_METADATA_CAPACITY + 2u];
+
+        memset(oversized, 'e', sizeof(oversized));
+        check_equal(compile_status(source, &program, &diagnostic), SCXML_OK);
+        check_false(scxml_program_event(
+            &program, "vendor.hidden", sizeof("vendor.hidden") - 1u,
+            &hidden));
+        check_true(cflow_executor_serial_init(&executor));
+        config = (scxml_session_config){
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 8u};
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+                        &session, NULL, 1u, &metadata),
+                    CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_try_send_named_with_metadata(
+                        &session, "", 0u, &metadata),
+                    CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_try_send_named_with_metadata(
+                        &session, oversized, sizeof(oversized), &metadata),
+                    CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_try_send_named_with_metadata(
+                        &session, "vendor.hidden",
+                        sizeof("vendor.hidden") - 1u, NULL),
+                    CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("lowers supported structural elements and deterministic name maps") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
@@ -1708,7 +1842,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             if (transition->source == all->id) ++all_events;
         }
         check_equal(start_events, (size_t)2u);
-        check_equal(all_events, (size_t)2u);
+        check_equal(all_events, (size_t)3u);
         scxml_program_destroy(&program);
     }
 
@@ -3096,9 +3230,16 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         static const char valid[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
             "<state id='xy'/></scxml>";
+        static const char exact_descriptor[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='waiting'><transition event='go' target='done'/>"
+            "</state><final id='done'/></scxml>";
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
         scxml_limits limits = scxml_default_limits();
+
+        check_equal(limits.max_events,
+                    (size_t)(CFLOW_MACHINE_MAX_EVENTS - 1u));
 
         check_equal(compile_status(malformed, &program, &diagnostic),
                     SCXML_XML_ERROR);
@@ -3117,6 +3258,15 @@ suite("SCXML Core to native CFlow Statechart compiler") {
                     SCXML_LIMIT_EXCEEDED);
         check_not_null(strstr(diagnostic.message, "max_name_bytes"));
         check_null(program.impl);
+
+        limits = scxml_default_limits();
+        limits.max_transitions = 4u;
+        check_equal(scxml_compile(
+                        &program, exact_descriptor,
+                        sizeof(exact_descriptor) - 1u, &limits,
+                        &diagnostic),
+                    SCXML_OK);
+        scxml_program_destroy(&program);
     }
 
     it("executes an independent SCXML fixture as the expected native trace") {

@@ -13,7 +13,10 @@ int main(void) {
                 limits.max_transitions > 0u && limits.max_name_bytes > 0u &&
                 cmeta_v2.abi_version == SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 &&
                 cmeta_v2.struct_size == sizeof(cmeta_v2) &&
-                cmeta_v2.actions == NULL && cmeta_v2.action_count == 0u;
+                cmeta_v2.actions == NULL && cmeta_v2.action_count == 0u &&
+                scxml_session_try_send_named_with_metadata(
+                    NULL, NULL, 0u, NULL) ==
+                    CFLOW_MAILBOX_INVALID_ARGUMENT;
 #if defined(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
     const scxml_quickjs_compile_options_v1 quickjs =
         scxml_quickjs_default_compile_options(NULL);
