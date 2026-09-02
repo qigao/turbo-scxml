@@ -64,12 +64,15 @@ running both cannot satisfy the guard.
 
 Public TurboSCXML API/ABI and data formats do not change. The runtime now
 requires the CFlow V4 host transaction ABI and no longer composes V2/V3 hook
-tables. The compiler admits the existing bounded CMeta assignment subset in
-`finalize`; unsupported external-effect elements remain fail-fast.
+tables. The compiler admits the existing bounded CMeta executable subset in
+`finalize`, including conditions, foreach loops, internal raises, staged
+send/cancel effects, assignments, and logs.
 
 ## Verification
 
 - Focused TinyTest filters for tests 233 and 234 must pass.
+- CMeta and foreach unit tests cover finalize conditions, iteration, staged
+  assignments, internal raises, and exactly-once send/cancel ticket commits.
 - A temporary local mutation that skips `execute_invocation_finalize()` must
   make both focused tests fail; the mutation is then reverted before delivery.
 - The manifest must contain 202 rows: 168 mandatory, 34 optional, 132 PASS,

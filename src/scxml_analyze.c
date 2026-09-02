@@ -1371,7 +1371,7 @@ static scxml_status analyze_cancel(scxml_build *build,
 
 static scxml_status analyze_executable_content(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    size_t conditional_depth, bool finalize_safe);
+    size_t conditional_depth);
 
 static scxml_status analyze_log(scxml_build *build,
                                       scxml_syntax_node node,
@@ -1459,7 +1459,7 @@ static scxml_status analyze_assign(scxml_build *build,
 
 static scxml_status analyze_foreach(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    size_t executable_depth, bool finalize_safe) {
+    size_t executable_depth) {
     const scxml_syntax_attribute array = scxml_analyze_find_attribute(node, "array");
     const scxml_syntax_attribute item = scxml_analyze_find_attribute(node, "item");
     const scxml_syntax_attribute index = scxml_analyze_find_attribute(node, "index");
@@ -1471,10 +1471,6 @@ static scxml_status analyze_foreach(
         return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
                           scxml_syntax_node_location(node),
                           "foreach requires the CMeta data model");
-    if (finalize_safe)
-        return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
-                          scxml_syntax_node_location(node),
-                          "CMeta finalize foreach is not supported yet");
     if (array.impl == NULL ||
         is_empty_view(scxml_syntax_attribute_value(array)) ||
         item.impl == NULL ||
@@ -1502,7 +1498,7 @@ static scxml_status analyze_foreach(
     if (executable_depth > counts->max_conditional_depth)
         counts->max_conditional_depth = executable_depth;
     status = analyze_executable_content(
-        build, node, counts, executable_depth, false);
+        build, node, counts, executable_depth);
     if (status != SCXML_OK) return status;
     if (counts->executable_steps == first_child_step + 1u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
@@ -1562,21 +1558,12 @@ static scxml_status validate_empty_marker(
 
 static scxml_status analyze_conditional(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    size_t conditional_depth, bool finalize_safe) {
+    size_t conditional_depth) {
     size_t branch_count = 1u;
     size_t index;
     bool saw_else = false;
     scxml_status status;
 
-    if (build->data_model == SCXML_DATA_MODEL_CMETA && finalize_safe) {
-        const scxml_syntax_attribute condition = scxml_analyze_find_attribute(node, "cond");
-        return scxml_analyze_fail(
-            build, SCXML_UNSUPPORTED_FEATURE,
-            condition.impl != NULL
-                ? scxml_syntax_attribute_location(condition)
-                : scxml_syntax_node_location(node),
-            "CMeta finalize conditions are not supported yet");
-    }
     status = validate_condition_attribute(build, node);
     if (status != SCXML_OK) return status;
     if (!scxml_analyze_checked_add(
@@ -1625,27 +1612,12 @@ static scxml_status analyze_conditional(
                     "conditional branch count overflow");
             }
         } else if (child_kind == SCXML_ELEMENT_RAISE) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_raise(build, child, counts);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_SEND) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_send(build, child, counts);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_CANCEL) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_cancel(build, child, counts);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_LOG) {
@@ -1666,7 +1638,7 @@ static scxml_status analyze_conditional(
                     "conditional nesting depth overflow");
             }
             status = analyze_conditional(
-                build, child, counts, next_depth, finalize_safe);
+                build, child, counts, next_depth);
             if (status != SCXML_OK) return status;
         } else if (child_kind == SCXML_ELEMENT_FOREACH) {
             size_t next_depth;
@@ -1675,7 +1647,7 @@ static scxml_status analyze_conditional(
                                   scxml_syntax_node_location(child),
                                   "foreach nesting depth overflow");
             status = analyze_foreach(
-                build, child, counts, next_depth, finalize_safe);
+                build, child, counts, next_depth);
             if (status != SCXML_OK) return status;
         } else {
             return scxml_analyze_fail(
@@ -1696,7 +1668,7 @@ static scxml_status analyze_conditional(
 
 static scxml_status analyze_executable_content(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    size_t conditional_depth, bool finalize_safe) {
+    size_t conditional_depth) {
     size_t index;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
@@ -1714,25 +1686,10 @@ static scxml_status analyze_executable_content(
         status = require_scxml_element(build, child, &child_kind);
         if (status != SCXML_OK) return status;
         if (child_kind == SCXML_ELEMENT_RAISE) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_raise(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_SEND) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_send(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_CANCEL) {
-            if (finalize_safe)
-                return scxml_analyze_fail(
-                    build, SCXML_UNSUPPORTED_FEATURE,
-                    scxml_syntax_node_location(child),
-                    "finalize cannot raise or invoke external effects");
             status = analyze_cancel(build, child, counts);
         } else if (child_kind == SCXML_ELEMENT_LOG) {
             status = analyze_log(build, child, counts);
@@ -1749,7 +1706,7 @@ static scxml_status analyze_executable_content(
                     "conditional nesting depth overflow");
             }
             status = analyze_conditional(
-                build, child, counts, next_depth, finalize_safe);
+                build, child, counts, next_depth);
         } else if (child_kind == SCXML_ELEMENT_FOREACH) {
             size_t next_depth;
             if (!scxml_analyze_checked_add(conditional_depth, 1u, &next_depth))
@@ -1757,7 +1714,7 @@ static scxml_status analyze_executable_content(
                                   scxml_syntax_node_location(child),
                                   "foreach nesting depth overflow");
             status = analyze_foreach(
-                build, child, counts, next_depth, finalize_safe);
+                build, child, counts, next_depth);
         } else if (child_kind == SCXML_ELEMENT_ELSEIF ||
                    child_kind == SCXML_ELEMENT_ELSE) {
             return scxml_analyze_fail(
@@ -1776,16 +1733,16 @@ static scxml_status analyze_executable_content(
 
 static scxml_status analyze_executable_block(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts,
-    bool finalize_safe, bool *out_nonempty) {
+    bool finalize_block, bool *out_nonempty) {
     const size_t first_step = counts->executable_steps;
     scxml_status status;
     *out_nonempty = false;
     status = analyze_executable_content(
-        build, node, counts, 0u, finalize_safe);
+        build, node, counts, 0u);
     if (status != SCXML_OK) return status;
     if (counts->executable_steps != first_step &&
         (!scxml_analyze_checked_add(counts->block_rows, 1u, &counts->block_rows) ||
-         (!finalize_safe &&
+         (!finalize_block &&
           !scxml_analyze_checked_add(counts->executable_blocks, 1u,
                        &counts->executable_blocks)))) {
         return scxml_analyze_fail(build, SCXML_LIMIT_EXCEEDED,
@@ -3140,6 +3097,8 @@ scxml_status scxml_analyze_collect_transition_events(
                    child_kind == SCXML_ELEMENT_HISTORY ||
                    child_kind == SCXML_ELEMENT_ONENTRY ||
                    child_kind == SCXML_ELEMENT_ONEXIT ||
+                   child_kind == SCXML_ELEMENT_INVOKE ||
+                   child_kind == SCXML_ELEMENT_FINALIZE ||
                    child_kind == SCXML_ELEMENT_IF ||
                    child_kind == SCXML_ELEMENT_FOREACH) {
             scxml_status status =

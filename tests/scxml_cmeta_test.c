@@ -439,6 +439,9 @@ typedef struct dynamic_adapter_probe {
     size_t cancels;
     size_t starts;
     size_t invoke_cancels;
+    size_t ticket_commits;
+    size_t ticket_discards;
+    uint64_t invoke_token;
     char event[32];
     char target[32];
     char type[SCXML_EVENT_METADATA_CAPACITY + 1u];
@@ -518,6 +521,16 @@ struct invoke_idlocation_probe {
 
 static void dynamic_ticket_done(void *user) {
     (void)user;
+}
+
+static void dynamic_ticket_commit(void *user) {
+    dynamic_adapter_probe *probe = (dynamic_adapter_probe *)user;
+    if (probe != NULL) ++probe->ticket_commits;
+}
+
+static void dynamic_ticket_discard(void *user) {
+    dynamic_adapter_probe *probe = (dynamic_adapter_probe *)user;
+    if (probe != NULL) ++probe->ticket_discards;
 }
 
 static void invoke_idlocation_ticket_commit(void *user) {
@@ -835,7 +848,7 @@ static scxml_adapter_status dynamic_prepare_send(
         return probe->send_status;
     }
     *out_ticket = (cflow_statechart_effect_ticket){
-        dynamic_ticket_done, dynamic_ticket_done, probe};
+        dynamic_ticket_commit, dynamic_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -861,7 +874,7 @@ static scxml_adapter_status dynamic_prepare_cancel(
         return probe->cancel_status;
     }
     *out_ticket = (cflow_statechart_effect_ticket){
-        dynamic_ticket_done, dynamic_ticket_done, probe};
+        dynamic_ticket_commit, dynamic_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -877,9 +890,10 @@ static scxml_adapter_status dynamic_prepare_start(
         !copy_probe_text(probe->source, sizeof(probe->source),
                          request->src, request->src_size))
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    probe->invoke_token = request->token;
     ++probe->starts;
     *out_ticket = (cflow_statechart_effect_ticket){
-        dynamic_ticket_done, dynamic_ticket_done, probe};
+        dynamic_ticket_commit, dynamic_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -893,7 +907,7 @@ static scxml_adapter_status dynamic_prepare_invoke_cancel(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     ++probe->invoke_cancels;
     *out_ticket = (cflow_statechart_effect_ticket){
-        dynamic_ticket_done, dynamic_ticket_done, probe};
+        dynamic_ticket_commit, dynamic_ticket_discard, probe};
     *out_error = NULL;
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -1513,9 +1527,105 @@ spec("TurboSCXML public CMeta data model") {
             scxml_program program = {0};
             scxml_diagnostic diagnostic = {0};
             check_equal(compile_cmeta(finalize, &program, &diagnostic),
-                        SCXML_UNSUPPORTED_FEATURE);
-            check_null(program.impl);
+                        SCXML_OK);
+            scxml_program_destroy(&program);
         }
+    }
+
+    it("runs CMeta finalize conditions, raises, sends, and cancels transactionally") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'><state id='active'>"
+            "<invoke id='child' type='urn:test'><finalize>"
+            "<if cond='enabled &amp;&amp; _event.name == &quot;returned&quot;'>"
+            "<assign location='count' expr='count + 1'/>"
+            "<raise event='finalized'/>"
+            "<send event='final.effect' id='final-send' delay='5ms'/>"
+            "<cancel sendid='final-send'/><else/>"
+            "<assign location='count' expr='-1'/></if>"
+            "</finalize></invoke>"
+            "<transition event='returned'/>"
+            "<transition event='finalized' cond='count == 1' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        dynamic_adapter_probe probe = {0};
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(event_io),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND |
+                SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
+            .prepare_send = dynamic_prepare_send,
+            .prepare_cancel = dynamic_prepare_cancel,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        const scxml_invoke_adapter invoke = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(invoke),
+            .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
+            .prepare_start = dynamic_prepare_start,
+            .prepare_cancel = dynamic_prepare_invoke_cancel,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        const scxml_public_data initial = {
+            true, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_event_view returned = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_status compile_status;
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 4u,
+            .completion_capacity = 2u,
+            .microstep_limit = 32u,
+            .effect_capacity = 4u,
+            .adapter_internal_event_capacity = 2u,
+            .delayed_send_capacity = 1u,
+            .invocation_capacity = 1u,
+            .event_io = &event_io,
+            .adapter_user = &probe,
+            .invoke = &invoke,
+            .invoke_user = &probe};
+
+        compile_status = compile_cmeta(source, &program, &diagnostic);
+        if (compile_status != SCXML_OK)
+            info("finalize compile diagnostic=%s", diagnostic.message);
+        check_equal(compile_status, SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(probe.starts, (size_t)1u);
+        check_equal(probe.ticket_commits, (size_t)1u);
+        check_true(scxml_program_event(
+            &program, "returned", sizeof("returned") - 1u, &returned));
+        check_equal(scxml_session_report_invoke_event(
+                        &session, probe.invoke_token, &returned),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(probe.sends, (size_t)1u);
+        check_equal(probe.cancels, (size_t)1u);
+        check_equal(probe.invoke_cancels, (size_t)1u);
+        check_equal(probe.ticket_commits, (size_t)4u);
+        check_equal(probe.ticket_discards, (size_t)0u);
+        check_equal(probe.event, "final.effect", sizeof("final.effect"));
+        check_equal(probe.send_id, "final-send", sizeof("final-send"));
+        check_equal(probe.cancel_id, "final-send", sizeof("final-send"));
+        check_equal(probe.delay_ms, UINT64_C(5));
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
     }
 
     it("commits ordered scalar assignments before later guards") {
