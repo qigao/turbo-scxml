@@ -496,6 +496,65 @@ cleanup:
     return succeeded;
 }
 
+static bool run_named_external_event_program(
+    const char *source, const char *event_name, bool expected_done) {
+    const scxml_event_metadata metadata = {
+        .abi_version = SCXML_EVENT_METADATA_ABI,
+        .struct_size = sizeof(metadata)};
+    scxml_program program = {0};
+    scxml_diagnostic diagnostic = {0};
+    scxml_session session = {0};
+    cflow_executor executor = {0};
+    cflow_statechart_instance_stats stats = {0};
+    scxml_session_config config = {0};
+    bool executor_initialized = false;
+    bool session_initialized = false;
+    bool succeeded = false;
+
+    if (source == NULL || event_name == NULL ||
+        compile_status(source, &program, &diagnostic) != SCXML_OK ||
+        !cflow_executor_serial_init(&executor))
+        goto cleanup;
+    executor_initialized = true;
+    config = (scxml_session_config){
+        .program = &program,
+        .executor = &executor,
+        .external_event_capacity = 2u,
+        .internal_event_capacity = 2u,
+        .completion_capacity = 2u,
+        .microstep_limit = 16u};
+    if (scxml_session_init(&session, &config) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        goto cleanup;
+    session_initialized = true;
+    if (scxml_session_try_send_named_with_metadata(
+            &session, NULL, 1u, &metadata) !=
+            CFLOW_MAILBOX_INVALID_ARGUMENT ||
+        scxml_session_try_send_named_with_metadata(
+            &session, event_name, 0u, &metadata) !=
+            CFLOW_MAILBOX_INVALID_ARGUMENT ||
+        scxml_session_try_send_named_with_metadata(
+            &session, event_name, SCXML_EVENT_METADATA_CAPACITY + 1u,
+            &metadata) != CFLOW_MAILBOX_INVALID_ARGUMENT)
+        goto cleanup;
+    if (scxml_session_try_send_named_with_metadata(
+            &session, event_name, strlen(event_name), &metadata) !=
+            CFLOW_MAILBOX_OK ||
+        !cflow_executor_wait_idle(&executor) ||
+        !scxml_session_get_stats(&session, &stats))
+        goto cleanup;
+    succeeded = stats.external_completed == UINT64_C(1) &&
+        stats.done == expected_done && !stats.errored;
+
+cleanup:
+    if (session_initialized &&
+        scxml_session_destroy(&session) != CFLOW_STATECHART_INSTANCE_OK)
+        succeeded = false;
+    if (executor_initialized) cflow_executor_destroy(&executor);
+    scxml_program_destroy(&program);
+    return succeeded;
+}
+
 suite("SCXML Core to native CFlow Statechart compiler") {
     it("lowers supported structural elements and deterministic name maps") {
         static const char source[] =
@@ -1708,8 +1767,43 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             if (transition->source == all->id) ++all_events;
         }
         check_equal(start_events, (size_t)2u);
-        check_equal(all_events, (size_t)2u);
+        check_equal(all_events, (size_t)3u);
         scxml_program_destroy(&program);
+    }
+
+    it("routes an unseen hierarchical Event through its longest descriptor prefix") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='parent'><state id='parent' initial='wait'>"
+            "<transition event='alarm' target='fail'/>"
+            "<state id='wait'><transition event='alarm.system' "
+            "target='pass'/></state></state>"
+            "<final id='pass'/><state id='fail'/></scxml>";
+
+        check_true(run_named_external_event_program(
+            source, "alarm.system.disk.full", true));
+    }
+
+    it("routes an otherwise unseen Event through a star descriptor") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='wait'><state id='wait'>"
+            "<transition event='*' target='pass'/>"
+            "</state><final id='pass'/></scxml>";
+
+        check_true(run_named_external_event_program(
+            source, "vendor.new", true));
+    }
+
+    it("consumes an unmatched named Event without fabricating a transition") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='wait'><state id='wait'>"
+            "<transition event='go' target='pass'/>"
+            "</state><final id='pass'/></scxml>";
+
+        check_true(run_named_external_event_program(
+            source, "vendor.ignored", false));
     }
 
     it("executes raise blocks on initial and history default transitions") {

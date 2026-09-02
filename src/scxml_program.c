@@ -79,6 +79,8 @@ static scxml_status compile_scxml_model(
     size_t transition_action_capacity = 0u;
     size_t descriptor_extra_multiplier = 0u;
     size_t supplemental_capacity = 0u;
+    size_t event_storage_capacity = 0u;
+    size_t native_event_count = 0u;
     char *name_cursor;
     bool needs_execution_error = false;
 
@@ -252,6 +254,13 @@ static scxml_status compile_scxml_model(
                             "reserved SCXML error event count overflow");
         goto cleanup;
     }
+    if (!scxml_analyze_checked_add(
+            counts.event_occurrences, 1u, &event_storage_capacity)) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED, scxml_syntax_node_location(root),
+            "private external Event storage count overflow");
+        goto cleanup;
+    }
     transition_capacity = counts.transition_rows;
     transition_target_capacity = counts.transition_target_rows;
     guard_capacity = counts.guard_rows;
@@ -314,7 +323,7 @@ static scxml_status compile_scxml_model(
         transition_target_capacity, sizeof(*build.transition_targets));
     build.guards = scxml_emit_allocate_rows(guard_capacity, sizeof(*build.guards));
     build.events =
-        scxml_emit_allocate_rows(counts.event_occurrences, sizeof(*build.events));
+        scxml_emit_allocate_rows(event_storage_capacity, sizeof(*build.events));
     build.executables = scxml_emit_allocate_rows(counts.executable_blocks,
                                       sizeof(*build.executables));
     build.state_actions = scxml_emit_allocate_rows(counts.state_action_rows,
@@ -414,9 +423,9 @@ static scxml_status compile_scxml_model(
         (guard_capacity != 0u &&
          (build.guards == NULL || build.guard_bindings == NULL ||
           build.guard_users == NULL)) ||
+        build.events == NULL ||
         (counts.event_occurrences != 0u &&
-          (build.events == NULL || build.event_names == NULL ||
-           build.event_occurrences == NULL)) ||
+          (build.event_names == NULL || build.event_occurrences == NULL)) ||
         (counts.executable_blocks != 0u &&
          (build.executables == NULL || build.bindings == NULL)) ||
         (counts.block_rows != 0u && build.blocks == NULL) ||
@@ -492,6 +501,17 @@ static scxml_status compile_scxml_model(
         scxml_analyze_collect_reserved_error_events(&build, scxml_syntax_node_location(root));
     status = scxml_analyze_build_event_names(&build, build.event_occurrence_index);
     if (status != SCXML_OK) goto cleanup;
+    if (!scxml_analyze_checked_add(
+            build.event_name_count, 1u, &native_event_count) ||
+        native_event_count > UINT32_MAX) {
+        status = scxml_analyze_fail(
+            &build, SCXML_LIMIT_EXCEEDED, scxml_syntax_node_location(root),
+            "native Event count exceeds the private routing bound");
+        goto cleanup;
+    }
+    build.unmatched_external_event = (cflow_event_id)native_event_count;
+    build.events[native_event_count - 1u] = (cflow_event_type){
+        build.unmatched_external_event, &cmeta_type_bool};
     if (needs_execution_error) {
         const turbo_xml_string_view execution_name = {
             SCXML_ERROR_EXECUTION_EVENT,
@@ -610,7 +630,7 @@ static scxml_status compile_scxml_model(
     definition.states = build.states;
     definition.state_count = build.state_index;
     definition.events = build.events;
-    definition.event_count = build.event_name_count;
+    definition.event_count = native_event_count;
     definition.guards = build.guards;
     definition.guard_count = build.guard_index;
     definition.executables = build.executables;
@@ -677,6 +697,7 @@ static scxml_status compile_scxml_model(
     }
     impl->state_name_count = build.state_name_index;
     impl->event_name_count = build.event_name_count;
+    impl->unmatched_external_event = build.unmatched_external_event;
     impl->data_model = data_model;
     impl->cmeta_root = cmeta_root;
     impl->requirements = build.requirements;
@@ -1050,6 +1071,27 @@ bool scxml_program_event_id(const scxml_program *program,
                               name, name_size);
     if (found == NULL) return false;
     *out_id = (cflow_event_id)found->id;
+    return true;
+}
+
+bool scxml_program_route_external_name(
+    const scxml_program_impl *program, const char *name, size_t name_size,
+    cflow_event_id *out_id) {
+    const scxml_program_name *best = NULL;
+    size_t index;
+    if (program == NULL || name == NULL || name_size == 0u || out_id == NULL)
+        return false;
+    for (index = 0u; index < program->event_name_count; ++index) {
+        const scxml_program_name *candidate = &program->event_names[index];
+        const bool prefix = candidate->size <= name_size &&
+            memcmp(candidate->name, name, candidate->size) == 0 &&
+            (candidate->size == name_size || name[candidate->size] == '.');
+        if (prefix && (best == NULL || candidate->size > best->size))
+            best = candidate;
+    }
+    *out_id = best != NULL ? (cflow_event_id)best->id
+                           : program->unmatched_external_event;
+    if (*out_id == 0u) return false;
     return true;
 }
 

@@ -1304,17 +1304,28 @@ static bool scxml_runtime_observe_event(
             session, event->completion, out_error);
     }
     if (event->event == NULL || event->event->id == 0u ||
-        event->event->id > session->program->event_name_count) {
+        (event->event->id > session->program->event_name_count &&
+         event->event->id != session->program->unmatched_external_event)) {
         *out_error = "SCXML observed Event is outside the program map";
         return false;
     }
-    name = session->program->event_names_by_id[event->event->id - 1u];
-    if (name == NULL) {
-        *out_error = "SCXML observed Event name is unavailable";
-        return false;
+    if (event->event->id == session->program->unmatched_external_event) {
+        if (event->kind != CFLOW_STATECHART_OBSERVED_EXTERNAL ||
+            (event->origin_token & SCXML_EXTERNAL_METADATA_TOKEN_BIT) == 0u) {
+            *out_error = "SCXML private external Event has no owned name";
+            return false;
+        }
+        session->system_values.event_name =
+            (scxml_expr_string_view){"", 0u};
+    } else {
+        name = session->program->event_names_by_id[event->event->id - 1u];
+        if (name == NULL) {
+            *out_error = "SCXML observed Event name is unavailable";
+            return false;
+        }
+        session->system_values.event_name =
+            (scxml_expr_string_view){name->name, name->size};
     }
-    session->system_values.event_name =
-        (scxml_expr_string_view){name->name, name->size};
     if (event->kind == CFLOW_STATECHART_OBSERVED_EXTERNAL) {
         session->system_values.event_type =
             (scxml_expr_string_view){
@@ -1367,6 +1378,7 @@ static bool scxml_runtime_observe_event(
         SCXML_COPY_CURRENT(origin_type);
         SCXML_COPY_CURRENT(invoke_id);
         SCXML_COPY_CURRENT(data);
+        if (row->name_size != 0u) SCXML_COPY_CURRENT(name);
 #undef SCXML_COPY_CURRENT
         row_data_live = row->data_object_live;
         if (!row_data_live) {
@@ -1680,7 +1692,7 @@ static scxml_execute_outcome send_failure_outcome(
     metadata.send_id = request->id;
     metadata.send_id_size = request->id_size;
     metadata_row = scxml_runtime_reserve_event_metadata(
-        session, &metadata, &token);
+        session, &metadata, NULL, 0u, &token);
     if (metadata_row == NULL) {
         *out_error = "SCXML failed send metadata capacity is exhausted";
         return SCXML_EXECUTE_FATAL;
@@ -1720,11 +1732,13 @@ bool scxml_runtime_metadata_field_valid(const char *data, size_t size) {
 scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     scxml_session_impl *session,
     const scxml_event_metadata *metadata,
+    const char *name, size_t name_size,
     uint64_t *out_token) {
     scxml_external_event_metadata_row *row = NULL;
     uint64_t token;
     size_t index;
     if (session == NULL || metadata == NULL || out_token == NULL ||
+        !scxml_runtime_metadata_field_valid(name, name_size) ||
         !scxml_runtime_metadata_field_valid(metadata->send_id,
                                     metadata->send_id_size) ||
         !scxml_runtime_metadata_field_valid(metadata->origin,
@@ -1757,6 +1771,9 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     row->session = session;
     row->token = token;
     row->in_use = true;
+    row->name_size = name_size;
+    if (name_size != 0u) memcpy(row->name, name, name_size);
+    row->name[name_size] = '\0';
 #define SCXML_RETAIN_METADATA(field)                                      \
     do {                                                                  \
         row->field##_size = metadata->field##_size;                       \
@@ -2134,7 +2151,8 @@ static scxml_execute_outcome execute_send(
         {
             uint64_t token = 0u;
             scxml_external_event_metadata_row *metadata_row =
-                scxml_runtime_reserve_event_metadata(session, &metadata, &token);
+                scxml_runtime_reserve_event_metadata(
+                    session, &metadata, NULL, 0u, &token);
             cflow_statechart_effect_ticket metadata_ticket;
             if (metadata_row == NULL)
                 return raise_block_execution_error(block, context, out_error);

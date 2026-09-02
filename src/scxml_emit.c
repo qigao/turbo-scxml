@@ -496,15 +496,15 @@ static bool evaluate_scxml_transition_guard_impl(
         const bool null_value = false;
         scxml_expr_diagnostic diagnostic = {0};
         scxml_expr_system_values current_system_values;
-        if (!scxml_analyze_bind_current_event_system_values(
-                system_values, guard->event_names_by_id,
-                guard->event_name_count, context->event,
-                &current_system_values)) {
+        if (preserve_observed_event_name) {
+            current_system_values = *system_values;
+        } else if (!scxml_analyze_bind_current_event_system_values(
+                       system_values, guard->event_names_by_id,
+                       guard->event_name_count, context->event,
+                       &current_system_values)) {
             *out_error = "SCXML guard Event is not in the program map";
             return false;
         }
-        if (preserve_observed_event_name)
-            current_system_values.event_name = system_values->event_name;
         if (scxml_expr_evaluate_with_system(
                 &guard->value.expression, context->state,
                 evaluate_cmeta_active_state, (void *)context,
@@ -2493,7 +2493,8 @@ static scxml_status emit_transition_targets(
 static scxml_status emit_transition_token(
     scxml_build *build, cflow_machine_state_id source,
     scxml_syntax_node transition_node, turbo_xml_string_view event_token,
-    bool has_event, cflow_machine_state_id completion_override,
+    bool has_event, cflow_event_id event_override,
+    cflow_machine_state_id completion_override,
     cflow_statechart_transition_id *out_transition) {
     const scxml_syntax_attribute target_attribute =
         scxml_analyze_find_attribute(transition_node, "target");
@@ -2526,6 +2527,9 @@ static scxml_status emit_transition_token(
         row.completion = completion_override;
     } else if (!has_event) {
         row.trigger = CFLOW_STATECHART_TRIGGER_EVENTLESS;
+    } else if (event_override != 0u) {
+        row.trigger = CFLOW_STATECHART_TRIGGER_EVENT;
+        row.event = event_override;
     } else {
         turbo_xml_string_view completed = {NULL, 0u};
         if (scxml_analyze_completion_token(event_token, &completed)) {
@@ -2624,7 +2628,7 @@ static scxml_status emit_transition_with_action(
     bool has_event, cflow_statechart_executable_id executable) {
     cflow_statechart_transition_id transition = 0u;
     scxml_status status = emit_transition_token(
-        build, source, transition_node, event_name, has_event, 0u,
+        build, source, transition_node, event_name, has_event, 0u, 0u,
         &transition);
     if (status != SCXML_OK) return status;
     if (executable != 0u) {
@@ -2642,8 +2646,25 @@ static scxml_status emit_completion_transition_with_action(
     cflow_statechart_transition_id transition = 0u;
     const turbo_xml_string_view empty = {NULL, 0u};
     scxml_status status = emit_transition_token(
-        build, source, transition_node, empty, true, completion,
+        build, source, transition_node, empty, true, 0u, completion,
         &transition);
+    if (status != SCXML_OK) return status;
+    if (executable != 0u)
+        build->transition_actions[build->transition_action_index++] =
+            (cflow_statechart_transition_action){
+                transition, executable, 0u};
+    return SCXML_OK;
+}
+
+static scxml_status emit_private_external_transition_with_action(
+    scxml_build *build, cflow_machine_state_id source,
+    scxml_syntax_node transition_node,
+    cflow_statechart_executable_id executable) {
+    const turbo_xml_string_view empty = {NULL, 0u};
+    cflow_statechart_transition_id transition = 0u;
+    scxml_status status = emit_transition_token(
+        build, source, transition_node, empty, true,
+        build->unmatched_external_event, 0u, &transition);
     if (status != SCXML_OK) return status;
     if (executable != 0u)
         build->transition_actions[build->transition_action_index++] =
@@ -2707,6 +2728,7 @@ scxml_status scxml_emit_transitions(scxml_build *build,
                     scxml_syntax_attribute_value(event_attribute);
                 turbo_xml_string_view token;
                 size_t cursor = 0u;
+                bool matches_private_external = false;
                 while (scxml_analyze_token_next(value, &cursor, &token)) {
                     turbo_xml_string_view completed = {NULL, 0u};
                     if (!scxml_analyze_completion_token(token, &completed)) continue;
@@ -2734,6 +2756,18 @@ scxml_status scxml_emit_transitions(scxml_build *build,
                     if (!matches) continue;
                     status = emit_transition_with_action(
                         build, source, child, event_name, true, executable);
+                    if (status != SCXML_OK) return status;
+                }
+                cursor = 0u;
+                while (scxml_analyze_token_next(value, &cursor, &token)) {
+                    if (token.size == 1u && token.data[0] == '*') {
+                        matches_private_external = true;
+                        break;
+                    }
+                }
+                if (matches_private_external) {
+                    status = emit_private_external_transition_with_action(
+                        build, source, child, executable);
                     if (status != SCXML_OK) return status;
                 }
                 for (cursor = 0u; cursor < build->state_name_index;

@@ -16,7 +16,7 @@ void scxml_runtime_clear_current_event_metadata(scxml_session_impl *session);
 bool scxml_runtime_metadata_field_valid(const char *data, size_t size);
 scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     scxml_session_impl *session, const scxml_event_metadata *metadata,
-    uint64_t *out_token);
+    const char *name, size_t name_size, uint64_t *out_token);
 void scxml_runtime_release_event_metadata(void *user);
 bool scxml_runtime_execute_block(
     void *user, const cflow_statechart_executable_context *context,

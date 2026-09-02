@@ -787,6 +787,15 @@ cflow_mailbox_status scxml_session_try_send_with_metadata(
     scxml_session *session, const cflow_event_view *event,
     const scxml_event_metadata *metadata);
 /**
+ * Route and atomically copy one externally supplied Event name and metadata.
+ * The name may match an exact compiled descriptor or one of its hierarchical
+ * descendants. The actual name, rather than its representative routing ID,
+ * is exposed through `_event.name` for the complete macrostep.
+ */
+cflow_mailbox_status scxml_session_try_send_named_with_metadata(
+    scxml_session *session, const char *name, size_t name_size,
+    const scxml_event_metadata *metadata);
+/**
  * Copy one returned invocation Event into the external FIFO with its live
  * session token. Admission validates the token once; external preprocessing
  * revalidates it to close the admission/cancellation race. Stale tokens return

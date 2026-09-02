@@ -382,6 +382,7 @@ typedef struct scxml_build {
     bool late_binding;
     bool quickjs_profile;
     scxml_quickjs_compile_options_v1 quickjs_options;
+    cflow_event_id unmatched_external_event;
     cflow_event_id execution_error_event;
 } scxml_build;
 
@@ -394,6 +395,7 @@ typedef struct scxml_program_impl {
     scxml_program_name *event_names;
     const scxml_program_name **event_names_by_id;
     size_t event_name_count;
+    cflow_event_id unmatched_external_event;
     cflow_statechart_executable_binding *bindings;
     size_t binding_count;
     cflow_statechart_guard_binding *guard_bindings;
@@ -570,6 +572,7 @@ typedef struct scxml_external_event_metadata_row {
     scxml_session_impl *session;
     uint64_t token;
     bool in_use;
+    size_t name_size;
     size_t send_id_size;
     size_t origin_size;
     size_t origin_type_size;
@@ -577,6 +580,7 @@ typedef struct scxml_external_event_metadata_row {
     size_t data_size;
     const cmeta_data_desc *data_schema;
     bool data_object_live;
+    char name[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char origin[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char origin_type[SCXML_EVENT_METADATA_CAPACITY + 1u];

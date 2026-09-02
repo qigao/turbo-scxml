@@ -518,7 +518,6 @@ static host_pump_status host_router_pump(host_router *router) {
     host_message *selected = NULL;
     host_endpoint target = {0};
     host_endpoint source = {0};
-    cflow_event_view event = {0};
     scxml_event_metadata metadata = {0};
     cflow_mailbox_status mailbox_status = CFLOW_MAILBOX_INVALID_ARGUMENT;
     size_t index;
@@ -549,12 +548,9 @@ static host_pump_status host_router_pump(host_router *router) {
         .origin_size = strlen(source.location),
         .origin_type = HOST_ORIGIN_TYPE,
         .origin_type_size = sizeof(HOST_ORIGIN_TYPE) - 1u};
-    if (source.active && target.active && target.accessible &&
-        scxml_program_event(
-            target.program, snapshot.event, strlen(snapshot.event), &event)) {
-        mailbox_status = scxml_session_try_send_with_metadata(
-            target.session, &event, &metadata);
-    }
+    if (source.active && target.active && target.accessible)
+        mailbox_status = scxml_session_try_send_named_with_metadata(
+            target.session, snapshot.event, strlen(snapshot.event), &metadata);
 
     turbo_mutex_lock(&router->lock);
     if (mailbox_status == CFLOW_MAILBOX_FULL) {
@@ -1449,6 +1445,54 @@ spec("SCXML host Event I/O adapter contract") {
         ticket.commit(ticket.user);
         check_equal(probe.start_commits, (size_t)1u);
         check_equal(probe.terminal_violations, (size_t)1u);
+    }
+
+    it("preserves the full external Event name behind the wildcard routing ID") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='waiting'>"
+            "<state id='waiting'><transition event='*' "
+            "cond='_event.name == &quot;vendor.new.disk.full&quot;' "
+            "target='done'/></state><final id='done'/></scxml>";
+        const scxml_cmeta_compile_options_v1 compile_options =
+            scxml_cmeta_default_compile_options(&HOST_CMETA_STATE_DESC);
+        const host_cmeta_state initial_data = {0};
+        const scxml_cmeta_session_options_v1 session_options = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(session_options),
+            .initial_state = &initial_data};
+        const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(metadata)};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_session_config config;
+
+        check_equal(scxml_compile_cmeta(
+                        &program, source, sizeof(source) - 1u, NULL,
+                        &compile_options, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        config = host_session_config(&program, &executor);
+        check_equal(scxml_session_init_cmeta(
+                        &session, &config, &session_options),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+                        &session, "vendor.new.disk.full",
+                        sizeof("vendor.new.disk.full") - 1u, &metadata),
+                    CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
     }
 
     it("publishes committed cross-session sends with SCXML field mapping") {

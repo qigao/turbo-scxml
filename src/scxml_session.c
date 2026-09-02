@@ -983,11 +983,10 @@ cflow_mailbox_status scxml_session_try_send(
         : CFLOW_MAILBOX_INVALID_ARGUMENT;
 }
 
-cflow_mailbox_status scxml_session_try_send_with_metadata(
-    scxml_session *session, const cflow_event_view *event,
-    const scxml_event_metadata *metadata) {
-    scxml_session_impl *impl = session != NULL
-        ? (scxml_session_impl *)session->impl : NULL;
+static cflow_mailbox_status session_try_send_with_metadata_impl(
+    scxml_session_impl *impl, const cflow_event_view *event,
+    const scxml_event_metadata *metadata, const char *name,
+    size_t name_size) {
     scxml_external_event_metadata_row *row = NULL;
     uint64_t token = 0u;
     cflow_mailbox_status status;
@@ -1003,7 +1002,8 @@ cflow_mailbox_status scxml_session_try_send_with_metadata(
         !scxml_runtime_metadata_field_valid(
             metadata->invoke_id, metadata->invoke_id_size))
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
-    row = scxml_runtime_reserve_event_metadata(impl, metadata, &token);
+    row = scxml_runtime_reserve_event_metadata(
+        impl, metadata, name, name_size, &token);
     if (row == NULL) return CFLOW_MAILBOX_FULL;
     if (!scxml_analyze_attach_event_content(impl, row, &metadata->data)) {
         scxml_runtime_release_event_metadata(row);
@@ -1013,6 +1013,33 @@ cflow_mailbox_status scxml_session_try_send_with_metadata(
         &impl->instance, event, token);
     if (status != CFLOW_MAILBOX_OK) scxml_runtime_release_event_metadata(row);
     return status;
+}
+
+cflow_mailbox_status scxml_session_try_send_with_metadata(
+    scxml_session *session, const cflow_event_view *event,
+    const scxml_event_metadata *metadata) {
+    scxml_session_impl *impl = session != NULL
+        ? (scxml_session_impl *)session->impl : NULL;
+    return session_try_send_with_metadata_impl(
+        impl, event, metadata, NULL, 0u);
+}
+
+cflow_mailbox_status scxml_session_try_send_named_with_metadata(
+    scxml_session *session, const char *name, size_t name_size,
+    const scxml_event_metadata *metadata) {
+    scxml_session_impl *impl = session != NULL
+        ? (scxml_session_impl *)session->impl : NULL;
+    cflow_event_view event = {0};
+    cflow_event_id event_id = 0u;
+    if (impl == NULL || name == NULL || name_size == 0u ||
+        name_size > SCXML_EVENT_METADATA_CAPACITY ||
+        !scxml_program_route_external_name(
+            impl->program, name, name_size, &event_id))
+        return CFLOW_MAILBOX_INVALID_ARGUMENT;
+    event = (cflow_event_view){
+        event_id, &cmeta_type_bool, &impl->program->null_value};
+    return session_try_send_with_metadata_impl(
+        impl, &event, metadata, name, name_size);
 }
 
 cflow_mailbox_status scxml_session_report_invoke_event(
