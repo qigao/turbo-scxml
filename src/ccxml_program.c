@@ -499,6 +499,98 @@ static ccxml_status validate_destroy_conference_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_dialog_start_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute dialog_id_attribute = {0};
+    turbo_xml_attribute source_attribute = {0};
+    turbo_xml_attribute connection_id_attribute = {0};
+    turbo_xml_string_view location;
+    turbo_xml_string_view source_expression;
+    turbo_xml_string_view connection_expression;
+    size_t index;
+    size_t retained_size;
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(action, index);
+        const turbo_xml_string_view namespace_uri =
+            turbo_xml_attribute_namespace_uri(attribute);
+        const turbo_xml_string_view local_name =
+            turbo_xml_attribute_local_name(attribute);
+        turbo_xml_attribute *slot = NULL;
+        if (namespace_uri.size == 0u && view_equal(local_name, "dialogid"))
+            slot = &dialog_id_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "src"))
+            slot = &source_attribute;
+        else if (namespace_uri.size == 0u &&
+                 view_equal(local_name, "connectionid"))
+            slot = &connection_id_attribute;
+        if (slot == NULL || slot->impl != NULL) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate dialogstart attribute");
+        }
+        *slot = attribute;
+    }
+    if (dialog_id_attribute.impl == NULL || source_attribute.impl == NULL ||
+        connection_id_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(action),
+            "dialogstart requires dialogid, src, and connectionid");
+    }
+    location = turbo_xml_attribute_value(dialog_id_attribute);
+    if (location.data == NULL || location.size == 0u) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_attribute_location(dialog_id_attribute),
+            "dialogstart dialogid must be nonempty");
+    }
+    if (!dotted_location_valid(location)) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(dialog_id_attribute),
+            "dialogstart dialogid must be a dotted NCName location");
+    }
+    status = validate_string_literal(
+        source_attribute, &source_expression, diagnostic);
+    if (status != CCXML_OK) return status;
+    connection_expression =
+        turbo_xml_attribute_value(connection_id_attribute);
+    if (!view_equal(connection_expression, "event$.connectionid")) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(connection_id_attribute),
+            "dialogstart connectionid must be event$.connectionid");
+    }
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "dialogstart must be empty");
+        }
+    }
+    if (!checked_add(location.size, 1u, &retained_size) ||
+        !checked_add(
+            retained_size, source_expression.size - 1u, &retained_size) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "dialogstart action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     turbo_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
@@ -553,7 +645,8 @@ static ccxml_status validate_transition(
             !view_equal(name, "redirect") && !view_equal(name, "join") &&
             !view_equal(name, "unjoin") && !view_equal(name, "merge") &&
             !view_equal(name, "createconference") &&
-            !view_equal(name, "destroyconference")) {
+            !view_equal(name, "destroyconference") &&
+            !view_equal(name, "dialogstart")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -575,6 +668,9 @@ static ccxml_status validate_transition(
         } else if (view_equal(name, "destroyconference")) {
             status = validate_destroy_conference_action(
                 action, measurement, limits, diagnostic);
+        } else if (view_equal(name, "dialogstart")) {
+            status = validate_dialog_start_action(
+                action, measurement, limits, diagnostic);
         } else {
             status = validate_empty_action(
                 action, measurement, limits, diagnostic);
@@ -583,7 +679,9 @@ static ccxml_status validate_transition(
         ++local_action_count;
         if (!checked_add(
                 local_effect_count,
-                view_equal(name, "createconference") ? 2u : 1u,
+                view_equal(name, "createconference") ||
+                        view_equal(name, "dialogstart")
+                    ? 2u : 1u,
                 &local_effect_count)) {
             return fail(
                 diagnostic, CCXML_LIMIT_EXCEEDED,
@@ -858,6 +956,41 @@ static void copy_program(
                         cursor += expression.size + 1u;
                         impl->uses_datamodel_read = true;
                     }
+                } else if (view_equal(action_name, "dialogstart")) {
+                    size_t dialog_attribute_index;
+                    turbo_xml_attribute id_attribute = {0};
+                    turbo_xml_attribute source_attribute = {0};
+                    turbo_xml_string_view value;
+                    action_row->kind = CCXML_ACTION_DIALOG_START;
+                    impl->uses_dialog_start = true;
+                    for (dialog_attribute_index = 0u;
+                         dialog_attribute_index <
+                             turbo_xml_node_attribute_count(action);
+                         ++dialog_attribute_index) {
+                        const turbo_xml_attribute candidate =
+                            turbo_xml_node_attribute_at(
+                                action, dialog_attribute_index);
+                        const turbo_xml_string_view local_name =
+                            turbo_xml_attribute_local_name(candidate);
+                        if (view_equal(local_name, "dialogid"))
+                            id_attribute = candidate;
+                        else if (view_equal(local_name, "src"))
+                            source_attribute = candidate;
+                    }
+                    value = turbo_xml_attribute_value(id_attribute);
+                    action_row->location = cursor;
+                    action_row->location_size = value.size;
+                    memcpy(cursor, value.data, value.size);
+                    cursor[value.size] = '\0';
+                    cursor += value.size + 1u;
+                    value = turbo_xml_attribute_value(source_attribute);
+                    action_row->destination = cursor;
+                    action_row->destination_size = value.size - 2u;
+                    memcpy(
+                        cursor, value.data + 1u,
+                        action_row->destination_size);
+                    cursor[action_row->destination_size] = '\0';
+                    cursor += action_row->destination_size + 1u;
                 } else {
                     size_t bridge_attribute_index;
                     turbo_xml_attribute id1_attribute = {0};

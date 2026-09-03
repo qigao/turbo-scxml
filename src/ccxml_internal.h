@@ -14,7 +14,8 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_UNJOIN,
     CCXML_ACTION_MERGE,
     CCXML_ACTION_CREATE_CONFERENCE,
-    CCXML_ACTION_DESTROY_CONFERENCE
+    CCXML_ACTION_DESTROY_CONFERENCE,
+    CCXML_ACTION_DIALOG_START
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
@@ -54,6 +55,7 @@ typedef struct ccxml_program_impl {
     bool uses_create_conference;
     bool uses_destroy_conference;
     bool uses_datamodel_read;
+    bool uses_dialog_start;
 } ccxml_program_impl;
 
 typedef struct ccxml_session_impl {
