@@ -248,9 +248,10 @@ typedef struct ccxml_telephony_adapter_v1 {
         const char **out_error);
     /**
      * Optional tail operation, required by createconference programs.
-     * ACCEPTED must publish a nonempty callback-scoped identifier as well as a
-     * valid ticket. The core copies that identifier through its datamodel
-     * adapter before this callback's borrowed output expires.
+     * ACCEPTED must publish a nonempty borrowed identifier as well as a valid
+     * ticket. The identifier remains valid until that ticket is committed or
+     * discarded; the core asks its datamodel adapter to copy the identifier
+     * before resolving the provider ticket.
      */
     scxml_adapter_status (*prepare_create_conference)(
         void *user,

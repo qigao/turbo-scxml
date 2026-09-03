@@ -150,6 +150,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 <transition event="connection.transfer">
   <merge connectionid1="'call-a'" connectionid2="'call-b'"/>
 </transition>
+<transition event="conference.request">
+  <createconference conferenceid="conference.id" confname="'support'"/>
+</transition>
 ```
 
 ```cmake
@@ -221,7 +224,37 @@ adapter 前缀继续有效。
 不修改 provider connection 状态，也不终止 CCXML session。不使用 merge 的
 unjoin-era adapter 前缀继续有效。
 
-当前明确不支持 SIP/RTP backend、conference 创建/销毁、dialog 生命周期、
+`<createconference/>` 要求 `conferenceid` 是点分 NCName 左值；它不会作为普通
+ID 传给电话 provider。可选 `confname` 当前只接受非空字符串字面量。provider
+的 `prepare_create_conference` 在预留电话资源的同时返回生成的 conference ID，
+核心随即通过独立 `ccxml_datamodel_adapter_v1` 准备左值写回；成功时先提交写回、
+再发布 provider operation，避免结果事件观察到旧值；任一 prepare 失败则逆序
+discard。内置
+`ccxml_cmeta_datamodel` 可将 ID 写入 CMeta schema 中的嵌套 owned-string 字段，
+且 live state 在 commit 前保持不变。provider 继续拥有全局 conference registry、
+同名 attach/lookup、session 终止时的隐式 detach，并异步回送
+`conference.created` 或 `error.conference.create`。
+
+```c
+ccxml_cmeta_datamodel model = {0};
+ccxml_cmeta_datamodel_config_v1 model_config = {
+    .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+    .struct_size = sizeof(model_config),
+    .root = &application_state_schema,
+    .state = &application_state,
+    .max_path_depth = 8u,
+    .max_string_bytes = 256u};
+ccxml_cmeta_datamodel_init(&model, &model_config);
+
+ccxml_session_config session_config = {
+    .program = &program,
+    .telephony = &telephony,
+    .telephony_user = telephony_user,
+    .datamodel = ccxml_cmeta_datamodel_adapter(),
+    .datamodel_user = &model};
+```
+
+当前明确不支持 SIP/RTP backend、conference 销毁、dialog 生命周期、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
@@ -229,6 +262,8 @@ ECMAScript、条件表达式、
 `connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的
 `duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<unjoin>` 的 `hints`
 属性或非字面量 ID、`<merge>` 的 `hints` 属性或非字面量 connection ID、
+`<createconference>` 的 `reservedtalkers`/`reservedlisteners`/`hints` 属性、
+非字面量 `confname` 或通用 ECMAScript 左值、
 `<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
@@ -245,7 +280,9 @@ bridge join 切片见
 切片见
 [`docs/specs/ccxml-unjoin-design.md`](docs/specs/ccxml-unjoin-design.md)，network
 merge 切片见
-[`docs/specs/ccxml-merge-design.md`](docs/specs/ccxml-merge-design.md)。
+[`docs/specs/ccxml-merge-design.md`](docs/specs/ccxml-merge-design.md)，conference
+创建与 CMeta 写回边界见
+[`docs/specs/ccxml-createconference-design.md`](docs/specs/ccxml-createconference-design.md)。
 
 ## CMeta 表达式
 

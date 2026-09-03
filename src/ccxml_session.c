@@ -426,6 +426,13 @@ ccxml_status ccxml_session_dispatch(
                 impl, adapter_status, datamodel_ticket, &prepared);
             (void)error;
             if (status != CCXML_OK) return status;
+            {
+                cflow_statechart_effect_ticket swap =
+                    impl->tickets[prepared - 2u];
+                impl->tickets[prepared - 2u] =
+                    impl->tickets[prepared - 1u];
+                impl->tickets[prepared - 1u] = swap;
+            }
         }
     }
     for (index = 0u; index < prepared; ++index) {

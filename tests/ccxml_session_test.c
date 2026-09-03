@@ -8,6 +8,8 @@
 
 typedef struct provider_probe provider_probe;
 
+static size_t transaction_commit_sequence;
+
 typedef struct provider_ticket {
     provider_probe *owner;
     size_t ordinal;
@@ -54,6 +56,7 @@ struct provider_probe {
     size_t conference_name_size;
     const char *conference_id_result;
     size_t conference_id_result_size;
+    size_t create_conference_commit_sequence;
 };
 
 enum {
@@ -74,6 +77,11 @@ static void ticket_commit(void *user) {
     ticket->live = false;
     ticket->owner->commit_order[ticket->owner->commit_count] =
         ticket->ordinal;
+    if (ticket->owner->prepare_kinds[ticket->ordinal - 1u] ==
+        PROVIDER_CREATE_CONFERENCE) {
+        ticket->owner->create_conference_commit_sequence =
+            ++transaction_commit_sequence;
+    }
     ++ticket->owner->commit_count;
 }
 
@@ -288,6 +296,7 @@ struct datamodel_probe {
     size_t location_size;
     char value[64];
     size_t value_size;
+    size_t commit_sequence;
 };
 
 static void datamodel_commit(void *user) {
@@ -295,6 +304,7 @@ static void datamodel_commit(void *user) {
     if (ticket == NULL || !ticket->live) return;
     ticket->live = false;
     ++ticket->owner->commit_count;
+    ticket->owner->commit_sequence = ++transaction_commit_sequence;
 }
 
 static void datamodel_discard(void *user) {
@@ -2047,6 +2057,9 @@ spec("CCXML session") {
             check_equal(datamodel.value, "conf-42");
             check_equal(provider.commit_count, (size_t)1);
             check_equal(datamodel.commit_count, (size_t)1);
+            check_true(
+                datamodel.commit_sequence <
+                provider.create_conference_commit_sequence);
 
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&program);

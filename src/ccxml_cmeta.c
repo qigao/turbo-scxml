@@ -12,7 +12,6 @@ typedef struct ccxml_cmeta_datamodel_impl {
 } ccxml_cmeta_datamodel_impl;
 
 typedef struct ccxml_cmeta_assignment_ticket {
-    const cmeta_data_desc *value;
     const cmeta_data_buffer_ops *buffer_ops;
     const cmeta_type_traits *traits;
     void *destination;
@@ -188,12 +187,17 @@ static scxml_adapter_status cmeta_prepare_assign_string(
         return SCXML_ADAPTER_FULL;
     }
     raw_address = (uintptr_t)ticket->allocation;
+    if (raw_address > UINTPTR_MAX - (value->storage_type->align - 1u)) {
+        free(ticket->allocation);
+        free(ticket);
+        set_error(out_error, "CMeta replacement address cannot be aligned");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
     aligned_address = raw_address;
     if (aligned_address % value->storage_type->align != 0u) {
         aligned_address += value->storage_type->align -
             aligned_address % value->storage_type->align;
     }
-    ticket->value = value;
     ticket->buffer_ops = cmeta_data_buffer_ops_of(value);
     ticket->traits = value->storage_type->traits;
     ticket->destination = destination;

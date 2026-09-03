@@ -517,7 +517,15 @@ static ccxml_status validate_transition(
         }
         if (status != CCXML_OK) return status;
         ++local_action_count;
-        local_effect_count += view_equal(name, "createconference") ? 2u : 1u;
+        if (!checked_add(
+                local_effect_count,
+                view_equal(name, "createconference") ? 2u : 1u,
+                &local_effect_count)) {
+            return fail(
+                diagnostic, CCXML_LIMIT_EXCEEDED,
+                turbo_xml_node_location(action),
+                "CCXML transition effect limit exceeded");
+        }
     }
     if (local_action_count > measurement->max_transition_actions)
         measurement->max_transition_actions = local_action_count;
