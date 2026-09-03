@@ -51,11 +51,11 @@ TinyTest
 
 **Files:** `tests/ccxml_cmeta_test.c`, `src/ccxml_cmeta.c`
 
-- [ ] Add RED tests for nested reads, type/path/size rejection, and
+- [x] Add RED tests for nested reads, type/path/size rejection, and
   non-mutation.
-- [ ] Reuse bounded path resolution while keeping writable-owned validation
+- [x] Reuse bounded path resolution while keeping writable-owned validation
   separate from readable-string validation.
-- [ ] Build and run focused tests, then commit the adapter slice.
+- [x] Build and run focused tests, then commit the adapter slice.
 
 ### Task 4: Document, verify, and publish
 

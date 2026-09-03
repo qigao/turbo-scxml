@@ -1,5 +1,6 @@
 #include <ccxml/ccxml.h>
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +38,7 @@ static const cmeta_data_field_desc *find_field(
     return NULL;
 }
 
-static bool resolve_owned_string(
+static bool resolve_value(
     const ccxml_cmeta_datamodel_impl *impl,
     const char *location, size_t location_size,
     const cmeta_data_desc **out_value, void **out_destination) {
@@ -82,16 +83,50 @@ static bool resolve_owned_string(
         if (at_end) break;
         segment_start = index + 1u;
     }
-    if (current->kind != CMETA_DATA_STRING ||
-        cmeta_data_buffer_ops_of(current) == NULL ||
-        cmeta_data_buffer_ops_of(current)->ownership !=
-            CMETA_DATA_BUFFER_OWNED ||
-        cmeta_type_require_traits(
-            current->storage_type,
-            CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY) != CMETA_OK)
-        return false;
     *out_value = current;
     *out_destination = (unsigned char *)impl->state + absolute_offset;
+    return true;
+}
+
+static bool resolve_owned_string(
+    const ccxml_cmeta_datamodel_impl *impl,
+    const char *location, size_t location_size,
+    const cmeta_data_desc **out_value, void **out_destination) {
+    const cmeta_data_desc *value = NULL;
+    void *destination = NULL;
+    if (!resolve_value(
+            impl, location, location_size, &value, &destination) ||
+        value->kind != CMETA_DATA_STRING ||
+        cmeta_data_buffer_ops_of(value) == NULL ||
+        cmeta_data_buffer_ops_of(value)->ownership !=
+            CMETA_DATA_BUFFER_OWNED ||
+        cmeta_type_require_traits(
+            value->storage_type,
+            CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY) != CMETA_OK)
+        return false;
+    *out_value = value;
+    *out_destination = destination;
+    return true;
+}
+
+static bool resolve_readable_string(
+    const ccxml_cmeta_datamodel_impl *impl,
+    const char *location, size_t location_size,
+    const cmeta_data_desc **out_value, void **out_source) {
+    const cmeta_data_desc *value = NULL;
+    const cmeta_data_buffer_ops *ops;
+    void *source = NULL;
+    const size_t read_size =
+        offsetof(cmeta_data_buffer_ops, read) + sizeof(ops->read);
+    if (!resolve_value(
+            impl, location, location_size, &value, &source) ||
+        value->kind != CMETA_DATA_STRING)
+        return false;
+    ops = cmeta_data_buffer_ops_of(value);
+    if (ops == NULL || ops->struct_size < read_size || ops->read == NULL)
+        return false;
+    *out_value = value;
+    *out_source = source;
     return true;
 }
 
@@ -221,11 +256,68 @@ static scxml_adapter_status cmeta_prepare_assign_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status cmeta_validate_readable_string_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const cmeta_data_desc *value = NULL;
+    void *source = NULL;
+    set_error(out_error, NULL);
+    if (!resolve_readable_string(
+            impl, location, location_size, &value, &source)) {
+        set_error(
+            out_error,
+            "CCXML CMeta location is not a readable string");
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    (void)value;
+    (void)source;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status cmeta_read_string(
+    void *user, const char *location, size_t location_size,
+    ccxml_string_view *out_value, const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const cmeta_data_desc *value = NULL;
+    void *source = NULL;
+    const unsigned char *bytes = NULL;
+    size_t size = 0u;
+    cmeta_status status;
+    if (out_value != NULL) *out_value = (ccxml_string_view){0};
+    set_error(out_error, NULL);
+    if (out_value == NULL ||
+        !resolve_readable_string(
+            impl, location, location_size, &value, &source)) {
+        set_error(out_error, "invalid CCXML CMeta string read");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    status = cmeta_data_buffer_read(
+        value, source, impl->max_string_bytes, &bytes, &size);
+    if (status != CMETA_OK) {
+        set_error(out_error, "CCXML CMeta string read failed");
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    *out_value = (ccxml_string_view){
+        .data = (const char *)bytes,
+        .size = size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
     .validate_string_location = cmeta_validate_string_location,
-    .prepare_assign_string = cmeta_prepare_assign_string};
+    .prepare_assign_string = cmeta_prepare_assign_string,
+    .validate_readable_string_location =
+        cmeta_validate_readable_string_location,
+    .read_string = cmeta_read_string};
 
 ccxml_status ccxml_cmeta_datamodel_init(
     ccxml_cmeta_datamodel *datamodel,

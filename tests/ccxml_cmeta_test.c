@@ -157,6 +157,8 @@ typedef struct conference_provider_probe {
     size_t commit_count;
     size_t discard_count;
     size_t close_count;
+    char destroyed_conference_id[32];
+    size_t destroyed_conference_id_size;
 } conference_provider_probe;
 
 static void provider_ticket_commit(void *user) {
@@ -199,6 +201,24 @@ static scxml_adapter_status provider_prepare_conference(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status provider_prepare_destroy_conference(
+    void *user, const ccxml_destroy_conference_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    probe->destroyed_conference_id_size = request->conference_id_size;
+    memcpy(
+        probe->destroyed_conference_id, request->conference_id,
+        request->conference_id_size);
+    probe->destroyed_conference_id[request->conference_id_size] = '\0';
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static void provider_close(void *user) {
     ++((conference_provider_probe *)user)->close_count;
 }
@@ -214,7 +234,9 @@ static const ccxml_telephony_adapter_v1 conference_provider = {
     .prepare_accept = unused_prepare_accept,
     .close = provider_close,
     .is_quiescent = provider_quiescent,
-    .prepare_create_conference = provider_prepare_conference};
+    .prepare_create_conference = provider_prepare_conference,
+    .prepare_destroy_conference =
+        provider_prepare_destroy_conference};
 
 static ccxml_status initialize(
     ccxml_cmeta_datamodel *datamodel, test_state *state,
@@ -295,6 +317,130 @@ spec("CCXML CMeta datamodel") {
         ticket.commit(ticket.user);
         check_equal(state.conference.id.data, "conf-42");
         check_equal(state.conference.id.size, (size_t)7);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("reads a nested conference ID through a CCXML session") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='ccxml.loaded'>"
+            "<destroyconference conferenceid='conference.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "ccxml.loaded",
+            .name_size = sizeof("ccxml.loaded") - 1u};
+
+        memcpy(state.conference.id.data, "conf-live", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        if (session.impl != NULL) {
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(provider.destroyed_conference_id, "conf-live");
+            check_equal(provider.commit_count, (size_t)1);
+            check_equal(state.conference.id.data, "conf-live");
+            check_equal(state.conference.id.size, (size_t)9);
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("returns a bounded borrowed nested string view") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {0};
+
+        memcpy(state.conference.id.data, "conf-read", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_not_null(adapter->validate_readable_string_location);
+        check_not_null(adapter->read_string);
+        if (adapter->validate_readable_string_location != NULL &&
+            adapter->read_string != NULL) {
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "conference.id", 13u, NULL),
+                SCXML_ADAPTER_ACCEPTED);
+            check_equal(
+                adapter->read_string(
+                    &datamodel, "conference.id", 13u, &value, NULL),
+                SCXML_ADAPTER_ACCEPTED);
+            check_equal(value.size, (size_t)9);
+            check_equal((const char *)value.data, "conf-read");
+            check_equal(state.conference.id.data, "conf-read");
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects unreadable paths and non-string fields") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_not_null(adapter->validate_readable_string_location);
+        if (adapter->validate_readable_string_location != NULL) {
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "conference.missing", 18u, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "count", 5u, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects a string view above the configured read bound") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {(const char *)1, 99u};
+
+        memcpy(state.conference.id.data, "conf-wide", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(initialize(&datamodel, &state, 4u), CCXML_OK);
+        check_not_null(adapter->read_string);
+        if (adapter->read_string != NULL) {
+            check_equal(
+                adapter->read_string(
+                    &datamodel, "conference.id", 13u, &value, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_null(value.data);
+            check_equal(value.size, (size_t)0);
+        }
+        check_equal(state.conference.id.data, "conf-wide");
 
         ccxml_cmeta_datamodel_destroy(&datamodel);
     }
