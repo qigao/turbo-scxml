@@ -103,6 +103,14 @@ typedef struct ccxml_join_request {
     size_t id2_size;
 } ccxml_join_request;
 
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_unjoin_request {
+    const char *id1;
+    size_t id1_size;
+    const char *id2;
+    size_t id2_size;
+} ccxml_unjoin_request;
+
 /**
  * Versioned telephony bridge copied by session initialization.
  *
@@ -149,6 +157,12 @@ typedef struct ccxml_telephony_adapter_v1 {
     scxml_adapter_status (*prepare_join)(
         void *user,
         const ccxml_join_request *request,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+    /** Optional tail operation, required by programs containing unjoin. */
+    scxml_adapter_status (*prepare_unjoin)(
+        void *user,
+        const ccxml_unjoin_request *request,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
 } ccxml_telephony_adapter_v1;

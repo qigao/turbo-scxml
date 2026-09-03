@@ -138,6 +138,15 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         }
     }
+    if (program->uses_unjoin) {
+        const size_t unjoin_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_unjoin) +
+            sizeof(telephony.prepare_unjoin);
+        if (config->telephony->struct_size < unjoin_size ||
+            telephony.prepare_unjoin == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
@@ -290,6 +299,22 @@ ccxml_status ccxml_session_dispatch(
                 .id2_size = action->id2_size};
             const scxml_adapter_status adapter_status =
                 impl->telephony.prepare_join(
+                    impl->telephony_user, &request, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+        }
+        if (action->kind == CCXML_ACTION_UNJOIN) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const ccxml_unjoin_request request = {
+                .id1 = action->id1,
+                .id1_size = action->id1_size,
+                .id2 = action->id2,
+                .id2_size = action->id2_size};
+            const scxml_adapter_status adapter_status =
+                impl->telephony.prepare_unjoin(
                     impl->telephony_user, &request, &ticket, &error);
             const ccxml_status status = retain_ticket(
                 impl, adapter_status, ticket, &prepared);
