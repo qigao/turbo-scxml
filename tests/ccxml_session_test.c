@@ -3288,8 +3288,15 @@ spec("CCXML session") {
                 provider.prepare_kinds[0],
                 (size_t)PROVIDER_PREPARED_DIALOG_START);
             check_equal(provider.started_prepared_dialog_id, "prepared-42");
+            check_equal(
+                provider.started_prepared_dialog_id_size,
+                sizeof("prepared-42") - 1u);
             check_equal(provider.prepared_dialog_connection_id, "call-7");
+            check_equal(
+                provider.prepared_dialog_connection_id_size,
+                sizeof("call-7") - 1u);
             check_equal(provider.commit_count, (size_t)1);
+            check_true(provider.prepared_dialog_start_commit_sequence > 0u);
             check_equal(datamodel.prepare_count, (size_t)0);
 
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
