@@ -381,7 +381,7 @@ typedef struct ccxml_session_config {
     /** Operations are copied; user remains borrowed through destruction. */
     const ccxml_telephony_adapter_v1 *telephony;
     void *telephony_user;
-    /** Required only when the program reads or writes datamodel strings. */
+    /** Required when the program reads/writes strings or uses conditions. */
     const ccxml_datamodel_adapter_v1 *datamodel;
     void *datamodel_user;
 } ccxml_session_config;

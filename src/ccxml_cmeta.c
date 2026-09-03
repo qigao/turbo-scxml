@@ -357,6 +357,8 @@ static scxml_adapter_status cmeta_compile_condition(
     const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
         ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
     ccxml_cmeta_condition *condition;
+    const scxml_expr_compile_policy policy = {
+        .allowed_system_operands = SCXML_EXPR_SYSTEM_EVENT_NAME};
     scxml_expr_limits limits;
     scxml_expr_diagnostic diagnostic = {0};
     scxml_expr_status status;
@@ -374,9 +376,9 @@ static scxml_adapter_status cmeta_compile_condition(
     limits = scxml_expr_default_limits();
     limits.max_path_depth = impl->max_path_depth;
     limits.max_string_bytes = impl->max_string_bytes;
-    status = scxml_expr_compile(
+    status = scxml_expr_compile_with_policy(
         &condition->program, source, source_size, impl->root,
-        reject_active_state, NULL, &limits, &diagnostic);
+        reject_active_state, NULL, &policy, &limits, &diagnostic);
     if (status != SCXML_EXPR_OK) {
         scxml_expr_program_destroy(&condition->program);
         free(condition);

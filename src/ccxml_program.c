@@ -1084,6 +1084,9 @@ static ccxml_status validate_transition(
     turbo_xml_string_view state = {0};
     turbo_xml_string_view condition = {0};
     size_t condition_decoded_size = 0u;
+    size_t condition_retained_size = 0u;
+    size_t event_retained_size = 0u;
+    size_t state_retained_size = 0u;
     size_t index;
     size_t local_action_count = 0u;
     size_t local_effect_count = 0u;
@@ -1167,17 +1170,23 @@ static ccxml_status validate_transition(
                     : "CCXML condition has an unsupported XML entity reference");
         }
     }
-    if (measurement->transition_count >= limits->max_transitions ||
+    if (!checked_add(event.size, 1u, &event_retained_size) ||
+        (state_attribute.impl != NULL &&
+         !checked_add(state.size, 1u, &state_retained_size)) ||
+        (condition_attribute.impl != NULL &&
+         !checked_add(condition_decoded_size, 1u,
+                      &condition_retained_size)) ||
+        measurement->transition_count >= limits->max_transitions ||
         !checked_add(measurement->transition_count, 1u,
                      &measurement->transition_count) ||
-        !checked_add(measurement->name_bytes, event.size + 1u,
+        !checked_add(measurement->name_bytes, event_retained_size,
                      &measurement->name_bytes) ||
         (state_attribute.impl != NULL &&
-         !checked_add(measurement->name_bytes, state.size + 1u,
+         !checked_add(measurement->name_bytes, state_retained_size,
                       &measurement->name_bytes)) ||
         (condition_attribute.impl != NULL &&
          !checked_add(measurement->name_bytes,
-                      condition_decoded_size + 1u,
+                      condition_retained_size,
                       &measurement->name_bytes)) ||
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(

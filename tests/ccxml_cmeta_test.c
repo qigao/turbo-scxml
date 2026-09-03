@@ -561,6 +561,41 @@ spec("CCXML CMeta datamodel") {
         ccxml_program_destroy(&program);
     }
 
+    it("rejects SCXML-only system operands in CCXML conditions") {
+        static const char *const unsupported_conditions[] = {
+            "_event.type == \"external\"",
+            "_event.data == \"payload\"",
+            "_name == \"machine\"",
+            "_sessionid != \"\"",
+            "_ioprocessors.scxml.location != \"\"",
+            "isBound(_event.name)",
+            "In(\"active\")"};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        size_t index;
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        for (index = 0u;
+             index < sizeof(unsupported_conditions) /
+                         sizeof(unsupported_conditions[0]);
+             ++index) {
+            const char *source = unsupported_conditions[index];
+            ccxml_condition condition = {0};
+            const char *error = NULL;
+            check_equal(
+                adapter->compile_condition(
+                    &datamodel, source, strlen(source),
+                    &condition, &error),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_null(condition.impl);
+            check_not_null(error);
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
     it("rolls back a state assignment when a later action fails") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
