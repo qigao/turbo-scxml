@@ -193,7 +193,7 @@ are 13/13, 13/13, 18/18, and 13/13. Install with
 C, CCXML C, and CCXML C++ consumers with the matching Rocida and vcpkg runtime
 paths; all three must exit zero.
 
-- [ ] **Step 3: Review, publish, and finalize**
+- [x] **Step 3: Review, publish, and finalize**
 
 Run `git diff --check`, scan changed source and tests for `fit(`, `it_only(`,
 `TODO`, `FIXME`, and `HACK`, and review the diff against every design
