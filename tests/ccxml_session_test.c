@@ -46,6 +46,10 @@ struct provider_probe {
     size_t unjoined_id1_size;
     char unjoined_id2[64];
     size_t unjoined_id2_size;
+    char merged_connection_id1[64];
+    size_t merged_connection_id1_size;
+    char merged_connection_id2[64];
+    size_t merged_connection_id2_size;
 };
 
 enum {
@@ -55,7 +59,8 @@ enum {
     PROVIDER_REJECT,
     PROVIDER_REDIRECT,
     PROVIDER_JOIN,
-    PROVIDER_UNJOIN
+    PROVIDER_UNJOIN,
+    PROVIDER_MERGE
 };
 
 static void ticket_commit(void *user) {
@@ -197,6 +202,23 @@ static scxml_adapter_status prepare_unjoin(
     return prepare_effect(probe, PROVIDER_UNJOIN, out_ticket, out_error);
 }
 
+static scxml_adapter_status prepare_merge(
+    void *user, const ccxml_merge_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->merged_connection_id1_size = request->connection_id1_size;
+    memcpy(
+        probe->merged_connection_id1, request->connection_id1,
+        request->connection_id1_size);
+    probe->merged_connection_id1[request->connection_id1_size] = '\0';
+    probe->merged_connection_id2_size = request->connection_id2_size;
+    memcpy(
+        probe->merged_connection_id2, request->connection_id2,
+        request->connection_id2_size);
+    probe->merged_connection_id2[request->connection_id2_size] = '\0';
+    return prepare_effect(probe, PROVIDER_MERGE, out_ticket, out_error);
+}
+
 static void provider_close(void *user) {
     provider_probe *probe = (provider_probe *)user;
     ++probe->close_count;
@@ -218,7 +240,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .prepare_reject = prepare_reject,
     .prepare_redirect = prepare_redirect,
     .prepare_join = prepare_join,
-    .prepare_unjoin = prepare_unjoin};
+    .prepare_unjoin = prepare_unjoin,
+    .prepare_merge = prepare_merge};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -1649,12 +1672,204 @@ spec("CCXML session") {
             provider_probe probe = {.quiescent = true};
             ccxml_telephony_adapter_v1 truncated = provider_adapter;
             ccxml_session_config config;
-            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+            truncated.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_unjoin) +
+                sizeof(truncated.prepare_unjoin) - 1u;
 
             check_equal(
                 compile_program(
                     &program,
                     "<unjoin id1=\"'call-a'\" id2=\"'conference-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &truncated,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+    }
+
+    group("merge") {
+        it("commits two program-owned IDs without event connection data") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='ccxml.loaded'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = loaded_event();
+
+            check_equal(compile_document(&program, source), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_count, (size_t)1);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_MERGE);
+            check_equal(probe.merged_connection_id1, "call-a");
+            check_equal(
+                probe.merged_connection_id1_size, sizeof("call-a") - 1u);
+            check_equal(probe.merged_connection_id2, "call-b");
+            check_equal(
+                probe.merged_connection_id2_size, sizeof("call-b") - 1u);
+            check_equal(probe.commit_count, (size_t)1);
+            check_equal(probe.discard_count, (size_t)0);
+            check_false(ccxml_session_is_terminated(&session));
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("commits join and merge effects in document order") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"
+                    "<merge connectionid1=\"'call-a'\" "
+                    "connectionid2=\"'call-b'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_JOIN);
+            check_equal(probe.prepare_kinds[1], (size_t)PROVIDER_MERGE);
+            check_equal(probe.commit_order[0], (size_t)1);
+            check_equal(probe.commit_order[1], (size_t)2);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards earlier effects in reverse order when merge is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {
+                .reject_on_prepare = 3u,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/>"
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"
+                    "<merge connectionid1=\"'call-a'\" "
+                    "connectionid2=\"'call-b'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(probe.prepare_count, (size_t)3);
+            check_equal(probe.commit_count, (size_t)0);
+            check_equal(probe.discard_count, (size_t)2);
+            check_equal(probe.discard_order[0], (size_t)2);
+            check_equal(probe.discard_order[1], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts the unjoin adapter prefix for older programs") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_merge);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<unjoin id1=\"'call-a'\" id2=\"'call-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the appended operation for a merge program") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_merge);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<merge connectionid1=\"'call-a'\" "
+                    "connectionid2=\"'call-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a null merge operation") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 incomplete = provider_adapter;
+            ccxml_session_config config;
+            incomplete.prepare_merge = NULL;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<merge connectionid1=\"'call-a'\" "
+                    "connectionid2=\"'call-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &incomplete,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a truncated merge callback field") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 truncated = provider_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<merge connectionid1=\"'call-a'\" "
+                    "connectionid2=\"'call-b'\"/>"),
                 CCXML_OK);
             config = (ccxml_session_config){
                 .program = &program,

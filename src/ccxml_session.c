@@ -147,6 +147,15 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         }
     }
+    if (program->uses_merge) {
+        const size_t merge_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_merge) +
+            sizeof(telephony.prepare_merge);
+        if (config->telephony->struct_size < merge_size ||
+            telephony.prepare_merge == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
@@ -315,6 +324,22 @@ ccxml_status ccxml_session_dispatch(
                 .id2_size = action->id2_size};
             const scxml_adapter_status adapter_status =
                 impl->telephony.prepare_unjoin(
+                    impl->telephony_user, &request, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+        }
+        if (action->kind == CCXML_ACTION_MERGE) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const ccxml_merge_request request = {
+                .connection_id1 = action->id1,
+                .connection_id1_size = action->id1_size,
+                .connection_id2 = action->id2,
+                .connection_id2_size = action->id2_size};
+            const scxml_adapter_status adapter_status =
+                impl->telephony.prepare_merge(
                     impl->telephony_user, &request, &ticket, &error);
             const ccxml_status status = retain_ticket(
                 impl, adapter_status, ticket, &prepared);
