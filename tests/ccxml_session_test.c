@@ -30,11 +30,14 @@ struct provider_probe {
     size_t connection_id_size;
     char destination[64];
     size_t destination_size;
+    char disconnected_connection_id[64];
+    size_t disconnected_connection_id_size;
 };
 
 enum {
     PROVIDER_ACCEPT = 1,
-    PROVIDER_CREATE_CALL
+    PROVIDER_CREATE_CALL,
+    PROVIDER_DISCONNECT
 };
 
 static void ticket_commit(void *user) {
@@ -108,6 +111,19 @@ static scxml_adapter_status prepare_create_call(
         probe, PROVIDER_CREATE_CALL, out_ticket, out_error);
 }
 
+static scxml_adapter_status prepare_disconnect(
+    void *user, const ccxml_disconnect_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->disconnected_connection_id_size = request->connection_id_size;
+    memcpy(
+        probe->disconnected_connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->disconnected_connection_id[request->connection_id_size] = '\0';
+    return prepare_effect(
+        probe, PROVIDER_DISCONNECT, out_ticket, out_error);
+}
+
 static void provider_close(void *user) {
     provider_probe *probe = (provider_probe *)user;
     ++probe->close_count;
@@ -124,7 +140,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .prepare_accept = prepare_accept,
     .close = provider_close,
     .is_quiescent = provider_is_quiescent,
-    .prepare_create_call = prepare_create_call};
+    .prepare_create_call = prepare_create_call,
+    .prepare_disconnect = prepare_disconnect};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -497,12 +514,239 @@ spec("CCXML session") {
             provider_probe probe = {.quiescent = true};
             ccxml_telephony_adapter_v1 truncated = provider_adapter;
             ccxml_session_config config;
-            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+            truncated.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_create_call) +
+                sizeof(truncated.prepare_create_call) - 1u;
 
             check_equal(
                 compile_program(
                     &program, "<createcall dest=\"'tel:123'\"/>"),
                 CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &truncated,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+    }
+
+    group("disconnect") {
+        it("commits the current event connection") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_count, (size_t)1);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_DISCONNECT);
+            check_equal(probe.disconnected_connection_id, "call-7");
+            check_equal(
+                probe.disconnected_connection_id_size,
+                sizeof("call-7") - 1u);
+            check_equal(probe.commit_count, (size_t)1);
+            check_equal(probe.discard_count, (size_t)0);
+            check_false(ccxml_session_is_terminated(&session));
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a missing current event connection") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+            event.connection_id = NULL;
+            event.connection_id_size = 0u;
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+            check_equal(probe.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an embedded NUL in the current connection") {
+            static const char malformed_id[] = {'c', 'a', 'l', 'l', '\0', '7'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+            event.connection_id = malformed_id;
+            event.connection_id_size = sizeof(malformed_id);
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+            check_equal(probe.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards earlier effects when the current connection is missing") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+            event.connection_id = NULL;
+            event.connection_id_size = 0u;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/><disconnect/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+            check_equal(probe.prepare_count, (size_t)1);
+            check_equal(
+                probe.prepare_kinds[0], (size_t)PROVIDER_CREATE_CALL);
+            check_equal(probe.commit_count, (size_t)0);
+            check_equal(probe.discard_count, (size_t)1);
+            check_equal(probe.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("commits mixed effects in document order") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/><disconnect/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(
+                probe.prepare_kinds[0], (size_t)PROVIDER_CREATE_CALL);
+            check_equal(probe.prepare_kinds[1], (size_t)PROVIDER_DISCONNECT);
+            check_equal(probe.commit_order[0], (size_t)1);
+            check_equal(probe.commit_order[1], (size_t)2);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards an earlier effect when disconnect is rejected") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/><disconnect/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(probe.prepare_count, (size_t)2);
+            check_equal(probe.commit_count, (size_t)0);
+            check_equal(probe.discard_count, (size_t)1);
+            check_equal(probe.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts the createcall adapter prefix for older programs") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_disconnect);
+
+            check_equal(
+                compile_program(
+                    &program, "<createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the appended operation for a disconnect program") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_disconnect);
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a null disconnect operation") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 incomplete = provider_adapter;
+            ccxml_session_config config;
+            incomplete.prepare_disconnect = NULL;
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &incomplete,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a truncated disconnect callback field") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 truncated = provider_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+
+            check_equal(compile_program(&program, "<disconnect/>"), CCXML_OK);
             config = (ccxml_session_config){
                 .program = &program,
                 .telephony = &truncated,

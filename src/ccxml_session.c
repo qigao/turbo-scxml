@@ -75,6 +75,12 @@ static ccxml_status retain_ticket(
     return CCXML_OK;
 }
 
+static bool connection_id_valid(const ccxml_event *event) {
+    return event->connection_id != NULL && event->connection_id_size != 0u &&
+           memchr(
+               event->connection_id, '\0', event->connection_id_size) == NULL;
+}
+
 ccxml_status ccxml_session_init(
     ccxml_session *session, const ccxml_session_config *config) {
     const ccxml_program_impl *program;
@@ -93,6 +99,15 @@ ccxml_status ccxml_session_init(
             sizeof(telephony.prepare_create_call);
         if (config->telephony->struct_size < create_call_size ||
             telephony.prepare_create_call == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
+    if (program->uses_disconnect) {
+        const size_t disconnect_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_disconnect) +
+            sizeof(telephony.prepare_disconnect);
+        if (config->telephony->struct_size < disconnect_size ||
+            telephony.prepare_disconnect == NULL) {
             return CCXML_INVALID_ARGUMENT;
         }
     }
@@ -175,6 +190,26 @@ ccxml_status ccxml_session_dispatch(
                 impl, adapter_status, ticket, &prepared);
             (void)error;
             if (status != CCXML_OK) return status;
+        }
+        if (action->kind == CCXML_ACTION_DISCONNECT) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            scxml_adapter_status adapter_status;
+            const ccxml_disconnect_request request = {
+                .connection_id = event->connection_id,
+                .connection_id_size = event->connection_id_size};
+            if (!connection_id_valid(event)) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_EVENT;
+            }
+            adapter_status = impl->telephony.prepare_disconnect(
+                impl->telephony_user, &request, &ticket, &error);
+            (void)error;
+            {
+                const ccxml_status status = retain_ticket(
+                    impl, adapter_status, ticket, &prepared);
+                if (status != CCXML_OK) return status;
+            }
         }
     }
     for (index = 0u; index < prepared; ++index) {
