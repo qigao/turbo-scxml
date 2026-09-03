@@ -220,6 +220,8 @@ typedef struct conference_provider_probe {
     char dialog_source[32];
     char dialog_connection_id[32];
     char dialog_media_type[32];
+    char terminated_dialog_id[32];
+    bool terminate_immediate;
     const test_text *published_dialog_id;
     bool dialog_id_visible_at_commit;
 } conference_provider_probe;
@@ -314,6 +316,24 @@ static scxml_adapter_status provider_prepare_dialog_start(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status provider_prepare_dialog_terminate(
+    void *user, const ccxml_dialog_terminate_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(
+        probe->terminated_dialog_id, request->dialog_id,
+        request->dialog_id_size);
+    probe->terminated_dialog_id[request->dialog_id_size] = '\0';
+    probe->terminate_immediate = request->immediate;
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static void provider_close(void *user) {
     ++((conference_provider_probe *)user)->close_count;
 }
@@ -332,7 +352,9 @@ static const ccxml_telephony_adapter_v1 conference_provider = {
     .prepare_create_conference = provider_prepare_conference,
     .prepare_destroy_conference =
         provider_prepare_destroy_conference,
-    .prepare_dialog_start = provider_prepare_dialog_start};
+    .prepare_dialog_start = provider_prepare_dialog_start,
+    .prepare_dialog_terminate =
+        provider_prepare_dialog_terminate};
 
 static ccxml_status initialize(
     ccxml_cmeta_datamodel *datamodel, test_state *state,
@@ -348,13 +370,15 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
-    it("writes a dialog ID through nested CMeta before provider publication") {
+    it("starts and normally terminates a dialog through nested CMeta") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition event='connection.alerting'>"
             "<dialogstart dialogid='dialog.id' "
             "src=\"'menu.vxml'\" "
             "connectionid='event$.connectionid'/>"
+            "</transition><transition event='dialog.stop'>"
+            "<dialogterminate dialogid='dialog.id'/>"
             "</transition></eventprocessor></ccxml>";
         ccxml_program program = {0};
         ccxml_session session = {0};
@@ -369,6 +393,9 @@ spec("CCXML CMeta datamodel") {
             .name_size = sizeof("connection.alerting") - 1u,
             .connection_id = "call-e2e",
             .connection_id_size = sizeof("call-e2e") - 1u};
+        const ccxml_event stop_event = {
+            .name = "dialog.stop",
+            .name_size = sizeof("dialog.stop") - 1u};
 
         check_equal(
             ccxml_compile(
@@ -392,6 +419,11 @@ spec("CCXML CMeta datamodel") {
         check_true(provider.dialog_id_visible_at_commit);
         check_equal(state.dialog.id.data, "dialog-e2e");
         check_equal(state.dialog.id.size, (size_t)10);
+        check_equal(
+            ccxml_session_dispatch(&session, &stop_event), CCXML_OK);
+        check_equal(provider.terminated_dialog_id, "dialog-e2e");
+        check_false(provider.terminate_immediate);
+        check_equal(provider.commit_count, (size_t)2);
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
         ccxml_cmeta_datamodel_destroy(&datamodel);
