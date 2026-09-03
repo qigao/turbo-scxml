@@ -10,7 +10,8 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_DISCONNECT,
     CCXML_ACTION_REJECT,
     CCXML_ACTION_REDIRECT,
-    CCXML_ACTION_JOIN
+    CCXML_ACTION_JOIN,
+    CCXML_ACTION_UNJOIN
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
@@ -42,6 +43,7 @@ typedef struct ccxml_program_impl {
     bool uses_reject;
     bool uses_redirect;
     bool uses_join;
+    bool uses_unjoin;
 } ccxml_program_impl;
 
 typedef struct ccxml_session_impl {

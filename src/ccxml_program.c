@@ -199,7 +199,7 @@ static ccxml_status validate_destination_action(
     return CCXML_OK;
 }
 
-static ccxml_status validate_join_action(
+static ccxml_status validate_bridge_action(
     turbo_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     turbo_xml_attribute id1_attribute = {0};
@@ -228,7 +228,7 @@ static ccxml_status validate_join_action(
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_attribute_location(attribute),
-                "unsupported or duplicate CCXML join attribute");
+                "unsupported or duplicate CCXML bridge-action attribute");
         }
         *slot = attribute;
     }
@@ -236,7 +236,7 @@ static ccxml_status validate_join_action(
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             turbo_xml_node_location(action),
-            "CCXML join requires id1 and id2");
+            "CCXML bridge action requires id1 and id2");
     }
     status = validate_string_literal(
         id1_attribute, &id1_expression, diagnostic);
@@ -250,7 +250,7 @@ static ccxml_status validate_join_action(
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(child),
-                "CCXML join must be empty");
+                "CCXML bridge action must be empty");
         }
     }
     if (!checked_add(id1_expression.size - 2u, 1u, &id1_retained_size) ||
@@ -265,7 +265,7 @@ static ccxml_status validate_join_action(
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
             turbo_xml_node_location(action),
-            "CCXML join or retained-string limit exceeded");
+            "CCXML bridge action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
@@ -320,7 +320,8 @@ static ccxml_status validate_transition(
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
-            !view_equal(name, "redirect") && !view_equal(name, "join")) {
+            !view_equal(name, "redirect") && !view_equal(name, "join") &&
+            !view_equal(name, "unjoin")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -329,8 +330,8 @@ static ccxml_status validate_transition(
         if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
             status = validate_destination_action(
                 action, measurement, limits, diagnostic);
-        } else if (view_equal(name, "join")) {
-            status = validate_join_action(
+        } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
+            status = validate_bridge_action(
                 action, measurement, limits, diagnostic);
         } else {
             status = validate_empty_action(
@@ -529,19 +530,24 @@ static void copy_program(
                     action_row->kind = CCXML_ACTION_REJECT;
                     impl->uses_reject = true;
                 } else {
-                    size_t join_attribute_index;
+                    size_t bridge_attribute_index;
                     turbo_xml_attribute id1_attribute = {0};
                     turbo_xml_attribute id2_attribute = {0};
                     turbo_xml_string_view expression;
-                    action_row->kind = CCXML_ACTION_JOIN;
-                    impl->uses_join = true;
-                    for (join_attribute_index = 0u;
-                         join_attribute_index <
+                    if (view_equal(action_name, "join")) {
+                        action_row->kind = CCXML_ACTION_JOIN;
+                        impl->uses_join = true;
+                    } else {
+                        action_row->kind = CCXML_ACTION_UNJOIN;
+                        impl->uses_unjoin = true;
+                    }
+                    for (bridge_attribute_index = 0u;
+                         bridge_attribute_index <
                              turbo_xml_node_attribute_count(action);
-                         ++join_attribute_index) {
+                         ++bridge_attribute_index) {
                         const turbo_xml_attribute candidate =
                             turbo_xml_node_attribute_at(
-                                action, join_attribute_index);
+                                action, bridge_attribute_index);
                         const turbo_xml_string_view local_name =
                             turbo_xml_attribute_local_name(candidate);
                         if (view_equal(local_name, "id1")) {
