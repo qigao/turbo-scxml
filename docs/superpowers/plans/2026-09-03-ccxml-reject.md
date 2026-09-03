@@ -127,7 +127,7 @@ the core C, CCXML C, and CCXML C++ installed consumers with the matching Rocida
 and vcpkg runtime paths. Expected counts are 13/13, 13/13, 18/18, and 13/13;
 all consumers must exit zero.
 
-- [ ] **Step 3: Run static checks and publish**
+- [x] **Step 3: Run static checks and publish**
 
 Run `git diff --check` across the slice and scan changed source/tests for
 focused tests and placeholder markers. Commit documentation, push, update PR
