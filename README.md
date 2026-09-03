@@ -256,10 +256,15 @@ dispatch 边界回送，核心不自行合成平台结果。
 生成有界 ID，先提交 datamodel 写回，再发布 send。`<cancel sendid="..."/>`
 接受点分可读字符串位置或字符串字面量，并复用 adapter 的
 `SCXML_EVENT_IO_CAP_CANCEL`/`prepare_cancel`。宿主继续拥有 delayed registry、
-取消竞态及 `cancel.successful`/`error.notallowed` 结果事件。由于外部 datamodel
+取消竞态及 `cancel.successful`/`error.notallowed` 结果事件。`namelist` 接受最多
+`SCXML_PAYLOAD_MAX_ENTRIES` 个 XML 解码后的点分 NCName 位置，保留顺序和限定名，
+并通过共享 `scxml_payload_view` 传递标量或 CMeta 对象视图；非空列表要求
+datamodel payload-read 尾部能力与 `SCXML_EVENT_IO_CAP_PAYLOAD`。Event I/O
+provider 必须在 prepare 返回前复制需保留的数据。由于外部 datamodel
 写入只在 transition commit 后可见，send 与读取其 ID 的 cancel 应位于不同
-transition。当前尚不支持动态 `delay`、任意 ECMAScript `sendid`、`namelist` 和
-inline content，这些形式会在 compile 阶段被明确拒绝。
+transition；同理，namelist 不会看到同一 transition 中更早 staged 的 assign。
+当前尚不支持动态 `delay`、任意 ECMAScript `sendid`、通用 ECMAScript namelist
+表达式和 inline content，这些形式会在 compile 阶段被明确拒绝。
 
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
@@ -393,8 +398,8 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>` 的动态 `delay`、任意 ECMAScript `sendid`、`namelist`/inline content
-或其他非字面量表达式、
+`<send>` 的动态 `delay`、任意 ECMAScript `sendid`、非点分位置 namelist、
+inline content 或其他非字面量表达式、
 文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
@@ -404,6 +409,8 @@ literal delay 增量见
 [`docs/specs/ccxml-send-delay-design.md`](docs/specs/ccxml-send-delay-design.md)，
 send identifier 与 cancel 增量见
 [`docs/specs/ccxml-send-cancel-design.md`](docs/specs/ccxml-send-cancel-design.md)，
+send namelist 与结构化 payload 增量见
+[`docs/specs/ccxml-send-namelist-design.md`](docs/specs/ccxml-send-namelist-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见

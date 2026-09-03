@@ -5,7 +5,7 @@
 This slice adds the first bounded CCXML `<send>` profile. It accepts an empty
 action with required literal-expression `target` and `name` attributes,
 optional literal-expression `targettype` and `delay` attributes, and an
-optional dotted-location `sendid`:
+optional dotted-location `sendid` and bounded dotted-location `namelist`:
 
 ```xml
 <send target="'session:callee'" name="'call.notice'"/>
@@ -13,18 +13,23 @@ optional dotted-location `sendid`:
       targettype="'basichttp'" name="'call.notice'" delay="'250ms'"/>
 <send target="'session:callee'" name="'call.notice'"
       delay="'250ms'" sendid="request.pending"/>
+<send target="'session:callee'" name="'call.notice'"
+      namelist="conference.id count"/>
 <cancel sendid="request.pending"/>
 ```
 
 When `targettype` is omitted, the compiled value is `ccxml`; omitted `delay`
 is zero. `sendid` is a dotted writable string location populated with a
 generated identifier. `<cancel>` accepts a dotted readable string location or
-a quoted literal identifier. `namelist`, inline-content forms, arbitrary
-dynamic expressions, and escaped string literals remain unsupported.
+a quoted literal identifier. `namelist` accepts at most
+`SCXML_PAYLOAD_MAX_ENTRIES` whitespace-separated dotted locations.
+Inline-content forms, arbitrary dynamic expressions, and escaped string
+literals remain unsupported.
 
 ## Compiler contract
 
-`target` and `name` are required. `targettype`, `delay`, and `sendid` are
+`target` and `name` are required. `targettype`, `delay`, `sendid`, and
+`namelist` are
 optional. Target, name, type, and delay values must be exactly one nonempty
 single-quoted or double-quoted string literal. `sendid` must be a dotted NCName
 location. The compiler strips expression quotes and retains decoded literal
@@ -37,8 +42,9 @@ exact `uint64_t` millisecond value. The event name uses the CCXML lexical subset
 the first character is an ASCII
 letter or underscore, and following characters are ASCII letters, digits,
 underscore, or dot. The retained target, name, explicit target type, and
-explicit delay share the existing `max_name_bytes` budget. Non-ignorable child
-content is rejected.
+explicit delay and each decoded namelist token share the existing
+`max_name_bytes` budget. Namelist order, duplicates, and qualification are
+preserved. Non-ignorable child content is rejected.
 
 Unsupported standard attributes are rejected as `CCXML_UNSUPPORTED_FEATURE`;
 missing or empty required values are rejected as `CCXML_INVALID_STRUCTURE`.
@@ -54,6 +60,10 @@ fields using the existing `scxml_event_io_adapter` table. A program containing
 couples cancellation to delayed-send support. `close` and `is_quiescent` remain
 mandatory for every attached adapter.
 
+A non-empty namelist additionally requires `SCXML_EVENT_IO_CAP_PAYLOAD` and
+the datamodel adapter's struct-size-protected `validate_payload_location` and
+`read_payload` tail. Empty namelists behave like an omitted payload.
+
 The shared `scxml_send_request` carries CCXML values as follows:
 
 - `event` is the compiled CCXML `name`;
@@ -61,7 +71,9 @@ The shared `scxml_send_request` carries CCXML values as follows:
 - `type` is the compiled `targettype` or `ccxml`;
 - `id` is empty unless `sendid` is present; then it is a bounded
   `send.<session-uuid>.<token>` value also staged into the datamodel location;
-- `delay_ms` is the compiled literal or zero, and the payload is empty.
+- `delay_ms` is the compiled literal or zero;
+- `payload` is empty or an ordered shared named payload containing scalar and
+  callback-scoped CMeta object views.
 
 This shares the allocation-free prepare/commit/discard protocol, not SCXML
 target semantics. The session-bound CCXML adapter interprets `targettype` and
@@ -84,7 +96,7 @@ order after a failure.
 ## Ownership and lifecycle
 
 - The program owns explicit target, name, target-type, delay, sendid-location,
-  and cancel-operand bytes until program destruction.
+  namelist-token, and cancel-operand bytes until program destruction.
 - The session copies the Event I/O operation table and borrows its user.
 - Session close calls both attached adapter close callbacks exactly once.
 - Session destruction remains busy until both attached adapters report
@@ -112,4 +124,5 @@ The slice is complete when tests prove:
 10. focused, full-preset, and installed-consumer checks remain green.
 
 Detailed identifier and cancellation semantics are specified in
-`docs/specs/ccxml-send-cancel-design.md`.
+`docs/specs/ccxml-send-cancel-design.md`. Namelist projection and lifetime
+semantics are specified in `docs/specs/ccxml-send-namelist-design.md`.

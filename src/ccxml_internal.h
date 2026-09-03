@@ -28,6 +28,11 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_CANCEL
 } ccxml_action_kind;
 
+typedef struct ccxml_payload_row {
+    const char *name;
+    size_t name_size;
+} ccxml_payload_row;
+
 typedef struct ccxml_action_row {
     ccxml_action_kind kind;
     const char *destination;
@@ -45,6 +50,8 @@ typedef struct ccxml_action_row {
     const char *delay;
     size_t delay_size;
     uint64_t delay_ms;
+    size_t payload_first;
+    size_t payload_count;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -62,6 +69,7 @@ typedef struct ccxml_program_impl {
     cflow_statechart statechart;
     ccxml_transition_row *transitions;
     ccxml_action_row *actions;
+    ccxml_payload_row *payloads;
     char *storage;
     const char *initial_variable;
     size_t initial_variable_size;
@@ -71,6 +79,8 @@ typedef struct ccxml_program_impl {
     size_t statevariable_size;
     size_t transition_count;
     size_t action_count;
+    size_t payload_count;
+    size_t max_send_payload_entries;
     size_t max_transition_actions;
     size_t max_transition_effects;
     bool uses_create_call;
@@ -91,6 +101,7 @@ typedef struct ccxml_program_impl {
     bool uses_statevariable;
     bool uses_condition;
     bool uses_send;
+    bool uses_send_payload;
     bool uses_send_id;
     bool uses_delayed_send;
     bool uses_cancel;
@@ -112,7 +123,9 @@ typedef struct ccxml_session_impl {
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
     cflow_statechart_effect_ticket *tickets;
+    scxml_payload_entry *payload_scratch;
     size_t ticket_capacity;
+    size_t payload_scratch_capacity;
     size_t prepared_ticket_count;
     char send_namespace[SALTS_UUID_STRING_SIZE];
     uint64_t next_send_token;

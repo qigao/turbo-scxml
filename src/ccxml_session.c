@@ -79,6 +79,38 @@ static bool datamodel_condition_adapter_valid(
            adapter->destroy_condition != NULL;
 }
 
+static bool datamodel_payload_adapter_valid(
+    const ccxml_datamodel_adapter_v1 *adapter) {
+    const size_t payload_size =
+        offsetof(ccxml_datamodel_adapter_v1, read_payload) +
+        sizeof(adapter->read_payload);
+    return adapter != NULL &&
+           adapter->abi_version == CCXML_DATAMODEL_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= payload_size &&
+           adapter->validate_payload_location != NULL &&
+           adapter->read_payload != NULL;
+}
+
+static bool payload_content_valid(const scxml_content_view *content) {
+    if (content == NULL) return false;
+    if (content->kind == SCXML_CONTENT_SCALAR) {
+        if (content->scalar.kind < SCXML_PAYLOAD_VALUE_BOOL ||
+            content->scalar.kind > SCXML_PAYLOAD_VALUE_STRING)
+            return false;
+        return content->scalar.kind != SCXML_PAYLOAD_VALUE_STRING ||
+               content->scalar.data.string.data != NULL ||
+               content->scalar.data.string.size == 0u;
+    }
+    return content->kind == SCXML_CONTENT_CMETA &&
+           content->schema != NULL && content->object != NULL &&
+           cmeta_data_desc_valid(content->schema) &&
+           content->schema->storage_type != NULL &&
+           content->schema->storage_type->align != 0u &&
+           (uintptr_t)content->object %
+                   content->schema->storage_type->align ==
+               0u;
+}
+
 static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
     const ccxml_datamodel_adapter_v1 *adapter) {
     ccxml_datamodel_adapter_v1 copy = {0};
@@ -337,6 +369,10 @@ ccxml_status ccxml_session_init(
             (config->event_io->capabilities &
              SCXML_EVENT_IO_CAP_CANCEL) == 0u)
             return CCXML_INVALID_ARGUMENT;
+        if (program->uses_send_payload &&
+            (config->event_io->capabilities &
+             SCXML_EVENT_IO_CAP_PAYLOAD) == 0u)
+            return CCXML_INVALID_ARGUMENT;
         event_io = *config->event_io;
         event_io_user = config->event_io_user;
     }
@@ -388,6 +424,25 @@ ccxml_status ccxml_session_init(
         if (!datamodel_condition_adapter_valid(config->datamodel))
             return CCXML_INVALID_ARGUMENT;
         datamodel = copy_datamodel_adapter(config->datamodel);
+    }
+    if (program->uses_send_payload) {
+        size_t payload_index;
+        if (!datamodel_payload_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+        for (payload_index = 0u; payload_index < program->payload_count;
+             ++payload_index) {
+            const ccxml_payload_row *payload =
+                &program->payloads[payload_index];
+            const char *error = NULL;
+            if (datamodel.validate_payload_location(
+                    config->datamodel_user, payload->name,
+                    payload->name_size, &error) !=
+                SCXML_ADAPTER_ACCEPTED) {
+                (void)error;
+                return CCXML_INVALID_ARGUMENT;
+            }
+        }
     }
     if (program->uses_create_call) {
         const size_t create_call_size =
@@ -589,6 +644,9 @@ ccxml_status ccxml_session_init(
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
     }
+    if (program->max_send_payload_entries >
+        SIZE_MAX / sizeof(scxml_payload_entry))
+        return CCXML_LIMIT_EXCEEDED;
     if (program->uses_send_id &&
         SCXML_EVENT_METADATA_CAPACITY < CCXML_SEND_ID_MAX_SIZE)
         return CCXML_LIMIT_EXCEEDED;
@@ -613,6 +671,16 @@ ccxml_status ccxml_session_init(
             return CCXML_ALLOCATION_FAILED;
         }
     }
+    if (program->max_send_payload_entries != 0u) {
+        impl->payload_scratch = (scxml_payload_entry *)calloc(
+            program->max_send_payload_entries,
+            sizeof(*impl->payload_scratch));
+        if (impl->payload_scratch == NULL) {
+            free(impl->tickets);
+            free(impl);
+            return CCXML_ALLOCATION_FAILED;
+        }
+    }
     impl->program = program;
     impl->telephony = telephony;
     impl->telephony_user = config->telephony_user;
@@ -621,6 +689,7 @@ ccxml_status ccxml_session_init(
     impl->event_io = event_io;
     impl->event_io_user = event_io_user;
     impl->ticket_capacity = program->max_transition_effects;
+    impl->payload_scratch_capacity = program->max_send_payload_entries;
     guard_count = cflow_statechart_guard_count(&program->statechart);
     executable_count =
         cflow_statechart_executable_count(&program->statechart);
@@ -628,6 +697,7 @@ ccxml_status ccxml_session_init(
         guard_count > SIZE_MAX / sizeof(*impl->transition_bindings) ||
         executable_count > SIZE_MAX / sizeof(*impl->executable_bindings)) {
         close_adapter(impl);
+        free(impl->payload_scratch);
         free(impl->tickets);
         free(impl);
         return CCXML_LIMIT_EXCEEDED;
@@ -646,6 +716,7 @@ ccxml_status ccxml_session_init(
           impl->transition_bindings == NULL)) ||
         (executable_count != 0u && impl->executable_bindings == NULL)) {
         close_adapter(impl);
+        free(impl->payload_scratch);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -682,6 +753,7 @@ ccxml_status ccxml_session_init(
             if (status != CCXML_OK) {
                 close_adapter(impl);
                 destroy_conditions(impl);
+                free(impl->payload_scratch);
                 free(impl->transition_bindings);
                 free(impl->executable_bindings);
                 free(impl->guard_bindings);
@@ -707,6 +779,7 @@ ccxml_status ccxml_session_init(
     if (!cflow_executor_serial_init(&impl->executor)) {
         close_adapter(impl);
         destroy_conditions(impl);
+        free(impl->payload_scratch);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -733,6 +806,7 @@ ccxml_status ccxml_session_init(
         cflow_executor_destroy(&impl->executor);
         close_adapter(impl);
         destroy_conditions(impl);
+        free(impl->payload_scratch);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -768,6 +842,7 @@ ccxml_status ccxml_session_init(
             cflow_executor_destroy(&impl->executor);
             close_adapter(impl);
             destroy_conditions(impl);
+            free(impl->payload_scratch);
             free(impl->transition_bindings);
             free(impl->executable_bindings);
             free(impl->guard_bindings);
@@ -823,6 +898,47 @@ static ccxml_status execute_transition_actions(
                 .payload = {.kind = SCXML_PAYLOAD_NONE}};
             scxml_adapter_status adapter_status;
             ccxml_status status;
+            if (action->payload_count != 0u) {
+                size_t payload_index;
+                if (action->payload_first > impl->program->payload_count ||
+                    action->payload_count >
+                        impl->program->payload_count - action->payload_first ||
+                    action->payload_count > impl->payload_scratch_capacity ||
+                    impl->payload_scratch == NULL) {
+                    discard_tickets(impl->tickets, prepared);
+                    return CCXML_INVALID_CONTRACT;
+                }
+                for (payload_index = 0u;
+                     payload_index < action->payload_count;
+                     ++payload_index) {
+                    const ccxml_payload_row *payload =
+                        &impl->program->payloads[
+                            action->payload_first + payload_index];
+                    scxml_payload_entry *entry =
+                        &impl->payload_scratch[payload_index];
+                    entry->name = payload->name;
+                    entry->name_size = payload->name_size;
+                    entry->value = (scxml_content_view){0};
+                    adapter_status = impl->datamodel.read_payload(
+                        impl->datamodel_user, payload->name,
+                        payload->name_size, &entry->value, &error);
+                    if (adapter_status != SCXML_ADAPTER_ACCEPTED ||
+                        !payload_content_valid(&entry->value)) {
+                        discard_tickets(impl->tickets, prepared);
+                        return (adapter_status ==
+                                    SCXML_ADAPTER_INVALID_CONTRACT ||
+                                adapter_status == SCXML_ADAPTER_ACCEPTED)
+                            ? CCXML_INVALID_CONTRACT
+                            : adapter_status == SCXML_ADAPTER_FULL
+                                ? CCXML_ALLOCATION_FAILED
+                                : CCXML_ADAPTER_ERROR;
+                    }
+                }
+                request.payload = (scxml_payload_view){
+                    .kind = SCXML_PAYLOAD_NAMED,
+                    .entries = impl->payload_scratch,
+                    .entry_count = action->payload_count};
+            }
             if (action->location != NULL) {
                 const uint64_t token = impl->next_send_token;
                 const int written = token == 0u ? -1 : snprintf(
@@ -1477,6 +1593,7 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
     free(impl->transition_bindings);
     free(impl->executable_bindings);
     free(impl->guard_bindings);
+    free(impl->payload_scratch);
     free(impl->tickets);
     free(impl);
     session->impl = NULL;

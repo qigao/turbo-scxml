@@ -42,6 +42,7 @@ nonzero token. Generated identifiers use the bounded form
 unique across sends and sessions subject to the UUID provider contract.
 
 Dispatch first prepares the Event I/O send using the generated identifier,
+after reading any namelist values from the committed datamodel,
 then prepares assignment of the identical bytes to the datamodel location.
 Both tickets are retained atomically. Their retained order is swapped so the
 datamodel assignment commits before the externally visible send, matching the
@@ -58,7 +59,8 @@ the host Event I/O processor's responsibility.
 Because external datamodel writes become visible only at transition commit, a
 cancel in the same transition cannot consume a send identifier assigned by an
 earlier action in that transition. The supported portable sequence cancels in
-a later dispatched transition.
+a later dispatched transition. Namelist reads have the same committed-state
+rule and do not observe assignments staged earlier in their transition.
 
 ## Verification
 

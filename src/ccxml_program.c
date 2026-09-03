@@ -14,9 +14,11 @@
 typedef struct ccxml_measurement {
     size_t transition_count;
     size_t action_count;
+    size_t payload_count;
     size_t name_bytes;
     size_t max_transition_actions;
     size_t max_transition_effects;
+    size_t max_send_payload_entries;
 } ccxml_measurement;
 
 static const cmeta_type_identity ccxml_event_identity =
@@ -60,6 +62,24 @@ static bool text_is_whitespace(salts_xml_string_view view) {
         if (value != ' ' && value != '\t' && value != '\r' && value != '\n')
             return false;
     }
+    return true;
+}
+
+static bool xml_space(char value) {
+    return value == ' ' || value == '\t' || value == '\r' || value == '\n';
+}
+
+static bool namelist_token_next(
+    const char *data, size_t size, size_t *cursor,
+    salts_xml_string_view *out) {
+    size_t begin;
+    if (data == NULL || cursor == NULL || out == NULL || *cursor > size)
+        return false;
+    while (*cursor < size && xml_space(data[*cursor])) ++*cursor;
+    if (*cursor == size) return false;
+    begin = *cursor;
+    while (*cursor < size && !xml_space(data[*cursor])) ++*cursor;
+    *out = (salts_xml_string_view){data + begin, *cursor - begin};
     return true;
 }
 
@@ -603,16 +623,20 @@ static ccxml_status validate_send_action(
     salts_xml_attribute type_attribute = {0};
     salts_xml_attribute delay_attribute = {0};
     salts_xml_attribute send_id_attribute = {0};
+    salts_xml_attribute namelist_attribute = {0};
     char *target_value = NULL;
     char *name_value = NULL;
     char *type_value = NULL;
     char *delay_value = NULL;
     char *send_id_location = NULL;
+    char *namelist_value = NULL;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
     size_t delay_size = 0u;
     size_t send_id_location_size = 0u;
+    size_t namelist_size = 0u;
+    size_t payload_count = 0u;
     uint64_t delay_ms = 0u;
     size_t retained_size = 0u;
     size_t part_size;
@@ -637,6 +661,8 @@ static ccxml_status validate_send_action(
             slot = &delay_attribute;
         else if (namespace_uri.size == 0u && view_equal(local_name, "sendid"))
             slot = &send_id_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "namelist"))
+            slot = &namelist_attribute;
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
@@ -705,6 +731,33 @@ static ccxml_status validate_send_action(
             goto cleanup;
         }
     }
+    if (namelist_attribute.impl != NULL) {
+        size_t cursor = 0u;
+        salts_xml_string_view token;
+        status = decode_attribute_value(
+            namelist_attribute, &namelist_value, &namelist_size, diagnostic);
+        if (status != CCXML_OK) goto cleanup;
+        while (namelist_token_next(
+                   namelist_value, namelist_size, &cursor, &token)) {
+            if (!dotted_location_valid(token)) {
+                status = fail(
+                    diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(namelist_attribute),
+                    "CCXML send namelist entries must be dotted NCName locations");
+                goto cleanup;
+            }
+            if (payload_count >= SCXML_PAYLOAD_MAX_ENTRIES ||
+                !checked_add(payload_count, 1u, &payload_count) ||
+                !checked_add(token.size, 1u, &part_size) ||
+                !checked_add(retained_size, part_size, &retained_size)) {
+                status = fail(
+                    diagnostic, CCXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(namelist_attribute),
+                    "CCXML send namelist entry limit exceeded");
+                goto cleanup;
+            }
+        }
+    }
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
@@ -729,6 +782,8 @@ static ccxml_status validate_send_action(
          (!checked_add(
               send_id_location_size, 1u, &part_size) ||
           !checked_add(retained_size, part_size, &retained_size))) ||
+        !checked_add(measurement->payload_count, payload_count,
+                     &measurement->payload_count) ||
         measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
                      &measurement->action_count) ||
@@ -741,9 +796,12 @@ static ccxml_status validate_send_action(
             "CCXML send action or retained-string limit exceeded");
         goto cleanup;
     }
+    if (payload_count > measurement->max_send_payload_entries)
+        measurement->max_send_payload_entries = payload_count;
     status = CCXML_OK;
 
 cleanup:
+    free(namelist_value);
     free(send_id_location);
     free(delay_value);
     free(type_value);
@@ -1830,11 +1888,13 @@ static ccxml_status validate_document(
     return CCXML_OK;
 }
 
-static void copy_program(
-    ccxml_program_impl *impl, salts_xml_node root) {
+static ccxml_status copy_program(
+    ccxml_program_impl *impl, salts_xml_node root,
+    ccxml_diagnostic *diagnostic) {
     size_t root_index;
     size_t transition_index = 0u;
     size_t action_index = 0u;
+    size_t payload_index = 0u;
     char *cursor = impl->storage;
     for (root_index = 0u;
          root_index < salts_xml_node_child_count(root); ++root_index) {
@@ -2217,8 +2277,11 @@ static void copy_program(
                         node_unqualified_attribute(action, "delay");
                     const salts_xml_attribute send_id_attribute =
                         node_unqualified_attribute(action, "sendid");
+                    const salts_xml_attribute namelist_attribute =
+                        node_unqualified_attribute(action, "namelist");
                     static const char default_type[] = "ccxml";
                     action_row->kind = CCXML_ACTION_SEND;
+                    action_row->payload_first = payload_index;
                     action_row->destination = cursor;
                     action_row->destination_size =
                         copy_send_literal(target_attribute, cursor);
@@ -2262,6 +2325,40 @@ static void copy_program(
                         cursor += location_size + 1u;
                         impl->uses_send_id = true;
                     }
+                    if (namelist_attribute.impl != NULL) {
+                        char *decoded = NULL;
+                        size_t decoded_size = 0u;
+                        size_t token_cursor = 0u;
+                        salts_xml_string_view token;
+                        ccxml_status decode_status = decode_attribute_value(
+                            namelist_attribute, &decoded, &decoded_size,
+                            diagnostic);
+                        if (decode_status != CCXML_OK) return decode_status;
+                        while (namelist_token_next(
+                                   decoded, decoded_size, &token_cursor,
+                                   &token)) {
+                            if (payload_index >= impl->payload_count) {
+                                free(decoded);
+                                return fail(
+                                    diagnostic, CCXML_INVALID_CONTRACT,
+                                    salts_xml_attribute_location(
+                                        namelist_attribute),
+                                    "CCXML send payload emission exceeded admission");
+                            }
+                            ccxml_payload_row *payload =
+                                &impl->payloads[payload_index++];
+                            payload->name = cursor;
+                            payload->name_size = token.size;
+                            memcpy(cursor, token.data, token.size);
+                            cursor[token.size] = '\0';
+                            cursor += token.size + 1u;
+                        }
+                        free(decoded);
+                    }
+                    action_row->payload_count =
+                        payload_index - action_row->payload_first;
+                    if (action_row->payload_count != 0u)
+                        impl->uses_send_payload = true;
                     impl->uses_send = true;
                 } else if (view_equal(action_name, "cancel")) {
                     const salts_xml_attribute send_id_attribute =
@@ -2339,6 +2436,12 @@ static void copy_program(
             }
         }
     }
+    if (payload_index != impl->payload_count)
+        return fail(
+            diagnostic, CCXML_INVALID_CONTRACT,
+            salts_xml_node_location(root),
+            "CCXML send payload emission mismatched admission");
+    return CCXML_OK;
 }
 
 ccxml_limits ccxml_default_limits(void) {
@@ -2398,6 +2501,14 @@ ccxml_status ccxml_compile(
             "CCXML program storage size overflow");
         goto cleanup;
     }
+    if (measurement.payload_count >
+        SIZE_MAX / sizeof(ccxml_payload_row)) {
+        status = fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(salts_xml_document_root(&document)),
+            "CCXML payload row storage size overflow");
+        goto cleanup;
+    }
     impl = (ccxml_program_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         status = fail(
@@ -2412,10 +2523,14 @@ ccxml_status ccxml_compile(
     if (measurement.action_count != 0u)
         impl->actions = (ccxml_action_row *)calloc(
             measurement.action_count, sizeof(*impl->actions));
+    if (measurement.payload_count != 0u)
+        impl->payloads = (ccxml_payload_row *)calloc(
+            measurement.payload_count, sizeof(*impl->payloads));
     if (measurement.name_bytes != 0u)
         impl->storage = (char *)malloc(storage_allocation_bytes);
     if ((measurement.transition_count != 0u && impl->transitions == NULL) ||
         (measurement.action_count != 0u && impl->actions == NULL) ||
+        (measurement.payload_count != 0u && impl->payloads == NULL) ||
         (measurement.name_bytes != 0u && impl->storage == NULL)) {
         status = fail(
             diagnostic, CCXML_ALLOCATION_FAILED,
@@ -2425,9 +2540,13 @@ ccxml_status ccxml_compile(
     }
     impl->transition_count = measurement.transition_count;
     impl->action_count = measurement.action_count;
+    impl->payload_count = measurement.payload_count;
+    impl->max_send_payload_entries = measurement.max_send_payload_entries;
     impl->max_transition_actions = measurement.max_transition_actions;
     impl->max_transition_effects = measurement.max_transition_effects;
-    copy_program(impl, salts_xml_document_root(&document));
+    status = copy_program(
+        impl, salts_xml_document_root(&document), diagnostic);
+    if (status != CCXML_OK) goto cleanup;
     status = build_native_statechart(
         impl, salts_xml_node_location(salts_xml_document_root(&document)),
         diagnostic);
@@ -2440,6 +2559,7 @@ cleanup:
     if (impl != NULL) {
         cflow_statechart_destroy(&impl->statechart);
         free(impl->storage);
+        free(impl->payloads);
         free(impl->actions);
         free(impl->transitions);
         free(impl);
@@ -2454,6 +2574,7 @@ void ccxml_program_destroy(ccxml_program *program) {
     if (impl == NULL) return;
     cflow_statechart_destroy(&impl->statechart);
     free(impl->storage);
+    free(impl->payloads);
     free(impl->actions);
     free(impl->transitions);
     free(impl);

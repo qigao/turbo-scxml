@@ -2,6 +2,7 @@
 
 #include "scxml_expr.h"
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -320,6 +321,202 @@ static scxml_adapter_status cmeta_read_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static bool cmeta_payload_location_supported(
+    const cmeta_data_desc *value) {
+    const cmeta_data_buffer_ops *ops;
+    const size_t read_size =
+        offsetof(cmeta_data_buffer_ops, read) + sizeof(ops->read);
+    if (value == NULL || !cmeta_data_desc_valid(value) ||
+        value->storage_type == NULL)
+        return false;
+    if (value->kind == CMETA_DATA_BOOL)
+        return value->storage_type->size == sizeof(bool);
+    if (value->kind == CMETA_DATA_SINT ||
+        value->kind == CMETA_DATA_UINT) {
+        const uint8_t bits =
+            ((const cmeta_data_integer_shape *)value->shape)->bits;
+        return bits % CHAR_BIT == 0u &&
+               value->storage_type->size == (size_t)bits / CHAR_BIT;
+    }
+    if (value->kind == CMETA_DATA_FLOAT) {
+        const uint8_t bits =
+            ((const cmeta_data_float_shape *)value->shape)->bits;
+        return bits % CHAR_BIT == 0u &&
+               value->storage_type->size == (size_t)bits / CHAR_BIT;
+    }
+    if (value->kind == CMETA_DATA_STRING) {
+        ops = cmeta_data_buffer_ops_of(value);
+        return ops != NULL && ops->struct_size >= read_size &&
+               ops->read != NULL;
+    }
+    if (value->kind == CMETA_DATA_ENUM)
+        return cmeta_data_enum_ops_of(value) != NULL;
+    return true;
+}
+
+static scxml_adapter_status cmeta_validate_payload_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const cmeta_data_desc *value = NULL;
+    void *source = NULL;
+    set_error(out_error, NULL);
+    if (!resolve_value(
+            impl, location, location_size, &value, &source) ||
+        !cmeta_payload_location_supported(value)) {
+        set_error(out_error, "CCXML CMeta payload location is not readable");
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    (void)source;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static bool cmeta_read_integer_payload(
+    const cmeta_data_desc *value, const void *source,
+    scxml_payload_value *out) {
+    const uint8_t bits =
+        ((const cmeta_data_integer_shape *)value->shape)->bits;
+    if (value->kind == CMETA_DATA_SINT) {
+        out->kind = SCXML_PAYLOAD_VALUE_SINT;
+        switch (bits) {
+            case 8: {
+                int8_t item;
+                memcpy(&item, source, sizeof(item));
+                out->data.sint = item;
+                return true;
+            }
+            case 16: {
+                int16_t item;
+                memcpy(&item, source, sizeof(item));
+                out->data.sint = item;
+                return true;
+            }
+            case 32: {
+                int32_t item;
+                memcpy(&item, source, sizeof(item));
+                out->data.sint = item;
+                return true;
+            }
+            case 64:
+                memcpy(&out->data.sint, source, sizeof(out->data.sint));
+                return true;
+            default: return false;
+        }
+    }
+    out->kind = SCXML_PAYLOAD_VALUE_UINT;
+    switch (bits) {
+        case 8: {
+            uint8_t item;
+            memcpy(&item, source, sizeof(item));
+            out->data.uint = item;
+            return true;
+        }
+        case 16: {
+            uint16_t item;
+            memcpy(&item, source, sizeof(item));
+            out->data.uint = item;
+            return true;
+        }
+        case 32: {
+            uint32_t item;
+            memcpy(&item, source, sizeof(item));
+            out->data.uint = item;
+            return true;
+        }
+        case 64:
+            memcpy(&out->data.uint, source, sizeof(out->data.uint));
+            return true;
+        default: return false;
+    }
+}
+
+static scxml_adapter_status cmeta_read_payload(
+    void *user, const char *location, size_t location_size,
+    scxml_content_view *out_value, const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const cmeta_data_desc *value = NULL;
+    void *source = NULL;
+    scxml_payload_value scalar = {0};
+    set_error(out_error, NULL);
+    if (out_value != NULL) *out_value = (scxml_content_view){0};
+    if (out_value == NULL ||
+        !resolve_value(
+            impl, location, location_size, &value, &source) ||
+        !cmeta_payload_location_supported(value)) {
+        set_error(out_error, "invalid CCXML CMeta payload read");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    switch (value->kind) {
+        case CMETA_DATA_BOOL:
+            scalar.kind = SCXML_PAYLOAD_VALUE_BOOL;
+            memcpy(&scalar.data.boolean, source, sizeof(bool));
+            break;
+        case CMETA_DATA_SINT:
+        case CMETA_DATA_UINT:
+            if (!cmeta_read_integer_payload(value, source, &scalar)) {
+                set_error(out_error, "CCXML CMeta integer payload read failed");
+                return SCXML_ADAPTER_ERROR_EXECUTION;
+            }
+            break;
+        case CMETA_DATA_FLOAT: {
+            const uint8_t bits =
+                ((const cmeta_data_float_shape *)value->shape)->bits;
+            scalar.kind = SCXML_PAYLOAD_VALUE_FLOAT;
+            if (bits == 32u) {
+                float item;
+                memcpy(&item, source, sizeof(item));
+                scalar.data.number = item;
+            } else if (bits == 64u) {
+                memcpy(
+                    &scalar.data.number, source,
+                    sizeof(scalar.data.number));
+            } else {
+                set_error(out_error, "CCXML CMeta float payload read failed");
+                return SCXML_ADAPTER_ERROR_EXECUTION;
+            }
+            break;
+        }
+        case CMETA_DATA_ENUM:
+            scalar.kind = SCXML_PAYLOAD_VALUE_SINT;
+            if (cmeta_data_enum_read(
+                    value, source, &scalar.data.sint) != CMETA_OK) {
+                set_error(out_error, "CCXML CMeta enum payload read failed");
+                return SCXML_ADAPTER_ERROR_EXECUTION;
+            }
+            break;
+        case CMETA_DATA_STRING: {
+            const unsigned char *bytes = NULL;
+            size_t size = 0u;
+            if (cmeta_data_buffer_read(
+                    value, source, impl->max_string_bytes,
+                    &bytes, &size) != CMETA_OK) {
+                set_error(out_error, "CCXML CMeta string payload read failed");
+                return SCXML_ADAPTER_ERROR_EXECUTION;
+            }
+            scalar.kind = SCXML_PAYLOAD_VALUE_STRING;
+            scalar.data.string.data = (const char *)bytes;
+            scalar.data.string.size = size;
+            break;
+        }
+        default:
+            *out_value = (scxml_content_view){
+                .kind = SCXML_CONTENT_CMETA,
+                .schema = value,
+                .object = source};
+            return SCXML_ADAPTER_ACCEPTED;
+    }
+    *out_value = (scxml_content_view){
+        .kind = SCXML_CONTENT_SCALAR,
+        .scalar = scalar};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static bool reject_active_state(
     void *user, const char *name, size_t name_size,
     cflow_machine_state_id *out_state) {
@@ -440,7 +637,9 @@ static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .read_string = cmeta_read_string,
     .compile_condition = cmeta_compile_condition,
     .evaluate_condition = cmeta_evaluate_condition,
-    .destroy_condition = cmeta_destroy_condition};
+    .destroy_condition = cmeta_destroy_condition,
+    .validate_payload_location = cmeta_validate_payload_location,
+    .read_payload = cmeta_read_payload};
 
 ccxml_status ccxml_cmeta_datamodel_init(
     ccxml_cmeta_datamodel *datamodel,

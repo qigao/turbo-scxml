@@ -14,7 +14,7 @@ transition in document order, stages every action effect, and either commits
 all staged effects or discards them all.
 
 SIP/RTP backends, document replacement, general ECMAScript, full `<send>`
-expressions/payloads, and a built-in VoiceXML interpreter are outside this
+expressions/inline payloads, and a built-in VoiceXML interpreter are outside this
 slice. The compiler rejects unsupported constructs instead of silently
 approximating them.
 

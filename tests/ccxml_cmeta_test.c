@@ -28,6 +28,10 @@ Struct(test_state,
     (int, count)
 );
 
+Struct(malformed_payload_state,
+    (unsigned char, bad)
+);
+
 static void text_move(void *destination, void *source) {
     memcpy(destination, source, sizeof(test_text));
     memset(source, 0, sizeof(test_text));
@@ -213,6 +217,51 @@ static const cmeta_data_desc state_desc = {
     .storage_type = &state_type,
     .shape = &state_shape};
 
+static const cmeta_type_desc malformed_byte_type = {
+    .name = "ccxml_malformed_payload_byte",
+    .size = sizeof(unsigned char),
+    .align = _Alignof(unsigned char),
+    .kind = CMETA_T_INTEGER,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_integer_shape malformed_integer_shape = {
+    .bits = 64u};
+
+static const cmeta_data_desc malformed_integer_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.malformed-integer",
+    .display_name = "CCXML malformed integer",
+    .kind = CMETA_DATA_SINT,
+    .storage_type = &malformed_byte_type,
+    .shape = &malformed_integer_shape};
+
+static const cmeta_type_desc malformed_state_type = {
+    .name = "ccxml_malformed_payload_state",
+    .size = sizeof(malformed_payload_state),
+    .align = _Alignof(malformed_payload_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc malformed_state_fields[] = {
+    {"test.ccxml.malformed-state.bad", "bad",
+     offsetof(malformed_payload_state, bad), &malformed_integer_desc}};
+
+static const cmeta_data_struct_shape malformed_state_shape = {
+    .layout = StructMeta(malformed_payload_state),
+    .fields = malformed_state_fields,
+    .field_count = sizeof(malformed_state_fields) /
+        sizeof(malformed_state_fields[0])};
+
+static const cmeta_data_desc malformed_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.malformed-state",
+    .display_name = "CCXML malformed payload state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &malformed_state_type,
+    .shape = &malformed_state_shape};
+
 typedef struct conference_provider_probe {
     bool live;
     size_t commit_count;
@@ -241,6 +290,12 @@ typedef struct send_cancel_probe {
     size_t send_id_size;
     char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t cancel_id_size;
+    size_t payload_count;
+    char payload_names[3][32];
+    scxml_payload_value payload_values[3];
+    char payload_string[32];
+    const cmeta_data_desc *payload_schema;
+    const void *payload_object;
 } send_cancel_probe;
 
 static void send_cancel_commit(void *user) {
@@ -269,6 +324,38 @@ static scxml_adapter_status cmeta_prepare_send(
     memcpy(probe->send_id, request->id, request->id_size);
     probe->send_id[request->id_size] = '\0';
     probe->send_id_size = request->id_size;
+    probe->payload_count = request->payload.entry_count;
+    if (request->payload.entry_count <= 3u) {
+        size_t index;
+        for (index = 0u; index < request->payload.entry_count; ++index) {
+            const scxml_payload_entry *entry =
+                &request->payload.entries[index];
+            if (entry->name_size < sizeof(probe->payload_names[index])) {
+                memcpy(
+                    probe->payload_names[index], entry->name,
+                    entry->name_size);
+                probe->payload_names[index][entry->name_size] = '\0';
+            }
+            if (entry->value.kind == SCXML_CONTENT_SCALAR) {
+                probe->payload_values[index] = entry->value.scalar;
+                if (entry->value.scalar.kind == SCXML_PAYLOAD_VALUE_STRING &&
+                    entry->value.scalar.data.string.size <
+                        sizeof(probe->payload_string)) {
+                    memcpy(
+                        probe->payload_string,
+                        entry->value.scalar.data.string.data,
+                        entry->value.scalar.data.string.size);
+                    probe->payload_string[
+                        entry->value.scalar.data.string.size] = '\0';
+                    probe->payload_values[index].data.string.data =
+                        probe->payload_string;
+                }
+            } else if (entry->value.kind == SCXML_CONTENT_CMETA) {
+                probe->payload_schema = entry->value.schema;
+                probe->payload_object = entry->value.object;
+            }
+        }
+    }
     probe->live = true;
     *out_ticket = (cflow_statechart_effect_ticket){
         .commit = send_cancel_commit,
@@ -309,7 +396,7 @@ static bool send_cancel_quiescent(void *user) {
 static const scxml_event_io_adapter send_cancel_adapter = {
     .abi_version = SCXML_ADAPTER_ABI,
     .struct_size = sizeof(scxml_event_io_adapter),
-    .capabilities = SCXML_EVENT_IO_CAP_SEND |
+    .capabilities = SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_PAYLOAD |
         SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
     .prepare_send = cmeta_prepare_send,
     .prepare_cancel = cmeta_prepare_cancel,
@@ -511,6 +598,117 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
+    it("rejects payload scalars whose storage is narrower than reflection") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='send.now'>"
+            "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+            "namelist='bad'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        malformed_payload_state state = {0};
+        conference_provider_probe provider = {0};
+        send_cancel_probe event_io = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &malformed_state_desc,
+            .state = &state,
+            .max_path_depth = 2u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        check_true(cmeta_data_desc_valid(&malformed_integer_desc));
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel,
+            .event_io = &send_cancel_adapter,
+            .event_io_user = &event_io};
+        check_equal(
+            ccxml_session_init(&session, &session_config),
+            CCXML_INVALID_ARGUMENT);
+        check_null(session.impl);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("sends scalar and object namelist values through CMeta") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='send.now'>"
+            "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+            "sendid='dialog.id' "
+            "namelist='conference.id count conference'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        send_cancel_probe event_io = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "send.now",
+            .name_size = sizeof("send.now") - 1u};
+
+        memcpy(state.conference.id.data, "conf-42", 7u);
+        state.conference.id.data[7] = '\0';
+        state.conference.id.size = 7u;
+        state.count = -9;
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel,
+            .event_io = &send_cancel_adapter,
+            .event_io_user = &event_io};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        if (session.impl != NULL) {
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(event_io.payload_count, (size_t)3u);
+            check_equal(event_io.payload_names[0], "conference.id");
+            check_equal(event_io.payload_names[1], "count");
+            check_equal(event_io.payload_names[2], "conference");
+            check_equal(
+                event_io.payload_values[0].kind,
+                SCXML_PAYLOAD_VALUE_STRING);
+            check_equal(event_io.payload_string, "conf-42");
+            check_equal(
+                event_io.payload_values[1].kind,
+                SCXML_PAYLOAD_VALUE_SINT);
+            check_equal(event_io.payload_values[1].data.sint, INT64_C(-9));
+            check_true(event_io.payload_schema == &conference_desc);
+            check_true(event_io.payload_object == &state.conference);
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
     it("routes repeated events through statevariable assignments") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

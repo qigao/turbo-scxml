@@ -46,6 +46,10 @@ typedef struct send_probe {
     size_t cancel_count;
     uint64_t delay_ms;
     scxml_payload_kind payload_kind;
+    size_t payload_count;
+    char payload_names[4][32];
+    scxml_payload_value payload_values[4];
+    char payload_strings[4][64];
 } send_probe;
 
 typedef struct datamodel_probe {
@@ -56,6 +60,9 @@ typedef struct datamodel_probe {
     size_t pending_size;
     bool reject_validation;
     bool reject_read;
+    size_t payload_read_count;
+    size_t reject_payload_read_at;
+    bool malformed_payload;
 } datamodel_probe;
 
 static size_t transaction_sequence;
@@ -155,6 +162,35 @@ static scxml_adapter_status prepare_send(
     ++probe->send_count;
     probe->delay_ms = request->delay_ms;
     probe->payload_kind = request->payload.kind;
+    probe->payload_count = request->payload.entry_count;
+    if (request->payload.entry_count <= 4u) {
+        size_t index;
+        for (index = 0u; index < request->payload.entry_count; ++index) {
+            const scxml_payload_entry *entry =
+                &request->payload.entries[index];
+            if (entry->name_size < sizeof(probe->payload_names[index])) {
+                memcpy(
+                    probe->payload_names[index], entry->name,
+                    entry->name_size);
+                probe->payload_names[index][entry->name_size] = '\0';
+            }
+            if (entry->value.kind == SCXML_CONTENT_SCALAR) {
+                probe->payload_values[index] = entry->value.scalar;
+                if (entry->value.scalar.kind == SCXML_PAYLOAD_VALUE_STRING &&
+                    entry->value.scalar.data.string.size <
+                        sizeof(probe->payload_strings[index])) {
+                    memcpy(
+                        probe->payload_strings[index],
+                        entry->value.scalar.data.string.data,
+                        entry->value.scalar.data.string.size);
+                    probe->payload_strings[index]
+                        [entry->value.scalar.data.string.size] = '\0';
+                    probe->payload_values[index].data.string.data =
+                        probe->payload_strings[index];
+                }
+            }
+        }
+    }
     return prepare_effect(&probe->effects, out_ticket, out_error);
 }
 
@@ -255,6 +291,47 @@ static scxml_adapter_status read_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status validate_payload_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    (void)user;
+    if (out_error != NULL) *out_error = NULL;
+    if ((location_size == sizeof("payload.text") - 1u &&
+         memcmp(location, "payload.text", location_size) == 0) ||
+        (location_size == sizeof("payload.count") - 1u &&
+         memcmp(location, "payload.count", location_size) == 0))
+        return SCXML_ADAPTER_ACCEPTED;
+    if (out_error != NULL) *out_error = "invalid payload location";
+    return SCXML_ADAPTER_ERROR_EXECUTION;
+}
+
+static scxml_adapter_status read_payload(
+    void *user, const char *location, size_t location_size,
+    scxml_content_view *out_value, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    if (out_value != NULL) *out_value = (scxml_content_view){0};
+    if (out_error != NULL) *out_error = NULL;
+    ++probe->payload_read_count;
+    if (out_value == NULL ||
+        (probe->reject_payload_read_at != 0u &&
+         probe->payload_read_count == probe->reject_payload_read_at) ||
+        validate_payload_location(
+            user, location, location_size, out_error) !=
+            SCXML_ADAPTER_ACCEPTED)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    if (probe->malformed_payload) return SCXML_ADAPTER_ACCEPTED;
+    out_value->kind = SCXML_CONTENT_SCALAR;
+    if (location_size == sizeof("payload.text") - 1u) {
+        out_value->scalar.kind = SCXML_PAYLOAD_VALUE_STRING;
+        out_value->scalar.data.string.data = "hello";
+        out_value->scalar.data.string.size = sizeof("hello") - 1u;
+    } else {
+        out_value->scalar.kind = SCXML_PAYLOAD_VALUE_SINT;
+        out_value->scalar.data.sint = INT64_C(42);
+    }
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
@@ -262,7 +339,9 @@ static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .prepare_assign_string = prepare_assign_string,
     .validate_readable_string_location =
         validate_readable_string_location,
-    .read_string = read_string};
+    .read_string = read_string,
+    .validate_payload_location = validate_payload_location,
+    .read_payload = read_payload};
 
 static scxml_adapter_status reject_condition_compile(
     void *user, const char *source, size_t source_size,
@@ -590,6 +669,70 @@ spec("CCXML send") {
             }
         }
 
+        it("accepts decoded dotted namelist locations") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" "
+                    "namelist=' conference&#46;id&#x9;count '/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts an empty send namelist") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" namelist='  '/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects malformed send namelist locations") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" namelist='good a..b'/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+        }
+
+        it("bounds send namelist entries") {
+            char action[1024] =
+                "<send target=\"'session:callee'\" "
+                "name=\"'call.notice'\" namelist='";
+            size_t size = strlen(action);
+            size_t index;
+            ccxml_program program = {0};
+            for (index = 0u; index <= SCXML_PAYLOAD_MAX_ENTRIES; ++index) {
+                const int written = snprintf(
+                    action + size, sizeof(action) - size,
+                    index == 0u ? "p%zu" : " p%zu", index);
+                check_true(
+                    written > 0 &&
+                    (size_t)written < sizeof(action) - size);
+                size += (size_t)written;
+                if (index + 1u == SCXML_PAYLOAD_MAX_ENTRIES) {
+                    const size_t exact_size = size;
+                    check_true(size + sizeof("'/>") <= sizeof(action));
+                    memcpy(action + size, "'/>", sizeof("'/>"));
+                    check_equal(compile_actions(&program, action), CCXML_OK);
+                    ccxml_program_destroy(&program);
+                    size = exact_size;
+                    action[size] = '\0';
+                }
+            }
+            check_true(size + sizeof("'/>") <= sizeof(action));
+            memcpy(action + size, "'/>", sizeof("'/>"));
+            check_equal(
+                compile_actions(&program, action), CCXML_LIMIT_EXCEEDED);
+        }
+
         it("rejects deferred attributes and inline content") {
             ccxml_program program = {0};
             check_equal(
@@ -597,12 +740,6 @@ spec("CCXML send") {
                     &program,
                     "<send target=\"'session:callee'\" name=\"'call.notice'\" "
                     "delay='dynamic'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_equal(
-                compile_actions(
-                    &program,
-                    "<send target=\"'session:callee'\" name=\"'call.notice'\" "
-                    "namelist='payload'/>"),
                 CCXML_UNSUPPORTED_FEATURE);
             check_equal(
                 compile_actions(
@@ -644,6 +781,30 @@ spec("CCXML send") {
             ccxml_diagnostic diagnostic = {0};
             ccxml_program program = {0};
             limits.max_name_bytes = 11u;
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("charges decoded namelist tokens to the name-byte limit") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target=\"'a'\" name=\"'e'\" "
+                "namelist='a&#46;b c'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_program program = {0};
+
+            limits.max_name_bytes = 12u;
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            limits.max_name_bytes = 13u;
             check_equal(
                 ccxml_compile(
                     &program, source, strlen(source), &limits, &diagnostic),
@@ -1125,6 +1286,179 @@ spec("CCXML send") {
             check_equal(send.id_size, (size_t)0);
             check_equal(send.delay_ms, (uint64_t)0);
             check_equal(send.payload_kind, SCXML_PAYLOAD_NONE);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires payload capabilities only for a nonempty namelist") {
+            ccxml_program program = {0};
+            ccxml_program empty_program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+            ccxml_session_config config;
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" namelist='payload.text'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send, &capable),
+                CCXML_INVALID_ARGUMENT);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &telephony_adapter,
+                .telephony_user = &telephony,
+                .datamodel = &legacy,
+                .datamodel_user = &datamodel,
+                .event_io = &capable,
+                .event_io_user = &send};
+            legacy.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1, validate_payload_location);
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+
+            session = (ccxml_session){0};
+            check_equal(
+                compile_actions(
+                    &empty_program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" namelist=' '/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &empty_program, &telephony, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&empty_program);
+        }
+
+        it("materializes ordered scalar namelist payload entries") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" "
+                    "namelist='payload.text payload.count payload.text'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.payload_kind, SCXML_PAYLOAD_NAMED);
+            check_equal(send.payload_count, (size_t)3u);
+            check_equal(send.payload_names[0], "payload.text");
+            check_equal(send.payload_names[1], "payload.count");
+            check_equal(send.payload_names[2], "payload.text");
+            check_equal(
+                send.payload_values[0].kind, SCXML_PAYLOAD_VALUE_STRING);
+            check_equal(send.payload_strings[0], "hello");
+            check_equal(
+                send.payload_values[1].kind, SCXML_PAYLOAD_VALUE_SINT);
+            check_equal(send.payload_values[1].data.sint, INT64_C(42));
+            check_equal(
+                send.payload_values[2].kind, SCXML_PAYLOAD_VALUE_STRING);
+            check_equal(send.payload_strings[2], "hello");
+            check_equal(datamodel.payload_read_count, (size_t)3u);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a malformed datamodel payload view") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .effects.quiescent = true, .malformed_payload = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" namelist='payload.text'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(send.send_count, (size_t)0u);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back earlier effects when a namelist read fails") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .effects.quiescent = true, .reject_payload_read_at = 2u};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_PAYLOAD;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<accept/><send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" "
+                    "namelist='payload.text payload.count'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(telephony.prepare_count, (size_t)1u);
+            check_equal(telephony.commit_count, (size_t)0u);
+            check_equal(telephony.discard_count, (size_t)1u);
+            check_equal(send.send_count, (size_t)0u);
 
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&program);
