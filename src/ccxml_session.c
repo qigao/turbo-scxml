@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 static bool adapter_valid(const ccxml_telephony_adapter_v1 *adapter) {
@@ -109,6 +110,47 @@ static bool payload_content_valid(const scxml_content_view *content) {
            (uintptr_t)content->object %
                    content->schema->storage_type->align ==
                0u;
+}
+
+static ccxml_status datamodel_payload_failure_status(
+    scxml_adapter_status adapter_status) {
+    if (adapter_status == SCXML_ADAPTER_ACCEPTED ||
+        adapter_status == SCXML_ADAPTER_INVALID_CONTRACT) {
+        return CCXML_INVALID_CONTRACT;
+    }
+    if (adapter_status == SCXML_ADAPTER_FULL) {
+        return CCXML_ALLOCATION_FAILED;
+    }
+    return CCXML_ADAPTER_ERROR;
+}
+
+static ccxml_status read_delay_milliseconds(
+    const scxml_content_view *content, uint64_t *out_delay_ms) {
+    double whole;
+    if (content == NULL || out_delay_ms == NULL ||
+        content->kind != SCXML_CONTENT_SCALAR) {
+        return CCXML_INVALID_CONTRACT;
+    }
+    switch (content->scalar.kind) {
+        case SCXML_PAYLOAD_VALUE_SINT:
+            if (content->scalar.data.sint < 0) return CCXML_INVALID_CONTRACT;
+            *out_delay_ms = (uint64_t)content->scalar.data.sint;
+            return CCXML_OK;
+        case SCXML_PAYLOAD_VALUE_UINT:
+            *out_delay_ms = content->scalar.data.uint;
+            return CCXML_OK;
+        case SCXML_PAYLOAD_VALUE_FLOAT:
+            if (!isfinite(content->scalar.data.number) ||
+                content->scalar.data.number < 0.0 ||
+                content->scalar.data.number > (double)UINT64_MAX ||
+                modf(content->scalar.data.number, &whole) != 0.0) {
+                return CCXML_INVALID_CONTRACT;
+            }
+            *out_delay_ms = (uint64_t)whole;
+            return CCXML_OK;
+        default:
+            return CCXML_INVALID_CONTRACT;
+    }
 }
 
 static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
@@ -425,7 +467,7 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         datamodel = copy_datamodel_adapter(config->datamodel);
     }
-    if (program->uses_send_payload) {
+    if (program->uses_send_payload || program->uses_send_delay) {
         size_t payload_index;
         if (!datamodel_payload_adapter_valid(config->datamodel))
             return CCXML_INVALID_ARGUMENT;
@@ -439,6 +481,18 @@ ccxml_status ccxml_session_init(
                     config->datamodel_user, payload->name,
                     payload->name_size, &error) !=
                 SCXML_ADAPTER_ACCEPTED) {
+                (void)error;
+                return CCXML_INVALID_ARGUMENT;
+            }
+        }
+        for (action_index = 0u; action_index < program->action_count;
+             ++action_index) {
+            const ccxml_action_row *action = &program->actions[action_index];
+            const char *error = NULL;
+            if (action->kind == CCXML_ACTION_SEND && action->delay_is_dynamic &&
+                datamodel.validate_payload_location(
+                    config->datamodel_user, action->delay, action->delay_size,
+                    &error) != SCXML_ADAPTER_ACCEPTED) {
                 (void)error;
                 return CCXML_INVALID_ARGUMENT;
             }
@@ -898,6 +952,21 @@ static ccxml_status execute_transition_actions(
                 .payload = {.kind = SCXML_PAYLOAD_NONE}};
             scxml_adapter_status adapter_status;
             ccxml_status status;
+            if (action->delay_is_dynamic) {
+                scxml_content_view delay_value = {0};
+                adapter_status = impl->datamodel.read_payload(
+                    impl->datamodel_user, action->delay, action->delay_size,
+                    &delay_value, &error);
+                if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+                    discard_tickets(impl->tickets, prepared);
+                    return datamodel_payload_failure_status(adapter_status);
+                }
+                status = read_delay_milliseconds(&delay_value, &request.delay_ms);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+            }
             if (action->payload_count != 0u) {
                 size_t payload_index;
                 if (action->payload_first > impl->program->payload_count ||
@@ -925,13 +994,10 @@ static ccxml_status execute_transition_actions(
                     if (adapter_status != SCXML_ADAPTER_ACCEPTED ||
                         !payload_content_valid(&entry->value)) {
                         discard_tickets(impl->tickets, prepared);
-                        return (adapter_status ==
-                                    SCXML_ADAPTER_INVALID_CONTRACT ||
-                                adapter_status == SCXML_ADAPTER_ACCEPTED)
-                            ? CCXML_INVALID_CONTRACT
-                            : adapter_status == SCXML_ADAPTER_FULL
-                                ? CCXML_ALLOCATION_FAILED
-                                : CCXML_ADAPTER_ERROR;
+                        if (adapter_status != SCXML_ADAPTER_ACCEPTED)
+                            return datamodel_payload_failure_status(
+                                adapter_status);
+                        return CCXML_INVALID_CONTRACT;
                     }
                 }
                 request.payload = (scxml_payload_view){

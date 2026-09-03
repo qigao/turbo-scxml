@@ -50,6 +50,7 @@ typedef struct ccxml_action_row {
     const char *delay;
     size_t delay_size;
     uint64_t delay_ms;
+    bool delay_is_dynamic;
     size_t payload_first;
     size_t payload_count;
 } ccxml_action_row;
@@ -102,6 +103,7 @@ typedef struct ccxml_program_impl {
     bool uses_condition;
     bool uses_send;
     bool uses_send_payload;
+    bool uses_send_delay;
     bool uses_send_id;
     bool uses_delayed_send;
     bool uses_cancel;

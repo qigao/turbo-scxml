@@ -739,6 +739,13 @@ spec("CCXML send") {
                 compile_actions(
                     &program,
                     "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+                    "delay='payload.count'/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" name=\"'call.notice'\" "
                     "delay='dynamic'/>"),
                 CCXML_UNSUPPORTED_FEATURE);
             check_equal(
@@ -1511,6 +1518,67 @@ spec("CCXML send") {
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&zero_program);
             ccxml_program_destroy(&delayed_program);
+        }
+
+        it("requires delayed-send capability and payload reads for dynamic delays") {
+            ccxml_program delayed_program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter delayed_adapter = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            check_equal(
+                compile_actions(
+                    &delayed_program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=payload.count/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &delayed_program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &delayed_program, &telephony, &datamodel, &send,
+                    &delayed_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.delay_ms, UINT64_C(42));
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&delayed_program);
+        }
+
+        it("rejects dynamic delay values that are not numeric") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter delayed_adapter = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=payload.text/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &delayed_adapter),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(send.send_count, (size_t)0u);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
         }
 
         it("forwards fractional seconds as exact milliseconds") {

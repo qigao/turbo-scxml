@@ -14,6 +14,8 @@ optional dotted-location `sendid` and bounded dotted-location `namelist`:
 <send target="'session:callee'" name="'call.notice'"
       delay="'250ms'" sendid="request.pending"/>
 <send target="'session:callee'" name="'call.notice'"
+      delay="payload.count"/>
+<send target="'session:callee'" name="'call.notice'"
       namelist="conference.id count"/>
 <cancel sendid="request.pending"/>
 ```
@@ -32,10 +34,11 @@ literals remain unsupported.
 `namelist` are
 optional. Target, name, type, and delay values must be exactly one nonempty
 single-quoted or double-quoted string literal. `sendid` must be a dotted NCName
-location. The compiler strips expression quotes and retains decoded literal
-bytes in program-owned storage. The default `ccxml` target type is an immutable
-static value. Cancel requires only `sendid`, accepts a dotted location or
-quoted literal, and must be empty.
+location. Dynamic delay may instead be an unquoted dotted location with at least
+one dot. The compiler strips expression quotes for literals and retains decoded
+literal and location bytes in program-owned storage. The default `ccxml` target
+type is an immutable static value. Cancel requires only `sendid`, accepts a dotted
+location or quoted literal, and must be empty.
 
 The delay literal uses the shared bounded CSS-time parser and is compiled to an
 exact `uint64_t` millisecond value. The event name uses the CCXML lexical subset:
@@ -43,8 +46,10 @@ the first character is an ASCII
 letter or underscore, and following characters are ASCII letters, digits,
 underscore, or dot. The retained target, name, explicit target type, and
 explicit delay and each decoded namelist token share the existing
-`max_name_bytes` budget. Namelist order, duplicates, and qualification are
-preserved. Non-ignorable child content is rejected.
+`max_name_bytes` budget. Dynamic delay locations are validated as payload
+locations and resolved at dispatch time as unsigned scalar values. Namelist
+order, duplicates, and qualification are preserved. Non-ignorable child content
+is rejected.
 
 Unsupported standard attributes are rejected as `CCXML_UNSUPPORTED_FEATURE`;
 missing or empty required values are rejected as `CCXML_INVALID_STRUCTURE`.
@@ -62,7 +67,8 @@ mandatory for every attached adapter.
 
 A non-empty namelist additionally requires `SCXML_EVENT_IO_CAP_PAYLOAD` and
 the datamodel adapter's struct-size-protected `validate_payload_location` and
-`read_payload` tail. Empty namelists behave like an omitted payload.
+`read_payload` tail. A dynamic delay also requires `read_payload` and
+its validation. Empty namelists behave like an omitted payload.
 
 The shared `scxml_send_request` carries CCXML values as follows:
 
@@ -71,7 +77,7 @@ The shared `scxml_send_request` carries CCXML values as follows:
 - `type` is the compiled `targettype` or `ccxml`;
 - `id` is empty unless `sendid` is present; then it is a bounded
   `send.<session-uuid>.<token>` value also staged into the datamodel location;
-- `delay_ms` is the compiled literal or zero;
+- `delay_ms` is the compiled literal or resolved dynamic payload value;
 - `payload` is empty or an ordered shared named payload containing scalar and
   callback-scoped CMeta object views.
 
@@ -116,7 +122,7 @@ The slice is complete when tests prove:
 5. adapter rejection and malformed tickets map to the existing status model;
 6. mixed send/telephony effects preserve transaction ordering and rollback;
 7. send programs reject absent or incapable adapters, including a missing
-   delayed-send capability when a nonzero delay is compiled;
+   delayed-send capability when a nonzero or dynamic delay is used;
 8. close is exactly once per adapter and destruction waits for Event I/O
    quiescence;
 9. generated IDs are unique, committed before send publication, readable by a

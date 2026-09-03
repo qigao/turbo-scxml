@@ -598,6 +598,86 @@ static size_t copy_send_literal(
     return decoded_size - 2u;
 }
 
+static bool send_delay_location_has_dot(salts_xml_string_view location) {
+    return location.data != NULL && location.size > 0u &&
+           memchr(location.data, '.', location.size) != NULL;
+}
+
+static ccxml_status decode_send_delay(
+    salts_xml_attribute attribute, char **out_value, size_t *out_size,
+    bool *out_is_literal, ccxml_diagnostic *diagnostic) {
+    ccxml_status status;
+    bool is_literal = false;
+    char *value = NULL;
+    size_t size;
+    size_t decoded_size = 0u;
+    char quote;
+    size_t index;
+    if (out_value == NULL || out_size == NULL || out_is_literal == NULL) {
+        return CCXML_INVALID_ARGUMENT;
+    }
+    *out_value = NULL;
+    *out_size = 0u;
+    *out_is_literal = false;
+    status = decode_attribute_value(
+        attribute, &value, &decoded_size, diagnostic);
+    if (status != CCXML_OK) return status;
+    if (decoded_size == 0u) {
+        free(value);
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "CCXML send delay is missing");
+    }
+    if (value[0] == '\'' || value[0] == '"') {
+        if (decoded_size < 2u) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML send delay must be a quoted string literal");
+        }
+        if (value[decoded_size - 1u] != value[0]) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML send delay must be a quoted string literal");
+        }
+        quote = value[0];
+        for (index = 1u; index + 1u < decoded_size; ++index) {
+            if (value[index] == '\\' || value[index] == quote) {
+                free(value);
+                return fail(
+                    diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "CCXML send literal decodes to an "
+                    "unsupported escape or quote");
+            }
+        }
+        size = decoded_size - 2u;
+        memmove(value, value + 1u, size);
+        value[size] = '\0';
+        is_literal = true;
+    } else {
+        const salts_xml_string_view location = {value, decoded_size};
+        if (!send_delay_location_has_dot(location) ||
+            !dotted_location_valid(location)) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML send delay must be a quoted literal or dotted "
+                "NCName location");
+        }
+        size = decoded_size;
+    }
+    *out_value = value;
+    *out_size = size;
+    *out_is_literal = is_literal;
+    return CCXML_OK;
+}
+
 static bool send_event_name_valid(const char *name, size_t name_size) {
     size_t index;
     if (name == NULL || name_size == 0u) return false;
@@ -630,6 +710,7 @@ static ccxml_status validate_send_action(
     char *delay_value = NULL;
     char *send_id_location = NULL;
     char *namelist_value = NULL;
+    bool delay_is_literal = false;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
@@ -696,12 +777,15 @@ static ccxml_status validate_send_action(
         if (status != CCXML_OK) goto cleanup;
     }
     if (delay_attribute.impl != NULL) {
-        status = decode_send_literal(
-            delay_attribute, &delay_value, &delay_size, diagnostic);
+        status = decode_send_delay(
+            delay_attribute, &delay_value, &delay_size, &delay_is_literal,
+            diagnostic);
         if (status != CCXML_OK) goto cleanup;
-        if (!scxml_time_parse_ms(
+        if (delay_is_literal &&
+            !scxml_time_parse_ms(
                 (salts_xml_string_view){delay_value, delay_size},
                 &delay_ms)) {
+            free(delay_value);
             status = fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(delay_attribute),
@@ -1891,6 +1975,7 @@ static ccxml_status validate_document(
 static ccxml_status copy_program(
     ccxml_program_impl *impl, salts_xml_node root,
     ccxml_diagnostic *diagnostic) {
+    ccxml_status status = CCXML_OK;
     size_t root_index;
     size_t transition_index = 0u;
     size_t action_index = 0u;
@@ -2300,16 +2385,32 @@ static ccxml_status copy_program(
                         action_row->target_type_size = sizeof(default_type) - 1u;
                     }
                     if (delay_attribute.impl != NULL) {
+                        bool delay_is_literal = false;
+                        char *delay_value = NULL;
+                        status = decode_send_delay(
+                            delay_attribute, &delay_value, &action_row->delay_size,
+                            &delay_is_literal, diagnostic);
+                        if (status != CCXML_OK) return status;
                         action_row->delay = cursor;
-                        action_row->delay_size =
-                            copy_send_literal(delay_attribute, cursor);
-                        (void)scxml_time_parse_ms(
-                            (salts_xml_string_view){
-                                action_row->delay, action_row->delay_size},
-                            &action_row->delay_ms);
-                        cursor += action_row->delay_size + 1u;
-                        if (action_row->delay_ms != 0u)
+                        action_row->delay_is_dynamic = !delay_is_literal;
+                        memcpy(cursor, delay_value, action_row->delay_size);
+                        cursor[action_row->delay_size] = '\0';
+                        if (delay_is_literal) {
+                            (void)scxml_time_parse_ms(
+                                (salts_xml_string_view){
+                                    action_row->delay, action_row->delay_size},
+                                &action_row->delay_ms);
+                            if (action_row->delay_ms > 0u)
+                                impl->uses_delayed_send = true;
+                        } else {
+                            impl->uses_send_delay = true;
                             impl->uses_delayed_send = true;
+                            action_row->delay_ms = 0u;
+                        }
+                        free(delay_value);
+                        cursor += action_row->delay_size + 1u;
+                    } else {
+                        action_row->delay_is_dynamic = false;
                     }
                     if (send_id_attribute.impl != NULL) {
                         size_t location_size = 0u;
