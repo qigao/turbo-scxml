@@ -128,7 +128,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和直接
-`<dialogstart/>`/normal `<dialogterminate/>` VoiceXML provider 生命周期：
+detached `<dialogprepare/>`、直接 `<dialogstart/>` 和 normal
+`<dialogterminate/>` VoiceXML provider 生命周期：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -157,6 +158,13 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="conference.release">
   <destroyconference conferenceid="conference.id"/>
+</transition>
+<transition event="ccxml.loaded">
+  <dialogprepare dialogid="dialog.prepared"
+                 src="'https://voice.example/menu.vxml'"/>
+</transition>
+<transition event="dialog.cancel">
+  <dialogterminate dialogid="dialog.prepared"/>
 </transition>
 <transition event="connection.connected">
   <dialogstart dialogid="dialog.id"
@@ -265,6 +273,14 @@ datamodel；旧 createconference writeback 前缀在只使用写回时继续有�
 dialog ID。URI 策略、抓取、VoiceXML 解释器、媒体 bridge 和结果事件均由
 provider 负责；核心不内置这些实现。
 
+`<dialogprepare/>` 当前要求 `dialogid` 是点分 NCName 写入位置，`src` 是非空
+字符串字面量，并且不接受 connection/conference 媒体目标。追加的
+`prepare_dialog_prepare` 接收 source 和默认 `application/voicexml+xml` MIME，
+返回 provider 生成的 prepared dialog ID 与准备 ticket。核心同样先提交
+CMeta/datamodel ID 写回，再发布异步准备；provider 负责 URI 抓取、VoiceXML
+环境准备以及 `dialog.prepared`/`error.dialog.notprepared`。已准备或正在准备的
+dialog 可由现有 `<dialogterminate/>` 取消。
+
 `<dialogterminate/>` 的 `dialogid` 接受非空字符串字面量或点分 NCName
 datamodel location。省略 `immediate` 使用 normal termination（`false`）；核心
 把求值后的 ID 和该模式交给追加的 `prepare_dialog_terminate`，不要求当前 Event
@@ -291,10 +307,11 @@ ccxml_session_config session_config = {
     .datamodel_user = &model};
 ```
 
-当前明确不支持 SIP/RTP backend、完整 dialog 生命周期（`<dialogprepare/>`、
-`<dialogterminate/>` 的显式 `immediate`/`hints`，以及 `<dialogstart/>` 的 prepared
-dialog、conference、parameters、media direction、显式 MIME、fetch/hints 等
-形式）、
+当前明确不支持 SIP/RTP backend、完整 dialog 生命周期（`<dialogprepare/>` 的
+connection/conference、parameters、media direction、显式 MIME、fetch/hints 等
+可选形式，`<dialogterminate/>` 的显式 `immediate`/`hints`，以及
+`<dialogstart/>` 的 prepared dialog、conference、parameters、media direction、
+显式 MIME、fetch/hints 等形式）、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
@@ -330,7 +347,9 @@ merge 切片见
 直接 dialog 启动与 provider/ID 写回边界见
 [`docs/specs/ccxml-dialogstart-design.md`](docs/specs/ccxml-dialogstart-design.md)，normal
 dialog termination 边界见
-[`docs/specs/ccxml-dialogterminate-design.md`](docs/specs/ccxml-dialogterminate-design.md)。
+[`docs/specs/ccxml-dialogterminate-design.md`](docs/specs/ccxml-dialogterminate-design.md)，
+detached dialog preparation 边界见
+[`docs/specs/ccxml-dialogprepare-design.md`](docs/specs/ccxml-dialogprepare-design.md)。
 
 ## CMeta 表达式
 
