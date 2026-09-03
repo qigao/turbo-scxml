@@ -1,14 +1,27 @@
 #include "ccxml_internal.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
 static bool adapter_valid(const ccxml_telephony_adapter_v1 *adapter) {
+    const size_t legacy_size =
+        offsetof(ccxml_telephony_adapter_v1, is_quiescent) +
+        sizeof(adapter->is_quiescent);
     return adapter != NULL &&
            adapter->abi_version == CCXML_TELEPHONY_ADAPTER_ABI_V1 &&
-           adapter->struct_size >= sizeof(*adapter) &&
+           adapter->struct_size >= legacy_size &&
            adapter->prepare_accept != NULL && adapter->close != NULL &&
            adapter->is_quiescent != NULL;
+}
+
+static ccxml_telephony_adapter_v1 copy_adapter(
+    const ccxml_telephony_adapter_v1 *adapter) {
+    ccxml_telephony_adapter_v1 copy = {0};
+    const size_t copy_size = adapter->struct_size < sizeof(copy)
+        ? adapter->struct_size : sizeof(copy);
+    memcpy(&copy, adapter, copy_size);
+    return copy;
 }
 
 static void close_adapter(ccxml_session_impl *impl) {
@@ -38,9 +51,34 @@ static const ccxml_transition_row *find_transition(
     return NULL;
 }
 
+static ccxml_status retain_ticket(
+    ccxml_session_impl *impl, scxml_adapter_status adapter_status,
+    cflow_statechart_effect_ticket ticket, size_t *prepared) {
+    if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+        discard_tickets(impl->tickets, *prepared);
+        *prepared = 0u;
+        return CCXML_ADAPTER_ERROR;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL) ticket.discard(ticket.user);
+        discard_tickets(impl->tickets, *prepared);
+        *prepared = 0u;
+        return CCXML_INVALID_CONTRACT;
+    }
+    if (*prepared >= impl->ticket_capacity) {
+        ticket.discard(ticket.user);
+        discard_tickets(impl->tickets, *prepared);
+        *prepared = 0u;
+        return CCXML_LIMIT_EXCEEDED;
+    }
+    impl->tickets[(*prepared)++] = ticket;
+    return CCXML_OK;
+}
+
 ccxml_status ccxml_session_init(
     ccxml_session *session, const ccxml_session_config *config) {
     const ccxml_program_impl *program;
+    ccxml_telephony_adapter_v1 telephony;
     ccxml_session_impl *impl;
     if (session == NULL || session->impl != NULL || config == NULL ||
         config->program == NULL || config->program->impl == NULL ||
@@ -48,6 +86,16 @@ ccxml_status ccxml_session_init(
         return CCXML_INVALID_ARGUMENT;
     }
     program = (const ccxml_program_impl *)config->program->impl;
+    telephony = copy_adapter(config->telephony);
+    if (program->uses_create_call) {
+        const size_t create_call_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_create_call) +
+            sizeof(telephony.prepare_create_call);
+        if (config->telephony->struct_size < create_call_size ||
+            telephony.prepare_create_call == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
@@ -63,7 +111,7 @@ ccxml_status ccxml_session_init(
         }
     }
     impl->program = program;
-    impl->telephony = *config->telephony;
+    impl->telephony = telephony;
     impl->telephony_user = config->telephony_user;
     impl->ticket_capacity = program->max_transition_actions;
     session->impl = impl;
@@ -108,21 +156,25 @@ ccxml_status ccxml_session_dispatch(
             adapter_status = impl->telephony.prepare_accept(
                 impl->telephony_user, &request, &ticket, &error);
             (void)error;
-            if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
-                discard_tickets(impl->tickets, prepared);
-                return CCXML_ADAPTER_ERROR;
+            {
+                const ccxml_status status = retain_ticket(
+                    impl, adapter_status, ticket, &prepared);
+                if (status != CCXML_OK) return status;
             }
-            if (ticket.commit == NULL || ticket.discard == NULL) {
-                if (ticket.discard != NULL) ticket.discard(ticket.user);
-                discard_tickets(impl->tickets, prepared);
-                return CCXML_INVALID_CONTRACT;
-            }
-            if (prepared >= impl->ticket_capacity) {
-                ticket.discard(ticket.user);
-                discard_tickets(impl->tickets, prepared);
-                return CCXML_LIMIT_EXCEEDED;
-            }
-            impl->tickets[prepared++] = ticket;
+        }
+        if (action->kind == CCXML_ACTION_CREATE_CALL) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const ccxml_create_call_request request = {
+                .destination = action->destination,
+                .destination_size = action->destination_size};
+            const scxml_adapter_status adapter_status =
+                impl->telephony.prepare_create_call(
+                    impl->telephony_user, &request, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
         }
     }
     for (index = 0u; index < prepared; ++index) {

@@ -69,6 +69,12 @@ typedef struct ccxml_accept_request {
     size_t connection_id_size;
 } ccxml_accept_request;
 
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_create_call_request {
+    const char *destination;
+    size_t destination_size;
+} ccxml_create_call_request;
+
 /**
  * Versioned telephony bridge copied by session initialization.
  *
@@ -87,6 +93,12 @@ typedef struct ccxml_telephony_adapter_v1 {
         const char **out_error);
     void (*close)(void *user);
     bool (*is_quiescent)(void *user);
+    /** Optional tail operation, required by programs containing createcall. */
+    scxml_adapter_status (*prepare_create_call)(
+        void *user,
+        const ccxml_create_call_request *request,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
 } ccxml_telephony_adapter_v1;
 
 typedef struct ccxml_session_config {

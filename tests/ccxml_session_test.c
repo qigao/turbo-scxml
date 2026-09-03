@@ -2,6 +2,7 @@
 
 #include "tinytest.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,12 +21,20 @@ struct provider_probe {
     size_t discard_count;
     size_t commit_order[4];
     size_t discard_order[4];
+    size_t prepare_kinds[4];
     size_t reject_on_prepare;
     bool malformed_ticket;
     bool quiescent;
     size_t close_count;
     char connection_id[64];
     size_t connection_id_size;
+    char destination[64];
+    size_t destination_size;
+};
+
+enum {
+    PROVIDER_ACCEPT = 1,
+    PROVIDER_CREATE_CALL
 };
 
 static void ticket_commit(void *user) {
@@ -46,23 +55,18 @@ static void ticket_discard(void *user) {
     ++ticket->owner->discard_count;
 }
 
-static scxml_adapter_status prepare_accept(
-    void *user, const ccxml_accept_request *request,
+static scxml_adapter_status prepare_effect(
+    provider_probe *probe, size_t kind,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
-    provider_probe *probe = (provider_probe *)user;
     provider_ticket *ticket;
     const size_t index = probe->prepare_count++;
+    probe->prepare_kinds[index] = kind;
     if (out_error != NULL) *out_error = NULL;
     if (probe->reject_on_prepare != 0u &&
         probe->prepare_count == probe->reject_on_prepare) {
         if (out_error != NULL) *out_error = "rejected by test provider";
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
-    probe->connection_id_size = request->connection_id_size;
-    memcpy(
-        probe->connection_id, request->connection_id,
-        request->connection_id_size);
-    probe->connection_id[request->connection_id_size] = '\0';
     if (probe->malformed_ticket) {
         *out_ticket = (cflow_statechart_effect_ticket){0};
         return SCXML_ADAPTER_ACCEPTED;
@@ -76,6 +80,32 @@ static scxml_adapter_status prepare_accept(
         .discard = ticket_discard,
         .user = ticket};
     return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status prepare_accept(
+    void *user, const ccxml_accept_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->connection_id_size = request->connection_id_size;
+    memcpy(
+        probe->connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->connection_id[request->connection_id_size] = '\0';
+    return prepare_effect(
+        probe, PROVIDER_ACCEPT, out_ticket, out_error);
+}
+
+static scxml_adapter_status prepare_create_call(
+    void *user, const ccxml_create_call_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->destination_size = request->destination_size;
+    memcpy(
+        probe->destination, request->destination,
+        request->destination_size);
+    probe->destination[request->destination_size] = '\0';
+    return prepare_effect(
+        probe, PROVIDER_CREATE_CALL, out_ticket, out_error);
 }
 
 static void provider_close(void *user) {
@@ -93,7 +123,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .struct_size = sizeof(ccxml_telephony_adapter_v1),
     .prepare_accept = prepare_accept,
     .close = provider_close,
-    .is_quiescent = provider_is_quiescent};
+    .is_quiescent = provider_is_quiescent,
+    .prepare_create_call = prepare_create_call};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -134,6 +165,13 @@ static ccxml_event alerting_event(void) {
         .name_size = sizeof("connection.alerting") - 1u,
         .connection_id = "call-7",
         .connection_id_size = sizeof("call-7") - 1u};
+    return event;
+}
+
+static ccxml_event loaded_event(void) {
+    const ccxml_event event = {
+        .name = "ccxml.loaded",
+        .name_size = sizeof("ccxml.loaded") - 1u};
     return event;
 }
 
@@ -331,5 +369,150 @@ spec("CCXML session") {
         check_equal(probe.close_count, (size_t)1);
 
         ccxml_program_destroy(&program);
+    }
+
+    group("createcall") {
+        it("commits the copied destination") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='ccxml.loaded'>"
+                "<createcall dest=\"'tel:+12025550123'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = loaded_event();
+
+            check_equal(compile_document(&program, source), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_count, (size_t)1);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_CREATE_CALL);
+            check_equal(probe.destination, "tel:+12025550123");
+            check_equal(probe.commit_count, (size_t)1);
+            check_equal(probe.discard_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("commits mixed effects in document order") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_ACCEPT);
+            check_equal(
+                probe.prepare_kinds[1], (size_t)PROVIDER_CREATE_CALL);
+            check_equal(probe.commit_order[0], (size_t)1);
+            check_equal(probe.commit_order[1], (size_t)2);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards an earlier accept when call creation is rejected") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(probe.prepare_count, (size_t)2);
+            check_equal(probe.commit_count, (size_t)0);
+            check_equal(probe.discard_count, (size_t)1);
+            check_equal(probe.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts a legacy adapter prefix for an accept-only program") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_create_call);
+
+            check_equal(compile_program(&program, "<accept/>"), CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the adapter tail for a createcall program") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_create_call);
+
+            check_equal(
+                compile_program(
+                    &program, "<createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a truncated createcall callback field") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 truncated = provider_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+
+            check_equal(
+                compile_program(
+                    &program, "<createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &truncated,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
     }
 }
