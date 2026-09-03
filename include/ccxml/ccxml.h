@@ -142,6 +142,14 @@ typedef struct ccxml_destroy_conference_request {
 } ccxml_destroy_conference_request;
 
 /** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_dialog_prepare_request {
+    const char *source;
+    size_t source_size;
+    const char *media_type;
+    size_t media_type_size;
+} ccxml_dialog_prepare_request;
+
+/** Borrowed request fields valid only during one prepare callback. */
 typedef struct ccxml_dialog_start_request {
     const char *source;
     size_t source_size;
@@ -319,6 +327,19 @@ typedef struct ccxml_telephony_adapter_v1 {
     scxml_adapter_status (*prepare_dialog_terminate)(
         void *user,
         const ccxml_dialog_terminate_request *request,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+    /**
+     * Optional tail operation, required by dialogprepare programs.
+     * ACCEPTED must publish a nonempty borrowed identifier as well as a valid
+     * ticket. The identifier remains valid until that ticket is committed or
+     * discarded; the core asks its datamodel adapter to copy the identifier
+     * before resolving the provider ticket.
+     */
+    scxml_adapter_status (*prepare_dialog_prepare)(
+        void *user,
+        const ccxml_dialog_prepare_request *request,
+        ccxml_string_view *out_dialog_id,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
 } ccxml_telephony_adapter_v1;
