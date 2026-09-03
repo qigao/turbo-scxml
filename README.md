@@ -122,8 +122,15 @@ router、默认拒绝的目标 resolver、正数网络 deadline、固定容量�
 
 安装包同时导出 `<ccxml/ccxml.h>` 与 `TurboSCXML::CCXML`。该组件是构建在
 TurboSCXML 公共 adapter/effect 契约上的 CCXML 1.0 孵化实现，不表示完整
-CCXML conformance。首个垂直切片支持一个 `<eventprocessor>`、按文档顺序的
-精确 `<transition event="...">` 匹配，以及空 `<accept/>` 和 `<exit/>`。
+CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文档顺序的
+精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
+单个字符串字面量 `dest` 表达式的 `<createcall/>`：
+
+```xml
+<transition event="ccxml.loaded">
+  <createcall dest="'tel:+12025550123'"/>
+</transition>
+```
 
 ```cmake
 find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML
@@ -146,10 +153,18 @@ effect ticket，同一 transition 的 effects 全部准备成功后才按顺序 
 失败则逆序 discard。`<exit/>` 在已准备 effects 提交后终止 session 并且只关闭
 adapter 一次。
 
+`<createcall/>` commit 后由 provider 异步发起呼叫，并通过已有 event dispatch
+边界回送 `connection.progressing`、`connection.connected` 或
+`connection.failed`。核心不包含 SIP/RTP backend，也不会伪造平台结果。
+adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
+原有 action 的旧 v1 provider 前缀继续可用。
+
 当前明确不支持 SIP/RTP backend、conference/dialog、ECMAScript、条件表达式、
-事件模式、`<createcall>`、`<send>`、文档切换和 VoiceXML；编译器会拒绝这些
-construct，而不是近似执行。完整边界和所有权语义见
-[`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)。
+事件模式、`<createcall>` 的可选属性或非字面量表达式、`<send>`、文档切换和
+VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
+[`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
+外呼切片的所有权与 ABI 语义见
+[`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)。
 
 ## CMeta 表达式
 
