@@ -57,6 +57,8 @@ struct provider_probe {
     const char *conference_id_result;
     size_t conference_id_result_size;
     size_t create_conference_commit_sequence;
+    char destroyed_conference_id[64];
+    size_t destroyed_conference_id_size;
 };
 
 enum {
@@ -68,7 +70,8 @@ enum {
     PROVIDER_JOIN,
     PROVIDER_UNJOIN,
     PROVIDER_MERGE,
-    PROVIDER_CREATE_CONFERENCE
+    PROVIDER_CREATE_CONFERENCE,
+    PROVIDER_DESTROY_CONFERENCE
 };
 
 static void ticket_commit(void *user) {
@@ -251,6 +254,19 @@ static scxml_adapter_status prepare_create_conference(
         probe, PROVIDER_CREATE_CONFERENCE, out_ticket, out_error);
 }
 
+static scxml_adapter_status prepare_destroy_conference(
+    void *user, const ccxml_destroy_conference_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->destroyed_conference_id_size = request->conference_id_size;
+    memcpy(
+        probe->destroyed_conference_id, request->conference_id,
+        request->conference_id_size);
+    probe->destroyed_conference_id[request->conference_id_size] = '\0';
+    return prepare_effect(
+        probe, PROVIDER_DESTROY_CONFERENCE, out_ticket, out_error);
+}
+
 static void provider_close(void *user) {
     provider_probe *probe = (provider_probe *)user;
     ++probe->close_count;
@@ -274,7 +290,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .prepare_join = prepare_join,
     .prepare_unjoin = prepare_unjoin,
     .prepare_merge = prepare_merge,
-    .prepare_create_conference = prepare_create_conference};
+    .prepare_create_conference = prepare_create_conference,
+    .prepare_destroy_conference = prepare_destroy_conference};
 
 typedef struct datamodel_probe datamodel_probe;
 
@@ -286,10 +303,14 @@ typedef struct datamodel_ticket {
 struct datamodel_probe {
     datamodel_ticket ticket;
     size_t validate_count;
+    size_t readable_validate_count;
+    size_t read_count;
     size_t prepare_count;
     size_t commit_count;
     size_t discard_count;
     bool reject_validation;
+    bool reject_readable_validation;
+    bool reject_read;
     bool reject_prepare;
     bool malformed_ticket;
     char location[64];
@@ -297,6 +318,8 @@ struct datamodel_probe {
     char value[64];
     size_t value_size;
     size_t commit_sequence;
+    const char *read_result;
+    size_t read_result_size;
 };
 
 static void datamodel_commit(void *user) {
@@ -359,11 +382,49 @@ static scxml_adapter_status prepare_assign_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status validate_readable_string_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->readable_validate_count;
+    probe->location_size = location_size;
+    memcpy(probe->location, location, location_size);
+    probe->location[location_size] = '\0';
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_readable_validation) {
+        if (out_error != NULL) *out_error = "unreadable test location";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status read_string(
+    void *user, const char *location, size_t location_size,
+    ccxml_string_view *out_value, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->read_count;
+    probe->location_size = location_size;
+    memcpy(probe->location, location, location_size);
+    probe->location[location_size] = '\0';
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_read) {
+        if (out_error != NULL) *out_error = "test read refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    *out_value = (ccxml_string_view){
+        .data = probe->read_result,
+        .size = probe->read_result_size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
     .validate_string_location = validate_string_location,
-    .prepare_assign_string = prepare_assign_string};
+    .prepare_assign_string = prepare_assign_string,
+    .validate_readable_string_location =
+        validate_readable_string_location,
+    .read_string = read_string};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -2231,7 +2292,9 @@ spec("CCXML session") {
             datamodel_probe datamodel = {0};
             ccxml_datamodel_adapter_v1 truncated = datamodel_adapter;
             ccxml_session_config config;
-            truncated.struct_size = sizeof(truncated) - 1u;
+            truncated.struct_size =
+                offsetof(ccxml_datamodel_adapter_v1, prepare_assign_string) +
+                sizeof(truncated.prepare_assign_string) - 1u;
 
             check_equal(
                 compile_program(
@@ -2248,6 +2311,298 @@ spec("CCXML session") {
                 ccxml_session_init(&session, &config),
                 CCXML_INVALID_ARGUMENT);
 
+            ccxml_program_destroy(&program);
+        }
+    }
+
+    group("destroyconference") {
+        it("passes a literal conference identifier without a datamodel") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference "
+                    "conferenceid=\"'conference-42'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_session(&session, &program, &provider), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(
+                provider.prepare_kinds[0],
+                (size_t)PROVIDER_DESTROY_CONFERENCE);
+            check_equal(
+                provider.destroyed_conference_id, "conference-42");
+            check_equal(provider.commit_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("reads a location value before preparing telephony") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .read_result = "conference-from-model",
+                .read_result_size = sizeof("conference-from-model") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(datamodel.readable_validate_count, (size_t)1);
+            check_equal(datamodel.location, "conference.id");
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.read_count, (size_t)1);
+            check_equal(
+                provider.destroyed_conference_id,
+                "conference-from-model");
+            check_equal(provider.commit_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires a datamodel only for location expressions") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session(&session, &program, &provider),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an unreadable location during session initialization") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .reject_readable_validation = true};
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            check_equal(datamodel.readable_validate_count, (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back earlier effects when the datamodel read is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {.reject_read = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><destroyconference "
+                    "conferenceid='conference.id'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an empty datamodel result before telephony prepare") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back earlier effects when telephony refuses destruction") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><destroyconference "
+                    "conferenceid=\"'conference-42'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_session(&session, &program, &provider), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+            check_equal(provider.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a malformed destroy ticket") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .malformed_ticket = true,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference "
+                    "conferenceid=\"'conference-42'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_session(&session, &program, &provider), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the appended telephony operation") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size = offsetof(
+                ccxml_telephony_adapter_v1,
+                prepare_destroy_conference);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference "
+                    "conferenceid=\"'conference-42'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &provider};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the appended datamodel read operations") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+            ccxml_session_config config;
+            legacy.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1,
+                validate_readable_string_location);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<destroyconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &legacy,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("preserves the old datamodel prefix for createconference") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conference-43",
+                .conference_id_result_size = sizeof("conference-43") - 1u};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_datamodel_adapter_v1, prepare_assign_string) +
+                sizeof(legacy.prepare_assign_string);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference.id'/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &legacy,
+                .datamodel_user = &datamodel};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&program);
         }
     }

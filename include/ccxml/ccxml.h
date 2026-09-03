@@ -135,6 +135,12 @@ typedef struct ccxml_create_conference_request {
     size_t conference_name_size;
 } ccxml_create_conference_request;
 
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_destroy_conference_request {
+    const char *conference_id;
+    size_t conference_id_size;
+} ccxml_destroy_conference_request;
+
 /**
  * Synchronous left-value boundary copied by session initialization.
  *
@@ -155,6 +161,17 @@ typedef struct ccxml_datamodel_adapter_v1 {
         const char *value, size_t value_size,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
+    /** Optional tail operations required by readable-location programs. */
+    scxml_adapter_status (*validate_readable_string_location)(
+        void *user, const char *location, size_t location_size,
+        const char **out_error);
+    /**
+     * Return a borrowed value valid through the immediately following
+     * telephony prepare callback. The core does not retain the view.
+     */
+    scxml_adapter_status (*read_string)(
+        void *user, const char *location, size_t location_size,
+        ccxml_string_view *out_value, const char **out_error);
 } ccxml_datamodel_adapter_v1;
 
 /** Opaque owner for the built-in synchronous CMeta datamodel adapter. */
@@ -257,6 +274,12 @@ typedef struct ccxml_telephony_adapter_v1 {
         void *user,
         const ccxml_create_conference_request *request,
         ccxml_string_view *out_conference_id,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+    /** Optional tail operation, required by destroyconference programs. */
+    scxml_adapter_status (*prepare_destroy_conference)(
+        void *user,
+        const ccxml_destroy_conference_request *request,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
 } ccxml_telephony_adapter_v1;

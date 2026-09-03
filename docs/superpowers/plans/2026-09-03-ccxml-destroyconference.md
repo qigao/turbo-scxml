@@ -41,11 +41,11 @@ TinyTest
 **Files:** `tests/ccxml_session_test.c`, `include/ccxml/ccxml.h`,
 `src/ccxml_session.c`
 
-- [ ] Add RED tests for exact evaluated requests, capability/location checks,
+- [x] Add RED tests for exact evaluated requests, capability/location checks,
   malformed reads/tickets, refusal rollback, and old callback prefixes.
-- [ ] Append read operations and `prepare_destroy_conference`, validate only
+- [x] Append read operations and `prepare_destroy_conference`, validate only
   the capabilities each program needs, and transact one provider ticket.
-- [ ] Run focused runtime tests and commit the transaction slice.
+- [x] Run focused runtime tests and commit the transaction slice.
 
 ### Task 3: Provide CMeta string reads
 
