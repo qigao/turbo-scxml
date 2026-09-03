@@ -61,9 +61,9 @@ TinyTest
 
 **Files:** `README.md`, this plan, and the design specification
 
-- [ ] Document supported syntax, ownership, provider event responsibility,
+- [x] Document supported syntax, ownership, provider event responsibility,
   and unsupported optional forms.
-- [ ] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
+- [x] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
   consumer verification.
 - [ ] Self-review the diff, commit docs, push, update PR #35, and confirm its
   merge state.

@@ -18,6 +18,7 @@ Struct(test_conference,
 
 Struct(test_state,
     (test_conference, conference),
+    (test_text, read_only),
     (int, count)
 );
 
@@ -97,6 +98,29 @@ static const cmeta_data_desc text_desc = {
     .shape = &text_shape,
     .buffer_ops = &text_ops};
 
+static const cmeta_data_buffer_shape borrowed_text_shape = {
+    .ownership = CMETA_DATA_BUFFER_BORROWED};
+
+static const cmeta_data_buffer_ops borrowed_text_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &text_type,
+    .ownership = CMETA_DATA_BUFFER_BORROWED,
+    .is_zero = text_is_zero,
+    .assign = text_assign,
+    .restore_zero = text_restore_zero,
+    .read = text_read};
+
+static const cmeta_data_desc borrowed_text_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.borrowed-text",
+    .display_name = "CCXML borrowed test text",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &text_type,
+    .shape = &borrowed_text_shape,
+    .buffer_ops = &borrowed_text_ops};
+
 static const cmeta_type_traits aggregate_traits = {
     .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
 
@@ -135,6 +159,8 @@ static const cmeta_type_desc state_type = {
 static const cmeta_data_field_desc state_fields[] = {
     {"test.ccxml.state.conference", "conference",
      offsetof(test_state, conference), &conference_desc},
+    {"test.ccxml.state.read-only", "read_only",
+     offsetof(test_state, read_only), &borrowed_text_desc},
     {"test.ccxml.state.count", "count",
      offsetof(test_state, count), &cmeta_data_int}};
 
@@ -398,6 +424,35 @@ spec("CCXML CMeta datamodel") {
         ccxml_cmeta_datamodel_destroy(&datamodel);
     }
 
+    it("reads a borrowed string that is not a writable location") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {0};
+
+        memcpy(state.read_only.data, "conf-view", 9u);
+        state.read_only.data[9] = '\0';
+        state.read_only.size = 9u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->validate_string_location(
+                &datamodel, "read_only", 9u, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(
+            adapter->validate_readable_string_location(
+                &datamodel, "read_only", 9u, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(
+            adapter->read_string(
+                &datamodel, "read_only", 9u, &value, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(value.size, (size_t)9);
+        check_equal((const char *)value.data, "conf-view");
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
     it("rejects unreadable paths and non-string fields") {
         ccxml_cmeta_datamodel datamodel = {0};
         test_state state = {0};
@@ -441,6 +496,34 @@ spec("CCXML CMeta datamodel") {
             check_equal(value.size, (size_t)0);
         }
         check_equal(state.conference.id.data, "conf-wide");
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects empty and NUL-containing conference ID views") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {(const char *)1, 99u};
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->read_string(
+                &datamodel, "conference.id", 13u, &value, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(value.data);
+        check_equal(value.size, (size_t)0);
+
+        memcpy(state.conference.id.data, "ab\0cd", 5u);
+        state.conference.id.size = 5u;
+        value = (ccxml_string_view){(const char *)1, 99u};
+        check_equal(
+            adapter->read_string(
+                &datamodel, "conference.id", 13u, &value, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(value.data);
+        check_equal(value.size, (size_t)0);
 
         ccxml_cmeta_datamodel_destroy(&datamodel);
     }

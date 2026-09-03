@@ -142,13 +142,15 @@ typedef struct ccxml_destroy_conference_request {
 } ccxml_destroy_conference_request;
 
 /**
- * Synchronous left-value boundary copied by session initialization.
+ * Synchronous string datamodel boundary copied by session initialization.
  *
- * Validation runs once per compiled write location before the session is
- * published. Assignment prepare must copy location/value bytes it retains and
- * must not mutate live state. ACCEPTED transfers one move-only effect ticket;
- * commit performs the already-prepared write without failure or allocation.
- * Neither operation may retain pointers supplied by the core after returning.
+ * Validation runs once per compiled location before the session is published.
+ * Assignment prepare must copy location/value bytes it retains and must not
+ * mutate live state. ACCEPTED transfers one move-only effect ticket; commit
+ * performs the already-prepared write without failure or allocation.
+ * Neither write operation may retain pointers supplied by the core after
+ * returning. Read operations are side-effect free and return bounded borrowed
+ * views under the lifetime documented below.
  */
 typedef struct ccxml_datamodel_adapter_v1 {
     uint32_t abi_version;
@@ -290,7 +292,7 @@ typedef struct ccxml_session_config {
     /** Operations are copied; user remains borrowed through destruction. */
     const ccxml_telephony_adapter_v1 *telephony;
     void *telephony_user;
-    /** Required only when the program writes provider-generated identifiers. */
+    /** Required only when the program reads or writes datamodel strings. */
     const ccxml_datamodel_adapter_v1 *datamodel;
     void *datamodel_user;
 } ccxml_session_config;

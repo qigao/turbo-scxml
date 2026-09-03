@@ -304,6 +304,10 @@ static scxml_adapter_status cmeta_read_string(
         set_error(out_error, "CCXML CMeta string read failed");
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
+    if (bytes == NULL || size == 0u || memchr(bytes, '\0', size) != NULL) {
+        set_error(out_error, "CCXML CMeta string value is not a valid ID");
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
     *out_value = (ccxml_string_view){
         .data = (const char *)bytes,
         .size = size};

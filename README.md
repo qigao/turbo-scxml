@@ -126,7 +126,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
-全双工 `<join/>`、双资源 `<unjoin/>`，以及两个连接的 `<merge/>`：
+全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
+`<createconference/>`/`<destroyconference/>` conference 生命周期：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -152,6 +153,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="conference.request">
   <createconference conferenceid="conference.id" confname="'support'"/>
+</transition>
+<transition event="conference.release">
+  <destroyconference conferenceid="conference.id"/>
 </transition>
 ```
 
@@ -235,6 +239,14 @@ discard。内置
 同名 attach/lookup、session 终止时的隐式 detach，并异步回送
 `conference.created` 或 `error.conference.create`。
 
+`<destroyconference/>` 的 `conferenceid` 接受非空字符串字面量，或点分 NCName
+datamodel location。location 由追加的只读 datamodel capability 在 session
+初始化时验证，并在 dispatch 时求值；`prepare_destroy_conference` 只会收到
+求值后的 ID，不会收到左值路径或表达式原文。provider 提交后负责 detach 当前
+session，只在没有其他 session attachment 时销毁全局 conference，并异步回送
+`conference.destroyed` 或 `error.conference.destroy`。literal 形式不要求
+datamodel；旧 createconference writeback 前缀在只使用写回时继续有效。
+
 ```c
 ccxml_cmeta_datamodel model = {0};
 ccxml_cmeta_datamodel_config_v1 model_config = {
@@ -254,7 +266,7 @@ ccxml_session_config session_config = {
     .datamodel_user = &model};
 ```
 
-当前明确不支持 SIP/RTP backend、conference 销毁、dialog 生命周期、
+当前明确不支持 SIP/RTP backend、dialog 生命周期、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
@@ -264,6 +276,8 @@ ECMAScript、条件表达式、
 属性或非字面量 ID、`<merge>` 的 `hints` 属性或非字面量 connection ID、
 `<createconference>` 的 `reservedtalkers`/`reservedlisteners`/`hints` 属性、
 非字面量 `confname` 或通用 ECMAScript 左值、
+`<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
+expression、
 `<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
@@ -282,7 +296,9 @@ bridge join 切片见
 merge 切片见
 [`docs/specs/ccxml-merge-design.md`](docs/specs/ccxml-merge-design.md)，conference
 创建与 CMeta 写回边界见
-[`docs/specs/ccxml-createconference-design.md`](docs/specs/ccxml-createconference-design.md)。
+[`docs/specs/ccxml-createconference-design.md`](docs/specs/ccxml-createconference-design.md)，conference
+销毁与 CMeta 读取边界见
+[`docs/specs/ccxml-destroyconference-design.md`](docs/specs/ccxml-destroyconference-design.md)。
 
 ## CMeta 表达式
 
