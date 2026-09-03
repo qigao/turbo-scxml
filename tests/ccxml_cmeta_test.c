@@ -16,8 +16,13 @@ Struct(test_conference,
     (test_text, id)
 );
 
+Struct(test_dialog,
+    (test_text, id)
+);
+
 Struct(test_state,
     (test_conference, conference),
+    (test_dialog, dialog),
     (test_text, read_only),
     (int, count)
 );
@@ -149,6 +154,31 @@ static const cmeta_data_desc conference_desc = {
     .storage_type = &conference_type,
     .shape = &conference_shape};
 
+static const cmeta_type_desc dialog_type = {
+    .name = "ccxml_test_dialog",
+    .size = sizeof(test_dialog),
+    .align = _Alignof(test_dialog),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc dialog_fields[] = {
+    {"test.ccxml.dialog.id", "id",
+     offsetof(test_dialog, id), &text_desc}};
+
+static const cmeta_data_struct_shape dialog_shape = {
+    .layout = StructMeta(test_dialog),
+    .fields = dialog_fields,
+    .field_count = sizeof(dialog_fields) / sizeof(dialog_fields[0])};
+
+static const cmeta_data_desc dialog_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.dialog",
+    .display_name = "CCXML test dialog",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &dialog_type,
+    .shape = &dialog_shape};
+
 static const cmeta_type_desc state_type = {
     .name = "ccxml_test_state",
     .size = sizeof(test_state),
@@ -159,6 +189,8 @@ static const cmeta_type_desc state_type = {
 static const cmeta_data_field_desc state_fields[] = {
     {"test.ccxml.state.conference", "conference",
      offsetof(test_state, conference), &conference_desc},
+    {"test.ccxml.state.dialog", "dialog",
+     offsetof(test_state, dialog), &dialog_desc},
     {"test.ccxml.state.read-only", "read_only",
      offsetof(test_state, read_only), &borrowed_text_desc},
     {"test.ccxml.state.count", "count",
@@ -185,12 +217,24 @@ typedef struct conference_provider_probe {
     size_t close_count;
     char destroyed_conference_id[32];
     size_t destroyed_conference_id_size;
+    char dialog_source[32];
+    char dialog_connection_id[32];
+    char dialog_media_type[32];
+    const test_text *published_dialog_id;
+    bool dialog_id_visible_at_commit;
 } conference_provider_probe;
 
 static void provider_ticket_commit(void *user) {
     conference_provider_probe *probe = (conference_provider_probe *)user;
     if (probe == NULL || !probe->live) return;
     probe->live = false;
+    if (probe->published_dialog_id != NULL &&
+        probe->published_dialog_id->size == 10u &&
+        memcmp(
+            probe->published_dialog_id->data,
+            "dialog-e2e", 10u) == 0) {
+        probe->dialog_id_visible_at_commit = true;
+    }
     ++probe->commit_count;
 }
 
@@ -245,6 +289,31 @@ static scxml_adapter_status provider_prepare_destroy_conference(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status provider_prepare_dialog_start(
+    void *user, const ccxml_dialog_start_request *request,
+    ccxml_string_view *out_dialog_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(probe->dialog_source, request->source, request->source_size);
+    probe->dialog_source[request->source_size] = '\0';
+    memcpy(
+        probe->dialog_connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->dialog_connection_id[request->connection_id_size] = '\0';
+    memcpy(
+        probe->dialog_media_type, request->media_type,
+        request->media_type_size);
+    probe->dialog_media_type[request->media_type_size] = '\0';
+    probe->live = true;
+    *out_dialog_id = (ccxml_string_view){"dialog-e2e", 10u};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static void provider_close(void *user) {
     ++((conference_provider_probe *)user)->close_count;
 }
@@ -262,7 +331,8 @@ static const ccxml_telephony_adapter_v1 conference_provider = {
     .is_quiescent = provider_quiescent,
     .prepare_create_conference = provider_prepare_conference,
     .prepare_destroy_conference =
-        provider_prepare_destroy_conference};
+        provider_prepare_destroy_conference,
+    .prepare_dialog_start = provider_prepare_dialog_start};
 
 static ccxml_status initialize(
     ccxml_cmeta_datamodel *datamodel, test_state *state,
@@ -278,6 +348,56 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
+    it("writes a dialog ID through nested CMeta before provider publication") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<dialogstart dialogid='dialog.id' "
+            "src=\"'menu.vxml'\" "
+            "connectionid='event$.connectionid'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {
+            .published_dialog_id = &state.dialog.id};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u,
+            .connection_id = "call-e2e",
+            .connection_id_size = sizeof("call-e2e") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.dialog_source, "menu.vxml");
+        check_equal(provider.dialog_connection_id, "call-e2e");
+        check_equal(
+            provider.dialog_media_type,
+            "application/voicexml+xml");
+        check_true(provider.dialog_id_visible_at_commit);
+        check_equal(state.dialog.id.data, "dialog-e2e");
+        check_equal(state.dialog.id.size, (size_t)10);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
     it("writes a provider-generated ID through a CCXML session") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

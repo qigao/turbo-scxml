@@ -56,10 +56,10 @@ TinyTest
 
 **Files:** `tests/ccxml_cmeta_test.c`
 
-- [ ] Add a RED end-to-end session test proving the provider-generated dialog
+- [x] Add an end-to-end session test proving the provider-generated dialog
   ID reaches a nested owned CMeta string before provider publication.
-- [ ] Reuse the production adapter without adding dialog-specific CMeta code.
-- [ ] Run focused CMeta/runtime tests and commit the integration slice.
+- [x] Reuse the production adapter without adding dialog-specific CMeta code.
+- [x] Run focused CMeta/runtime tests and commit the integration slice.
 
 ### Task 4: Document, verify, and publish
 
