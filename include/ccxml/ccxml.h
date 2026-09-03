@@ -10,6 +10,7 @@ extern "C" {
 #define CCXML_DIAGNOSTIC_CAPACITY 256u
 #define CCXML_TELEPHONY_ADAPTER_ABI_V1 1u
 #define CCXML_DATAMODEL_ADAPTER_ABI_V1 1u
+#define CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1 1u
 
 typedef enum ccxml_status {
     CCXML_OK = 0,
@@ -155,6 +156,35 @@ typedef struct ccxml_datamodel_adapter_v1 {
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
 } ccxml_datamodel_adapter_v1;
+
+/** Opaque owner for the built-in synchronous CMeta datamodel adapter. */
+typedef struct ccxml_cmeta_datamodel {
+    void *impl;
+} ccxml_cmeta_datamodel;
+
+/**
+ * Borrowed CMeta state configuration. Root schema and mutable state must
+ * outlive this owner and every session that uses it. Both limits are positive
+ * hard bounds. The root must describe the supplied state as a struct.
+ */
+typedef struct ccxml_cmeta_datamodel_config_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const cmeta_data_desc *root;
+    void *state;
+    size_t max_path_depth;
+    size_t max_string_bytes;
+} ccxml_cmeta_datamodel_config_v1;
+
+ccxml_status ccxml_cmeta_datamodel_init(
+    ccxml_cmeta_datamodel *datamodel,
+    const ccxml_cmeta_datamodel_config_v1 *config);
+
+/** Static immutable operations; use the datamodel owner as adapter user. */
+const ccxml_datamodel_adapter_v1 *ccxml_cmeta_datamodel_adapter(void);
+
+/** Release adapter bookkeeping; borrowed schema and state are untouched. */
+void ccxml_cmeta_datamodel_destroy(ccxml_cmeta_datamodel *datamodel);
 
 /**
  * Versioned telephony bridge copied by session initialization.
