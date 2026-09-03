@@ -1,8 +1,8 @@
 #include <scxml/scxml.h>
 #include "scxml_quickjs.h"
 #include "tinytest.h"
-#include <rocida/stl/typed.h>
-#include <turbo/thread.h>
+#include <cstl/typed.h>
+#include <salts/thread.h>
 
 #include <string.h>
 #include <stdio.h>
@@ -123,7 +123,7 @@ static bool quickjs_slow_text_is_zero(const void *object) {
 static cmeta_status quickjs_slow_text_assign(
     void *object, const unsigned char *data, size_t size, size_t max_bytes) {
     quickjs_slow_text *text = (quickjs_slow_text *)object;
-    turbo_sleep_ms(QUICKJS_SLOW_ASSIGN_MILLISECONDS);
+    salts_sleep_ms(QUICKJS_SLOW_ASSIGN_MILLISECONDS);
     if (text == NULL || (size != 0u && data == NULL))
         return CMETA_INVALID_ARGUMENT;
     if (size > max_bytes || size > QUICKJS_SLOW_TEXT_CAPACITY)

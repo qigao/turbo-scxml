@@ -36,13 +36,13 @@ static bool checked_add(size_t left, size_t right, size_t *out) {
     return true;
 }
 
-static bool view_equal(turbo_xml_string_view view, const char *text) {
+static bool view_equal(salts_xml_string_view view, const char *text) {
     const size_t size = text != NULL ? strlen(text) : 0u;
     return view.data != NULL && view.size == size &&
            memcmp(view.data, text, size) == 0;
 }
 
-static bool view_has_space(turbo_xml_string_view view) {
+static bool view_has_space(salts_xml_string_view view) {
     size_t index;
     for (index = 0u; index < view.size; ++index) {
         const char value = view.data[index];
@@ -52,7 +52,7 @@ static bool view_has_space(turbo_xml_string_view view) {
     return false;
 }
 
-static bool text_is_whitespace(turbo_xml_string_view view) {
+static bool text_is_whitespace(salts_xml_string_view view) {
     size_t index;
     for (index = 0u; index < view.size; ++index) {
         const char value = view.data[index];
@@ -62,41 +62,41 @@ static bool text_is_whitespace(turbo_xml_string_view view) {
     return true;
 }
 
-static bool node_is_ignorable(turbo_xml_node node) {
-    const turbo_xml_node_kind kind = turbo_xml_node_type(node);
-    return kind == TURBO_XML_COMMENT ||
-           kind == TURBO_XML_PROCESSING_INSTRUCTION ||
-           (kind == TURBO_XML_TEXT &&
-            text_is_whitespace(turbo_xml_node_value(node)));
+static bool node_is_ignorable(salts_xml_node node) {
+    const salts_xml_node_kind kind = salts_xml_node_type(node);
+    return kind == SALTS_XML_COMMENT ||
+           kind == SALTS_XML_PROCESSING_INSTRUCTION ||
+           (kind == SALTS_XML_TEXT &&
+            text_is_whitespace(salts_xml_node_value(node)));
 }
 
 static bool node_has_unqualified_attribute(
-    turbo_xml_node node, const char *name) {
+    salts_xml_node node, const char *name) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
-        if (turbo_xml_attribute_namespace_uri(attribute).size == 0u &&
-            view_equal(turbo_xml_attribute_local_name(attribute), name))
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(salts_xml_attribute_local_name(attribute), name))
             return true;
     }
     return false;
 }
 
-static turbo_xml_attribute node_unqualified_attribute(
-    turbo_xml_node node, const char *name) {
+static salts_xml_attribute node_unqualified_attribute(
+    salts_xml_node node, const char *name) {
     size_t index;
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
-        if (turbo_xml_attribute_namespace_uri(attribute).size == 0u &&
-            view_equal(turbo_xml_attribute_local_name(attribute), name))
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(salts_xml_attribute_local_name(attribute), name))
             return attribute;
     }
-    return (turbo_xml_attribute){0};
+    return (salts_xml_attribute){0};
 }
 
-static bool view_has_nonspace(turbo_xml_string_view view) {
+static bool view_has_nonspace(salts_xml_string_view view) {
     size_t index;
     for (index = 0u; index < view.size; ++index) {
         const char value = view.data[index];
@@ -169,7 +169,7 @@ static bool ncname_continue(uint32_t codepoint) {
            (codepoint >= 0x203fu && codepoint <= 0x2040u);
 }
 
-static bool dotted_location_valid(turbo_xml_string_view location) {
+static bool dotted_location_valid(salts_xml_string_view location) {
     size_t cursor = 0u;
     bool segment_start = true;
     if (location.data == NULL || location.size == 0u) return false;
@@ -193,7 +193,7 @@ static bool dotted_location_valid(turbo_xml_string_view location) {
 
 static ccxml_status fail(
     ccxml_diagnostic *diagnostic, ccxml_status status,
-    turbo_xml_location location, const char *message) {
+    salts_xml_location location, const char *message) {
     if (diagnostic != NULL) {
         diagnostic->status = status;
         diagnostic->location = location;
@@ -205,7 +205,7 @@ static ccxml_status fail(
 }
 
 static ccxml_status build_native_statechart(
-    ccxml_program_impl *impl, turbo_xml_location location,
+    ccxml_program_impl *impl, salts_xml_location location,
     ccxml_diagnostic *diagnostic) {
     const size_t runtime_transition_count =
         impl->transition_count != 0u ? impl->transition_count : 1u;
@@ -337,22 +337,22 @@ cleanup:
 }
 
 static ccxml_status validate_attributes(
-    turbo_xml_node node, const char *only_name, bool required,
-    turbo_xml_attribute *out_attribute, ccxml_diagnostic *diagnostic) {
+    salts_xml_node node, const char *only_name, bool required,
+    salts_xml_attribute *out_attribute, ccxml_diagnostic *diagnostic) {
     size_t index;
-    turbo_xml_attribute found = {0};
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
+    salts_xml_attribute found = {0};
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
         if (namespace_uri.size != 0u || only_name == NULL ||
             !view_equal(local_name, only_name) || found.impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate CCXML attribute");
         }
         found = attribute;
@@ -360,28 +360,28 @@ static ccxml_status validate_attributes(
     if (required && found.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(node), "required CCXML attribute is missing");
+            salts_xml_node_location(node), "required CCXML attribute is missing");
     }
     if (out_attribute != NULL) *out_attribute = found;
     return CCXML_OK;
 }
 
 static ccxml_status validate_empty_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     size_t index;
-    if (turbo_xml_node_attribute_count(action) != 0u) {
+    if (salts_xml_node_attribute_count(action) != 0u) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "CCXML MVP actions do not accept attributes");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "CCXML MVP actions must be empty");
         }
     }
@@ -390,16 +390,16 @@ static ccxml_status validate_empty_action(
                      &measurement->action_count)) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action), "CCXML action limit exceeded");
+            salts_xml_node_location(action), "CCXML action limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_string_literal(
-    turbo_xml_attribute attribute, turbo_xml_string_view *out_expression,
+    salts_xml_attribute attribute, salts_xml_string_view *out_expression,
     ccxml_diagnostic *diagnostic) {
-    const turbo_xml_string_view expression =
-        turbo_xml_attribute_value(attribute);
+    const salts_xml_string_view expression =
+        salts_xml_attribute_value(attribute);
     char quote;
     size_t index;
     if (expression.data == NULL || expression.size < 2u ||
@@ -407,21 +407,21 @@ static ccxml_status validate_string_literal(
         expression.data[expression.size - 1u] != expression.data[0]) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(attribute),
+            salts_xml_attribute_location(attribute),
             "CCXML value must be a quoted string literal");
     }
     quote = expression.data[0];
     if (expression.size == 2u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(attribute),
+            salts_xml_attribute_location(attribute),
             "CCXML string literal must be nonempty");
     }
     for (index = 1u; index + 1u < expression.size; ++index) {
         if (expression.data[index] == '\\' || expression.data[index] == quote) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "CCXML string literal escapes are not supported");
         }
     }
@@ -430,10 +430,10 @@ static ccxml_status validate_string_literal(
 }
 
 static ccxml_status validate_destination_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute destination_attribute = {0};
-    turbo_xml_string_view expression;
+    salts_xml_attribute destination_attribute = {0};
+    salts_xml_string_view expression;
     size_t index;
     size_t retained_size;
     ccxml_status status = validate_attributes(
@@ -442,12 +442,12 @@ static ccxml_status validate_destination_action(
     status = validate_string_literal(
         destination_attribute, &expression, diagnostic);
     if (status != CCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "CCXML destination action must be empty");
         }
     }
@@ -460,33 +460,33 @@ static ccxml_status validate_destination_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "CCXML action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_two_identifier_action(
-    turbo_xml_node action, const char *id1_name, const char *id2_name,
+    salts_xml_node action, const char *id1_name, const char *id2_name,
     ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute id1_attribute = {0};
-    turbo_xml_attribute id2_attribute = {0};
-    turbo_xml_string_view id1_expression;
-    turbo_xml_string_view id2_expression;
+    salts_xml_attribute id1_attribute = {0};
+    salts_xml_attribute id2_attribute = {0};
+    salts_xml_string_view id1_expression;
+    salts_xml_string_view id2_expression;
     size_t index;
     size_t id1_retained_size;
     size_t id2_retained_size;
     size_t retained_size;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(action, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        turbo_xml_attribute *slot = NULL;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
         if (namespace_uri.size == 0u && view_equal(local_name, id1_name)) {
             slot = &id1_attribute;
         } else if (namespace_uri.size == 0u &&
@@ -496,7 +496,7 @@ static ccxml_status validate_two_identifier_action(
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate CCXML two-ID action attribute");
         }
         *slot = attribute;
@@ -504,7 +504,7 @@ static ccxml_status validate_two_identifier_action(
     if (id1_attribute.impl == NULL || id2_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "CCXML two-ID action requires both identifiers");
     }
     status = validate_string_literal(
@@ -513,12 +513,12 @@ static ccxml_status validate_two_identifier_action(
     status = validate_string_literal(
         id2_attribute, &id2_expression, diagnostic);
     if (status != CCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "CCXML two-ID action must be empty");
         }
     }
@@ -533,30 +533,30 @@ static ccxml_status validate_two_identifier_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "CCXML two-ID action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_create_conference_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute id_attribute = {0};
-    turbo_xml_attribute name_attribute = {0};
-    turbo_xml_string_view location;
-    turbo_xml_string_view name_expression = {0};
+    salts_xml_attribute id_attribute = {0};
+    salts_xml_attribute name_attribute = {0};
+    salts_xml_string_view location;
+    salts_xml_string_view name_expression = {0};
     size_t index;
     size_t retained_size;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(action, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        turbo_xml_attribute *slot = NULL;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
         if (namespace_uri.size == 0u && view_equal(local_name, "conferenceid"))
             slot = &id_attribute;
         else if (namespace_uri.size == 0u && view_equal(local_name, "confname"))
@@ -564,7 +564,7 @@ static ccxml_status validate_create_conference_action(
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate createconference attribute");
         }
         *slot = attribute;
@@ -572,20 +572,20 @@ static ccxml_status validate_create_conference_action(
     if (id_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "createconference requires conferenceid");
     }
-    location = turbo_xml_attribute_value(id_attribute);
+    location = salts_xml_attribute_value(id_attribute);
     if (location.data == NULL || location.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(id_attribute),
+            salts_xml_attribute_location(id_attribute),
             "createconference conferenceid must be nonempty");
     }
     if (!dotted_location_valid(location)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(id_attribute),
+            salts_xml_attribute_location(id_attribute),
             "createconference conferenceid must be a dotted NCName location");
     }
     if (name_attribute.impl != NULL) {
@@ -593,12 +593,12 @@ static ccxml_status validate_create_conference_action(
             name_attribute, &name_expression, diagnostic);
         if (status != CCXML_OK) return status;
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "createconference must be empty");
         }
     }
@@ -614,27 +614,27 @@ static ccxml_status validate_create_conference_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "createconference action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_destroy_conference_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute id_attribute = {0};
-    turbo_xml_string_view expression;
+    salts_xml_attribute id_attribute = {0};
+    salts_xml_string_view expression;
     size_t index;
     size_t retained_size;
     ccxml_status status = validate_attributes(
         action, "conferenceid", true, &id_attribute, diagnostic);
     if (status != CCXML_OK) return status;
-    expression = turbo_xml_attribute_value(id_attribute);
+    expression = salts_xml_attribute_value(id_attribute);
     if (expression.data == NULL || expression.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(id_attribute),
+            salts_xml_attribute_location(id_attribute),
             "destroyconference conferenceid must be nonempty");
     }
     if (expression.data[0] == '\'' || expression.data[0] == '"') {
@@ -646,23 +646,23 @@ static ccxml_status validate_destroy_conference_action(
         if (!dotted_location_valid(expression)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(id_attribute),
+                salts_xml_attribute_location(id_attribute),
                 "destroyconference conferenceid must be a quoted string "
                 "or dotted NCName location");
         }
         if (!checked_add(expression.size, 1u, &retained_size)) {
             return fail(
                 diagnostic, CCXML_LIMIT_EXCEEDED,
-                turbo_xml_attribute_location(id_attribute),
+                salts_xml_attribute_location(id_attribute),
                 "destroyconference identifier limit exceeded");
         }
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "destroyconference must be empty");
         }
     }
@@ -674,32 +674,32 @@ static ccxml_status validate_destroy_conference_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "destroyconference action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_dialog_start_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute dialog_id_attribute = {0};
-    turbo_xml_attribute source_attribute = {0};
-    turbo_xml_attribute connection_id_attribute = {0};
-    turbo_xml_string_view location;
-    turbo_xml_string_view source_expression;
-    turbo_xml_string_view connection_expression;
+    salts_xml_attribute dialog_id_attribute = {0};
+    salts_xml_attribute source_attribute = {0};
+    salts_xml_attribute connection_id_attribute = {0};
+    salts_xml_string_view location;
+    salts_xml_string_view source_expression;
+    salts_xml_string_view connection_expression;
     size_t index;
     size_t retained_size;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(action, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        turbo_xml_attribute *slot = NULL;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
         if (namespace_uri.size == 0u && view_equal(local_name, "dialogid"))
             slot = &dialog_id_attribute;
         else if (namespace_uri.size == 0u && view_equal(local_name, "src"))
@@ -710,7 +710,7 @@ static ccxml_status validate_dialog_start_action(
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate dialogstart attribute");
         }
         *slot = attribute;
@@ -719,39 +719,39 @@ static ccxml_status validate_dialog_start_action(
         connection_id_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "dialogstart requires dialogid, src, and connectionid");
     }
-    location = turbo_xml_attribute_value(dialog_id_attribute);
+    location = salts_xml_attribute_value(dialog_id_attribute);
     if (location.data == NULL || location.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(dialog_id_attribute),
+            salts_xml_attribute_location(dialog_id_attribute),
             "dialogstart dialogid must be nonempty");
     }
     if (!dotted_location_valid(location)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(dialog_id_attribute),
+            salts_xml_attribute_location(dialog_id_attribute),
             "dialogstart dialogid must be a dotted NCName location");
     }
     status = validate_string_literal(
         source_attribute, &source_expression, diagnostic);
     if (status != CCXML_OK) return status;
     connection_expression =
-        turbo_xml_attribute_value(connection_id_attribute);
+        salts_xml_attribute_value(connection_id_attribute);
     if (!view_equal(connection_expression, "event$.connectionid")) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(connection_id_attribute),
+            salts_xml_attribute_location(connection_id_attribute),
             "dialogstart connectionid must be event$.connectionid");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "dialogstart must be empty");
         }
     }
@@ -766,29 +766,29 @@ static ccxml_status validate_dialog_start_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "dialogstart action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_prepared_dialog_start_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute prepared_id_attribute = {0};
-    turbo_xml_attribute connection_id_attribute = {0};
-    turbo_xml_string_view location;
-    turbo_xml_string_view connection_expression;
+    salts_xml_attribute prepared_id_attribute = {0};
+    salts_xml_attribute connection_id_attribute = {0};
+    salts_xml_string_view location;
+    salts_xml_string_view connection_expression;
     size_t index;
     size_t retained_size;
-    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(action, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        turbo_xml_attribute *slot = NULL;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
         if (namespace_uri.size == 0u &&
             view_equal(local_name, "prepareddialogid"))
             slot = &prepared_id_attribute;
@@ -798,7 +798,7 @@ static ccxml_status validate_prepared_dialog_start_action(
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate prepared dialogstart attribute");
         }
         *slot = attribute;
@@ -807,37 +807,37 @@ static ccxml_status validate_prepared_dialog_start_action(
         connection_id_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "prepared dialogstart requires prepareddialogid and connectionid");
     }
-    location = turbo_xml_attribute_value(prepared_id_attribute);
+    location = salts_xml_attribute_value(prepared_id_attribute);
     if (location.data == NULL || location.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(prepared_id_attribute),
+            salts_xml_attribute_location(prepared_id_attribute),
             "prepared dialogstart prepareddialogid must be nonempty");
     }
     if (!dotted_location_valid(location)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(prepared_id_attribute),
+            salts_xml_attribute_location(prepared_id_attribute),
             "prepared dialogstart prepareddialogid must be a dotted NCName "
             "location");
     }
     connection_expression =
-        turbo_xml_attribute_value(connection_id_attribute);
+        salts_xml_attribute_value(connection_id_attribute);
     if (!view_equal(connection_expression, "event$.connectionid")) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(connection_id_attribute),
+            salts_xml_attribute_location(connection_id_attribute),
             "prepared dialogstart connectionid must be event$.connectionid");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "prepared dialogstart must be empty");
         }
     }
@@ -850,30 +850,30 @@ static ccxml_status validate_prepared_dialog_start_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "prepared dialogstart action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_dialog_prepare_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute dialog_id_attribute = {0};
-    turbo_xml_attribute source_attribute = {0};
-    turbo_xml_string_view location;
-    turbo_xml_string_view source_expression;
+    salts_xml_attribute dialog_id_attribute = {0};
+    salts_xml_attribute source_attribute = {0};
+    salts_xml_string_view location;
+    salts_xml_string_view source_expression;
     size_t index;
     size_t retained_size;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(action, index);
-        const turbo_xml_string_view namespace_uri =
-            turbo_xml_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        turbo_xml_attribute *slot = NULL;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
         if (namespace_uri.size == 0u && view_equal(local_name, "dialogid"))
             slot = &dialog_id_attribute;
         else if (namespace_uri.size == 0u && view_equal(local_name, "src"))
@@ -881,7 +881,7 @@ static ccxml_status validate_dialog_prepare_action(
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate dialogprepare attribute");
         }
         *slot = attribute;
@@ -889,31 +889,31 @@ static ccxml_status validate_dialog_prepare_action(
     if (dialog_id_attribute.impl == NULL || source_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "dialogprepare requires dialogid and src");
     }
-    location = turbo_xml_attribute_value(dialog_id_attribute);
+    location = salts_xml_attribute_value(dialog_id_attribute);
     if (location.data == NULL || location.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(dialog_id_attribute),
+            salts_xml_attribute_location(dialog_id_attribute),
             "dialogprepare dialogid must be nonempty");
     }
     if (!dotted_location_valid(location)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(dialog_id_attribute),
+            salts_xml_attribute_location(dialog_id_attribute),
             "dialogprepare dialogid must be a dotted NCName location");
     }
     status = validate_string_literal(
         source_attribute, &source_expression, diagnostic);
     if (status != CCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "dialogprepare must be empty");
         }
     }
@@ -928,27 +928,27 @@ static ccxml_status validate_dialog_prepare_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "dialogprepare action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_dialog_terminate_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+    salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute id_attribute = {0};
-    turbo_xml_string_view expression;
+    salts_xml_attribute id_attribute = {0};
+    salts_xml_string_view expression;
     size_t index;
     size_t retained_size;
     ccxml_status status = validate_attributes(
         action, "dialogid", true, &id_attribute, diagnostic);
     if (status != CCXML_OK) return status;
-    expression = turbo_xml_attribute_value(id_attribute);
+    expression = salts_xml_attribute_value(id_attribute);
     if (expression.data == NULL || expression.size == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(id_attribute),
+            salts_xml_attribute_location(id_attribute),
             "dialogterminate dialogid must be nonempty");
     }
     if (expression.data[0] == '\'' || expression.data[0] == '"') {
@@ -960,23 +960,23 @@ static ccxml_status validate_dialog_terminate_action(
         if (!dotted_location_valid(expression)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(id_attribute),
+                salts_xml_attribute_location(id_attribute),
                 "dialogterminate dialogid must be a quoted string "
                 "or dotted NCName location");
         }
         if (!checked_add(expression.size, 1u, &retained_size)) {
             return fail(
                 diagnostic, CCXML_LIMIT_EXCEEDED,
-                turbo_xml_attribute_location(id_attribute),
+                salts_xml_attribute_location(id_attribute),
                 "dialogterminate identifier limit exceeded");
         }
     }
-    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "dialogterminate must be empty");
         }
     }
@@ -988,32 +988,32 @@ static ccxml_status validate_dialog_terminate_action(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(action),
+            salts_xml_node_location(action),
             "dialogterminate action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
 
 static ccxml_status validate_string_binding(
-    turbo_xml_node node, bool counts_as_action,
+    salts_xml_node node, bool counts_as_action,
     ccxml_measurement *measurement, const ccxml_limits *limits,
-    ccxml_diagnostic *diagnostic, turbo_xml_string_view *out_name) {
-    turbo_xml_attribute name_attribute = {0};
-    turbo_xml_attribute expression_attribute = {0};
-    turbo_xml_string_view name;
-    turbo_xml_string_view expression;
+    ccxml_diagnostic *diagnostic, salts_xml_string_view *out_name) {
+    salts_xml_attribute name_attribute = {0};
+    salts_xml_attribute expression_attribute = {0};
+    salts_xml_string_view name;
+    salts_xml_string_view expression;
     size_t retained_size;
     size_t index;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(node, index);
-        const turbo_xml_string_view local_name =
-            turbo_xml_attribute_local_name(attribute);
-        if (turbo_xml_attribute_namespace_uri(attribute).size != 0u) {
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "namespaced CCXML variable attributes are unsupported");
         }
         if (view_equal(local_name, "name") && name_attribute.impl == NULL)
@@ -1024,31 +1024,31 @@ static ccxml_status validate_string_binding(
         else
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate CCXML variable attribute");
     }
     if (name_attribute.impl == NULL || expression_attribute.impl == NULL) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(node),
+            salts_xml_node_location(node),
             "CCXML string variable requires name and expr");
     }
-    name = turbo_xml_attribute_value(name_attribute);
+    name = salts_xml_attribute_value(name_attribute);
     if (!dotted_location_valid(name)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(name_attribute),
+            salts_xml_attribute_location(name_attribute),
             "CCXML string variable name must be a dotted NCName location");
     }
     status = validate_string_literal(
         expression_attribute, &expression, diagnostic);
     if (status != CCXML_OK) return status;
-    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(node, index);
         if (!node_is_ignorable(child)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "CCXML string variable element must be empty");
         }
     }
@@ -1063,7 +1063,7 @@ static ccxml_status validate_string_binding(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(node),
+            salts_xml_node_location(node),
             counts_as_action
                 ? "CCXML assign action or retained-string limit exceeded"
                 : "CCXML var retained-string limit exceeded");
@@ -1073,16 +1073,16 @@ static ccxml_status validate_string_binding(
 }
 
 static ccxml_status validate_transition(
-    turbo_xml_node transition, ccxml_measurement *measurement,
+    salts_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, bool has_statevariable,
-    turbo_xml_string_view declared_variable,
+    salts_xml_string_view declared_variable,
     ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute event_attribute = {0};
-    turbo_xml_attribute state_attribute = {0};
-    turbo_xml_attribute condition_attribute = {0};
-    turbo_xml_string_view event;
-    turbo_xml_string_view state = {0};
-    turbo_xml_string_view condition = {0};
+    salts_xml_attribute event_attribute = {0};
+    salts_xml_attribute state_attribute = {0};
+    salts_xml_attribute condition_attribute = {0};
+    salts_xml_string_view event;
+    salts_xml_string_view state = {0};
+    salts_xml_string_view condition = {0};
     size_t condition_decoded_size = 0u;
     size_t condition_retained_size = 0u;
     size_t event_retained_size = 0u;
@@ -1091,16 +1091,16 @@ static ccxml_status validate_transition(
     size_t local_action_count = 0u;
     size_t local_effect_count = 0u;
     ccxml_status status;
-    for (index = 0u; index < turbo_xml_node_attribute_count(transition);
+    for (index = 0u; index < salts_xml_node_attribute_count(transition);
          ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(transition, index);
-        const turbo_xml_string_view name =
-            turbo_xml_attribute_local_name(attribute);
-        if (turbo_xml_attribute_namespace_uri(attribute).size != 0u) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(transition, index);
+        const salts_xml_string_view name =
+            salts_xml_attribute_local_name(attribute);
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "namespaced transition attributes are unsupported");
         }
         if (view_equal(name, "event") && event_attribute.impl == NULL)
@@ -1113,47 +1113,47 @@ static ccxml_status validate_transition(
         else
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "unsupported or duplicate CCXML transition attribute");
     }
     event = event_attribute.impl != NULL
-        ? turbo_xml_attribute_value(event_attribute)
-        : (turbo_xml_string_view){.data = "*", .size = 1u};
+        ? salts_xml_attribute_value(event_attribute)
+        : (salts_xml_string_view){.data = "*", .size = 1u};
     if (event_attribute.impl != NULL &&
         (event.data == NULL || event.size == 0u)) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(event_attribute),
+            salts_xml_attribute_location(event_attribute),
             "CCXML transition event must be nonempty");
     }
     if (view_has_space(event)) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(event_attribute),
+            salts_xml_attribute_location(event_attribute),
             "CCXML transition event pattern cannot contain whitespace");
     }
     if (state_attribute.impl != NULL) {
-        state = turbo_xml_attribute_value(state_attribute);
+        state = salts_xml_attribute_value(state_attribute);
         if (!has_statevariable) {
             return fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(state_attribute),
+                salts_xml_attribute_location(state_attribute),
                 "transition state requires eventprocessor statevariable");
         }
         if (!view_has_nonspace(state)) {
             return fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(state_attribute),
+                salts_xml_attribute_location(state_attribute),
                 "CCXML transition state list must be nonempty");
         }
     }
     if (condition_attribute.impl != NULL) {
         scxml_xml_decode_status decode_status;
-        condition = turbo_xml_attribute_value(condition_attribute);
+        condition = salts_xml_attribute_value(condition_attribute);
         if (!view_has_nonspace(condition)) {
             return fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(condition_attribute),
+                salts_xml_attribute_location(condition_attribute),
                 "CCXML transition condition must be nonempty");
         }
         decode_status = scxml_xml_decode_attribute_entities(
@@ -1163,7 +1163,7 @@ static ccxml_status validate_transition(
             condition_decoded_size == 0u) {
             return fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
-                turbo_xml_attribute_location(condition_attribute),
+                salts_xml_attribute_location(condition_attribute),
                 decode_status ==
                         SCXML_XML_DECODE_INVALID_CHARACTER_REFERENCE
                     ? "CCXML condition has an invalid XML character reference"
@@ -1191,22 +1191,22 @@ static ccxml_status validate_transition(
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(transition),
+            salts_xml_node_location(transition),
             "CCXML transition or retained-name limit exceeded");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(transition); ++index) {
-        const turbo_xml_node action =
-            turbo_xml_node_child_at(transition, index);
-        turbo_xml_string_view name;
+    for (index = 0u; index < salts_xml_node_child_count(transition); ++index) {
+        const salts_xml_node action =
+            salts_xml_node_child_at(transition, index);
+        salts_xml_string_view name;
         if (node_is_ignorable(action)) continue;
-        if (turbo_xml_node_type(action) != TURBO_XML_ELEMENT ||
-            !view_equal(turbo_xml_node_namespace_uri(action), CCXML_NAMESPACE)) {
+        if (salts_xml_node_type(action) != SALTS_XML_ELEMENT ||
+            !view_equal(salts_xml_node_namespace_uri(action), CCXML_NAMESPACE)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(action),
+                salts_xml_node_location(action),
                 "unsupported CCXML executable content");
         }
-        name = turbo_xml_node_local_name(action);
+        name = salts_xml_node_local_name(action);
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
@@ -1220,7 +1220,7 @@ static ccxml_status validate_transition(
             !view_equal(name, "assign")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(action),
+                salts_xml_node_location(action),
                 "unsupported CCXML executable content");
         }
         if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
@@ -1253,7 +1253,7 @@ static ccxml_status validate_transition(
             status = validate_dialog_terminate_action(
                 action, measurement, limits, diagnostic);
         } else if (view_equal(name, "assign")) {
-            turbo_xml_string_view assignment_name = {0};
+            salts_xml_string_view assignment_name = {0};
             status = validate_string_binding(
                 action, true, measurement, limits,
                 diagnostic, &assignment_name);
@@ -1264,7 +1264,7 @@ static ccxml_status validate_transition(
                         assignment_name.size) != 0)) {
                 status = fail(
                     diagnostic, CCXML_INVALID_STRUCTURE,
-                    turbo_xml_node_location(action),
+                    salts_xml_node_location(action),
                     "assign must name the declared root string var");
             }
         } else {
@@ -1284,7 +1284,7 @@ static ccxml_status validate_transition(
                 &local_effect_count)) {
             return fail(
                 diagnostic, CCXML_LIMIT_EXCEEDED,
-                turbo_xml_node_location(action),
+                salts_xml_node_location(action),
                 "CCXML transition effect limit exceeded");
         }
     }
@@ -1296,23 +1296,23 @@ static ccxml_status validate_transition(
 }
 
 static ccxml_status validate_eventprocessor(
-    turbo_xml_node processor, ccxml_measurement *measurement,
+    salts_xml_node processor, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic,
-    turbo_xml_string_view declared_variable,
-    turbo_xml_string_view *out_statevariable) {
-    turbo_xml_attribute statevariable_attribute = {0};
-    turbo_xml_string_view statevariable = {0};
+    salts_xml_string_view declared_variable,
+    salts_xml_string_view *out_statevariable) {
+    salts_xml_attribute statevariable_attribute = {0};
+    salts_xml_string_view statevariable = {0};
     size_t index;
     ccxml_status status = validate_attributes(
         processor, "statevariable", false,
         &statevariable_attribute, diagnostic);
     if (status != CCXML_OK) return status;
     if (statevariable_attribute.impl != NULL) {
-        statevariable = turbo_xml_attribute_value(statevariable_attribute);
+        statevariable = salts_xml_attribute_value(statevariable_attribute);
         if (!dotted_location_valid(statevariable)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(statevariable_attribute),
+                salts_xml_attribute_location(statevariable_attribute),
                 "eventprocessor statevariable must be a dotted NCName location");
         }
         if (!checked_add(
@@ -1321,20 +1321,20 @@ static ccxml_status validate_eventprocessor(
             measurement->name_bytes > limits->max_name_bytes) {
             return fail(
                 diagnostic, CCXML_LIMIT_EXCEEDED,
-                turbo_xml_attribute_location(statevariable_attribute),
+                salts_xml_attribute_location(statevariable_attribute),
                 "eventprocessor statevariable exceeds retained-name limit");
         }
     }
-    for (index = 0u; index < turbo_xml_node_child_count(processor); ++index) {
-        const turbo_xml_node transition =
-            turbo_xml_node_child_at(processor, index);
+    for (index = 0u; index < salts_xml_node_child_count(processor); ++index) {
+        const salts_xml_node transition =
+            salts_xml_node_child_at(processor, index);
         if (node_is_ignorable(transition)) continue;
-        if (turbo_xml_node_type(transition) != TURBO_XML_ELEMENT ||
-            !view_equal(turbo_xml_node_namespace_uri(transition), CCXML_NAMESPACE) ||
-            !view_equal(turbo_xml_node_local_name(transition), "transition")) {
+        if (salts_xml_node_type(transition) != SALTS_XML_ELEMENT ||
+            !view_equal(salts_xml_node_namespace_uri(transition), CCXML_NAMESPACE) ||
+            !view_equal(salts_xml_node_local_name(transition), "transition")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(transition),
+                salts_xml_node_location(transition),
                 "eventprocessor accepts transition elements only");
         }
         {
@@ -1350,46 +1350,46 @@ static ccxml_status validate_eventprocessor(
 }
 
 static ccxml_status validate_document(
-    turbo_xml_node root, ccxml_measurement *measurement,
+    salts_xml_node root, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute version_attribute = {0};
-    turbo_xml_node processor = {0};
-    turbo_xml_node variable = {0};
-    turbo_xml_string_view variable_name = {0};
-    turbo_xml_string_view statevariable = {0};
+    salts_xml_attribute version_attribute = {0};
+    salts_xml_node processor = {0};
+    salts_xml_node variable = {0};
+    salts_xml_string_view variable_name = {0};
+    salts_xml_string_view statevariable = {0};
     size_t index;
     size_t processor_count = 0u;
     size_t variable_count = 0u;
     ccxml_status status;
-    if (turbo_xml_node_type(root) != TURBO_XML_ELEMENT ||
-        !view_equal(turbo_xml_node_local_name(root), "ccxml") ||
-        !view_equal(turbo_xml_node_namespace_uri(root), CCXML_NAMESPACE)) {
+    if (salts_xml_node_type(root) != SALTS_XML_ELEMENT ||
+        !view_equal(salts_xml_node_local_name(root), "ccxml") ||
+        !view_equal(salts_xml_node_namespace_uri(root), CCXML_NAMESPACE)) {
         return fail(
             diagnostic, CCXML_INVALID_NAMESPACE,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "root must be W3C CCXML ccxml element");
     }
     status = validate_attributes(
         root, "version", true, &version_attribute, diagnostic);
     if (status != CCXML_OK) return status;
-    if (!view_equal(turbo_xml_attribute_value(version_attribute), "1.0")) {
+    if (!view_equal(salts_xml_attribute_value(version_attribute), "1.0")) {
         return fail(
             diagnostic, CCXML_INVALID_VERSION,
-            turbo_xml_attribute_location(version_attribute),
+            salts_xml_attribute_location(version_attribute),
             "CCXML version must be 1.0");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(root); ++index) {
-        const turbo_xml_node child = turbo_xml_node_child_at(root, index);
-        turbo_xml_string_view name;
+    for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(root, index);
+        salts_xml_string_view name;
         if (node_is_ignorable(child)) continue;
-        if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
-            !view_equal(turbo_xml_node_namespace_uri(child), CCXML_NAMESPACE)) {
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT ||
+            !view_equal(salts_xml_node_namespace_uri(child), CCXML_NAMESPACE)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "unsupported CCXML root content");
         }
-        name = turbo_xml_node_local_name(child);
+        name = salts_xml_node_local_name(child);
         if (view_equal(name, "eventprocessor")) {
             processor = child;
             ++processor_count;
@@ -1399,7 +1399,7 @@ static ccxml_status validate_document(
         } else {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 "CCXML root supports one string var and eventprocessor");
         }
         if (processor_count > 1u || variable_count > 1u) {
@@ -1407,7 +1407,7 @@ static ccxml_status validate_document(
                 diagnostic,
                 processor_count > 1u
                     ? CCXML_INVALID_STRUCTURE : CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_node_location(child),
+                salts_xml_node_location(child),
                 processor_count > 1u
                     ? "CCXML MVP requires exactly one eventprocessor"
                     : "CCXML bounded profile supports one root string var");
@@ -1416,7 +1416,7 @@ static ccxml_status validate_document(
     if (processor_count != 1u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "CCXML MVP requires exactly one eventprocessor");
     }
     if (variable_count != 0u) {
@@ -1436,34 +1436,34 @@ static ccxml_status validate_document(
                 statevariable.size) != 0)) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(processor),
+            salts_xml_node_location(processor),
             "eventprocessor statevariable must name the root string var");
     }
     return CCXML_OK;
 }
 
 static void copy_program(
-    ccxml_program_impl *impl, turbo_xml_node root) {
+    ccxml_program_impl *impl, salts_xml_node root) {
     size_t root_index;
     size_t transition_index = 0u;
     size_t action_index = 0u;
     char *cursor = impl->storage;
     for (root_index = 0u;
-         root_index < turbo_xml_node_child_count(root); ++root_index) {
-        const turbo_xml_node processor =
-            turbo_xml_node_child_at(root, root_index);
+         root_index < salts_xml_node_child_count(root); ++root_index) {
+        const salts_xml_node processor =
+            salts_xml_node_child_at(root, root_index);
         size_t processor_index;
-        if (turbo_xml_node_type(processor) != TURBO_XML_ELEMENT)
+        if (salts_xml_node_type(processor) != SALTS_XML_ELEMENT)
             continue;
-        if (view_equal(turbo_xml_node_local_name(processor), "var")) {
-            const turbo_xml_attribute name_attribute =
+        if (view_equal(salts_xml_node_local_name(processor), "var")) {
+            const salts_xml_attribute name_attribute =
                 node_unqualified_attribute(processor, "name");
-            const turbo_xml_attribute expression_attribute =
+            const salts_xml_attribute expression_attribute =
                 node_unqualified_attribute(processor, "expr");
-            const turbo_xml_string_view name =
-                turbo_xml_attribute_value(name_attribute);
-            const turbo_xml_string_view expression =
-                turbo_xml_attribute_value(expression_attribute);
+            const salts_xml_string_view name =
+                salts_xml_attribute_value(name_attribute);
+            const salts_xml_string_view expression =
+                salts_xml_attribute_value(expression_attribute);
             impl->initial_variable = cursor;
             impl->initial_variable_size = name.size;
             memcpy(cursor, name.data, name.size);
@@ -1477,14 +1477,14 @@ static void copy_program(
             continue;
         }
         if (!view_equal(
-                turbo_xml_node_local_name(processor), "eventprocessor"))
+                salts_xml_node_local_name(processor), "eventprocessor"))
             continue;
         {
-            const turbo_xml_attribute statevariable_attribute =
+            const salts_xml_attribute statevariable_attribute =
                 node_unqualified_attribute(processor, "statevariable");
             if (statevariable_attribute.impl != NULL) {
-                const turbo_xml_string_view statevariable =
-                    turbo_xml_attribute_value(statevariable_attribute);
+                const salts_xml_string_view statevariable =
+                    salts_xml_attribute_value(statevariable_attribute);
                 impl->statevariable = cursor;
                 impl->statevariable_size = statevariable.size;
                 memcpy(cursor, statevariable.data, statevariable.size);
@@ -1495,38 +1495,38 @@ static void copy_program(
             }
         }
         for (processor_index = 0u;
-             processor_index < turbo_xml_node_child_count(processor);
+             processor_index < salts_xml_node_child_count(processor);
              ++processor_index) {
-            const turbo_xml_node transition =
-                turbo_xml_node_child_at(processor, processor_index);
-            turbo_xml_attribute event_attribute = {0};
-            turbo_xml_attribute state_attribute = {0};
-            turbo_xml_attribute condition_attribute = {0};
-            turbo_xml_string_view event;
+            const salts_xml_node transition =
+                salts_xml_node_child_at(processor, processor_index);
+            salts_xml_attribute event_attribute = {0};
+            salts_xml_attribute state_attribute = {0};
+            salts_xml_attribute condition_attribute = {0};
+            salts_xml_string_view event;
             size_t attribute_index;
             size_t child_index;
             ccxml_transition_row *row;
-            if (turbo_xml_node_type(transition) != TURBO_XML_ELEMENT) continue;
+            if (salts_xml_node_type(transition) != SALTS_XML_ELEMENT) continue;
             for (attribute_index = 0u;
-                 attribute_index < turbo_xml_node_attribute_count(transition);
+                 attribute_index < salts_xml_node_attribute_count(transition);
                  ++attribute_index) {
-                const turbo_xml_attribute candidate =
-                    turbo_xml_node_attribute_at(transition, attribute_index);
+                const salts_xml_attribute candidate =
+                    salts_xml_node_attribute_at(transition, attribute_index);
                 if (view_equal(
-                        turbo_xml_attribute_local_name(candidate), "event")) {
+                        salts_xml_attribute_local_name(candidate), "event")) {
                     event_attribute = candidate;
                 } else if (view_equal(
-                               turbo_xml_attribute_local_name(candidate),
+                               salts_xml_attribute_local_name(candidate),
                                "state"))
                     state_attribute = candidate;
                 else if (view_equal(
-                             turbo_xml_attribute_local_name(candidate),
+                             salts_xml_attribute_local_name(candidate),
                              "cond"))
                     condition_attribute = candidate;
             }
             event = event_attribute.impl != NULL
-                ? turbo_xml_attribute_value(event_attribute)
-                : (turbo_xml_string_view){.data = "*", .size = 1u};
+                ? salts_xml_attribute_value(event_attribute)
+                : (salts_xml_string_view){.data = "*", .size = 1u};
             row = &impl->transitions[transition_index++];
             row->event = cursor;
             row->event_size = event.size;
@@ -1535,8 +1535,8 @@ static void copy_program(
             cursor[event.size] = '\0';
             cursor += event.size + 1u;
             if (state_attribute.impl != NULL) {
-                const turbo_xml_string_view state =
-                    turbo_xml_attribute_value(state_attribute);
+                const salts_xml_string_view state =
+                    salts_xml_attribute_value(state_attribute);
                 row->state = cursor;
                 row->state_size = state.size;
                 memcpy(cursor, state.data, state.size);
@@ -1544,8 +1544,8 @@ static void copy_program(
                 cursor += state.size + 1u;
             }
             if (condition_attribute.impl != NULL) {
-                const turbo_xml_string_view condition =
-                    turbo_xml_attribute_value(condition_attribute);
+                const salts_xml_string_view condition =
+                    salts_xml_attribute_value(condition_attribute);
                 size_t decoded_size = 0u;
                 row->condition = cursor;
                 (void)scxml_xml_decode_attribute_entities(
@@ -1557,14 +1557,14 @@ static void copy_program(
                 impl->uses_condition = true;
             }
             for (child_index = 0u;
-                 child_index < turbo_xml_node_child_count(transition);
+                 child_index < salts_xml_node_child_count(transition);
                  ++child_index) {
-                const turbo_xml_node action =
-                    turbo_xml_node_child_at(transition, child_index);
-                if (turbo_xml_node_type(action) != TURBO_XML_ELEMENT) continue;
+                const salts_xml_node action =
+                    salts_xml_node_child_at(transition, child_index);
+                if (salts_xml_node_type(action) != SALTS_XML_ELEMENT) continue;
                 ccxml_action_row *action_row = &impl->actions[action_index++];
-                const turbo_xml_string_view action_name =
-                    turbo_xml_node_local_name(action);
+                const salts_xml_string_view action_name =
+                    salts_xml_node_local_name(action);
                 if (view_equal(action_name, "accept")) {
                     action_row->kind = CCXML_ACTION_ACCEPT;
                 } else if (view_equal(action_name, "exit")) {
@@ -1572,8 +1572,8 @@ static void copy_program(
                 } else if (view_equal(action_name, "createcall") ||
                            view_equal(action_name, "redirect")) {
                     size_t destination_attribute_index;
-                    turbo_xml_attribute destination_attribute = {0};
-                    turbo_xml_string_view expression;
+                    salts_xml_attribute destination_attribute = {0};
+                    salts_xml_string_view expression;
                     if (view_equal(action_name, "createcall")) {
                         action_row->kind = CCXML_ACTION_CREATE_CALL;
                         impl->uses_create_call = true;
@@ -1583,20 +1583,20 @@ static void copy_program(
                     }
                     for (destination_attribute_index = 0u;
                          destination_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++destination_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, destination_attribute_index);
                         if (view_equal(
-                                turbo_xml_attribute_local_name(candidate),
+                                salts_xml_attribute_local_name(candidate),
                                 "dest")) {
                             destination_attribute = candidate;
                             break;
                         }
                     }
                     expression =
-                        turbo_xml_attribute_value(destination_attribute);
+                        salts_xml_attribute_value(destination_attribute);
                     action_row->destination = cursor;
                     action_row->destination_size = expression.size - 2u;
                     memcpy(
@@ -1612,33 +1612,33 @@ static void copy_program(
                     impl->uses_reject = true;
                 } else if (view_equal(action_name, "createconference")) {
                     size_t conference_attribute_index;
-                    turbo_xml_attribute id_attribute = {0};
-                    turbo_xml_attribute name_attribute = {0};
-                    turbo_xml_string_view value;
+                    salts_xml_attribute id_attribute = {0};
+                    salts_xml_attribute name_attribute = {0};
+                    salts_xml_string_view value;
                     action_row->kind = CCXML_ACTION_CREATE_CONFERENCE;
                     impl->uses_create_conference = true;
                     for (conference_attribute_index = 0u;
                          conference_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++conference_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, conference_attribute_index);
-                        const turbo_xml_string_view local_name =
-                            turbo_xml_attribute_local_name(candidate);
+                        const salts_xml_string_view local_name =
+                            salts_xml_attribute_local_name(candidate);
                         if (view_equal(local_name, "conferenceid"))
                             id_attribute = candidate;
                         else if (view_equal(local_name, "confname"))
                             name_attribute = candidate;
                     }
-                    value = turbo_xml_attribute_value(id_attribute);
+                    value = salts_xml_attribute_value(id_attribute);
                     action_row->location = cursor;
                     action_row->location_size = value.size;
                     memcpy(cursor, value.data, value.size);
                     cursor[value.size] = '\0';
                     cursor += value.size + 1u;
                     if (name_attribute.impl != NULL) {
-                        value = turbo_xml_attribute_value(name_attribute);
+                        value = salts_xml_attribute_value(name_attribute);
                         action_row->destination = cursor;
                         action_row->destination_size = value.size - 2u;
                         memcpy(
@@ -1650,25 +1650,25 @@ static void copy_program(
                 } else if (view_equal(
                                action_name, "destroyconference")) {
                     size_t conference_attribute_index;
-                    turbo_xml_attribute id_attribute = {0};
-                    turbo_xml_string_view expression;
+                    salts_xml_attribute id_attribute = {0};
+                    salts_xml_string_view expression;
                     action_row->kind = CCXML_ACTION_DESTROY_CONFERENCE;
                     impl->uses_destroy_conference = true;
                     for (conference_attribute_index = 0u;
                          conference_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++conference_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, conference_attribute_index);
                         if (view_equal(
-                                turbo_xml_attribute_local_name(candidate),
+                                salts_xml_attribute_local_name(candidate),
                                 "conferenceid")) {
                             id_attribute = candidate;
                             break;
                         }
                     }
-                    expression = turbo_xml_attribute_value(id_attribute);
+                    expression = salts_xml_attribute_value(id_attribute);
                     if (expression.data[0] == '\'' ||
                         expression.data[0] == '"') {
                         action_row->id1 = cursor;
@@ -1690,27 +1690,27 @@ static void copy_program(
                            node_has_unqualified_attribute(
                                action, "prepareddialogid")) {
                     size_t dialog_attribute_index;
-                    turbo_xml_attribute prepared_id_attribute = {0};
-                    turbo_xml_string_view location;
+                    salts_xml_attribute prepared_id_attribute = {0};
+                    salts_xml_string_view location;
                     action_row->kind = CCXML_ACTION_PREPARED_DIALOG_START;
                     impl->uses_prepared_dialog_start = true;
                     impl->uses_datamodel_read = true;
                     for (dialog_attribute_index = 0u;
                          dialog_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++dialog_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, dialog_attribute_index);
                         if (view_equal(
-                                turbo_xml_attribute_local_name(candidate),
+                                salts_xml_attribute_local_name(candidate),
                                 "prepareddialogid")) {
                             prepared_id_attribute = candidate;
                             break;
                         }
                     }
                     location =
-                        turbo_xml_attribute_value(prepared_id_attribute);
+                        salts_xml_attribute_value(prepared_id_attribute);
                     action_row->location = cursor;
                     action_row->location_size = location.size;
                     memcpy(cursor, location.data, location.size);
@@ -1719,9 +1719,9 @@ static void copy_program(
                 } else if (view_equal(action_name, "dialogprepare") ||
                            view_equal(action_name, "dialogstart")) {
                     size_t dialog_attribute_index;
-                    turbo_xml_attribute id_attribute = {0};
-                    turbo_xml_attribute source_attribute = {0};
-                    turbo_xml_string_view value;
+                    salts_xml_attribute id_attribute = {0};
+                    salts_xml_attribute source_attribute = {0};
+                    salts_xml_string_view value;
                     if (view_equal(action_name, "dialogprepare")) {
                         action_row->kind = CCXML_ACTION_DIALOG_PREPARE;
                         impl->uses_dialog_prepare = true;
@@ -1731,25 +1731,25 @@ static void copy_program(
                     }
                     for (dialog_attribute_index = 0u;
                          dialog_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++dialog_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, dialog_attribute_index);
-                        const turbo_xml_string_view local_name =
-                            turbo_xml_attribute_local_name(candidate);
+                        const salts_xml_string_view local_name =
+                            salts_xml_attribute_local_name(candidate);
                         if (view_equal(local_name, "dialogid"))
                             id_attribute = candidate;
                         else if (view_equal(local_name, "src"))
                             source_attribute = candidate;
                     }
-                    value = turbo_xml_attribute_value(id_attribute);
+                    value = salts_xml_attribute_value(id_attribute);
                     action_row->location = cursor;
                     action_row->location_size = value.size;
                     memcpy(cursor, value.data, value.size);
                     cursor[value.size] = '\0';
                     cursor += value.size + 1u;
-                    value = turbo_xml_attribute_value(source_attribute);
+                    value = salts_xml_attribute_value(source_attribute);
                     action_row->destination = cursor;
                     action_row->destination_size = value.size - 2u;
                     memcpy(
@@ -1760,25 +1760,25 @@ static void copy_program(
                 } else if (view_equal(
                                action_name, "dialogterminate")) {
                     size_t dialog_attribute_index;
-                    turbo_xml_attribute id_attribute = {0};
-                    turbo_xml_string_view expression;
+                    salts_xml_attribute id_attribute = {0};
+                    salts_xml_string_view expression;
                     action_row->kind = CCXML_ACTION_DIALOG_TERMINATE;
                     impl->uses_dialog_terminate = true;
                     for (dialog_attribute_index = 0u;
                          dialog_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++dialog_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, dialog_attribute_index);
                         if (view_equal(
-                                turbo_xml_attribute_local_name(candidate),
+                                salts_xml_attribute_local_name(candidate),
                                 "dialogid")) {
                             id_attribute = candidate;
                             break;
                         }
                     }
-                    expression = turbo_xml_attribute_value(id_attribute);
+                    expression = salts_xml_attribute_value(id_attribute);
                     if (expression.data[0] == '\'' ||
                         expression.data[0] == '"') {
                         action_row->id1 = cursor;
@@ -1797,19 +1797,19 @@ static void copy_program(
                         impl->uses_datamodel_read = true;
                     }
                 } else if (view_equal(action_name, "assign")) {
-                    const turbo_xml_attribute name_attribute =
+                    const salts_xml_attribute name_attribute =
                         node_unqualified_attribute(action, "name");
-                    const turbo_xml_attribute expression_attribute =
+                    const salts_xml_attribute expression_attribute =
                         node_unqualified_attribute(action, "expr");
-                    turbo_xml_string_view value =
-                        turbo_xml_attribute_value(name_attribute);
+                    salts_xml_string_view value =
+                        salts_xml_attribute_value(name_attribute);
                     action_row->kind = CCXML_ACTION_ASSIGN_STRING;
                     action_row->location = cursor;
                     action_row->location_size = value.size;
                     memcpy(cursor, value.data, value.size);
                     cursor[value.size] = '\0';
                     cursor += value.size + 1u;
-                    value = turbo_xml_attribute_value(expression_attribute);
+                    value = salts_xml_attribute_value(expression_attribute);
                     action_row->destination = cursor;
                     action_row->destination_size = value.size - 2u;
                     memcpy(
@@ -1820,9 +1820,9 @@ static void copy_program(
                     impl->uses_assign = true;
                 } else {
                     size_t bridge_attribute_index;
-                    turbo_xml_attribute id1_attribute = {0};
-                    turbo_xml_attribute id2_attribute = {0};
-                    turbo_xml_string_view expression;
+                    salts_xml_attribute id1_attribute = {0};
+                    salts_xml_attribute id2_attribute = {0};
+                    salts_xml_string_view expression;
                     const bool is_merge = view_equal(action_name, "merge");
                     const char *id1_name =
                         is_merge ? "connectionid1" : "id1";
@@ -1840,26 +1840,26 @@ static void copy_program(
                     }
                     for (bridge_attribute_index = 0u;
                          bridge_attribute_index <
-                             turbo_xml_node_attribute_count(action);
+                             salts_xml_node_attribute_count(action);
                          ++bridge_attribute_index) {
-                        const turbo_xml_attribute candidate =
-                            turbo_xml_node_attribute_at(
+                        const salts_xml_attribute candidate =
+                            salts_xml_node_attribute_at(
                                 action, bridge_attribute_index);
-                        const turbo_xml_string_view local_name =
-                            turbo_xml_attribute_local_name(candidate);
+                        const salts_xml_string_view local_name =
+                            salts_xml_attribute_local_name(candidate);
                         if (view_equal(local_name, id1_name)) {
                             id1_attribute = candidate;
                         } else if (view_equal(local_name, id2_name)) {
                             id2_attribute = candidate;
                         }
                     }
-                    expression = turbo_xml_attribute_value(id1_attribute);
+                    expression = salts_xml_attribute_value(id1_attribute);
                     action_row->id1 = cursor;
                     action_row->id1_size = expression.size - 2u;
                     memcpy(cursor, expression.data + 1u, action_row->id1_size);
                     cursor[action_row->id1_size] = '\0';
                     cursor += action_row->id1_size + 1u;
-                    expression = turbo_xml_attribute_value(id2_attribute);
+                    expression = salts_xml_attribute_value(id2_attribute);
                     action_row->id2 = cursor;
                     action_row->id2_size = expression.size - 2u;
                     memcpy(cursor, expression.data + 1u, action_row->id2_size);
@@ -1874,7 +1874,7 @@ static void copy_program(
 
 ccxml_limits ccxml_default_limits(void) {
     const ccxml_limits limits = {
-        turbo_xml_default_limits(),
+        salts_xml_default_limits(),
         CCXML_DEFAULT_MAX_TRANSITIONS,
         CCXML_DEFAULT_MAX_ACTIONS,
         CCXML_DEFAULT_MAX_NAME_BYTES};
@@ -1886,12 +1886,12 @@ ccxml_status ccxml_compile(
     const ccxml_limits *limits_or_null, ccxml_diagnostic *diagnostic) {
     const ccxml_limits limits = limits_or_null != NULL
         ? *limits_or_null : ccxml_default_limits();
-    turbo_xml_document document = {0};
-    turbo_xml_diagnostic xml_diagnostic = {0};
+    salts_xml_document document = {0};
+    salts_xml_diagnostic xml_diagnostic = {0};
     ccxml_measurement measurement = {0};
     ccxml_program_impl *impl = NULL;
     ccxml_status status;
-    turbo_xml_status xml_status;
+    salts_xml_status xml_status;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
     if (out == NULL || out->impl != NULL || input == NULL || input_size == 0u ||
         limits.xml.max_input_bytes == 0u || limits.xml.max_nodes == 0u ||
@@ -1901,29 +1901,29 @@ ccxml_status ccxml_compile(
         limits.max_name_bytes == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_ARGUMENT,
-            (turbo_xml_location){0u, 0u, 0u},
+            (salts_xml_location){0u, 0u, 0u},
             "output, input, and all CCXML limits must be valid");
     }
-    xml_status = turbo_xml_parse(
+    xml_status = salts_xml_parse(
         &document, input, input_size, &limits.xml, &xml_diagnostic);
-    if (xml_status != TURBO_XML_OK) {
+    if (xml_status != SALTS_XML_OK) {
         ccxml_status mapped = CCXML_XML_ERROR;
-        if (xml_status == TURBO_XML_LIMIT_EXCEEDED)
+        if (xml_status == SALTS_XML_LIMIT_EXCEEDED)
             mapped = CCXML_LIMIT_EXCEEDED;
-        else if (xml_status == TURBO_XML_ALLOCATION_FAILED)
+        else if (xml_status == SALTS_XML_ALLOCATION_FAILED)
             mapped = CCXML_ALLOCATION_FAILED;
         return fail(
             diagnostic, mapped, xml_diagnostic.location,
             xml_diagnostic.message);
     }
     status = validate_document(
-        turbo_xml_document_root(&document), &measurement, &limits, diagnostic);
+        salts_xml_document_root(&document), &measurement, &limits, diagnostic);
     if (status != CCXML_OK) goto cleanup;
     impl = (ccxml_program_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         status = fail(
             diagnostic, CCXML_ALLOCATION_FAILED,
-            turbo_xml_node_location(turbo_xml_document_root(&document)),
+            salts_xml_node_location(salts_xml_document_root(&document)),
             "CCXML program allocation failed");
         goto cleanup;
     }
@@ -1940,7 +1940,7 @@ ccxml_status ccxml_compile(
         (measurement.name_bytes != 0u && impl->storage == NULL)) {
         status = fail(
             diagnostic, CCXML_ALLOCATION_FAILED,
-            turbo_xml_node_location(turbo_xml_document_root(&document)),
+            salts_xml_node_location(salts_xml_document_root(&document)),
             "CCXML program storage allocation failed");
         goto cleanup;
     }
@@ -1948,9 +1948,9 @@ ccxml_status ccxml_compile(
     impl->action_count = measurement.action_count;
     impl->max_transition_actions = measurement.max_transition_actions;
     impl->max_transition_effects = measurement.max_transition_effects;
-    copy_program(impl, turbo_xml_document_root(&document));
+    copy_program(impl, salts_xml_document_root(&document));
     status = build_native_statechart(
-        impl, turbo_xml_node_location(turbo_xml_document_root(&document)),
+        impl, salts_xml_node_location(salts_xml_document_root(&document)),
         diagnostic);
     if (status != CCXML_OK) goto cleanup;
     out->impl = impl;
@@ -1965,7 +1965,7 @@ cleanup:
         free(impl->transitions);
         free(impl);
     }
-    turbo_xml_document_destroy(&document);
+    salts_xml_document_destroy(&document);
     return status;
 }
 

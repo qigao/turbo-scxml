@@ -3,9 +3,9 @@
 #include "scxml_chttp_resource_internal.h"
 
 #include <tinytest.h>
-#include <turbo/error_codes.h>
-#include <turbo/clock.h>
-#include <turbo/thread.h>
+#include <salts/error_codes.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -133,7 +133,7 @@ static int probe_get(
     (void)client;
     if (probe == NULL || options == NULL || out_response == NULL ||
         out_error == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     ++probe->get_calls;
     (void)strncpy(probe->connection_uri, options->connection_uri,
                   sizeof(probe->connection_uri) - 1u);
@@ -147,7 +147,7 @@ static int probe_get(
             (scxml_chttp_data_decoder_v1 *)probe->decoder;
         decoder->open = replaced_decoder_open;
     }
-    if (probe->transport_status != TURBO_OK) {
+    if (probe->transport_status != SALTS_OK) {
         out_error->status = probe->transport_status;
         out_error->stage = "test";
         return probe->transport_status;
@@ -160,7 +160,7 @@ static int probe_get(
         .header_count = probe->response_header_count,
         .body = (void *)probe->response_body,
         .body_size = probe->response_body_size};
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void probe_response_destroy(
@@ -179,7 +179,7 @@ static resource_probe default_probe(void) {
     resource_probe probe = {
         .resolve_status = SCXML_RESOURCE_OK,
         .decoder = &probe_decoder,
-        .transport_status = TURBO_OK,
+        .transport_status = SALTS_OK,
         .response_status = 200u,
         .response_media_type = "application/json",
         .response_body = body,
@@ -313,10 +313,10 @@ static int loopback_large(
 static int loopback_slow(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
-    const uint64_t deadline = turbo_monotonic_ms() + 50u;
+    const uint64_t deadline = salts_monotonic_ms() + 50u;
     (void)user;
     (void)request;
-    while (turbo_monotonic_ms() < deadline) turbo_thread_yield();
+    while (salts_monotonic_ms() < deadline) salts_thread_yield();
     return chttp_server_reply(
         response, 200u, "application/json", "7", 1u);
 }
@@ -398,19 +398,19 @@ spec("TurboSCXML optional CHTTP resource adapter") {
         check_equal(probe.response_destroy_calls, 3u);
 
         probe.response_status = 200u;
-        probe.transport_status = TURBO_ETIMEDOUT;
+        probe.transport_status = SALTS_ETIMEDOUT;
         check_equal(adapter->open(
                         &resource, "tenant:slow", sizeof("tenant:slow") - 1u,
                         32u, &text),
                     SCXML_RESOURCE_TIMEOUT);
 
-        probe.transport_status = TURBO_EMSGSIZE;
+        probe.transport_status = SALTS_EMSGSIZE;
         check_equal(adapter->open(
                         &resource, "tenant:large", sizeof("tenant:large") - 1u,
                         32u, &text),
                     SCXML_RESOURCE_LIMIT_EXCEEDED);
 
-        probe.transport_status = TURBO_OK;
+        probe.transport_status = SALTS_OK;
         probe.response_media_type = "text/plain";
         check_equal(adapter->open(
                         &resource, "tenant:type", sizeof("tenant:type") - 1u,
@@ -632,23 +632,23 @@ spec("TurboSCXML optional CHTTP resource adapter") {
         uint16_t port = 0u;
         int uri_size;
 
-        check_equal(chttp_server_init(&server, &server_config), TURBO_OK);
+        check_equal(chttp_server_init(&server, &server_config), SALTS_OK);
         check_equal(chttp_server_get(
                         &server, "/ok", loopback_ok, NULL),
-                    TURBO_OK);
+                    SALTS_OK);
         check_equal(chttp_server_get(
                         &server, "/large", loopback_large, NULL),
-                    TURBO_OK);
+                    SALTS_OK);
         check_equal(chttp_server_get(
                         &server, "/slow", loopback_slow, NULL),
-                    TURBO_OK);
-        check_equal(chttp_server_start(&server), TURBO_OK);
-        check_equal(chttp_server_port(&server, &port), TURBO_OK);
+                    SALTS_OK);
+        check_equal(chttp_server_start(&server), SALTS_OK);
+        check_equal(chttp_server_port(&server, &port), SALTS_OK);
         uri_size = snprintf(
             connection_uri, sizeof(connection_uri),
             "tcp://127.0.0.1:%u", (unsigned int)port);
         check_true(uri_size > 0 && (size_t)uri_size < sizeof(connection_uri));
-        check_equal(chttp_client_init(&client, &client_config), TURBO_OK);
+        check_equal(chttp_client_init(&client, &client_config), SALTS_OK);
 
         probe.resolution.connection_uri = connection_uri;
         probe.resolution.connection_uri_size = (size_t)uri_size;
@@ -690,8 +690,8 @@ spec("TurboSCXML optional CHTTP resource adapter") {
                     SCXML_RESOURCE_TIMEOUT);
         check_equal(scxml_chttp_resource_destroy(&resource), SCXML_OK);
 
-        check_equal(chttp_client_destroy(&client, 1000u), TURBO_OK);
-        check_equal(chttp_server_stop(&server, 1000u), TURBO_OK);
-        check_equal(chttp_server_destroy(&server), TURBO_OK);
+        check_equal(chttp_client_destroy(&client, 1000u), SALTS_OK);
+        check_equal(chttp_server_stop(&server, 1000u), SALTS_OK);
+        check_equal(chttp_server_destroy(&server), SALTS_OK);
     }
 }

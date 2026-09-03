@@ -29,7 +29,7 @@ The implementation is an always-built static library exported as
 one-way:
 
 ```text
-application -> TurboSCXML::CCXML -> TurboSCXML::SCXML -> Rocida
+application -> TurboSCXML::CCXML -> TurboSCXML::SCXML -> Salts
 ```
 
 The first slice deliberately reuses the SCXML adapter status and CFlow
@@ -155,7 +155,7 @@ Explicit `ccxml_session_close` is idempotent and also closes the adapter once.
 
 ## Limits and diagnostics
 
-`ccxml_default_limits()` starts from `turbo_xml_default_limits()` and supplies
+`ccxml_default_limits()` starts from `salts_xml_default_limits()` and supplies
 positive bounds for transitions, actions, and retained event-name bytes. Zero
 limits are invalid. Count, size, and addition overflow is detected before
 allocation. Compile failure leaves the output program empty.

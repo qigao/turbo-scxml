@@ -16,7 +16,7 @@ typedef struct scxml_foreach_managed_value {
 #define CMETA_CALLABLE_TYPE_LIST CMETA_BUILTIN_TYPE_LIST
 
 #include <scxml/scxml.h>
-#include <rocida/stl/typed.h>
+#include <cstl/typed.h>
 
 #include "scxml_foreach.h"
 #include "tinytest.h"

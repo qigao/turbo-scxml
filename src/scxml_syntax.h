@@ -21,39 +21,39 @@ static inline scxml_syntax_node scxml_syntax_root(
     return result;
 }
 
-static inline turbo_xml_node_kind scxml_syntax_node_type(
+static inline salts_xml_node_kind scxml_syntax_node_type(
     scxml_syntax_node node) {
-    return node.impl != NULL ? node.impl->xml_kind : TURBO_XML_INVALID_NODE;
+    return node.impl != NULL ? node.impl->xml_kind : SALTS_XML_INVALID_NODE;
 }
 
-static inline turbo_xml_location scxml_syntax_node_location(
+static inline salts_xml_location scxml_syntax_node_location(
     scxml_syntax_node node) {
     return node.impl != NULL
-        ? node.impl->location : (turbo_xml_location){0u, 0u, 0u};
+        ? node.impl->location : (salts_xml_location){0u, 0u, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_node_local_name(
+static inline salts_xml_string_view scxml_syntax_node_local_name(
     scxml_syntax_node node) {
     return node.impl != NULL
-        ? node.impl->name : (turbo_xml_string_view){NULL, 0u};
+        ? node.impl->name : (salts_xml_string_view){NULL, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_node_namespace_uri(
+static inline salts_xml_string_view scxml_syntax_node_namespace_uri(
     scxml_syntax_node node) {
     return node.impl != NULL
-        ? node.impl->namespace_uri : (turbo_xml_string_view){NULL, 0u};
+        ? node.impl->namespace_uri : (salts_xml_string_view){NULL, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_node_value(
+static inline salts_xml_string_view scxml_syntax_node_value(
     scxml_syntax_node node) {
     return node.impl != NULL
-        ? node.impl->value : (turbo_xml_string_view){NULL, 0u};
+        ? node.impl->value : (salts_xml_string_view){NULL, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_node_text(
+static inline salts_xml_string_view scxml_syntax_node_text(
     scxml_syntax_node node) {
     return node.impl != NULL
-        ? node.impl->text : (turbo_xml_string_view){NULL, 0u};
+        ? node.impl->text : (salts_xml_string_view){NULL, 0u};
 }
 
 static inline size_t scxml_syntax_node_child_count(
@@ -83,28 +83,28 @@ static inline scxml_syntax_attribute scxml_syntax_node_attribute_at(
     return result;
 }
 
-static inline turbo_xml_location scxml_syntax_attribute_location(
+static inline salts_xml_location scxml_syntax_attribute_location(
     scxml_syntax_attribute attribute) {
     return attribute.impl != NULL
-        ? attribute.impl->location : (turbo_xml_location){0u, 0u, 0u};
+        ? attribute.impl->location : (salts_xml_location){0u, 0u, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_attribute_local_name(
+static inline salts_xml_string_view scxml_syntax_attribute_local_name(
     scxml_syntax_attribute attribute) {
     return attribute.impl != NULL
-        ? attribute.impl->name : (turbo_xml_string_view){NULL, 0u};
+        ? attribute.impl->name : (salts_xml_string_view){NULL, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_attribute_namespace_uri(
+static inline salts_xml_string_view scxml_syntax_attribute_namespace_uri(
     scxml_syntax_attribute attribute) {
     return attribute.impl != NULL
-        ? attribute.impl->namespace_uri : (turbo_xml_string_view){NULL, 0u};
+        ? attribute.impl->namespace_uri : (salts_xml_string_view){NULL, 0u};
 }
 
-static inline turbo_xml_string_view scxml_syntax_attribute_value(
+static inline salts_xml_string_view scxml_syntax_attribute_value(
     scxml_syntax_attribute attribute) {
     return attribute.impl != NULL
-        ? attribute.impl->value : (turbo_xml_string_view){NULL, 0u};
+        ? attribute.impl->value : (salts_xml_string_view){NULL, 0u};
 }
 
 static inline scxml_syntax_attribute scxml_syntax_node_find_attribute(
@@ -115,39 +115,39 @@ static inline scxml_syntax_attribute scxml_syntax_node_find_attribute(
     return result;
 }
 
-static inline turbo_xml_string_view scxml_syntax_serialized_children(
+static inline salts_xml_string_view scxml_syntax_serialized_children(
     scxml_syntax_node node) {
     if (node.impl == NULL ||
         (node.impl->kind != SCXML_ELEMENT_CONTENT &&
          node.impl->kind != SCXML_ELEMENT_DATA))
-        return (turbo_xml_string_view){NULL, 0u};
-    return (turbo_xml_string_view){
+        return (salts_xml_string_view){NULL, 0u};
+    return (salts_xml_string_view){
         node.impl->serialized_children.data,
         node.impl->serialized_children.size};
 }
 
-static inline turbo_xml_status scxml_syntax_serialize_children(
+static inline salts_xml_status scxml_syntax_serialize_children(
     scxml_syntax_node node, char *output, size_t output_capacity,
     size_t max_bytes, size_t *out_size) {
     size_t required_capacity;
     if (node.impl == NULL || out_size == NULL ||
         (node.impl->kind != SCXML_ELEMENT_CONTENT &&
          node.impl->kind != SCXML_ELEMENT_DATA))
-        return TURBO_XML_INVALID_ARGUMENT;
+        return SALTS_XML_INVALID_ARGUMENT;
     if (node.impl->serialized_children.size > max_bytes)
-        return TURBO_XML_LIMIT_EXCEEDED;
+        return SALTS_XML_LIMIT_EXCEEDED;
     *out_size = node.impl->serialized_children.size;
-    if (output == NULL && output_capacity == 0u) return TURBO_XML_OK;
+    if (output == NULL && output_capacity == 0u) return SALTS_XML_OK;
     if (output == NULL ||
         node.impl->serialized_children.size == SIZE_MAX ||
         (required_capacity = node.impl->serialized_children.size + 1u) >
             output_capacity)
-        return TURBO_XML_LIMIT_EXCEEDED;
+        return SALTS_XML_LIMIT_EXCEEDED;
     if (node.impl->serialized_children.size != 0u)
         memcpy(output, node.impl->serialized_children.data,
                node.impl->serialized_children.size);
     output[node.impl->serialized_children.size] = '\0';
-    return TURBO_XML_OK;
+    return SALTS_XML_OK;
 }
 
 #endif

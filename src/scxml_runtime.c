@@ -149,7 +149,7 @@ static void commit_prepared_effect(void *user) {
     cflow_statechart_effect_ticket adapter_ticket;
     if (effect == NULL || !effect->in_use || effect->session == NULL) return;
     session = effect->session;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     adapter_ticket = effect->adapter_ticket;
     if (effect->registry_index != SIZE_MAX &&
         effect->registry_index < session->delayed_send_capacity) {
@@ -168,7 +168,7 @@ static void commit_prepared_effect(void *user) {
         }
     }
     effect->in_use = false;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     adapter_ticket.commit(adapter_ticket.user);
 }
 
@@ -178,10 +178,10 @@ static void discard_prepared_effect(void *user) {
     cflow_statechart_effect_ticket adapter_ticket;
     if (effect == NULL || !effect->in_use || effect->session == NULL) return;
     session = effect->session;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     adapter_ticket = effect->adapter_ticket;
     rollback_prepared_effect_locked(effect);
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     adapter_ticket.discard(adapter_ticket.user);
 }
 
@@ -218,9 +218,9 @@ static cflow_mailbox_status report_invocation_adapter_error(
         admission = cflow_statechart_instance_try_send_internal(
             &session->instance, &event);
     if (admission != CFLOW_MAILBOX_OK) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         scxml_runtime_increment_u64(&session->invoke_stats.adapter_error_rejected);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
     }
     return admission;
 }
@@ -248,7 +248,7 @@ static void commit_invocation_lifecycle(void *user) {
     if (kind == SCXML_INVOCATION_EFFECT_START ||
         kind == SCXML_INVOCATION_EFFECT_FORWARD)
         adapter_ticket = effect->adapter_ticket;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     if (effect->invocation < session->invocation_capacity) {
         scxml_invocation_row *row =
             &session->invocation_rows[effect->invocation];
@@ -295,7 +295,7 @@ static void commit_invocation_lifecycle(void *user) {
         }
     }
     effect->in_use = false;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (start) {
         adapter_ticket.commit(adapter_ticket.user);
         return;
@@ -317,17 +317,17 @@ static void commit_invocation_lifecycle(void *user) {
     (void)adapter_error;
     if (status != SCXML_ADAPTER_ACCEPTED ||
         adapter_ticket.commit == NULL || adapter_ticket.discard == NULL) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         scxml_runtime_increment_u64(&session->invoke_stats.cancel_failed);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         (void)report_invocation_adapter_error(
             session, status == SCXML_ADAPTER_ACCEPTED
                 ? SCXML_ADAPTER_INVALID_CONTRACT : status);
         return;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     scxml_runtime_increment_u64(&session->invoke_stats.cancelled);
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     adapter_ticket.commit(adapter_ticket.user);
 }
 
@@ -339,7 +339,7 @@ static void discard_invocation_lifecycle(void *user) {
     bool discard_adapter = false;
     if (effect == NULL || !effect->in_use || effect->session == NULL) return;
     session = effect->session;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     if (effect->invocation < session->invocation_capacity &&
         (effect->kind == SCXML_INVOCATION_EFFECT_START ||
          effect->kind == SCXML_INVOCATION_EFFECT_FAIL)) {
@@ -361,7 +361,7 @@ static void discard_invocation_lifecycle(void *user) {
         discard_adapter = adapter_ticket.discard != NULL;
     }
     effect->in_use = false;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (discard_adapter) adapter_ticket.discard(adapter_ticket.user);
 }
 
@@ -380,7 +380,7 @@ static scxml_execute_outcome execute_invocation_lifecycle(
         *out_error = "SCXML invoke requires an owning invocation session";
         return SCXML_EXECUTE_FATAL;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     effect = acquire_invocation_effect_locked(session);
     if (effect != NULL) {
         effect->invocation = step->invocation;
@@ -388,7 +388,7 @@ static scxml_execute_outcome execute_invocation_lifecycle(
             ? SCXML_INVOCATION_EFFECT_ENTER
             : SCXML_INVOCATION_EFFECT_EXIT;
     }
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (effect == NULL) {
         *out_error = "SCXML invocation effect storage is full";
         return SCXML_EXECUTE_FATAL;
@@ -420,17 +420,17 @@ static bool enqueue_invocation_adapter_error(
         : session->program->communication_error_event;
     const cflow_event_view event = {id, &cmeta_type_bool, &null_value};
     if (id == 0u || context->raise_internal == NULL) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         scxml_runtime_increment_u64(&session->invoke_stats.adapter_error_rejected);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         *out_error = "SCXML invocation error Event is unavailable";
         return false;
     }
     if (!context->raise_internal(
             context->raise_user, &event, out_error)) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         scxml_runtime_increment_u64(&session->invoke_stats.adapter_error_rejected);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return false;
     }
     return true;
@@ -646,7 +646,7 @@ static bool stage_invocation_result(
             adapter_ticket->discard(adapter_ticket->user);
         return false;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     row = &session->invocation_rows[invocation];
     effect = row->state == SCXML_INVOCATION_PENDING
         ? acquire_invocation_effect_locked(session) : NULL;
@@ -671,7 +671,7 @@ static bool stage_invocation_result(
         if (adapter_ticket != NULL)
             effect->adapter_ticket = *adapter_ticket;
     }
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (effect == NULL) {
         *out_error = "SCXML invocation effect storage is full";
         if (owns_adapter_ticket)
@@ -699,14 +699,14 @@ static bool stage_invocation_completion(
             *out_error = "SCXML invocation completion is invalid";
         return false;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     effect = acquire_invocation_effect_locked(session);
     if (effect != NULL) {
         effect->invocation = invocation;
         effect->token = token;
         effect->kind = SCXML_INVOCATION_EFFECT_COMPLETE;
     }
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (effect == NULL) {
         *out_error = "SCXML invocation effect storage is full";
         return false;
@@ -737,14 +737,14 @@ static bool stage_invocation_forward(
             *out_error = "SCXML invocation forward ticket is invalid";
         return false;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     effect = acquire_invocation_effect_locked(session);
     if (effect != NULL) {
         effect->invocation = invocation;
         effect->kind = SCXML_INVOCATION_EFFECT_FORWARD;
         effect->adapter_ticket = *adapter_ticket;
     }
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     if (effect == NULL) {
         adapter_ticket->discard(adapter_ticket->user);
         *out_error = "SCXML invocation effect storage is full";
@@ -800,23 +800,23 @@ scxml_runtime_start_pending_invocations(
         int written;
         bool restored = true;
 
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         if (session->invocation_rows[index].state !=
                 SCXML_INVOCATION_PENDING) {
-            turbo_mutex_unlock(&session->registry_lock);
+            salts_mutex_unlock(&session->registry_lock);
             continue;
         }
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (!cflow_statechart_host_context_is_active(
                 context, descriptor->owner))
             continue;
 
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         token = session->next_invocation_token;
         if (token != 0u)
             session->next_invocation_token =
                 token == UINT64_MAX ? 0u : token + 1u;
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (token == 0u) {
             *out_error = "SCXML invocation token space is exhausted";
             return CFLOW_STATECHART_HOST_FATAL;
@@ -1013,7 +1013,7 @@ static bool forward_external_to_invocations(
         const char *request_id = NULL;
         size_t id_size = 0u;
         if (!descriptor->autoforward || index == skipped_invocation) continue;
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         if (session->invocation_rows[index].state ==
                 SCXML_INVOCATION_ACTIVE) {
             token = session->invocation_rows[index].token;
@@ -1027,7 +1027,7 @@ static bool forward_external_to_invocations(
                 request_id = session->invocation_rows[index].id;
             }
         }
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (token == 0u) continue;
         request = (scxml_invoke_forward_request){
             .token = token,
@@ -1045,9 +1045,9 @@ static bool forward_external_to_invocations(
                 return false;
             continue;
         }
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         scxml_runtime_increment_u64(&session->invoke_stats.forward_failed);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (status == SCXML_ADAPTER_INVALID_CONTRACT ||
             (status == SCXML_ADAPTER_ACCEPTED &&
              (adapter_ticket.commit == NULL ||
@@ -1339,7 +1339,7 @@ static bool scxml_runtime_observe_event(
         (event->kind != CFLOW_STATECHART_OBSERVED_EXTERNAL &&
          (event->origin_token & SCXML_EXTERNAL_METADATA_TOKEN_BIT) == 0u))
         return true;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     if ((event->origin_token & SCXML_EXTERNAL_METADATA_TOKEN_BIT) != 0u) {
         scxml_external_event_metadata_row *row = NULL;
         bool row_data_live;
@@ -1352,7 +1352,7 @@ static bool scxml_runtime_observe_event(
             }
         }
         if (row == NULL) {
-            turbo_mutex_unlock(&session->registry_lock);
+            salts_mutex_unlock(&session->registry_lock);
             *out_error = "SCXML external Event metadata token is stale";
             return false;
         }
@@ -1382,20 +1382,20 @@ static bool scxml_runtime_observe_event(
         row_data_live = row->data_object_live;
         if (!row_data_live) {
             memset(row, 0, sizeof(*row));
-            turbo_mutex_unlock(&session->registry_lock);
+            salts_mutex_unlock(&session->registry_lock);
             return true;
         }
         row->in_use = false;
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (!scxml_runtime_copy_event_data_object(
                 row->data_schema,
                 session->current_event_data_object.bytes,
                 row->data_object.bytes)) {
             scxml_runtime_destroy_event_data_object(
                 row->data_schema, row->data_object.bytes);
-            turbo_mutex_lock(&session->registry_lock);
+            salts_mutex_lock(&session->registry_lock);
             memset(row, 0, sizeof(*row));
-            turbo_mutex_unlock(&session->registry_lock);
+            salts_mutex_unlock(&session->registry_lock);
             *out_error = "SCXML structured Event data copy failed";
             return false;
         }
@@ -1407,9 +1407,9 @@ static bool scxml_runtime_observe_event(
         session->system_values.event_data_object =
             session->current_event_data_object.bytes;
         scxml_runtime_destroy_event_data_object(row->data_schema, row->data_object.bytes);
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         memset(row, 0, sizeof(*row));
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return true;
     } else {
         for (index = 0u; index < session->program->invocation_count; ++index) {
@@ -1424,7 +1424,7 @@ static bool scxml_runtime_observe_event(
                     &session->invocation_rows[index];
                 if (invocation->id_size >
                     SCXML_EVENT_METADATA_CAPACITY) {
-                    turbo_mutex_unlock(&session->registry_lock);
+                    salts_mutex_unlock(&session->registry_lock);
                     *out_error = "SCXML invoke ID exceeds metadata bound";
                     return false;
                 }
@@ -1443,7 +1443,7 @@ static bool scxml_runtime_observe_event(
                             invocation->id_size, &dynamic_name_size) ||
                         dynamic_name_size >
                             SCXML_EVENT_METADATA_CAPACITY) {
-                        turbo_mutex_unlock(&session->registry_lock);
+                        salts_mutex_unlock(&session->registry_lock);
                         *out_error =
                             "SCXML dynamic done Event exceeds metadata bound";
                         return false;
@@ -1463,7 +1463,7 @@ static bool scxml_runtime_observe_event(
             }
         }
     }
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     return true;
 }
 
@@ -1487,7 +1487,7 @@ static cflow_statechart_host_result preprocess_invocation_external(
         context, cflow_statechart_host_context_state(context));
     if (source_token != 0u &&
         (source_token & SCXML_EXTERNAL_METADATA_TOKEN_BIT) == 0u) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         for (index = 0u; index < session->program->invocation_count; ++index) {
             const scxml_invocation_row *row =
                 &session->invocation_rows[index];
@@ -1499,10 +1499,10 @@ static cflow_statechart_host_result preprocess_invocation_external(
         }
         if (source_index == SIZE_MAX) {
             scxml_runtime_increment_u64(&session->invoke_stats.returned_rejected);
-            turbo_mutex_unlock(&session->registry_lock);
+            salts_mutex_unlock(&session->registry_lock);
             return CFLOW_STATECHART_HOST_DROP;
         }
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         source = &session->program->invocations[source_index];
         if (!execute_invocation_finalize(
                 source, session, context, out_error))
@@ -1528,10 +1528,10 @@ static bool has_pending_active_invocation(
     size_t index;
     for (index = 0u; index < session->program->invocation_count; ++index) {
         bool pending;
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         pending = session->invocation_rows[index].state ==
             SCXML_INVOCATION_PENDING;
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         if (pending && cflow_statechart_host_context_is_active(
                            context,
                            session->program->invocations[index].owner))
@@ -1745,7 +1745,7 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
         !scxml_runtime_metadata_field_valid(metadata->invoke_id,
                                     metadata->invoke_id_size))
         return NULL;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     for (index = 0u; index < session->external_metadata_capacity; ++index) {
         if (!session->external_metadata_rows[index].in_use &&
             !session->external_metadata_rows[index].data_object_live) {
@@ -1754,7 +1754,7 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
         }
     }
     if (row == NULL) {
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return NULL;
     }
     token = session->next_external_metadata_token;
@@ -1780,7 +1780,7 @@ scxml_external_event_metadata_row *scxml_runtime_reserve_event_metadata(
     SCXML_RETAIN_METADATA(origin_type);
     SCXML_RETAIN_METADATA(invoke_id);
 #undef SCXML_RETAIN_METADATA
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     *out_token = token;
     return row;
 }
@@ -1792,24 +1792,24 @@ void scxml_runtime_release_event_metadata(void *user) {
     if (session == NULL) return;
     bool data_live;
     const cmeta_data_desc *schema;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     if (!row->in_use) {
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return;
     }
     data_live = row->data_object_live;
     if (!data_live) {
         memset(row, 0, sizeof(*row));
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return;
     }
     row->in_use = false;
     schema = row->data_schema;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
     scxml_runtime_destroy_event_data_object(schema, row->data_object.bytes);
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     memset(row, 0, sizeof(*row));
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
 }
 
 static void commit_event_metadata(void *user) {
@@ -2047,7 +2047,7 @@ static scxml_execute_outcome execute_send(
         if (session == NULL || !evaluate_effect_value(
                 &descriptor->event_expr, context, system_values, &value) ||
             value.kind != SCXML_EXPR_VALUE_STRING ||
-            !scxml_analyze_is_xml_nmtoken((turbo_xml_string_view){
+            !scxml_analyze_is_xml_nmtoken((salts_xml_string_view){
                 value.data.string.data, value.data.string.size})) {
             return raise_block_execution_error(block, context, out_error);
         }
@@ -2221,7 +2221,7 @@ static scxml_execute_outcome execute_send(
         return SCXML_EXECUTE_FATAL;
     }
     materialized.payload = payload;
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     prepared = acquire_prepared_effect_locked(session);
     if (prepared != NULL && request->delay_ms != 0u) {
         delayed = reserve_delayed_send_locked(
@@ -2230,7 +2230,7 @@ static scxml_execute_outcome execute_send(
     }
     if (prepared == NULL || (request->delay_ms != 0u && delayed == NULL)) {
         if (prepared != NULL) prepared->in_use = false;
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return raise_adapter_error(
             session, context,
             duplicate ? SCXML_ADAPTER_ERROR_KIND_EXECUTION
@@ -2240,22 +2240,22 @@ static scxml_execute_outcome execute_send(
     prepared->kind = request->delay_ms != 0u
         ? SCXML_PREPARED_DELAYED_SEND : SCXML_PREPARED_SEND;
     prepared->registry_index = registry_index;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
 
     status = session->event_io.prepare_send(
         session->adapter_user, request, &adapter_ticket, &adapter_error);
     if (status != SCXML_ADAPTER_ACCEPTED) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return send_failure_outcome(
             session, descriptor, request, context, status, adapter_error,
             out_error);
     }
     if (adapter_ticket.commit == NULL || adapter_ticket.discard == NULL) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         *out_error = "SCXML Event I/O adapter returned an invalid ticket";
         return SCXML_EXECUTE_FATAL;
     }
@@ -2301,16 +2301,16 @@ static scxml_execute_outcome execute_cancel(
         *out_error = "SCXML cancel requires an owning Event I/O session";
         return SCXML_EXECUTE_FATAL;
     }
-    turbo_mutex_lock(&session->registry_lock);
+    salts_mutex_lock(&session->registry_lock);
     delayed = scxml_runtime_find_delayed_send_locked(
         session, request->send_id, request->send_id_size, &registry_index);
     if (delayed == NULL) {
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return SCXML_EXECUTE_CONTINUE;
     }
     prepared = acquire_prepared_effect_locked(session);
     if (prepared == NULL) {
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return raise_adapter_error(
             session, context, SCXML_ADAPTER_ERROR_KIND_COMMUNICATION,
             out_error);
@@ -2319,21 +2319,21 @@ static scxml_execute_outcome execute_cancel(
     prepared->registry_index = registry_index;
     delayed->previous_state = delayed->state;
     delayed->state = SCXML_DELAYED_CANCEL_RESERVED;
-    turbo_mutex_unlock(&session->registry_lock);
+    salts_mutex_unlock(&session->registry_lock);
 
     status = session->event_io.prepare_cancel(
         session->adapter_user, request, &adapter_ticket, &adapter_error);
     if (status != SCXML_ADAPTER_ACCEPTED) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         return adapter_failure_outcome(
             session, context, status, adapter_error, out_error);
     }
     if (adapter_ticket.commit == NULL || adapter_ticket.discard == NULL) {
-        turbo_mutex_lock(&session->registry_lock);
+        salts_mutex_lock(&session->registry_lock);
         rollback_prepared_effect_locked(prepared);
-        turbo_mutex_unlock(&session->registry_lock);
+        salts_mutex_unlock(&session->registry_lock);
         *out_error = "SCXML Event I/O adapter returned an invalid ticket";
         return SCXML_EXECUTE_FATAL;
     }
@@ -3054,7 +3054,7 @@ static scxml_execute_outcome execute_scxml_range(
                 *out_error = "SCXML log label storage is invalid";
                 return SCXML_EXECUTE_FATAL;
             }
-            TURBO_LOG_DEBUG(
+            SALTS_LOG_DEBUG(
                 tlog_peek_default(), "cflow.scxml", step->label);
         } else if (step->kind == SCXML_STEP_SCRIPT) {
             void *state;

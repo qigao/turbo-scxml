@@ -90,20 +90,20 @@ bool scxml_analyze_checked_multiply(size_t left, size_t right, size_t *out) {
     return true;
 }
 
-static bool view_equal(turbo_xml_string_view left,
-                       turbo_xml_string_view right) {
+static bool view_equal(salts_xml_string_view left,
+                       salts_xml_string_view right) {
     return left.size == right.size &&
            (left.size == 0u || memcmp(left.data, right.data, left.size) == 0);
 }
 
-bool scxml_analyze_view_equal_raw(turbo_xml_string_view view, const char *raw) {
+bool scxml_analyze_view_equal_raw(salts_xml_string_view view, const char *raw) {
     const size_t size = strlen(raw);
     return view.size == size &&
            (size == 0u || memcmp(view.data, raw, size) == 0);
 }
 
-int scxml_analyze_compare_view(turbo_xml_string_view left,
-                        turbo_xml_string_view right) {
+int scxml_analyze_compare_view(salts_xml_string_view left,
+                        salts_xml_string_view right) {
     const size_t common = left.size < right.size ? left.size : right.size;
     const int compared = common != 0u ? memcmp(left.data, right.data, common) : 0;
     if (compared != 0) return compared;
@@ -167,8 +167,8 @@ int scxml_analyze_compare_node_ref(const void *left, const void *right) {
 int scxml_analyze_compare_program_name(const void *left, const void *right) {
     const scxml_program_name *left_name = (const scxml_program_name *)left;
     const scxml_program_name *right_name = (const scxml_program_name *)right;
-    const turbo_xml_string_view left_view = {left_name->name, left_name->size};
-    const turbo_xml_string_view right_view = {right_name->name, right_name->size};
+    const salts_xml_string_view left_view = {left_name->name, left_name->size};
+    const salts_xml_string_view right_view = {right_name->name, right_name->size};
     return scxml_analyze_compare_view(left_view, right_view);
 }
 
@@ -194,7 +194,7 @@ bool scxml_analyze_bind_current_event_system_values(
 
 scxml_status scxml_analyze_fail(scxml_build *build,
                                      scxml_status status,
-                                     turbo_xml_location location,
+                                     salts_xml_location location,
                                      const char *message) {
     if (build != NULL && build->diagnostic != NULL) {
         build->diagnostic->status = status;
@@ -205,7 +205,7 @@ scxml_status scxml_analyze_fail(scxml_build *build,
     return status;
 }
 
-static bool is_empty_view(turbo_xml_string_view view) {
+static bool is_empty_view(salts_xml_string_view view) {
     return view.data == NULL || view.size == 0u;
 }
 
@@ -274,7 +274,7 @@ static bool is_ncname_char(uint32_t codepoint) {
            (codepoint >= 0x203fu && codepoint <= 0x2040u);
 }
 
-bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name) {
+bool scxml_analyze_is_xml_ncname(salts_xml_string_view name) {
     size_t cursor = 0u;
     uint32_t codepoint;
     if (is_empty_view(name) ||
@@ -291,7 +291,7 @@ bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name) {
     return true;
 }
 
-bool scxml_analyze_is_xml_nmtoken(turbo_xml_string_view token) {
+bool scxml_analyze_is_xml_nmtoken(salts_xml_string_view token) {
     size_t cursor = 0u;
     uint32_t codepoint;
     if (is_empty_view(token)) return false;
@@ -308,7 +308,7 @@ static bool xml_space(char value) {
     return value == ' ' || value == '\t' || value == '\r' || value == '\n';
 }
 
-static bool is_xml_whitespace(turbo_xml_string_view value) {
+static bool is_xml_whitespace(salts_xml_string_view value) {
     size_t index;
     for (index = 0u; index < value.size; ++index) {
         if (!xml_space(value.data[index])) return false;
@@ -316,17 +316,17 @@ static bool is_xml_whitespace(turbo_xml_string_view value) {
     return true;
 }
 
-static void skip_xml_space(turbo_xml_string_view value, size_t *cursor) {
+static void skip_xml_space(salts_xml_string_view value, size_t *cursor) {
     while (*cursor < value.size && xml_space(value.data[*cursor]))
         ++*cursor;
 }
 
 bool scxml_analyze_parse_null_in_condition(
-    turbo_xml_string_view value, turbo_xml_string_view *out_state) {
+    salts_xml_string_view value, salts_xml_string_view *out_state) {
     size_t cursor = 0u;
     size_t begin;
     if (out_state == NULL) return false;
-    *out_state = (turbo_xml_string_view){NULL, 0u};
+    *out_state = (salts_xml_string_view){NULL, 0u};
     skip_xml_space(value, &cursor);
     if (cursor > value.size || value.size - cursor < 2u ||
         memcmp(value.data + cursor, "In", 2u) != 0)
@@ -363,7 +363,7 @@ scxml_syntax_attribute scxml_analyze_find_attribute(scxml_syntax_node node,
 }
 
 static bool attribute_allowed(scxml_element_kind kind,
-                              turbo_xml_string_view name) {
+                              salts_xml_string_view name) {
     switch (kind) {
         case SCXML_ELEMENT_SCXML:
             return scxml_analyze_view_equal_raw(name, "version") ||
@@ -455,7 +455,7 @@ static scxml_status analyze_script(
     bool root) {
     const scxml_syntax_attribute source =
         scxml_analyze_find_attribute(node, "src");
-    const turbo_xml_string_view inline_source = scxml_syntax_node_text(node);
+    const salts_xml_string_view inline_source = scxml_syntax_node_text(node);
     size_t retained;
     size_t index;
     scxml_status status = scxml_analyze_validate_element_attributes(
@@ -468,8 +468,8 @@ static scxml_status analyze_script(
             "script requires the quickjs-sandbox data model");
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) != TURBO_XML_TEXT &&
-            scxml_syntax_node_type(child) != TURBO_XML_COMMENT)
+        if (scxml_syntax_node_type(child) != SALTS_XML_TEXT &&
+            scxml_syntax_node_type(child) != SALTS_XML_COMMENT)
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
                 scxml_syntax_node_location(child),
@@ -514,9 +514,9 @@ scxml_status scxml_analyze_validate_element_attributes(
     for (index = 0u; index < scxml_syntax_node_attribute_count(node); ++index) {
         const scxml_syntax_attribute attribute =
             scxml_syntax_node_attribute_at(node, index);
-        const turbo_xml_string_view namespace_uri =
+        const salts_xml_string_view namespace_uri =
             scxml_syntax_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view name =
+        const salts_xml_string_view name =
             scxml_syntax_attribute_local_name(attribute);
         if (!is_empty_view(namespace_uri)) continue;
         if (kind == SCXML_ELEMENT_LOG && scxml_analyze_view_equal_raw(name, "expr")) {
@@ -543,7 +543,7 @@ scxml_status scxml_analyze_validate_element_attributes(
 static scxml_status require_scxml_element(scxml_build *build,
                                                 scxml_syntax_node node,
                                                 scxml_element_kind *out_kind) {
-    const turbo_xml_string_view namespace_uri =
+    const salts_xml_string_view namespace_uri =
         scxml_syntax_node_namespace_uri(node);
     const scxml_element_kind kind = scxml_analyze_element_kind(node);
     if (!scxml_analyze_view_equal_raw(namespace_uri, SCXML_NAMESPACE)) {
@@ -562,9 +562,9 @@ static scxml_status require_scxml_element(scxml_build *build,
 
 const scxml_cmeta_custom_action_v1 *scxml_analyze_find_custom_action(
     const scxml_build *build, scxml_syntax_node node) {
-    const turbo_xml_string_view namespace_uri =
+    const salts_xml_string_view namespace_uri =
         scxml_syntax_node_namespace_uri(node);
-    const turbo_xml_string_view local_name =
+    const salts_xml_string_view local_name =
         scxml_syntax_node_local_name(node);
     size_t index;
     if (build == NULL || namespace_uri.data == NULL ||
@@ -599,8 +599,8 @@ static scxml_status analyze_custom_action(
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child =
             scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
         return scxml_analyze_fail(
@@ -611,9 +611,9 @@ static scxml_status analyze_custom_action(
     for (index = 0u; index < scxml_syntax_node_attribute_count(node); ++index) {
         const scxml_syntax_attribute attribute =
             scxml_syntax_node_attribute_at(node, index);
-        const turbo_xml_string_view namespace_uri =
+        const salts_xml_string_view namespace_uri =
             scxml_syntax_attribute_namespace_uri(attribute);
-        const turbo_xml_string_view name =
+        const salts_xml_string_view name =
             scxml_syntax_attribute_local_name(attribute);
         size_t parameter;
         bool found = false;
@@ -666,7 +666,7 @@ size_t scxml_analyze_element_child_count(scxml_syntax_node node,
     size_t index;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_ELEMENT &&
             scxml_analyze_element_kind(child) == wanted) {
             ++count;
         }
@@ -679,7 +679,7 @@ static scxml_syntax_node first_real_child(scxml_syntax_node node) {
     scxml_syntax_node empty = {NULL};
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_ELEMENT &&
             scxml_analyze_is_state_element(scxml_analyze_element_kind(child))) {
             return child;
         }
@@ -687,8 +687,8 @@ static scxml_syntax_node first_real_child(scxml_syntax_node node) {
     return empty;
 }
 
-bool scxml_analyze_token_next(turbo_xml_string_view value, size_t *cursor,
-                       turbo_xml_string_view *token) {
+bool scxml_analyze_token_next(salts_xml_string_view value, size_t *cursor,
+                       salts_xml_string_view *token) {
     size_t begin;
     if (cursor == NULL || token == NULL) return false;
     begin = *cursor;
@@ -708,8 +708,8 @@ bool scxml_analyze_token_next(turbo_xml_string_view value, size_t *cursor,
     return true;
 }
 
-static bool normalize_event_descriptor(turbo_xml_string_view token,
-                                       turbo_xml_string_view *out_base,
+static bool normalize_event_descriptor(salts_xml_string_view token,
+                                       salts_xml_string_view *out_base,
                                        bool *out_match_all) {
     const char *wildcard;
     if (out_base == NULL || out_match_all == NULL || token.size == 0u)
@@ -733,9 +733,9 @@ static bool normalize_event_descriptor(turbo_xml_string_view token,
     return out_base->size != 0u;
 }
 
-bool scxml_analyze_event_descriptor_matches(turbo_xml_string_view descriptor,
-                                     turbo_xml_string_view event_name) {
-    turbo_xml_string_view base;
+bool scxml_analyze_event_descriptor_matches(salts_xml_string_view descriptor,
+                                     salts_xml_string_view event_name) {
+    salts_xml_string_view base;
     bool match_all;
     if (!normalize_event_descriptor(descriptor, &base, &match_all))
         return false;
@@ -747,8 +747,8 @@ bool scxml_analyze_event_descriptor_matches(turbo_xml_string_view descriptor,
               event_name.data[base.size] == '.';
 }
 
-bool scxml_analyze_completion_token(turbo_xml_string_view token,
-                             turbo_xml_string_view *state_name) {
+bool scxml_analyze_completion_token(salts_xml_string_view token,
+                             salts_xml_string_view *state_name) {
     static const char prefix[] = "done.state.";
     if (token.size <= sizeof(prefix) - 1u ||
         memcmp(token.data, prefix, sizeof(prefix) - 1u) != 0) {
@@ -760,9 +760,9 @@ bool scxml_analyze_completion_token(turbo_xml_string_view token,
 }
 
 bool scxml_analyze_completion_descriptor_matches(
-    turbo_xml_string_view descriptor, turbo_xml_string_view state_name) {
+    salts_xml_string_view descriptor, salts_xml_string_view state_name) {
     static const char prefix[] = "done.state.";
-    turbo_xml_string_view base = {NULL, 0u};
+    salts_xml_string_view base = {NULL, 0u};
     const size_t prefix_size = sizeof(prefix) - 1u;
     size_t event_size;
     bool match_all = false;
@@ -804,7 +804,7 @@ static scxml_status analyze_raise(scxml_build *build,
     }
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT) {
+        if (scxml_syntax_node_type(child) != SALTS_XML_COMMENT) {
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
                               "raise cannot contain executable or text content");
@@ -821,7 +821,7 @@ static scxml_status analyze_raise(scxml_build *build,
     return SCXML_OK;
 }
 
-bool scxml_analyze_parse_delay_ms(turbo_xml_string_view value, uint64_t *out_ms) {
+bool scxml_analyze_parse_delay_ms(salts_xml_string_view value, uint64_t *out_ms) {
     size_t number_size;
     size_t index;
     size_t dot = SIZE_MAX;
@@ -877,7 +877,7 @@ bool scxml_analyze_parse_delay_ms(turbo_xml_string_view value, uint64_t *out_ms)
     return true;
 }
 
-static bool count_retained_view(turbo_xml_string_view value,
+static bool count_retained_view(salts_xml_string_view value,
                                 size_t *total) {
     size_t retained;
     return scxml_analyze_checked_add(value.size, 1u, &retained) &&
@@ -897,25 +897,25 @@ scxml_status scxml_analyze_inspect_inline_content(
     scxml_build *build, scxml_syntax_node content,
     scxml_content_kind *out_kind, size_t *out_size) {
     size_t index;
-    turbo_xml_status xml_status;
+    salts_xml_status xml_status;
     bool has_markup = false;
     if (build == NULL || out_kind == NULL || out_size == NULL)
         return SCXML_INVALID_ARGUMENT;
     for (index = 0u; index < scxml_syntax_node_child_count(content); ++index) {
         if (scxml_syntax_node_type(scxml_syntax_node_child_at(content, index)) !=
-            TURBO_XML_TEXT) {
+            SALTS_XML_TEXT) {
             has_markup = true;
             break;
         }
     }
     xml_status = scxml_syntax_serialize_children(
         content, NULL, 0u, build->limits.max_name_bytes, out_size);
-    if (xml_status != TURBO_XML_OK) {
+    if (xml_status != SALTS_XML_OK) {
         return scxml_analyze_fail(
             build,
-            xml_status == TURBO_XML_LIMIT_EXCEEDED
+            xml_status == SALTS_XML_LIMIT_EXCEEDED
                 ? SCXML_LIMIT_EXCEEDED
-                : xml_status == TURBO_XML_ALLOCATION_FAILED
+                : xml_status == SALTS_XML_ALLOCATION_FAILED
                     ? SCXML_ALLOCATION_FAILED
                     : SCXML_INVALID_STRUCTURE,
             scxml_syntax_node_location(content),
@@ -930,7 +930,7 @@ static bool content_expression_is_rich(
     const scxml_build *build, scxml_syntax_attribute expression) {
     scxml_location location = {0};
     scxml_expr_diagnostic diagnostic = {0};
-    const turbo_xml_string_view source =
+    const salts_xml_string_view source =
         scxml_syntax_attribute_value(expression);
     return build != NULL && expression.impl != NULL &&
         scxml_location_compile(
@@ -978,12 +978,12 @@ static scxml_status analyze_send_content(
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child)))) {
             continue;
         }
-        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) == SALTS_XML_ELEMENT) {
             scxml_status namespace_status = require_scxml_element(
                 build, child, &child_kind);
             if (namespace_status != SCXML_OK)
@@ -1077,11 +1077,11 @@ static scxml_status analyze_done_data(
         size_t content_size = 0u;
         size_t retained = 0u;
         scxml_content_kind content_kind;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT)
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
                               "donedata admits only param or content children");
@@ -1136,7 +1136,7 @@ static scxml_status analyze_done_data(
             if (content_expression_is_rich(build, expression)) {
                 scxml_location location = {0};
                 scxml_expr_diagnostic diagnostic = {0};
-                const turbo_xml_string_view source =
+                const salts_xml_string_view source =
                     scxml_syntax_attribute_value(expression);
                 const cmeta_type_desc *type;
                 if (scxml_location_compile(
@@ -1212,8 +1212,8 @@ static scxml_status validate_empty_effect(
     size_t index;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
@@ -1242,22 +1242,22 @@ static scxml_status analyze_send(scxml_build *build,
         scxml_analyze_find_attribute(node, "idlocation");
     const scxml_syntax_attribute namelist_attribute =
         scxml_analyze_find_attribute(node, "namelist");
-    const turbo_xml_string_view event =
+    const salts_xml_string_view event =
         event_attribute.impl != NULL
             ? scxml_syntax_attribute_value(event_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
-    const turbo_xml_string_view target =
+            : (salts_xml_string_view){NULL, 0u};
+    const salts_xml_string_view target =
         target_attribute.impl != NULL
             ? scxml_syntax_attribute_value(target_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
-    const turbo_xml_string_view type =
+            : (salts_xml_string_view){NULL, 0u};
+    const salts_xml_string_view type =
         type_attribute.impl != NULL
             ? scxml_syntax_attribute_value(type_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
-    const turbo_xml_string_view id =
+            : (salts_xml_string_view){NULL, 0u};
+    const salts_xml_string_view id =
         id_attribute.impl != NULL
             ? scxml_syntax_attribute_value(id_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
+            : (salts_xml_string_view){NULL, 0u};
     uint64_t delay_ms = 0u;
     bool internal_target;
     bool has_data = false;
@@ -1265,7 +1265,7 @@ static scxml_status analyze_send(scxml_build *build,
     size_t payload_count = 0u;
     size_t param_count = 0u;
     size_t token_cursor = 0u;
-    turbo_xml_string_view token;
+    salts_xml_string_view token;
     size_t child_index;
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_SEND);
@@ -1344,7 +1344,7 @@ static scxml_status analyze_send(scxml_build *build,
                           scxml_syntax_node_location(node),
                           "send content is mutually exclusive with namelist and param");
     if (namelist_attribute.impl != NULL) {
-        const turbo_xml_string_view namelist =
+        const salts_xml_string_view namelist =
             scxml_syntax_attribute_value(namelist_attribute);
         while (scxml_analyze_token_next(namelist, &token_cursor, &token)) {
             if (!scxml_analyze_checked_add(payload_count, 1u, &payload_count) ||
@@ -1366,7 +1366,7 @@ static scxml_status analyze_send(scxml_build *build,
         const scxml_syntax_node child =
             scxml_syntax_node_child_at(node, child_index);
         scxml_syntax_attribute name;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT ||
             scxml_analyze_element_kind(child) != SCXML_ELEMENT_PARAM)
             continue;
         name = scxml_analyze_find_attribute(child, "name");
@@ -1473,10 +1473,10 @@ static scxml_status analyze_cancel(scxml_build *build,
     const scxml_syntax_attribute sendid_attribute = scxml_analyze_find_attribute(node, "sendid");
     const scxml_syntax_attribute sendid_expr_attribute =
         scxml_analyze_find_attribute(node, "sendidexpr");
-    const turbo_xml_string_view sendid =
+    const salts_xml_string_view sendid =
         sendid_attribute.impl != NULL
             ? scxml_syntax_attribute_value(sendid_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
+            : (salts_xml_string_view){NULL, 0u};
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_CANCEL);
     if (status != SCXML_OK) return status;
@@ -1526,10 +1526,10 @@ static scxml_status analyze_log(scxml_build *build,
                                       scxml_syntax_node node,
                                       scxml_counts *counts) {
     const scxml_syntax_attribute label_attribute = scxml_analyze_find_attribute(node, "label");
-    const turbo_xml_string_view label =
+    const salts_xml_string_view label =
         label_attribute.impl != NULL
             ? scxml_syntax_attribute_value(label_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
+            : (salts_xml_string_view){NULL, 0u};
     size_t retained_bytes;
     size_t index;
     scxml_status status = scxml_analyze_validate_element_attributes(
@@ -1537,7 +1537,7 @@ static scxml_status analyze_log(scxml_build *build,
     if (status != SCXML_OK) return status;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT) {
+        if (scxml_syntax_node_type(child) != SALTS_XML_COMMENT) {
             return scxml_analyze_fail(
                 build, SCXML_INVALID_STRUCTURE,
                 scxml_syntax_node_location(child),
@@ -1578,7 +1578,7 @@ static scxml_status analyze_assign(scxml_build *build,
         is_empty_view(scxml_syntax_attribute_value(location)) ||
         expression.impl == NULL ||
         is_empty_view(scxml_syntax_attribute_value(expression))) {
-        const turbo_xml_location failure_location =
+        const salts_xml_location failure_location =
             location.impl == NULL || expression.impl == NULL
                 ? scxml_syntax_node_location(node)
                 : location.impl != NULL &&
@@ -1591,7 +1591,7 @@ static scxml_status analyze_assign(scxml_build *build,
     }
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) != TURBO_XML_COMMENT)
+        if (scxml_syntax_node_type(child) != SALTS_XML_COMMENT)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
                               "assign cannot contain child content");
@@ -1659,7 +1659,7 @@ static scxml_status analyze_foreach(
 static scxml_status validate_condition_attribute(
     scxml_build *build, scxml_syntax_node node) {
     const scxml_syntax_attribute condition = scxml_analyze_find_attribute(node, "cond");
-    turbo_xml_string_view state;
+    salts_xml_string_view state;
     if (build->data_model == SCXML_DATA_MODEL_CMETA) {
         if (condition.impl == NULL ||
             is_empty_view(scxml_syntax_attribute_value(condition))) {
@@ -1693,8 +1693,8 @@ static scxml_status validate_empty_marker(
     size_t index;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
         return scxml_analyze_fail(
@@ -1726,11 +1726,11 @@ static scxml_status analyze_conditional(
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT) {
             return scxml_analyze_fail(
                 build, SCXML_UNSUPPORTED_FEATURE,
                 scxml_syntax_node_location(child),
@@ -1829,11 +1829,11 @@ static scxml_status analyze_executable_content(
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
         scxml_status status;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
                               scxml_syntax_node_location(child),
                               "executable block text content is not supported");
@@ -1921,8 +1921,8 @@ static scxml_status analyze_transition(scxml_build *build,
     scxml_syntax_attribute event_attribute;
     scxml_syntax_attribute target_attribute;
     scxml_syntax_attribute condition_attribute;
-    turbo_xml_string_view value;
-    turbo_xml_string_view token;
+    salts_xml_string_view value;
+    salts_xml_string_view token;
     size_t cursor = 0u;
     size_t token_count = 0u;
     size_t target_count = 0u;
@@ -1954,7 +1954,7 @@ static scxml_status analyze_transition(scxml_build *build,
     }
     if (condition_attribute.impl != NULL &&
         build->data_model == SCXML_DATA_MODEL_NULL) {
-        turbo_xml_string_view state_name;
+        salts_xml_string_view state_name;
         if (!scxml_analyze_parse_null_in_condition(
                 scxml_syntax_attribute_value(condition_attribute), &state_name)) {
             return scxml_analyze_fail(
@@ -1978,8 +1978,8 @@ static scxml_status analyze_transition(scxml_build *build,
         value = scxml_syntax_attribute_value(event_attribute);
         cursor = 0u;
         while (scxml_analyze_token_next(value, &cursor, &token)) {
-            turbo_xml_string_view completed = {NULL, 0u};
-            turbo_xml_string_view descriptor_base = {NULL, 0u};
+            salts_xml_string_view completed = {NULL, 0u};
+            salts_xml_string_view descriptor_base = {NULL, 0u};
             bool match_all = false;
             ++token_count;
             if (scxml_analyze_completion_token(token, &completed)) continue;
@@ -2132,7 +2132,7 @@ static size_t decimal_digits(size_t value) {
 
 static scxml_status analyze_invoke(
     scxml_build *build, scxml_syntax_node node,
-    turbo_xml_string_view owner_id, size_t ordinal,
+    salts_xml_string_view owner_id, size_t ordinal,
     scxml_counts *counts) {
     static const size_t generated_separator_size =
         sizeof(".invoke.") - 1u;
@@ -2153,15 +2153,15 @@ static scxml_status analyze_invoke(
         scxml_analyze_find_attribute(node, "idlocation");
     const scxml_syntax_attribute namelist_attribute =
         scxml_analyze_find_attribute(node, "namelist");
-    const turbo_xml_string_view id = id_attribute.impl != NULL
+    const salts_xml_string_view id = id_attribute.impl != NULL
         ? scxml_syntax_attribute_value(id_attribute)
-        : (turbo_xml_string_view){NULL, 0u};
-    const turbo_xml_string_view type = type_attribute.impl != NULL
+        : (salts_xml_string_view){NULL, 0u};
+    const salts_xml_string_view type = type_attribute.impl != NULL
         ? scxml_syntax_attribute_value(type_attribute)
-        : (turbo_xml_string_view){NULL, 0u};
-    const turbo_xml_string_view src = src_attribute.impl != NULL
+        : (salts_xml_string_view){NULL, 0u};
+    const salts_xml_string_view src = src_attribute.impl != NULL
         ? scxml_syntax_attribute_value(src_attribute)
-        : (turbo_xml_string_view){NULL, 0u};
+        : (salts_xml_string_view){NULL, 0u};
     size_t id_size = id.size;
     size_t done_size;
     size_t dynamic_id_size = 0u;
@@ -2173,7 +2173,7 @@ static scxml_status analyze_invoke(
     size_t param_count = 0u;
     size_t payload_count = 0u;
     size_t token_cursor = 0u;
-    turbo_xml_string_view token;
+    salts_xml_string_view token;
     scxml_location compiled_id_location = {0};
     scxml_status status = scxml_analyze_validate_element_attributes(
         build, node, SCXML_ELEMENT_INVOKE);
@@ -2235,7 +2235,7 @@ static scxml_status analyze_invoke(
             "invoke literal type and src must be nonempty");
     }
     if (autoforward_attribute.impl != NULL) {
-        const turbo_xml_string_view value =
+        const salts_xml_string_view value =
             scxml_syntax_attribute_value(autoforward_attribute);
         if (!scxml_analyze_view_equal_raw(value, "true") &&
             !scxml_analyze_view_equal_raw(value, "false")) {
@@ -2249,11 +2249,11 @@ static scxml_status analyze_invoke(
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
         bool nonempty = false;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
                               scxml_syntax_node_location(child),
                               "invoke text content is not supported");
@@ -2341,7 +2341,7 @@ static scxml_status analyze_invoke(
                           scxml_syntax_node_location(node),
                           "invoke namelist and param are mutually exclusive");
     if (namelist_attribute.impl != NULL) {
-        const turbo_xml_string_view namelist =
+        const salts_xml_string_view namelist =
             scxml_syntax_attribute_value(namelist_attribute);
         while (scxml_analyze_token_next(namelist, &token_cursor, &token)) {
             if (!scxml_analyze_checked_add(payload_count, 1u, &payload_count) ||
@@ -2432,11 +2432,11 @@ static scxml_status analyze_datamodel(
         scxml_content_kind content_kind;
         size_t content_size = 0u;
         size_t child_index;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT ||
-            (scxml_syntax_node_type(child) == TURBO_XML_TEXT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT ||
+            (scxml_syntax_node_type(child) == SALTS_XML_TEXT &&
              is_xml_whitespace(scxml_syntax_node_value(child))))
             continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT ||
             scxml_analyze_element_kind(child) != SCXML_ELEMENT_DATA)
             return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                               scxml_syntax_node_location(child),
@@ -2473,8 +2473,8 @@ static scxml_status analyze_datamodel(
                  ++child_index) {
                 const scxml_syntax_node content =
                     scxml_syntax_node_child_at(child, child_index);
-                if (scxml_syntax_node_type(content) == TURBO_XML_COMMENT ||
-                    (scxml_syntax_node_type(content) == TURBO_XML_TEXT &&
+                if (scxml_syntax_node_type(content) == SALTS_XML_COMMENT ||
+                    (scxml_syntax_node_type(content) == SALTS_XML_TEXT &&
                      is_xml_whitespace(scxml_syntax_node_value(content))))
                     continue;
                 return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
@@ -2584,7 +2584,7 @@ scxml_status scxml_analyze_state(scxml_build *build,
     if (kind == SCXML_ELEMENT_HISTORY) {
         const scxml_syntax_attribute type_attribute = scxml_analyze_find_attribute(node, "type");
         if (type_attribute.impl != NULL) {
-            const turbo_xml_string_view type =
+            const salts_xml_string_view type =
                 scxml_syntax_attribute_value(type_attribute);
             if (!scxml_analyze_view_equal_raw(type, "shallow") &&
                 !scxml_analyze_view_equal_raw(type, "deep")) {
@@ -2623,9 +2623,9 @@ scxml_status scxml_analyze_state(scxml_build *build,
         if (explicit_initials == 0u) {
             size_t initial_target_count = 1u;
             if (initial_attribute.impl != NULL) {
-                const turbo_xml_string_view initial_value =
+                const salts_xml_string_view initial_value =
                     scxml_syntax_attribute_value(initial_attribute);
-                turbo_xml_string_view initial_token;
+                salts_xml_string_view initial_token;
                 size_t initial_cursor = 0u;
                 initial_target_count = 0u;
                 while (scxml_analyze_token_next(initial_value, &initial_cursor,
@@ -2656,8 +2656,8 @@ scxml_status scxml_analyze_state(scxml_build *build,
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         scxml_element_kind child_kind;
-        if (scxml_syntax_node_type(child) == TURBO_XML_COMMENT) continue;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) {
+        if (scxml_syntax_node_type(child) == SALTS_XML_COMMENT) continue;
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT) {
             return scxml_analyze_fail(build, SCXML_UNSUPPORTED_FEATURE,
                               scxml_syntax_node_location(child),
                               "non-whitespace SCXML text is not supported");
@@ -2822,8 +2822,8 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
     if (compound && !has_explicit_initial) {
         scxml_syntax_node target_node = first_real_child(node);
         scxml_syntax_attribute target_id;
-        turbo_xml_string_view target;
-        turbo_xml_location location;
+        salts_xml_string_view target;
+        salts_xml_location location;
         const cflow_machine_state_id initial_id =
             (cflow_machine_state_id)(build->state_index + 1u);
         if (initial_attribute.impl != NULL) {
@@ -2845,7 +2845,7 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind child_kind = scxml_analyze_element_kind(child);
-        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_ELEMENT &&
             (scxml_analyze_is_state_element(child_kind) ||
              child_kind == SCXML_ELEMENT_INITIAL ||
              child_kind == SCXML_ELEMENT_HISTORY)) {
@@ -2859,7 +2859,7 @@ scxml_status scxml_analyze_emit_state(scxml_build *build,
 
 const scxml_name_ref *scxml_analyze_find_name_ref(const scxml_name_ref *names,
                                            size_t count,
-                                           turbo_xml_string_view name) {
+                                           salts_xml_string_view name) {
     size_t low = 0u;
     size_t high = count;
     while (low < high) {
@@ -2903,7 +2903,7 @@ static char *reserve_invocation_storage(scxml_build *build, size_t size) {
 }
 
 static bool retain_invocation_view(
-    scxml_build *build, turbo_xml_string_view value,
+    scxml_build *build, salts_xml_string_view value,
     const char **out_data, size_t *out_size) {
     char *stored;
     size_t retained;
@@ -2938,7 +2938,7 @@ static scxml_status retain_invocation_inline_content(
     content->bytes = stored;
     if (scxml_syntax_serialize_children(
             node, stored, retained, build->limits.max_name_bytes,
-            &actual) != TURBO_XML_OK || actual != content->byte_count)
+            &actual) != SALTS_XML_OK || actual != content->byte_count)
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                           scxml_syntax_node_location(node),
                           "invoke inline content changed during emission");
@@ -2953,10 +2953,10 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         sizeof("18446744073709551615") - 1u;
     const cflow_machine_state_id owner = scxml_analyze_node_id(build, node, node_count);
     const scxml_syntax_attribute owner_id_attribute = scxml_analyze_find_attribute(node, "id");
-    const turbo_xml_string_view owner_id =
+    const salts_xml_string_view owner_id =
         owner_id_attribute.impl != NULL
             ? scxml_syntax_attribute_value(owner_id_attribute)
-            : (turbo_xml_string_view){NULL, 0u};
+            : (salts_xml_string_view){NULL, 0u};
     size_t ordinal = 0u;
     size_t index;
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
@@ -2971,7 +2971,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         scxml_syntax_attribute idlocation_attribute;
         scxml_syntax_attribute namelist_attribute;
         scxml_syntax_attribute autoforward_attribute;
-        turbo_xml_location id_location;
+        salts_xml_location id_location;
         char *generated;
         size_t generated_size;
         size_t retained_size;
@@ -2979,7 +2979,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
         int ordinal_size;
         char *done_name;
         scxml_status expression_status;
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT ||
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT ||
             kind != SCXML_ELEMENT_INVOKE)
             continue;
         ++ordinal;
@@ -3037,13 +3037,13 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                 build,
                 type_attribute.impl != NULL
                     ? scxml_syntax_attribute_value(type_attribute)
-                    : (turbo_xml_string_view){NULL, 0u},
+                    : (salts_xml_string_view){NULL, 0u},
                 &descriptor->type, &descriptor->type_size) ||
             !retain_invocation_view(
                 build,
                 src_attribute.impl != NULL
                     ? scxml_syntax_attribute_value(src_attribute)
-                    : (turbo_xml_string_view){NULL, 0u},
+                    : (salts_xml_string_view){NULL, 0u},
                 &descriptor->src, &descriptor->src_size) ||
             !scxml_analyze_checked_add(sizeof(done_prefix) - 1u, descriptor->id_size,
                          &generated_size) ||
@@ -3112,10 +3112,10 @@ scxml_status scxml_analyze_emit_invocation_declarations(
             descriptor->has_src_expr = true;
         }
         if (namelist_attribute.impl != NULL) {
-            const turbo_xml_string_view namelist =
+            const salts_xml_string_view namelist =
                 scxml_syntax_attribute_value(namelist_attribute);
             size_t cursor = 0u;
-            turbo_xml_string_view token;
+            salts_xml_string_view token;
             while (scxml_analyze_token_next(namelist, &cursor, &token)) {
                 scxml_payload_descriptor *payload;
                 if (build->payload_index >= build->payload_capacity)
@@ -3150,7 +3150,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
                 const scxml_element_kind payload_kind =
                     scxml_analyze_element_kind(payload_child);
                 if (scxml_syntax_node_type(payload_child) !=
-                    TURBO_XML_ELEMENT)
+                    SALTS_XML_ELEMENT)
                     continue;
                 if (payload_kind == SCXML_ELEMENT_PARAM) {
                     const scxml_syntax_attribute name =
@@ -3217,7 +3217,7 @@ scxml_status scxml_analyze_emit_invocation_declarations(
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind kind = scxml_analyze_element_kind(child);
-        if (scxml_syntax_node_type(child) == TURBO_XML_ELEMENT &&
+        if (scxml_syntax_node_type(child) == SALTS_XML_ELEMENT &&
             (scxml_analyze_is_state_element(kind) || kind == SCXML_ELEMENT_INITIAL ||
              kind == SCXML_ELEMENT_HISTORY)) {
             scxml_status status = scxml_analyze_emit_invocation_declarations(
@@ -3235,11 +3235,11 @@ scxml_status scxml_analyze_resolve_invocation_events(scxml_build *build) {
             &build->invocations[index];
         const scxml_name_ref *event = scxml_analyze_find_name_ref(
             build->event_names, build->event_name_count,
-            (turbo_xml_string_view){
+            (salts_xml_string_view){
                 descriptor->done_name, descriptor->done_name_size});
         if (event == NULL) {
             return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
-                              (turbo_xml_location){0u, 0u, 0u},
+                              (salts_xml_location){0u, 0u, 0u},
                               "invoke done Event was not retained");
         }
         descriptor->done_event = (cflow_event_id)event->id;
@@ -3253,19 +3253,19 @@ scxml_status scxml_analyze_collect_transition_events(
     for (index = 0u; index < scxml_syntax_node_child_count(node); ++index) {
         const scxml_syntax_node child = scxml_syntax_node_child_at(node, index);
         const scxml_element_kind child_kind = scxml_analyze_element_kind(child);
-        if (scxml_syntax_node_type(child) != TURBO_XML_ELEMENT) continue;
+        if (scxml_syntax_node_type(child) != SALTS_XML_ELEMENT) continue;
         if (child_kind == SCXML_ELEMENT_TRANSITION) {
             const scxml_syntax_attribute event_attribute =
                 scxml_analyze_find_attribute(child, "event");
             if (event_attribute.impl != NULL) {
-                const turbo_xml_string_view value =
+                const salts_xml_string_view value =
                     scxml_syntax_attribute_value(event_attribute);
-                turbo_xml_string_view token;
+                salts_xml_string_view token;
                 size_t cursor = 0u;
                 while (scxml_analyze_token_next(value, &cursor, &token)) {
-                    turbo_xml_string_view completed = {NULL, 0u};
+                    salts_xml_string_view completed = {NULL, 0u};
                     if (!scxml_analyze_completion_token(token, &completed)) {
-                        turbo_xml_string_view descriptor_base = {NULL, 0u};
+                        salts_xml_string_view descriptor_base = {NULL, 0u};
                         bool match_all = false;
                         if (!normalize_event_descriptor(
                                 token, &descriptor_base, &match_all)) {
@@ -3318,7 +3318,7 @@ scxml_status scxml_analyze_collect_transition_events(
 }
 
 void scxml_analyze_collect_reserved_error_events(scxml_build *build,
-                                          turbo_xml_location location) {
+                                          salts_xml_location location) {
     size_t order = build->event_occurrence_index;
     build->event_occurrences[order] =
         (scxml_name_ref){

@@ -14,8 +14,8 @@ scxml_status scxml_emit_compile_cmeta_owned_string_location(
     scxml_build *build, scxml_syntax_attribute attribute,
     const char *subject, scxml_location *out);
 scxml_status scxml_emit_compile_cmeta_payload_token(
-    scxml_build *build, turbo_xml_string_view source,
-    turbo_xml_location location, const char *subject,
+    scxml_build *build, salts_xml_string_view source,
+    salts_xml_location location, const char *subject,
     scxml_expr_program *program);
 scxml_status scxml_emit_compile_cmeta_content_expression(
     scxml_build *build, scxml_syntax_attribute expression,

@@ -8,7 +8,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <turbo/thread.h>
+#include <salts/thread.h>
 
 #define HOST_ENDPOINT_CAPACITY 4u
 #define HOST_MESSAGE_CAPACITY 4u
@@ -95,7 +95,7 @@ typedef struct host_delivery {
 } host_delivery;
 
 struct host_router {
-    turbo_mutex_t lock;
+    salts_mutex_t lock;
     size_t message_capacity;
     uint64_t next_sequence;
     host_endpoint endpoints[HOST_ENDPOINT_CAPACITY];
@@ -146,13 +146,13 @@ static bool host_router_init(host_router *router, size_t message_capacity) {
     }
     router->message_capacity = message_capacity;
     router->next_sequence = UINT64_C(1);
-    turbo_mutex_init(&router->lock);
+    salts_mutex_init(&router->lock);
     return router->lock != NULL;
 }
 
 static void host_router_destroy(host_router *router) {
     if (router == NULL) return;
-    if (router->lock != NULL) turbo_mutex_destroy(&router->lock);
+    if (router->lock != NULL) salts_mutex_destroy(&router->lock);
     memset(router, 0, sizeof(*router));
 }
 
@@ -169,10 +169,10 @@ static bool host_router_reserve(
     size_t index;
     if (router == NULL || adapter == NULL || out_endpoint == NULL)
         return false;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (adapter->router != router || adapter->endpoint != SIZE_MAX ||
         adapter->closed) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return false;
     }
     for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
@@ -186,10 +186,10 @@ static bool host_router_reserve(
             .invoke_target = SIZE_MAX};
         adapter->endpoint = index;
         *out_endpoint = index;
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return true;
     }
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return false;
 }
 
@@ -206,16 +206,16 @@ static bool host_router_activate(
             session, location, sizeof(location), &required) !=
             SCXML_LOCATION_OK)
         return false;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     endpoint = &router->endpoints[endpoint_index];
     if (!endpoint->in_use || endpoint->active) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return false;
     }
     for (index = 0u; index < HOST_ENDPOINT_CAPACITY; ++index) {
         if (index != endpoint_index && router->endpoints[index].active &&
             strcmp(router->endpoints[index].location, location) == 0) {
-            turbo_mutex_unlock(&router->lock);
+            salts_mutex_unlock(&router->lock);
             return false;
         }
     }
@@ -223,7 +223,7 @@ static bool host_router_activate(
     endpoint->program = program;
     memcpy(endpoint->location, location, required);
     endpoint->active = true;
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return true;
 }
 
@@ -252,9 +252,9 @@ static bool host_router_register(
         return false;
     }
     if (adapter == NULL) {
-        turbo_mutex_lock(&router->lock);
+        salts_mutex_lock(&router->lock);
         router->endpoints[endpoint].adapter = NULL;
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
     }
     *out_endpoint = endpoint;
     return true;
@@ -263,16 +263,16 @@ static bool host_router_register(
 static bool host_router_unregister(host_router *router, size_t endpoint) {
     size_t index;
     if (router == NULL || endpoint >= HOST_ENDPOINT_CAPACITY) return false;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (!router->endpoints[endpoint].in_use) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return false;
     }
     for (index = 0u; index < router->message_capacity; ++index) {
         const host_message *message = &router->messages[index];
         if (message->state != HOST_MESSAGE_FREE &&
             (message->source == endpoint || message->target == endpoint)) {
-            turbo_mutex_unlock(&router->lock);
+            salts_mutex_unlock(&router->lock);
             return false;
         }
     }
@@ -280,7 +280,7 @@ static bool host_router_unregister(host_router *router, size_t endpoint) {
         router->endpoints[endpoint].adapter->endpoint = SIZE_MAX;
     router->endpoints[endpoint] = (host_endpoint){
         .parent = SIZE_MAX, .invoke_target = SIZE_MAX};
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return true;
 }
 
@@ -290,11 +290,11 @@ static bool host_router_set_parent(host_router *router, size_t child,
     if (router == NULL || child >= HOST_ENDPOINT_CAPACITY ||
         parent >= HOST_ENDPOINT_CAPACITY)
         return false;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     valid = router->endpoints[child].in_use &&
         router->endpoints[parent].in_use;
     if (valid) router->endpoints[child].parent = parent;
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return valid;
 }
 
@@ -304,14 +304,14 @@ static bool host_router_set_invoke_alias(
     if (router == NULL || owner >= HOST_ENDPOINT_CAPACITY ||
         target >= HOST_ENDPOINT_CAPACITY || alias == NULL)
         return false;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     valid = router->endpoints[owner].in_use &&
         router->endpoints[target].in_use &&
         host_copy(router->endpoints[owner].invoke_alias,
                   sizeof(router->endpoints[owner].invoke_alias),
                   alias, strlen(alias));
     if (valid) router->endpoints[owner].invoke_target = target;
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return valid;
 }
 
@@ -350,10 +350,10 @@ static size_t host_router_discard_pending(host_router *router) {
     size_t discarded = 0u;
     size_t index;
     if (router == NULL) return SIZE_MAX;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     for (index = 0u; index < router->message_capacity; ++index) {
         if (router->messages[index].state == HOST_MESSAGE_INFLIGHT) {
-            turbo_mutex_unlock(&router->lock);
+            salts_mutex_unlock(&router->lock);
             return SIZE_MAX;
         }
     }
@@ -364,7 +364,7 @@ static size_t host_router_discard_pending(host_router *router) {
             ++discarded;
         }
     }
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return discarded;
 }
 
@@ -372,22 +372,22 @@ static void host_ticket_commit(void *user) {
     host_message *message = (host_message *)user;
     host_router *router = message != NULL ? message->router : NULL;
     if (router == NULL) return;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (message->state == HOST_MESSAGE_RESERVED) {
         message->state = HOST_MESSAGE_READY;
         message->sequence = router->next_sequence++;
     }
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
 }
 
 static void host_ticket_discard(void *user) {
     host_message *message = (host_message *)user;
     host_router *router = message != NULL ? message->router : NULL;
     if (router == NULL) return;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (message->state == HOST_MESSAGE_RESERVED)
         host_release_message_locked(message);
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
 }
 
 static scxml_adapter_status host_prepare_send(
@@ -411,9 +411,9 @@ static scxml_adapter_status host_prepare_send(
         *out_error = "unsupported Event I/O processor type";
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (adapter->closed) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return SCXML_ADAPTER_CLOSED;
     }
     source_relative_target = request->target_size == 0u ||
@@ -429,7 +429,7 @@ static scxml_adapter_status host_prepare_send(
     if (target == SIZE_MAX || !router->endpoints[target].in_use ||
         (!source_relative_target &&
          !router->endpoints[target].accessible)) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         *out_error = "target session is missing or inaccessible";
         return SCXML_ADAPTER_ERROR_COMMUNICATION;
     }
@@ -440,7 +440,7 @@ static scxml_adapter_status host_prepare_send(
         }
     }
     if (message == NULL) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return SCXML_ADAPTER_FULL;
     }
     if (!host_copy(message->event, sizeof(message->event),
@@ -450,7 +450,7 @@ static scxml_adapter_status host_prepare_send(
         !host_copy(message->send_id, sizeof(message->send_id),
                    request->id, request->id_size)) {
         memset(message, 0, sizeof(*message));
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return SCXML_ADAPTER_FULL;
     }
     message->router = router;
@@ -461,7 +461,7 @@ static scxml_adapter_status host_prepare_send(
     ++adapter->outstanding;
     *out_ticket = (cflow_statechart_effect_ticket){
         host_ticket_commit, host_ticket_discard, message};
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return SCXML_ADAPTER_ACCEPTED;
 }
 
@@ -478,18 +478,18 @@ static scxml_adapter_status host_prepare_cancel(
 static void host_adapter_close(void *user) {
     host_adapter_context *adapter = (host_adapter_context *)user;
     if (adapter == NULL || adapter->router == NULL) return;
-    turbo_mutex_lock(&adapter->router->lock);
+    salts_mutex_lock(&adapter->router->lock);
     adapter->closed = true;
-    turbo_mutex_unlock(&adapter->router->lock);
+    salts_mutex_unlock(&adapter->router->lock);
 }
 
 static bool host_adapter_is_quiescent(void *user) {
     host_adapter_context *adapter = (host_adapter_context *)user;
     bool quiescent;
     if (adapter == NULL || adapter->router == NULL) return false;
-    turbo_mutex_lock(&adapter->router->lock);
+    salts_mutex_lock(&adapter->router->lock);
     quiescent = adapter->closed && adapter->outstanding == 0u;
-    turbo_mutex_unlock(&adapter->router->lock);
+    salts_mutex_unlock(&adapter->router->lock);
     return quiescent;
 }
 
@@ -505,11 +505,11 @@ static const scxml_event_io_adapter HOST_ADAPTER = {
 static size_t host_router_ready_count(host_router *router) {
     size_t count = 0u;
     size_t index;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     for (index = 0u; index < router->message_capacity; ++index) {
         if (router->messages[index].state == HOST_MESSAGE_READY) ++count;
     }
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     return count;
 }
 
@@ -522,7 +522,7 @@ static host_pump_status host_router_pump(host_router *router) {
     cflow_mailbox_status mailbox_status = CFLOW_MAILBOX_INVALID_ARGUMENT;
     size_t index;
     if (router == NULL) return HOST_PUMP_EMPTY;
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     for (index = 0u; index < router->message_capacity; ++index) {
         host_message *candidate = &router->messages[index];
         if (candidate->state == HOST_MESSAGE_READY &&
@@ -530,14 +530,14 @@ static host_pump_status host_router_pump(host_router *router) {
             selected = candidate;
     }
     if (selected == NULL) {
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return HOST_PUMP_EMPTY;
     }
     selected->state = HOST_MESSAGE_INFLIGHT;
     snapshot = *selected;
     source = router->endpoints[snapshot.source];
     target = router->endpoints[snapshot.target];
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
 
     metadata = (scxml_event_metadata){
         .abi_version = SCXML_EVENT_METADATA_ABI,
@@ -553,10 +553,10 @@ static host_pump_status host_router_pump(host_router *router) {
             target.session, snapshot.event, strlen(snapshot.event),
             &metadata);
 
-    turbo_mutex_lock(&router->lock);
+    salts_mutex_lock(&router->lock);
     if (mailbox_status == CFLOW_MAILBOX_FULL) {
         selected->state = HOST_MESSAGE_READY;
-        turbo_mutex_unlock(&router->lock);
+        salts_mutex_unlock(&router->lock);
         return HOST_PUMP_WOULD_BLOCK;
     }
     if (mailbox_status == CFLOW_MAILBOX_OK) {
@@ -578,7 +578,7 @@ static host_pump_status host_router_pump(host_router *router) {
                         HOST_ORIGIN_TYPE, sizeof(HOST_ORIGIN_TYPE) - 1u);
     }
     host_release_message_locked(selected);
-    turbo_mutex_unlock(&router->lock);
+    salts_mutex_unlock(&router->lock);
     if (mailbox_status == CFLOW_MAILBOX_OK) return HOST_PUMP_DELIVERED;
     if (target.in_use)
         (void)scxml_session_report_adapter_error(
@@ -817,7 +817,7 @@ static void host_order_block_executor(void *user) {
     host_order_blocker *blocker = (host_order_blocker *)user;
     if (blocker == NULL) return;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+    while (!atomic_load(&blocker->release)) salts_thread_yield();
 }
 
 static bool host_admit_named_event(
@@ -897,7 +897,7 @@ static bool host_characterize_macrostep_invoke_order(void) {
             CFLOW_ADMISSION_ACCEPTED)
         goto cleanup;
     blocker_posted = true;
-    while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+    while (!atomic_load(&blocker.entered)) salts_thread_yield();
     if (!host_admit_named_event(&session, &program, "enter") ||
         !host_admit_named_event(&session, &program, "noise") ||
         !host_admit_named_event(&session, &program, "go"))

@@ -5,15 +5,15 @@
 
 #include <cflow/executor.h>
 #include <tinytest.h>
-#include <turbo/error_codes.h>
-#include <turbo/platform.h>
-#include <turbo/thread.h>
+#include <salts/error_codes.h>
+#include <salts/platform.h>
+#include <salts/thread.h>
 
 #include <stdio.h>
 #include <string.h>
 
 typedef struct wire_probe {
-    turbo_mutex_t lock;
+    salts_mutex_t lock;
     size_t requests;
     unsigned int response_status;
     uint32_t response_delay_ms;
@@ -119,7 +119,7 @@ static int peer_handler(
     unsigned int response_status;
     uint32_t delay_ms;
     size_t body_size;
-    turbo_mutex_lock(&probe->lock);
+    salts_mutex_lock(&probe->lock);
     ++probe->requests;
     probe->method = request->method;
     (void)snprintf(probe->target, sizeof(probe->target), "%s",
@@ -136,8 +136,8 @@ static int peer_handler(
     }
     response_status = probe->response_status;
     delay_ms = probe->response_delay_ms;
-    turbo_mutex_unlock(&probe->lock);
-    if (delay_ms != 0u) turbo_sleep_ms(delay_ms);
+    salts_mutex_unlock(&probe->lock);
+    if (delay_ms != 0u) salts_sleep_ms(delay_ms);
     return chttp_server_reply(response, response_status, NULL, NULL, 0u);
 }
 
@@ -147,11 +147,11 @@ static int resolve_target(
     resolver_probe *probe = (resolver_probe *)user;
     if (probe == NULL || uri == NULL || uri_size == 0u ||
         out_target == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     ++probe->calls;
     *out_target = (scxml_chttp_resolved_target){
         probe->connection_uri, probe->authority, probe->target};
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void downstream_commit(void *user) {
@@ -215,15 +215,15 @@ static bool fixture_init_source(
     scxml_diagnostic diagnostic = {0};
     uint16_t port = 0u;
     memset(fixture, 0, sizeof(*fixture));
-    turbo_mutex_init(&fixture->wire.lock);
+    salts_mutex_init(&fixture->wire.lock);
     if (fixture->wire.lock == NULL) return false;
     fixture->wire.response_status = 204u;
-    if (chttp_server_init(&fixture->peer, &peer_config) != TURBO_OK ||
+    if (chttp_server_init(&fixture->peer, &peer_config) != SALTS_OK ||
         chttp_server_post(
             &fixture->peer, "/sink", peer_handler, &fixture->wire) !=
-            TURBO_OK ||
-        chttp_server_start(&fixture->peer) != TURBO_OK ||
-        chttp_server_port(&fixture->peer, &port) != TURBO_OK)
+            SALTS_OK ||
+        chttp_server_start(&fixture->peer) != SALTS_OK ||
+        chttp_server_port(&fixture->peer, &port) != SALTS_OK)
         return false;
     (void)snprintf(fixture->resolver.connection_uri,
                    sizeof(fixture->resolver.connection_uri),
@@ -253,8 +253,8 @@ static bool fixture_init_source(
         .resolve = resolve_target,
         .resolve_user = &fixture->resolver};
     if (scxml_chttp_processor_init(
-            &fixture->processor, &processor_config) != TURBO_OK ||
-        scxml_chttp_processor_start(&fixture->processor) != TURBO_OK)
+            &fixture->processor, &processor_config) != SALTS_OK ||
+        scxml_chttp_processor_start(&fixture->processor) != SALTS_OK)
         return false;
     binding_config = (scxml_chttp_binding_config_v1){
         .abi_version = SCXML_CHTTP_ABI_V1,
@@ -263,7 +263,7 @@ static bool fixture_init_source(
         .scxml_adapter_user = &fixture->downstream};
     if (scxml_chttp_binding_init(
             &fixture->binding, &fixture->processor,
-            &binding_config) != TURBO_OK ||
+            &binding_config) != SALTS_OK ||
         !scxml_chttp_binding_ioprocessor(&fixture->binding, &descriptor) ||
         scxml_compile(&fixture->program, source, strlen(source),
                       NULL, &diagnostic) != SCXML_OK ||
@@ -293,7 +293,7 @@ static bool fixture_init_source(
                CFLOW_STATECHART_INSTANCE_OK &&
            scxml_chttp_binding_activate(
                &fixture->binding, &fixture->session,
-               &fixture->program) == TURBO_OK;
+               &fixture->program) == SALTS_OK;
 }
 
 static bool fixture_init(egress_fixture *fixture, size_t egress_capacity) {
@@ -319,28 +319,28 @@ static void fixture_destroy(egress_fixture *fixture) {
     }
     if (fixture->executor_live) cflow_executor_destroy(&fixture->executor);
     if (fixture->program.impl != NULL) scxml_program_destroy(&fixture->program);
-    if (fixture->wire.lock != NULL) turbo_mutex_destroy(&fixture->wire.lock);
+    if (fixture->wire.lock != NULL) salts_mutex_destroy(&fixture->wire.lock);
 }
 
 static size_t wire_requests(egress_fixture *fixture) {
     size_t requests;
-    turbo_mutex_lock(&fixture->wire.lock);
+    salts_mutex_lock(&fixture->wire.lock);
     requests = fixture->wire.requests;
-    turbo_mutex_unlock(&fixture->wire.lock);
+    salts_mutex_unlock(&fixture->wire.lock);
     return requests;
 }
 
 static bool wait_for_terminal(
     egress_fixture *fixture, uint64_t count, uint32_t timeout_ms) {
-    const uint64_t deadline = turbo_monotonic_ms() + timeout_ms;
+    const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
     do {
         scxml_chttp_processor_stats stats = {0};
         if (scxml_chttp_processor_get_stats(&fixture->processor, &stats) &&
             stats.egress_completed + stats.egress_failed +
                 stats.egress_cancelled >= count)
             return true;
-        turbo_sleep_ms(1u);
-    } while (turbo_monotonic_ms() < deadline);
+        salts_sleep_ms(1u);
+    } while (salts_monotonic_ms() < deadline);
     return false;
 }
 
@@ -384,7 +384,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &first, &error), SCXML_ADAPTER_ACCEPTED);
-        turbo_sleep_ms(20u);
+        salts_sleep_ms(20u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -420,7 +420,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         if (ticket.commit != NULL) ticket.commit(ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 1000u));
         check_equal(wire_requests(&fixture), (size_t)1u);
-        turbo_mutex_lock(&fixture.wire.lock);
+        salts_mutex_lock(&fixture.wire.lock);
         check_equal(fixture.wire.method, CHTTP_METHOD_POST);
         check_equal(strcmp(fixture.wire.target, "/sink"), 0);
         check_not_null(strstr(fixture.wire.host, "127.0.0.1:"));
@@ -430,7 +430,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         check_equal(strcmp(
                         fixture.wire.bodies[0],
                         "_scxmleventname=order+ready&customer=A%26B&qty=2"), 0);
-        turbo_mutex_unlock(&fixture.wire.lock);
+        salts_mutex_unlock(&fixture.wire.lock);
         {
             scxml_chttp_processor_stats stats = {0};
             check_true(scxml_chttp_processor_get_stats(
@@ -484,7 +484,7 @@ spec("TurboSCXML CHTTP transactional egress") {
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         if (send_ticket.commit != NULL) send_ticket.commit(send_ticket.user);
-        turbo_sleep_ms(20u);
+        salts_sleep_ms(20u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -493,7 +493,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         if (cancel_ticket.commit != NULL)
             cancel_ticket.commit(cancel_ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 500u));
-        turbo_sleep_ms(160u);
+        salts_sleep_ms(160u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         {
             scxml_chttp_processor_stats stats = {0};
@@ -520,7 +520,7 @@ spec("TurboSCXML CHTTP transactional egress") {
 
         check_true(fixture_init_source(&fixture, 1u, source));
         check_true(wait_for_terminal(&fixture, 1u, 500u));
-        turbo_sleep_ms(175u);
+        salts_sleep_ms(175u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(fixture.downstream.cancels, (size_t)0u);
         check_true(scxml_chttp_processor_get_stats(
@@ -555,7 +555,7 @@ spec("TurboSCXML CHTTP transactional egress") {
                     SCXML_ADAPTER_ACCEPTED);
         check_equal(fixture.downstream.cancels, (size_t)0u);
         cancel_ticket.commit(cancel_ticket.user);
-        turbo_sleep_ms(225u);
+        salts_sleep_ms(225u);
         check_true(scxml_chttp_processor_get_stats(
             &fixture.processor, &stats));
         check_equal(stats.invariant_failures, UINT64_C(0));
@@ -594,7 +594,7 @@ spec("TurboSCXML CHTTP transactional egress") {
             .scxml_adapter_user = &second_downstream};
         check_equal(scxml_chttp_binding_init(
                         &second_binding, &fixture.processor,
-                        &binding_config), TURBO_OK);
+                        &binding_config), SALTS_OK);
         check_true(scxml_chttp_binding_ioprocessor(
             &second_binding, &descriptor));
         session_config = (scxml_session_config){
@@ -618,7 +618,7 @@ spec("TurboSCXML CHTTP transactional egress") {
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_chttp_binding_activate(
                         &second_binding, &second_session,
-                        &fixture.program), TURBO_OK);
+                        &fixture.program), SALTS_OK);
         first_adapter =
             scxml_chttp_binding_event_io_adapter(&fixture.binding);
         second_adapter =
@@ -638,14 +638,14 @@ spec("TurboSCXML CHTTP transactional egress") {
         second_ticket.commit(second_ticket.user);
         other_ticket.commit(other_ticket.user);
         check_true(wait_for_terminal(&fixture, 3u, 1500u));
-        turbo_mutex_lock(&fixture.wire.lock);
+        salts_mutex_lock(&fixture.wire.lock);
         check_not_null(strstr(fixture.wire.bodies[0], "=other&"));
         check_not_null(strstr(fixture.wire.bodies[1], "=first&"));
         check_not_null(strstr(fixture.wire.bodies[2], "=second&"));
-        turbo_mutex_unlock(&fixture.wire.lock);
+        salts_mutex_unlock(&fixture.wire.lock);
         check_equal(scxml_session_destroy(&second_session),
                     CFLOW_STATECHART_INSTANCE_OK);
-        check_equal(scxml_chttp_binding_destroy(&second_binding), TURBO_OK);
+        check_equal(scxml_chttp_binding_destroy(&second_binding), SALTS_OK);
         fixture_destroy(&fixture);
     }
 
@@ -657,20 +657,20 @@ spec("TurboSCXML CHTTP transactional egress") {
         cflow_statechart_effect_ticket cancel_ticket = {0};
         const scxml_event_io_adapter *adapter;
         const char *error = NULL;
-        const uint64_t deadline = turbo_monotonic_ms() + 1000u;
+        const uint64_t deadline = salts_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
-        turbo_mutex_lock(&fixture.wire.lock);
+        salts_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_delay_ms = 200u;
-        turbo_mutex_unlock(&fixture.wire.lock);
+        salts_mutex_unlock(&fixture.wire.lock);
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         send_ticket.commit(send_ticket.user);
         while (wire_requests(&fixture) == 0u &&
-               turbo_monotonic_ms() < deadline)
-            turbo_sleep_ms(1u);
+               salts_monotonic_ms() < deadline)
+            salts_sleep_ms(1u);
         check_equal(wire_requests(&fixture), (size_t)1u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -700,20 +700,20 @@ spec("TurboSCXML CHTTP transactional egress") {
         const scxml_event_io_adapter *adapter;
         const char *error = NULL;
         scxml_chttp_processor_stats stats = {0};
-        const uint64_t deadline = turbo_monotonic_ms() + 1000u;
+        const uint64_t deadline = salts_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
-        turbo_mutex_lock(&fixture.wire.lock);
+        salts_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_delay_ms = 300u;
-        turbo_mutex_unlock(&fixture.wire.lock);
+        salts_mutex_unlock(&fixture.wire.lock);
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         send_ticket.commit(send_ticket.user);
         while (wire_requests(&fixture) == 0u &&
-               turbo_monotonic_ms() < deadline)
-            turbo_sleep_ms(1u);
+               salts_monotonic_ms() < deadline)
+            salts_sleep_ms(1u);
         check_equal(wire_requests(&fixture), (size_t)1u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -762,10 +762,10 @@ spec("TurboSCXML CHTTP transactional egress") {
             check_equal(stats.egress_failed, UINT64_C(1));
         }
         {
-            const uint64_t deadline = turbo_monotonic_ms() + 1000u;
+            const uint64_t deadline = salts_monotonic_ms() + 1000u;
             while (current_state(&fixture) != fixture.failed_id &&
-                   turbo_monotonic_ms() < deadline)
-                turbo_sleep_ms(1u);
+                   salts_monotonic_ms() < deadline)
+                salts_sleep_ms(1u);
         }
         check_equal(current_state(&fixture), fixture.failed_id);
         fixture_destroy(&fixture);
@@ -782,19 +782,19 @@ spec("TurboSCXML CHTTP transactional egress") {
 
         check_true(fixture_init(&fixture, 2u));
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
-        turbo_mutex_lock(&fixture.wire.lock);
+        salts_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_status = 404u;
-        turbo_mutex_unlock(&fixture.wire.lock);
+        salts_mutex_unlock(&fixture.wire.lock);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
         if (ticket.commit != NULL) ticket.commit(ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 1000u));
         {
-            const uint64_t deadline = turbo_monotonic_ms() + 1000u;
+            const uint64_t deadline = salts_monotonic_ms() + 1000u;
             while (current_state(&fixture) != fixture.failed_id &&
-                   turbo_monotonic_ms() < deadline)
-                turbo_sleep_ms(1u);
+                   salts_monotonic_ms() < deadline)
+                salts_sleep_ms(1u);
         }
         check_equal(current_state(&fixture), fixture.failed_id);
         delegated.type = "vendor:custom";

@@ -190,7 +190,7 @@ Fresh-configure, build, and test `win-release-user`, `win-dev-user`,
 `win-release-chttp-user`, and `win-release-quickjs-user`. Expected CTest totals
 are 13/13, 13/13, 18/18, and 13/13. Install with
 `install-win-release-user`, then configure, build, and run the installed core
-C, CCXML C, and CCXML C++ consumers with the matching Rocida and vcpkg runtime
+C, CCXML C, and CCXML C++ consumers with the matching Salts and vcpkg runtime
 paths; all three must exit zero.
 
 - [x] **Step 3: Review, publish, and finalize**

@@ -74,7 +74,7 @@ typedef enum scxml_attribute_kind {
 typedef uint32_t scxml_ast_node_id;
 #define SCXML_AST_NODE_NONE UINT32_MAX
 
-typedef turbo_xml_string_view scxml_ast_string_view;
+typedef salts_xml_string_view scxml_ast_string_view;
 
 typedef struct scxml_ast_limits {
     size_t max_nodes;
@@ -88,12 +88,12 @@ typedef struct scxml_ast_attribute {
     scxml_ast_string_view name;
     scxml_ast_string_view namespace_uri;
     scxml_ast_string_view value;
-    turbo_xml_location location;
+    salts_xml_location location;
 } scxml_ast_attribute;
 
 typedef struct scxml_ast_node {
     scxml_ast_node_id id;
-    turbo_xml_node_kind xml_kind;
+    salts_xml_node_kind xml_kind;
     scxml_element_kind kind;
     scxml_ast_node_id parent;
     scxml_ast_node_id first_child;
@@ -107,7 +107,7 @@ typedef struct scxml_ast_node {
     scxml_ast_string_view value;
     scxml_ast_string_view text;
     scxml_ast_string_view serialized_children;
-    turbo_xml_location location;
+    salts_xml_location location;
 } scxml_ast_node;
 
 typedef struct scxml_ast {
@@ -121,7 +121,7 @@ scxml_ast_limits scxml_ast_default_limits(void);
  * The root and every borrowed XML view are used only for this call.
  */
 scxml_status scxml_ast_build(
-    scxml_ast *out, turbo_xml_node root,
+    scxml_ast *out, salts_xml_node root,
     const scxml_ast_limits *limits_or_null,
     scxml_diagnostic *diagnostic);
 

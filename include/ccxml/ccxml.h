@@ -30,7 +30,7 @@ typedef enum ccxml_status {
 } ccxml_status;
 
 typedef struct ccxml_limits {
-    turbo_xml_limits xml;
+    salts_xml_limits xml;
     size_t max_transitions;
     size_t max_actions;
     size_t max_name_bytes;
@@ -38,7 +38,7 @@ typedef struct ccxml_limits {
 
 typedef struct ccxml_diagnostic {
     ccxml_status status;
-    turbo_xml_location location;
+    salts_xml_location location;
     char message[CCXML_DIAGNOSTIC_CAPACITY];
 } ccxml_diagnostic;
 

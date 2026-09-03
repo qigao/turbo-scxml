@@ -109,7 +109,7 @@ int scxml_chttp_processor_init(
 int scxml_chttp_processor_start(scxml_chttp_processor *processor);
 /**
  * Stop every phase against one timeout budget; zero waits without a limit.
- * TURBO_ETIMEDOUT means stopping is incomplete and retryable. Another terminal
+ * SALTS_ETIMEDOUT means stopping is incomplete and retryable. Another terminal
  * error may be returned after cleanup has reached STOPPED; preserve it for
  * diagnostics and call destroy, retaining the handle if destroy reports busy.
  */

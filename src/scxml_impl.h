@@ -3,8 +3,8 @@
 
 #include <scxml/scxml.h>
 #include <tlog.h>
-#include <turbo/thread.h>
-#include <turbo_uuid.h>
+#include <salts/thread.h>
+#include <salts_uuid.h>
 
 #include "scxml_expr.h"
 #include "scxml_assign.h"
@@ -37,8 +37,8 @@ typedef enum scxml_data_model {
 } scxml_data_model;
 
 typedef struct scxml_name_ref {
-    turbo_xml_string_view name;
-    turbo_xml_location location;
+    salts_xml_string_view name;
+    salts_xml_location location;
     uint64_t id;
     size_t order;
 } scxml_name_ref;
@@ -57,8 +57,8 @@ typedef struct scxml_node_ref {
 typedef struct scxml_synthetic_initial {
     cflow_machine_state_id parent;
     cflow_machine_state_id state;
-    turbo_xml_string_view target;
-    turbo_xml_location location;
+    salts_xml_string_view target;
+    salts_xml_location location;
 } scxml_synthetic_initial;
 
 typedef enum scxml_step_kind {
@@ -663,9 +663,9 @@ struct scxml_session_impl {
     bool supplemental_checkpoint_live;
     scxml_quickjs_runtime *quickjs_runtime;
     char *system_name;
-    char session_id[TURBO_UUID_STRING_SIZE];
+    char session_id[SALTS_UUID_STRING_SIZE];
     char scxml_location[sizeof("#_scxml_") - 1u +
-                        TURBO_UUID_STRING_SIZE];
+                        SALTS_UUID_STRING_SIZE];
     void *ioprocessor_storage;
     scxml_ioprocessor_descriptor *ioprocessors;
     size_t ioprocessor_count;
@@ -689,7 +689,7 @@ struct scxml_session_impl {
     scxml_expr_system_values system_values;
     scxml_event_io_adapter event_io;
     void *adapter_user;
-    turbo_mutex_t registry_lock;
+    salts_mutex_t registry_lock;
     scxml_delayed_send *delayed_sends;
     size_t delayed_send_capacity;
     scxml_prepared_effect *prepared_effects;

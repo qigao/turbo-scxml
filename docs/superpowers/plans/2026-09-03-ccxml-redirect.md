@@ -125,7 +125,7 @@ and unsupported optional attributes.
 
 Fresh-configure, build, and test Release, Debug/ASan, CHTTP, and QuickJS user
 presets. Install Release through `install-win-release-user`; configure the
-install consumer with the matching Rocida root and vcpkg prefix, then build and
+install consumer with the matching Salts root and vcpkg prefix, then build and
 run core C, CCXML C, and CCXML C++ consumers with matching runtime paths.
 Expected counts are 13/13, 13/13, 18/18, and 13/13; consumers exit zero.
 

@@ -4,8 +4,8 @@
 #include <scxml/chttp_event_io.h>
 #endif
 #include <cflow/statechart_instance.h>
-#include <turbo_cmeta_data.h>
-#include <rocida/stl/typed.h>
+#include <salts_cmeta_data.h>
+#include <cstl/typed.h>
 #include <tlog.h>
 
 #include "tinytest.h"
@@ -16,10 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 #if defined(TURBOSCXML_TEST_CHTTP_EVENT_IO)
-#include <turbo/clock.h>
-#include <turbo/error_codes.h>
+#include <salts/clock.h>
+#include <salts/error_codes.h>
 #endif
-#include <turbo/thread.h>
+#include <salts/thread.h>
 
 #define W3C_FIXTURE_PATH_CAPACITY 512u
 #define W3C_MANIFEST_ROW_CAPACITY 256u
@@ -343,9 +343,9 @@ static const cmeta_data_desc w3c_owned_string_desc = {
     .stable_id = "test.scxml.w3c.owned-string",
     .display_name = "W3C owned string",
     .kind = CMETA_DATA_STRING,
-    .storage_type = &turbo_tstr_cmeta_type,
+    .storage_type = &salts_tstr_cmeta_type,
     .shape = &w3c_owned_string_shape,
-    .buffer_ops = &turbo_tstr_cmeta_buffer_ops};
+    .buffer_ops = &salts_tstr_cmeta_buffer_ops};
 static const cmeta_data_field_desc w3c_cmeta_state_fields[] = {
     {"test.scxml.w3c.state.invoke-id", "invoke_id",
      offsetof(w3c_cmeta_state, invoke_id), &w3c_owned_string_desc},
@@ -1376,7 +1376,7 @@ static scxml_adapter_status w3c_capture_cmeta_send(
 static void w3c_block_executor(void *user) {
     w3c_executor_blocker *blocker = (w3c_executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+    while (!atomic_load(&blocker->release)) salts_thread_yield();
 }
 
 static bool w3c_admit_external_event(
@@ -1497,7 +1497,7 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
 }
 
 static void w3c_capture_invoke_cancellation_log(
-    const turbo_log_entry_t *entry, void *user_data) {
+    const salts_log_entry_t *entry, void *user_data) {
     w3c_invoke_cancellation_log *capture =
         (w3c_invoke_cancellation_log *)user_data;
     size_t message_size;
@@ -2421,7 +2421,7 @@ static bool run_w3c_copy_fixture(const char *fixture_name) {
             &receiver_executor, w3c_block_executor, &blocker) !=
         CFLOW_ADMISSION_ACCEPTED)
         goto cleanup;
-    while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+    while (!atomic_load(&blocker.entered)) salts_thread_yield();
     metadata.data = (scxml_content_view){
         .kind = SCXML_CONTENT_CMETA,
         .schema = &w3c_copy_payload_desc,
@@ -2927,7 +2927,7 @@ static bool run_w3c_invoke_cancellation_fixture(
     uint64_t expected_returned_rejected = 0u;
     tlog_t *previous_logger = tlog_peek_default();
     tlog_t *logger = NULL;
-    turbo_log_sink_t *sink = NULL;
+    salts_log_sink_t *sink = NULL;
     bool require_exit_logs = false;
     bool parent_executor_initialized = false;
     bool child_executor_initialized = false;
@@ -2952,14 +2952,14 @@ static bool run_w3c_invoke_cancellation_fixture(
         expected_returned_rejected = 2u;
     } else if (test_case == W3C_INVOKE_CANCEL_RUNS_CHILD_ONEXIT) {
         const tlog_config_t log_config = {
-            .min_level = TURBO_LOG_LEVEL_DEBUG, .buffer_size = 0u};
+            .min_level = SALTS_LOG_LEVEL_DEBUG, .buffer_size = 0u};
         child_fixture = "test250-child.scxml";
         expected_id = "invoke250";
         expected_returned_rejected = 1u;
         require_exit_logs = true;
         logger = tlog_create(&log_config);
         if (logger == NULL) goto cleanup;
-        sink = turbo_sink_callback_create(
+        sink = salts_sink_callback_create(
             w3c_capture_invoke_cancellation_log, &cancellation_log);
         if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
         sink = NULL;
@@ -3130,7 +3130,7 @@ cleanup:
         cflow_executor_destroy(&child_executor);
     if (logger != NULL) tlog_flush(logger);
     tlog_set_default(previous_logger);
-    if (sink != NULL) turbo_sink_destroy(sink);
+    if (sink != NULL) salts_sink_destroy(sink);
     if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&parent_program);
     scxml_program_destroy(&child_program);
@@ -3843,7 +3843,7 @@ static bool run_w3c_cmeta_fixture_with_schema(
                 &executor, w3c_block_executor, &blocker) !=
             CFLOW_ADMISSION_ACCEPTED)
             goto cleanup;
-        while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+        while (!atomic_load(&blocker.entered)) salts_thread_yield();
     }
     if (options != NULL && options->external_event != NULL) {
         if (!w3c_admit_external_event(
@@ -5022,16 +5022,16 @@ static int w3c_chttp_resolve(
         memcmp(uri, probe->access_uri, uri_size) != 0 ||
         uri_size < sizeof(scheme) ||
         memcmp(uri, scheme, sizeof(scheme) - 1u) != 0)
-        return TURBO_EPERM;
+        return SALTS_EPERM;
     path = memchr(
         uri + sizeof(scheme) - 1u, '/',
         uri_size - (sizeof(scheme) - 1u));
-    if (path == NULL) return TURBO_EINVAL;
+    if (path == NULL) return SALTS_EINVAL;
     authority_size = (size_t)(path - uri) - (sizeof(scheme) - 1u);
     if (authority_size == 0u ||
         authority_size >= sizeof(probe->authority) ||
         uri_size - (size_t)(path - uri) >= sizeof(probe->target))
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     memcpy(probe->authority, uri + sizeof(scheme) - 1u, authority_size);
     probe->authority[authority_size] = '\0';
     memcpy(probe->target, path, uri_size - (size_t)(path - uri));
@@ -5040,10 +5040,10 @@ static int w3c_chttp_resolve(
         probe->connection_uri, sizeof(probe->connection_uri),
         "tcp://%s", probe->authority);
     if (written < 0 || (size_t)written >= sizeof(probe->connection_uri))
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     *out_target = (scxml_chttp_resolved_target){
         probe->connection_uri, probe->authority, probe->target};
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static scxml_chttp_decode_status w3c_chttp_decode(
@@ -5171,7 +5171,7 @@ static unsigned int w3c_chttp_post(
     chttp_response response = {0};
     chttp_error error = {0};
     unsigned int status = 0u;
-    if (chttp_post(&probe->client, &options, &response, &error) == TURBO_OK)
+    if (chttp_post(&probe->client, &options, &response, &error) == SALTS_OK)
         status = response.status_code;
     chttp_response_destroy(&response);
     return status;
@@ -5286,8 +5286,8 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         .request_timeout_ms = 500u, .worker_poll_ms = 1u,
         .resolve = w3c_chttp_resolve, .resolve_user = &probe};
     if (scxml_chttp_processor_init(
-            &probe.processor, &processor_config) != TURBO_OK ||
-        scxml_chttp_processor_start(&probe.processor) != TURBO_OK)
+            &probe.processor, &processor_config) != SALTS_OK ||
+        scxml_chttp_processor_start(&probe.processor) != SALTS_OK)
         goto cleanup;
     binding_config = (scxml_chttp_binding_config_v1){
         .abi_version = SCXML_CHTTP_ABI_V1,
@@ -5296,7 +5296,7 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         .scxml_adapter_user = &probe,
         .decode = w3c_chttp_decode, .decode_user = &probe};
     if (scxml_chttp_binding_init(
-            &probe.binding, &probe.processor, &binding_config) != TURBO_OK ||
+            &probe.binding, &probe.processor, &binding_config) != SALTS_OK ||
         !scxml_chttp_binding_ioprocessor(
             &probe.binding, &probe.descriptor) ||
         probe.descriptor.location == NULL ||
@@ -5310,7 +5310,7 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
     if (w3c_chttp_resolve(
             &probe, probe.descriptor.location,
             probe.descriptor.location_size,
-            &(scxml_chttp_resolved_target){0}) != TURBO_OK)
+            &(scxml_chttp_resolved_target){0}) != SALTS_OK)
         goto cleanup;
     if (!cflow_executor_serial_init(&probe.executor)) goto cleanup;
     probe.executor_initialized = true;
@@ -5330,7 +5330,7 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         goto cleanup;
     session_initialized = true;
     if (scxml_chttp_binding_activate(
-            &probe.binding, &probe.session, &probe.program) != TURBO_OK)
+            &probe.binding, &probe.session, &probe.program) != SALTS_OK)
         goto cleanup;
     if (chttp_client_init(
             &probe.client, &(chttp_client_config){
@@ -5340,13 +5340,13 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
                 .max_header_count = 8u, .max_header_bytes = 512u,
                 .max_request_body_bytes = 256u,
                 .max_response_body_bytes = 64u,
-                .max_informational_responses = 1u}) != TURBO_OK)
+                .max_informational_responses = 1u}) != SALTS_OK)
         goto cleanup;
     probe.client_initialized = true;
     if (strcmp(fixture_name, "test513.scxml") == 0)
         probe.manual_status = w3c_chttp_post(
             &probe, "_scxmleventname=test&key1=value1");
-    deadline = turbo_monotonic_ms() + UINT64_C(3000);
+    deadline = salts_monotonic_ms() + UINT64_C(3000);
     do {
         if (!cflow_executor_wait_idle(&probe.executor)) goto cleanup;
         if (probe.downstream_ready > probe.downstream_delivered) {
@@ -5363,8 +5363,8 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         if (session_stats.done && probe.result.commits == 1u &&
             (!expects_egress || processor_stats.egress_completed == 1u))
             break;
-        turbo_sleep_ms(1u);
-    } while (turbo_monotonic_ms() < deadline);
+        salts_sleep_ms(1u);
+    } while (salts_monotonic_ms() < deadline);
     if (!session_stats.done || probe.result.commits != 1u ||
         session_stats.errored ||
         !cflow_executor_wait_idle(&probe.executor))
@@ -5373,27 +5373,27 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
 
 cleanup:
     if (probe.client_initialized &&
-        chttp_client_destroy(&probe.client, 1000u) != TURBO_OK)
+        chttp_client_destroy(&probe.client, 1000u) != SALTS_OK)
         cleaned = false;
     if (session_initialized) {
-        deadline = turbo_monotonic_ms() + UINT64_C(2000);
+        deadline = salts_monotonic_ms() + UINT64_C(2000);
         do {
             status = (int)scxml_session_destroy(&probe.session);
             if (status == CFLOW_STATECHART_INSTANCE_OK) break;
-            turbo_sleep_ms(1u);
-        } while (turbo_monotonic_ms() < deadline);
+            salts_sleep_ms(1u);
+        } while (salts_monotonic_ms() < deadline);
         if (status != CFLOW_STATECHART_INSTANCE_OK) cleaned = false;
     } else if (probe.binding.impl != NULL) {
         scxml_chttp_binding_event_io_adapter(&probe.binding)->close(
             scxml_chttp_binding_adapter_user(&probe.binding));
     }
     if (probe.binding.impl != NULL &&
-        scxml_chttp_binding_destroy(&probe.binding) != TURBO_OK)
+        scxml_chttp_binding_destroy(&probe.binding) != SALTS_OK)
         cleaned = false;
     if (probe.processor.impl != NULL) {
-        if (scxml_chttp_processor_stop(&probe.processor, 1000u) != TURBO_OK)
+        if (scxml_chttp_processor_stop(&probe.processor, 1000u) != SALTS_OK)
             cleaned = false;
-        if (scxml_chttp_processor_destroy(&probe.processor) != TURBO_OK)
+        if (scxml_chttp_processor_destroy(&probe.processor) != SALTS_OK)
             cleaned = false;
     }
     if (probe.executor_initialized)

@@ -537,7 +537,7 @@ static cflow_statechart_instance_status retain_ioprocessors(
     for (index = 0u; index < configured_count; ++index) {
         const scxml_ioprocessor_descriptor *row = &configured[index];
         size_t prior;
-        turbo_xml_string_view name;
+        salts_xml_string_view name;
         if (row->name == NULL || row->name_size == 0u ||
             row->type == NULL || row->type_size == 0u ||
             row->location == NULL || row->location_size == 0u)
@@ -546,7 +546,7 @@ static cflow_statechart_instance_status retain_ioprocessors(
             row->type_size > SCXML_EVENT_METADATA_CAPACITY ||
             row->location_size > SCXML_EVENT_METADATA_CAPACITY)
             return CFLOW_STATECHART_INSTANCE_LIMIT_EXCEEDED;
-        name = (turbo_xml_string_view){row->name, row->name_size};
+        name = (salts_xml_string_view){row->name, row->name_size};
         if (!scxml_analyze_is_xml_ncname(name) ||
             memchr(row->type, '\0', row->type_size) != NULL ||
             memchr(row->location, '\0', row->location_size) != NULL ||
@@ -635,7 +635,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     cflow_statechart_instance_config native_config;
     cflow_statechart_instance_hooks instance_hooks = {0};
     cflow_statechart_instance_status status;
-    turbo_uuid_t session_uuid;
+    salts_uuid_t session_uuid;
     size_t invocation_effect_capacity = 0u;
     size_t completion_data_capacity = 0u;
     size_t completion_projection_field_capacity = 0u;
@@ -755,10 +755,10 @@ static cflow_statechart_instance_status scxml_session_init_model(
     impl->system_values.is_data_bound = session_data_range_is_bound;
     impl->system_values.data_bound_user = impl;
     impl->system_values.datamodel_user = impl;
-    if (turbo_uuid_v4_generate(&session_uuid) != TURBO_OK ||
-        turbo_uuid_format(
+    if (salts_uuid_v4_generate(&session_uuid) != SALTS_OK ||
+        salts_uuid_format(
             &session_uuid, impl->session_id,
-            sizeof(impl->session_id)) != TURBO_OK ||
+            sizeof(impl->session_id)) != SALTS_OK ||
         snprintf(impl->scxml_location, sizeof(impl->scxml_location),
                  "#_scxml_%s", impl->session_id) < 0) {
         free(impl);
@@ -766,7 +766,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     }
     impl->system_values.session_id =
         (scxml_expr_string_view){
-            impl->session_id, TURBO_UUID_STRING_LENGTH};
+            impl->session_id, SALTS_UUID_STRING_LENGTH};
     status = retain_ioprocessors(
         impl, config->ioprocessors, config->ioprocessor_count);
     if (status != CFLOW_STATECHART_INSTANCE_OK) {
@@ -920,7 +920,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
                 impl->completion_projection_stable_ids +
                 index * slot->projection_stable_id_capacity;
     }
-    turbo_mutex_init(&impl->registry_lock);
+    salts_mutex_init(&impl->registry_lock);
     if (impl->registry_lock == NULL) {
         session_free_storage(impl);
         free(impl);
@@ -971,7 +971,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
             &initialized_cmeta_state, &initialized_cmeta_state_managed);
         if (status != CFLOW_STATECHART_INSTANCE_OK) {
             session_close_adapter(impl);
-            turbo_mutex_destroy(&impl->registry_lock);
+            salts_mutex_destroy(&impl->registry_lock);
             session_free_storage(impl);
             free(impl);
             return status;
@@ -986,7 +986,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
                 program, initialized_cmeta_state,
                 initialized_cmeta_state_managed);
             session_close_adapter(impl);
-            turbo_mutex_destroy(&impl->registry_lock);
+            salts_mutex_destroy(&impl->registry_lock);
             session_free_storage(impl);
             free(impl);
             return CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
@@ -1024,7 +1024,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
         program, initialized_cmeta_state, initialized_cmeta_state_managed);
     if (status != CFLOW_STATECHART_INSTANCE_OK) {
         session_close_adapter(impl);
-        turbo_mutex_destroy(&impl->registry_lock);
+        salts_mutex_destroy(&impl->registry_lock);
         session_free_storage(impl);
         free(impl);
         return status;
@@ -1212,7 +1212,7 @@ cflow_mailbox_status scxml_session_report_invoke_event(
     size_t index;
     if (impl == NULL || !impl->has_invoke || token == 0u || event == NULL)
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     for (index = 0u; index < impl->program->invocation_count; ++index) {
         if (impl->invocation_rows[index].state == SCXML_INVOCATION_ACTIVE &&
             impl->invocation_rows[index].token == token) {
@@ -1222,18 +1222,18 @@ cflow_mailbox_status scxml_session_report_invoke_event(
     }
     if (!live) {
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_rejected);
-        turbo_mutex_unlock(&impl->registry_lock);
+        salts_mutex_unlock(&impl->registry_lock);
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
     }
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     status = cflow_statechart_instance_try_send_tagged(
         &impl->instance, event, token);
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     if (status == CFLOW_MAILBOX_OK)
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_accepted);
     else
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_rejected);
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     return status;
 }
 
@@ -1247,7 +1247,7 @@ cflow_mailbox_status scxml_session_report_invoke_done(
     size_t index;
     if (impl == NULL || !impl->has_invoke || token == 0u)
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     for (index = 0u; index < impl->program->invocation_count; ++index) {
         if (impl->invocation_rows[index].state == SCXML_INVOCATION_ACTIVE &&
             impl->invocation_rows[index].token == token) {
@@ -1259,18 +1259,18 @@ cflow_mailbox_status scxml_session_report_invoke_done(
     }
     if (event.id == 0u) {
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_rejected);
-        turbo_mutex_unlock(&impl->registry_lock);
+        salts_mutex_unlock(&impl->registry_lock);
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
     }
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     status = cflow_statechart_instance_try_send_tagged(
         &impl->instance, &event, token);
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     if (status == CFLOW_MAILBOX_OK)
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_accepted);
     else
         scxml_runtime_increment_u64(&impl->invoke_stats.returned_rejected);
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     return status;
 }
 
@@ -1311,20 +1311,20 @@ bool scxml_session_report_send_done(
     scxml_delayed_send *row;
     if (impl == NULL || send_id == NULL || send_id_size == 0u)
         return false;
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     row = scxml_runtime_find_delayed_send_locked(impl, send_id, send_id_size, NULL);
     if (row == NULL ||
         (row->state != SCXML_DELAYED_ACTIVE &&
          (row->state != SCXML_DELAYED_CANCEL_RESERVED ||
           row->previous_state != SCXML_DELAYED_ACTIVE))) {
-        turbo_mutex_unlock(&impl->registry_lock);
+        salts_mutex_unlock(&impl->registry_lock);
         return false;
     }
     if (row->state == SCXML_DELAYED_CANCEL_RESERVED)
         row->previous_state = SCXML_DELAYED_FREE;
     else
         *row = (scxml_delayed_send){0};
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     return true;
 }
 
@@ -1358,9 +1358,9 @@ bool scxml_session_get_invoke_stats(
     scxml_session_impl *impl = session != NULL
         ? (scxml_session_impl *)session->impl : NULL;
     if (impl == NULL || out == NULL) return false;
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     *out = impl->invoke_stats;
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     return true;
 }
 
@@ -1432,12 +1432,12 @@ bool scxml_session_matches_event_io(
     if (impl == NULL || program == NULL || program->impl == NULL ||
         adapter == NULL || ioprocessor == NULL)
         return false;
-    turbo_mutex_lock(&impl->registry_lock);
+    salts_mutex_lock(&impl->registry_lock);
     if (!impl->has_event_io ||
         impl->program != (const scxml_program_impl *)program->impl ||
         impl->adapter_user != adapter_user ||
         !event_io_adapters_equal(&impl->event_io, adapter)) {
-        turbo_mutex_unlock(&impl->registry_lock);
+        salts_mutex_unlock(&impl->registry_lock);
         return false;
     }
     for (index = 0u; index < impl->ioprocessor_count; ++index) {
@@ -1456,7 +1456,7 @@ bool scxml_session_matches_event_io(
             break;
         }
     }
-    turbo_mutex_unlock(&impl->registry_lock);
+    salts_mutex_unlock(&impl->registry_lock);
     return descriptor_found;
 }
 
@@ -1485,7 +1485,7 @@ cflow_statechart_instance_status scxml_session_destroy(
         return CFLOW_STATECHART_INSTANCE_WOULD_BLOCK;
     status = cflow_statechart_instance_destroy(&impl->instance);
     if (status != CFLOW_STATECHART_INSTANCE_OK) return status;
-    turbo_mutex_destroy(&impl->registry_lock);
+    salts_mutex_destroy(&impl->registry_lock);
     session_free_storage(impl);
     free(impl);
     session->impl = NULL;

@@ -6,7 +6,7 @@
 
 **Architecture:** Add `TurboSCXML::CCXML` as a thin library above `TurboSCXML::SCXML`. The CCXML compiler owns a compact immutable transition/action program; the session selects exact events and uses existing SCXML/CFlow adapter status and effect-ticket semantics without adding CCXML syntax to the SCXML compiler.
 
-**Tech Stack:** C11, Rocida XmlParser, TurboSCXML public adapter contracts, CFlow effect tickets, TinyTest, CMake presets.
+**Tech Stack:** C11, Salts XmlParser, TurboSCXML public adapter contracts, CFlow effect tickets, TinyTest, CMake presets.
 
 **Spec:** `docs/specs/ccxml-core-mvp-design.md`
 
@@ -33,7 +33,7 @@
 - Modify: `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: `turbo_xml_parse`, `turbo_xml_document_destroy`, and the immutable XmlParser node/attribute accessors.
+- Consumes: `salts_xml_parse`, `salts_xml_document_destroy`, and the immutable XmlParser node/attribute accessors.
 - Produces: `ccxml_default_limits`, `ccxml_compile`, `ccxml_program_destroy`, opaque `ccxml_program`, diagnostics, transition/action rows used by Task 2.
 
 - [ ] **Step 1: Write the failing compile tests**

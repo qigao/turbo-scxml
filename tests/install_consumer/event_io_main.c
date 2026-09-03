@@ -19,10 +19,10 @@ static int resolve_allowed(
     if (allowed == NULL || uri == NULL || out_target == NULL ||
         uri_size != allowed->logical_uri_size ||
         memcmp(uri, allowed->logical_uri, uri_size) != 0)
-        return TURBO_EPERM;
+        return SALTS_EPERM;
     *out_target = (scxml_chttp_resolved_target){
         allowed->connection_uri, allowed->authority, allowed->target};
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static scxml_chttp_decode_status decode_ingress(
@@ -152,7 +152,7 @@ int main(void) {
                    binding_config.decode == decode_ingress &&
                    resolve_allowed(
                        (void *)&allowed, "https://denied", 14u,
-                       &denied) == TURBO_EPERM &&
+                       &denied) == SALTS_EPERM &&
                    processor_init != NULL && processor_start != NULL &&
                    processor_stop != NULL && processor_destroy != NULL &&
                    binding_init != NULL && binding_adapter != NULL &&

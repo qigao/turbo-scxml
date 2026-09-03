@@ -493,7 +493,7 @@ static bool parser_retain_ioprocessor_name(
     size_t scan;
     size_t selected_name_size = 0u;
     size_t selected_end = 0u;
-    turbo_xml_string_view selected_name;
+    salts_xml_string_view selected_name;
     while (name_offset < parser->source_size &&
            expr_space(parser->source[name_offset]))
         ++name_offset;
@@ -523,7 +523,7 @@ static bool parser_retain_ioprocessor_name(
         selected_name_size = name_end - name_offset;
         selected_end = property_end;
     }
-    selected_name = (turbo_xml_string_view){
+    selected_name = (salts_xml_string_view){
         parser->source + name_offset, selected_name_size};
     if (selected_end == 0u ||
         !scxml_analyze_is_xml_ncname(selected_name))

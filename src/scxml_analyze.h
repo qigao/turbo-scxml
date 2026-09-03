@@ -10,9 +10,9 @@ bool scxml_analyze_attach_event_content(
     scxml_external_event_metadata_row *row,
     const scxml_content_view *content);
 bool scxml_analyze_view_equal_raw(
-    turbo_xml_string_view view, const char *raw);
+    salts_xml_string_view view, const char *raw);
 int scxml_analyze_compare_view(
-    turbo_xml_string_view left, turbo_xml_string_view right);
+    salts_xml_string_view left, salts_xml_string_view right);
 int scxml_analyze_compare_name_ref(const void *left, const void *right);
 int scxml_analyze_compare_node_ref(const void *left, const void *right);
 int scxml_analyze_compare_program_name(const void *left, const void *right);
@@ -25,11 +25,11 @@ bool scxml_analyze_bind_current_event_system_values(
     scxml_expr_system_values *out);
 scxml_status scxml_analyze_fail(
     scxml_build *build, scxml_status status,
-    turbo_xml_location location, const char *message);
-bool scxml_analyze_is_xml_nmtoken(turbo_xml_string_view token);
-bool scxml_analyze_is_xml_ncname(turbo_xml_string_view name);
+    salts_xml_location location, const char *message);
+bool scxml_analyze_is_xml_nmtoken(salts_xml_string_view token);
+bool scxml_analyze_is_xml_ncname(salts_xml_string_view name);
 bool scxml_analyze_parse_null_in_condition(
-    turbo_xml_string_view value, turbo_xml_string_view *out_state);
+    salts_xml_string_view value, salts_xml_string_view *out_state);
 scxml_element_kind scxml_analyze_element_kind(scxml_syntax_node node);
 bool scxml_analyze_is_state_element(scxml_element_kind kind);
 scxml_syntax_attribute scxml_analyze_find_attribute(
@@ -41,16 +41,16 @@ scxml_status scxml_analyze_validate_element_attributes(
 size_t scxml_analyze_element_child_count(
     scxml_syntax_node node, scxml_element_kind wanted);
 bool scxml_analyze_token_next(
-    turbo_xml_string_view value, size_t *cursor,
-    turbo_xml_string_view *token);
+    salts_xml_string_view value, size_t *cursor,
+    salts_xml_string_view *token);
 bool scxml_analyze_event_descriptor_matches(
-    turbo_xml_string_view descriptor, turbo_xml_string_view event_name);
+    salts_xml_string_view descriptor, salts_xml_string_view event_name);
 bool scxml_analyze_completion_token(
-    turbo_xml_string_view token, turbo_xml_string_view *state_name);
+    salts_xml_string_view token, salts_xml_string_view *state_name);
 bool scxml_analyze_completion_descriptor_matches(
-    turbo_xml_string_view descriptor, turbo_xml_string_view state_name);
+    salts_xml_string_view descriptor, salts_xml_string_view state_name);
 bool scxml_analyze_parse_delay_ms(
-    turbo_xml_string_view value, uint64_t *out_ms);
+    salts_xml_string_view value, uint64_t *out_ms);
 bool scxml_analyze_cmeta_content_kind_is_scalar(cmeta_data_kind kind);
 scxml_status scxml_analyze_inspect_inline_content(
     scxml_build *build, scxml_syntax_node content,
@@ -63,7 +63,7 @@ scxml_status scxml_analyze_emit_state(
     cflow_machine_state_id parent, bool is_root);
 const scxml_name_ref *scxml_analyze_find_name_ref(
     const scxml_name_ref *names, size_t count,
-    turbo_xml_string_view name);
+    salts_xml_string_view name);
 cflow_machine_state_id scxml_analyze_node_id(
     const scxml_build *build, scxml_syntax_node node, size_t node_count);
 scxml_status scxml_analyze_emit_invocation_declarations(
@@ -72,7 +72,7 @@ scxml_status scxml_analyze_resolve_invocation_events(scxml_build *build);
 scxml_status scxml_analyze_collect_transition_events(
     scxml_build *build, scxml_syntax_node node);
 void scxml_analyze_collect_reserved_error_events(
-    scxml_build *build, turbo_xml_location location);
+    scxml_build *build, salts_xml_location location);
 scxml_status scxml_analyze_build_event_names(
     scxml_build *build, size_t occurrence_count);
 

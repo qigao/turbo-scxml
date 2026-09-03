@@ -15,7 +15,7 @@ find_package(TurboSCXML CONFIG REQUIRED COMPONENTS CHttpEventIO)
 target_link_libraries(app PRIVATE TurboSCXML::CHttpEventIO)
 ```
 
-匹配 profile 的 `ROCIDA_ROOT` 必须提供 `Rocida::CHTTP`。功能默认关闭；关闭后
+匹配 profile 的 `SALTS_ROOT` 必须提供 `Salts::CHTTP`。功能默认关闭；关闭后
 不会安装该 header/target，也不会改变 `TurboSCXML::SCXML` 的 link interface。
 
 ## 生命周期
@@ -67,9 +67,9 @@ scxml_chttp_binding_config_v1 binding_config = {
     .decode_user = decoder_state
 };
 
-if (scxml_chttp_processor_init(&processor, &processor_config) != TURBO_OK ||
-    scxml_chttp_processor_start(&processor) != TURBO_OK ||
-    scxml_chttp_binding_init(&binding, &processor, &binding_config) != TURBO_OK ||
+if (scxml_chttp_processor_init(&processor, &processor_config) != SALTS_OK ||
+    scxml_chttp_processor_start(&processor) != SALTS_OK ||
+    scxml_chttp_binding_init(&binding, &processor, &binding_config) != SALTS_OK ||
     !scxml_chttp_binding_ioprocessor(&binding, &descriptor)) {
     /* unwind initialized owners in reverse order */
 }
@@ -94,7 +94,7 @@ scxml_session_config session_config = {
 /* Initialize the session, then activate the reserved binding endpoint. */
 if (scxml_session_init(session, &session_config) !=
         CFLOW_STATECHART_INSTANCE_OK ||
-    scxml_chttp_binding_activate(&binding, session, program) != TURBO_OK) {
+    scxml_chttp_binding_activate(&binding, session, program) != SALTS_OK) {
     /* close/destroy in reverse order */
 }
 ```
@@ -118,10 +118,10 @@ static int resolve_authorized_target(
     if (allowed == NULL || uri == NULL || out == NULL ||
         uri_size != allowed->logical_uri_size ||
         memcmp(uri, allowed->logical_uri, uri_size) != 0)
-        return TURBO_EPERM;
+        return SALTS_EPERM;
     *out = (scxml_chttp_resolved_target){
         allowed->connection_uri, allowed->authority, allowed->target};
-    return TURBO_OK;
+    return SALTS_OK;
 }
 ```
 
@@ -149,10 +149,10 @@ I/O、分配或等待。
 销毁 session 会先 close composite adapter，并等待 binding 的 callback/outbound
 引用归零。只有 `scxml_session_destroy()` 成功后才能 destroy binding；所有 binding
 销毁后再 stop processor。`processor_stop(timeout_ms)` 的所有阶段共享一个总
-deadline：`TURBO_ETIMEDOUT` 表示停止尚未完成，必须保留 handle 并重试。
+deadline：`SALTS_ETIMEDOUT` 表示停止尚未完成，必须保留 handle 并重试。
 
 停止期间发现的 transport/server terminal error 会被保留；即使所有清理已完成、
 processor 已进入 STOPPED，`processor_stop()` 仍返回该错误。此时调用方应保留该错误
 用于诊断，并尝试 `processor_destroy()`；destroy 成功即表示 owner 已释放。若 destroy
-返回 `TURBO_EBUSY`，handle 仍有效，调用方须先消除 live binding/未完成停止条件，再次
+返回 `SALTS_EBUSY`，handle 仍有效，调用方须先消除 live binding/未完成停止条件，再次
 调用 stop，而不能泄漏或清零 opaque handle。

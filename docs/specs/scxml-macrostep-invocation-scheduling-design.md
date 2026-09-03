@@ -19,7 +19,7 @@
 
 `cflow_statechart_instance` 是活动配置、配置版本、internal/completion 队列、external FIFO、最优转换选择和宏步状态的唯一事实源。`scxml_session_impl` 是编译后 invocation descriptors、逐 descriptor invocation rows、token、统计和 adapter attachment 的唯一事实源。host adapter 只拥有已经接受的 prepare ticket 及其外部资源；它不拥有 SCXML 活动配置，也不决定下一个事件。
 
-依赖方向保持 `TurboSCXML -> installed Rocida/CFlow`。TurboSCXML 通过 `scxml_session_init_model()` 注册唯一的 CFlow V4 `on_host_transaction`，在 `PREPARE_TRIGGER` 处理 Event 观察与 external preprocess，在 `PREPARE_QUIESCENCE` 启动仍活动的调用；不新增第二个 scheduler、全局 session registry、子解释器或反向依赖。
+依赖方向保持 `TurboSCXML -> installed Salts/CFlow`。TurboSCXML 通过 `scxml_session_init_model()` 注册唯一的 CFlow V4 `on_host_transaction`，在 `PREPARE_TRIGGER` 处理 Event 观察与 external preprocess，在 `PREPARE_QUIESCENCE` 启动仍活动的调用；不新增第二个 scheduler、全局 session registry、子解释器或反向依赖。
 
 ## 精确调度序列
 
@@ -75,6 +75,6 @@ manifest 仍是唯一 conformance 事实源，行数保持 202（168 mandatory�
 
 ## 兼容性、修复与回滚
 
-SCXML 公开 API、adapter ABI、package target、数据格式、依赖关系和用户配置不变。其依赖的 CFlow StateChart hook ABI 已统一为 V4-only，因此 TurboSCXML 与 Rocida 必须配套重编译；TurboSCXML 内部不保留 V1-V3 context 适配层。首先登记 W3C 测试并保存缺 fixture RED，再添加忠实 fixture 与直接 adapter-order 回归。若直接回归已通过，生产语义保持不变。
+SCXML 公开 API、adapter ABI、package target、数据格式、依赖关系和用户配置不变。其依赖的 CFlow StateChart hook ABI 已统一为 V4-only，因此 TurboSCXML 与 Salts 必须配套重编译；TurboSCXML 内部不保留 V1-V3 context 适配层。首先登记 W3C 测试并保存缺 fixture RED，再添加忠实 fixture 与直接 adapter-order 回归。若直接回归已通过，生产语义保持不变。
 
 只有直接回归在现有 runtime 上因调度语义失败时，才在暴露失败的 owning layer 做最小修复：活动配置/外部 FIFO 属于 CFlow，invocation row/adapter 事务属于 TurboSCXML；不得跨层复制状态。修复必须保持 callbacks outside locks、事务性发布和现有错误语义。回滚方式是单独撤销该最小生产改动并保留 characterization 测试为失败证据；若修复需要公开 ABI、依赖或数据格式变化，则视为计划缺陷，停止而不扩展范围。

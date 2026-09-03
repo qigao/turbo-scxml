@@ -61,8 +61,8 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
-        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+        "PATH": "${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -77,8 +77,8 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
-        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -91,7 +91,7 @@
         "VCPKG_MANIFEST_FEATURES": "quickjs"
       },
       "environment": {
-        "PATH": "${sourceDir}/build/Msvc-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "PATH": "${sourceDir}/build/Msvc-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -105,8 +105,8 @@
         "VCPKG_MANIFEST_FEATURES": "chttp"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
-        "PATH": "${sourceDir}/build/Msvc-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+        "PATH": "${sourceDir}/build/Msvc-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -119,7 +119,7 @@
         "VCPKG_MANIFEST_FEATURES": "quickjs"
       },
       "environment": {
-        "PATH": "${sourceDir}/build/Msvc-Release-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "PATH": "${sourceDir}/build/Msvc-Release-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -133,8 +133,8 @@
         "VCPKG_MANIFEST_FEATURES": "chttp"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
-        "PATH": "${sourceDir}/build/Msvc-Release-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "${sourceDir}/build/Msvc-Release-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
       }
     },
     {
@@ -149,9 +149,9 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/debug",
-        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
+        "PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
       }
     },
     {
@@ -166,9 +166,9 @@
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux"
       },
       "environment": {
-        "ROCIDA_ROOT": "$env{PKG_ROOT}/rocida/release",
-        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{ROCIDA_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{ROCIDA_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
+        "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
+        "PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}"
       }
     }
   ],

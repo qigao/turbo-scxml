@@ -9,7 +9,7 @@
 ## Decision
 
 Add `TurboSCXML::CHttpEventIO` as an optional C11 library layered over
-`TurboSCXML::SCXML` and `Rocida::CHTTP`. The core remains transport-free.
+`TurboSCXML::SCXML` and `Salts::CHTTP`. The core remains transport-free.
 The optional library is a composite Event I/O adapter: it owns BasicHTTP
 ingress and egress and delegates the mandatory SCXML Event I/O Processor to a
 host-supplied adapter.
@@ -389,7 +389,7 @@ HTTP results are deterministic:
   target dependencies.
 - `TurboSCXML::CHttpEventIO` exists only when
   `TURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON`; configuration then requires the
-  installed `Rocida::CHTTP` target from the same `ROCIDA_ROOT`.
+  installed `Salts::CHTTP` target from the same `SALTS_ROOT`.
 - The implementation targets CHTTP HTTP/1 over `tcp://`. The resolver rejects
   `https:` until the selected CHTTP SDK exposes and verifies HTTPS. It must not
   translate HTTPS to plaintext.
@@ -418,8 +418,8 @@ HTTP results are deterministic:
 - **MED — fact:** CHTTP separates connection URI, authority, and origin-form
   target. The resolver is mandatory, preventing accidental URL parsing,
   authorization bypass, and SSRF-prone pass-through.
-- **MED — fact:** feature-ON configuration requires `Rocida::CHTTP` in the
-  selected `ROCIDA_ROOT`. CMake fails when that component is absent rather than
+- **MED — fact:** feature-ON configuration requires `Salts::CHTTP` in the
+  selected `SALTS_ROOT`. CMake fails when that component is absent rather than
   searching a second or fallback package root.
 
 ## Verification

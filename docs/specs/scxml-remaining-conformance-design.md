@@ -29,7 +29,7 @@ macrostep ordering, and published CMeta state. TurboSCXML owns compiled
 resource/script descriptors and session-local supplemental variables. The
 host owns resource authorization, logical-URI resolution, authentication, and
 deployment. An optional TurboSCXML adapter may perform bounded HTTP/1
-acquisition through `Rocida::CHTTP`; it is not linked into the SCXML core.
+acquisition through `Salts::CHTTP`; it is not linked into the SCXML core.
 
 ## Data resource boundary
 
@@ -83,7 +83,7 @@ artifact store, or an in-memory test source behind the same adapter and policy.
 ### Optional CHTTP transport adapter
 
 `TurboSCXML::CHttpResource` is a separate optional target. It links
-`Rocida::CHTTP` and adapts an authorized HTTP response into the generic
+`Salts::CHTTP` and adapts an authorized HTTP response into the generic
 data or compile-time text resource contract. `TurboSCXML::SCXML` neither links
 CHTTP nor exposes a CHTTP type.
 
@@ -194,9 +194,9 @@ discard adapters.
 
 - Existing null/CMeta compile and session entry points retain their layout and
   behavior. New behavior is exposed through additive versioned entry points.
-- `Rocida::CSerde` is a public type dependency only for the V3 resource
-  adapter; `Rocida::CBind` is a private implementation dependency.
-- `Rocida::CHTTP` is required only by the separately exported optional
+- `Salts::CSerde` is a public type dependency only for the V3 resource
+  adapter; `Salts::CBind` is a private implementation dependency.
+- `Salts::CHTTP` is required only by the separately exported optional
   `TurboSCXML::CHttpResource` target. Its blocking client has one progress
   owner and is not shared concurrently between sessions.
 - QuickJS is optional and private. Disabled builds retain the current package

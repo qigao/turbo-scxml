@@ -4,9 +4,9 @@
 
 **Goal:** Extract the existing `cflow-scxml` library into a standalone `TurboSCXML` repository without deleting or changing the source copy in TurboUtils.
 
-**Architecture:** The new repository owns the SCXML-to-CFlow compiler, SCXML session runtime adapters, public `<scxml/scxml.h>` API, conformance corpus, and tests. It consumes an installed Rocida SDK through `ROCIDA_ROOT`; CFlow, CMeta, QueryVM, XmlParser, Core, STL, and TinyTest remain owned by Rocida. The initial extraction preserves C behavior and header paths while publishing the new CMake target `TurboSCXML::SCXML`.
+**Architecture:** The new repository owns the SCXML-to-CFlow compiler, SCXML session runtime adapters, public `<scxml/scxml.h>` API, conformance corpus, and tests. It consumes an installed Salts SDK through `SALTS_ROOT`; CFlow, CMeta, QueryVM, XmlParser, Core, STL, and TinyTest remain owned by Salts. The initial extraction preserves C behavior and header paths while publishing the new CMake target `TurboSCXML::SCXML`.
 
-**Tech Stack:** C11, CMake 3.20+, CMake Presets, Ninja/MSVC or GCC, CTest, Rocida TinyTest.
+**Tech Stack:** C11, CMake 3.20+, CMake Presets, Ninja/MSVC or GCC, CTest, Salts TinyTest.
 
 **Spec:** `docs/specs/scxml-core-design.md`
 
@@ -14,9 +14,9 @@
 
 - Do not delete or modify `C:\projects\cpp\turbonet\turbo-utils\cflow-scxml` during this extraction.
 - Copy source, public headers, tests, fixtures, and W3C corpus byte-for-byte before standalone build changes.
-- Resolve Rocida only from `$ENV{ROCIDA_ROOT}` with `NO_DEFAULT_PATH`; missing or incomplete roots fail configuration.
+- Resolve Salts only from `$ENV{SALTS_ROOT}` with `NO_DEFAULT_PATH`; missing or incomplete roots fail configuration.
 - Preserve `<scxml/scxml.h>` and all existing `scxml_*` C symbols and ABI constants.
-- Keep `Rocida::CFlow` independent of XML, CSerde, and SCXML.
+- Keep `Salts::CFlow` independent of XML, CSerde, and SCXML.
 - Use version-controlled `CMakeUserPresets.json` for configure, build, test, and install entry points.
 - Do not add QuickJS, HTTP, persistence, or server behavior to this extraction.
 
@@ -73,7 +73,7 @@ Expected: no differences before standalone build files are introduced.
 - Create: `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: installed `Rocida::CFlow`, `CMeta`, `XmlParser`, `Core`, and `QueryVM` targets.
+- Consumes: installed `Salts::CFlow`, `CMeta`, `XmlParser`, `Core`, and `QueryVM` targets.
 - Produces: build-tree alias and installed target `TurboSCXML::SCXML`.
 
 - [x] **Step 1: Verify the missing standalone build fails**
@@ -88,16 +88,16 @@ The root build creates `turbo_scxml`, assigns `EXPORT_NAME SCXML`, and links exa
 
 ```cmake
 target_link_libraries(turbo_scxml
-  PUBLIC Rocida::CFlow Rocida::CMeta Rocida::XmlParser
-  PRIVATE Rocida::Core Rocida::QueryVM)
+  PUBLIC Salts::CFlow Salts::CMeta Salts::XmlParser
+  PRIVATE Salts::Core Salts::QueryVM)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 ```
 
-It validates `ROCIDA_ROOT`, calls:
+It validates `SALTS_ROOT`, calls:
 
 ```cmake
-find_package(Rocida CONFIG REQUIRED
-  PATHS "$ENV{ROCIDA_ROOT}" NO_DEFAULT_PATH)
+find_package(Salts CONFIG REQUIRED
+  PATHS "$ENV{SALTS_ROOT}" NO_DEFAULT_PATH)
 ```
 
 and installs headers, the library, `TurboSCXMLTargets.cmake`, config, and version files under `${CMAKE_INSTALL_LIBDIR}/cmake/TurboSCXML`.
@@ -108,7 +108,7 @@ Define one local `turboscxml_add_test(name source)` function that creates the ex
 
 - [x] **Step 4: Configure and confirm dependency contract**
 
-Expected: configuration fails if `ROCIDA_ROOT` is absent and succeeds only against the selected installed Rocida SDK.
+Expected: configuration fails if `SALTS_ROOT` is absent and succeeds only against the selected installed Salts SDK.
 
 ### Task 3: Add first-party presets and repository metadata
 
@@ -121,7 +121,7 @@ Expected: configuration fails if `ROCIDA_ROOT` is absent and succeeds only again
 - Create: `README.md`
 
 **Interfaces:**
-- Consumes: `PROJECT_ROOT`, `VCPKG_ROOT`, and installed Rocida SDK profiles.
+- Consumes: `PROJECT_ROOT`, `VCPKG_ROOT`, and installed Salts SDK profiles.
 - Produces: `win-dev-user`, `win-release-user`, `linux-dev-user`, and `linux-release-user` configure/build/test presets plus matching `install-*` build presets.
 
 - [x] **Step 1: Copy portable shared preset definitions**
@@ -130,7 +130,7 @@ Copy the existing TurboUtils `presets/` definitions and retain compiler/platform
 
 - [x] **Step 2: Add project-specific user profiles**
 
-Each profile defines `ROCIDA_ROOT=$env{PKG_ROOT}/rocida/<profile>` and installs this project to `$env{PKG_ROOT}/turboscxml/<profile>`. Runtime paths contain this build, matching vcpkg binaries, Rocida binaries, and `$penv{PATH}`.
+Each profile defines `SALTS_ROOT=$env{PKG_ROOT}/salts/<profile>` and installs this project to `$env{PKG_ROOT}/turboscxml/<profile>`. Runtime paths contain this build, matching vcpkg binaries, Salts binaries, and `$penv{PATH}`.
 
 - [x] **Step 3: Add bounded repository metadata**
 
@@ -155,7 +155,7 @@ Expected: configure/build/test/install entries are visible and no user preset is
 - Create: `tests/install_consumer/main.c`
 
 **Interfaces:**
-- Consumes: installed `TurboSCXMLConfig.cmake` and `RocidaConfig.cmake`.
+- Consumes: installed `TurboSCXMLConfig.cmake` and `SaltsConfig.cmake`.
 - Produces: proof that a downstream project can include `<scxml/scxml.h>` and link `TurboSCXML::SCXML`.
 
 - [x] **Step 1: Configure through the Windows user preset**

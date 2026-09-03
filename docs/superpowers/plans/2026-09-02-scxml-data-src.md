@@ -18,7 +18,7 @@ TinyTest, CMake Presets.
 - Every allocation and token/container/string/depth count has a positive hard limit.
 - Provider/decode failure raises `error.execution` without publishing partial data.
 - CHTTP remains an optional adapter target; the SCXML core never parses network
-  URLs or links `Rocida::CHTTP`.
+  URLs or links `Salts::CHTTP`.
 
 ---
 
@@ -43,7 +43,7 @@ TinyTest, CMake Presets.
 
 - [x] **Step 3: Add only the versioned declarations and dependency checks**
 
-  Add ABI/size fields, exact open/close callback signatures, V3 session options containing V2 fields plus adapter/user and positive decode limits, and CMake target checks for `Rocida::CSerde`/`Rocida::CBind`.
+  Add ABI/size fields, exact open/close callback signatures, V3 session options containing V2 fields plus adapter/user and positive decode limits, and CMake target checks for `Salts::CSerde`/`Salts::CBind`.
 
 - [x] **Step 4: Build the focused target**
 
@@ -173,7 +173,7 @@ TinyTest, CMake Presets.
 - [x] **Step 3: Add the isolated target**
 
   Build and export `TurboSCXML::CHttpResource` only when explicitly enabled and
-  `Rocida::CHTTP` is present. Link it to the generic SCXML resource API;
+  `Salts::CHTTP` is present. Link it to the generic SCXML resource API;
   leave the core dependency contract unchanged.
 
 - [x] **Step 4: Implement bounded acquisition**

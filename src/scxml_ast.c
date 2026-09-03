@@ -47,7 +47,7 @@ static bool checked_multiply(size_t left, size_t right, size_t *out) {
     return true;
 }
 
-static bool view_equal(turbo_xml_string_view view, const char *text) {
+static bool view_equal(salts_xml_string_view view, const char *text) {
     const size_t size = strlen(text);
     return view.data != NULL && view.size == size &&
         memcmp(view.data, text, size) == 0;
@@ -55,7 +55,7 @@ static bool view_equal(turbo_xml_string_view view, const char *text) {
 
 static scxml_status ast_fail(
     scxml_diagnostic *diagnostic, scxml_status status,
-    turbo_xml_location location, const char *message) {
+    salts_xml_location location, const char *message) {
     if (diagnostic != NULL) {
         diagnostic->status = status;
         diagnostic->location = location;
@@ -66,7 +66,7 @@ static scxml_status ast_fail(
     return status;
 }
 
-static scxml_element_kind element_kind(turbo_xml_string_view name) {
+static scxml_element_kind element_kind(salts_xml_string_view name) {
     if (view_equal(name, "scxml")) return SCXML_ELEMENT_SCXML;
     if (view_equal(name, "state")) return SCXML_ELEMENT_STATE;
     if (view_equal(name, "parallel")) return SCXML_ELEMENT_PARALLEL;
@@ -96,7 +96,7 @@ static scxml_element_kind element_kind(turbo_xml_string_view name) {
     return SCXML_ELEMENT_UNKNOWN;
 }
 
-static scxml_attribute_kind attribute_kind(turbo_xml_string_view name) {
+static scxml_attribute_kind attribute_kind(salts_xml_string_view name) {
     if (view_equal(name, "version")) return SCXML_ATTRIBUTE_VERSION;
     if (view_equal(name, "datamodel")) return SCXML_ATTRIBUTE_DATAMODEL;
     if (view_equal(name, "initial")) return SCXML_ATTRIBUTE_INITIAL;
@@ -129,41 +129,41 @@ static scxml_attribute_kind attribute_kind(turbo_xml_string_view name) {
     return SCXML_ATTRIBUTE_UNKNOWN;
 }
 
-static bool source_has_serialized_children(turbo_xml_node source) {
+static bool source_has_serialized_children(salts_xml_node source) {
     scxml_element_kind kind;
-    if (turbo_xml_node_type(source) != TURBO_XML_ELEMENT ||
-        !view_equal(turbo_xml_node_namespace_uri(source), SCXML_AST_NAMESPACE))
+    if (salts_xml_node_type(source) != SALTS_XML_ELEMENT ||
+        !view_equal(salts_xml_node_namespace_uri(source), SCXML_AST_NAMESPACE))
         return false;
-    kind = element_kind(turbo_xml_node_local_name(source));
+    kind = element_kind(salts_xml_node_local_name(source));
     return kind == SCXML_ELEMENT_CONTENT || kind == SCXML_ELEMENT_DATA ||
            kind == SCXML_ELEMENT_SCRIPT;
 }
 
 static bool measure_view(
-    turbo_xml_string_view view, scxml_ast_measurement *measurement) {
+    salts_xml_string_view view, scxml_ast_measurement *measurement) {
     return checked_add(
         measurement->storage_size, view.size,
         &measurement->storage_size);
 }
 
 static scxml_status measure_serialized_children(
-    turbo_xml_node source, const scxml_ast_limits *limits,
+    salts_xml_node source, const scxml_ast_limits *limits,
     scxml_ast_measurement *measurement, scxml_diagnostic *diagnostic) {
     size_t serialized_size = 0u;
     size_t retained_size;
-    turbo_xml_status xml_status;
+    salts_xml_status xml_status;
     if (!source_has_serialized_children(source)) return SCXML_OK;
-    xml_status = turbo_xml_serialize_children(
+    xml_status = salts_xml_serialize_children(
         source, NULL, 0u, limits->max_storage_bytes, &serialized_size);
-    if (xml_status != TURBO_XML_OK) {
+    if (xml_status != SALTS_XML_OK) {
         return ast_fail(
             diagnostic,
-            xml_status == TURBO_XML_LIMIT_EXCEEDED
+            xml_status == SALTS_XML_LIMIT_EXCEEDED
                 ? SCXML_LIMIT_EXCEEDED
-                : xml_status == TURBO_XML_ALLOCATION_FAILED
+                : xml_status == SALTS_XML_ALLOCATION_FAILED
                     ? SCXML_ALLOCATION_FAILED
                     : SCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST inline content serialization failed");
     }
     if (!checked_add(serialized_size, 1u, &retained_size) ||
@@ -171,14 +171,14 @@ static scxml_status measure_serialized_children(
                      &measurement->storage_size)) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST string storage overflow");
     }
     return SCXML_OK;
 }
 
 static scxml_status measure_node(
-    turbo_xml_node source, const scxml_ast_limits *limits,
+    salts_xml_node source, const scxml_ast_limits *limits,
     size_t depth, scxml_ast_measurement *measurement,
     scxml_diagnostic *diagnostic) {
     size_t index;
@@ -186,44 +186,44 @@ static scxml_status measure_node(
     if (depth > limits->max_depth) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST depth exceeds max_depth");
     }
     if (measurement->node_count >= limits->max_nodes ||
         measurement->node_count >= (size_t)SCXML_AST_NODE_NONE) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST node count exceeds max_nodes");
     }
     ++measurement->node_count;
-    if (!measure_view(turbo_xml_node_local_name(source), measurement) ||
-        !measure_view(turbo_xml_node_namespace_uri(source), measurement) ||
-        !measure_view(turbo_xml_node_value(source), measurement) ||
-        !measure_view(turbo_xml_node_text_view(source), measurement)) {
+    if (!measure_view(salts_xml_node_local_name(source), measurement) ||
+        !measure_view(salts_xml_node_namespace_uri(source), measurement) ||
+        !measure_view(salts_xml_node_value(source), measurement) ||
+        !measure_view(salts_xml_node_text_view(source), measurement)) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST string storage overflow");
     }
-    for (index = 0u; index < turbo_xml_node_attribute_count(source); ++index) {
-        const turbo_xml_attribute attribute =
-            turbo_xml_node_attribute_at(source, index);
+    for (index = 0u; index < salts_xml_node_attribute_count(source); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(source, index);
         if (measurement->attribute_count >= limits->max_attributes) {
             return ast_fail(
                 diagnostic, SCXML_LIMIT_EXCEEDED,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "SCXML AST attribute count exceeds max_attributes");
         }
         ++measurement->attribute_count;
         if (!measure_view(
-                turbo_xml_attribute_local_name(attribute), measurement) ||
+                salts_xml_attribute_local_name(attribute), measurement) ||
             !measure_view(
-                turbo_xml_attribute_namespace_uri(attribute), measurement) ||
-            !measure_view(turbo_xml_attribute_value(attribute), measurement)) {
+                salts_xml_attribute_namespace_uri(attribute), measurement) ||
+            !measure_view(salts_xml_attribute_value(attribute), measurement)) {
             return ast_fail(
                 diagnostic, SCXML_LIMIT_EXCEEDED,
-                turbo_xml_attribute_location(attribute),
+                salts_xml_attribute_location(attribute),
                 "SCXML AST string storage overflow");
         }
     }
@@ -233,12 +233,12 @@ static scxml_status measure_node(
     if (measurement->storage_size > limits->max_storage_bytes) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST strings exceed max_storage_bytes");
     }
-    for (index = 0u; index < turbo_xml_node_child_count(source); ++index) {
+    for (index = 0u; index < salts_xml_node_child_count(source); ++index) {
         status = measure_node(
-            turbo_xml_node_child_at(source, index), limits, depth + 1u,
+            salts_xml_node_child_at(source, index), limits, depth + 1u,
             measurement, diagnostic);
         if (status != SCXML_OK) return status;
     }
@@ -246,7 +246,7 @@ static scxml_status measure_node(
 }
 
 static scxml_ast_string_view copy_view(
-    scxml_ast_writer *writer, turbo_xml_string_view source) {
+    scxml_ast_writer *writer, salts_xml_string_view source) {
     scxml_ast_string_view result = {NULL, source.size};
     if (source.size == 0u) return result;
     result.data = writer->impl->storage + writer->storage_index;
@@ -257,25 +257,25 @@ static scxml_ast_string_view copy_view(
 }
 
 static scxml_status write_serialized_children(
-    scxml_ast_writer *writer, turbo_xml_node source,
+    scxml_ast_writer *writer, salts_xml_node source,
     scxml_ast_node *node, scxml_diagnostic *diagnostic) {
-    turbo_xml_status xml_status;
+    salts_xml_status xml_status;
     size_t serialized_size = 0u;
     const size_t capacity =
         writer->impl->storage_size - writer->storage_index;
     if (!source_has_serialized_children(source)) return SCXML_OK;
     node->serialized_children.data =
         writer->impl->storage + writer->storage_index;
-    xml_status = turbo_xml_serialize_children(
+    xml_status = salts_xml_serialize_children(
         source, writer->impl->storage + writer->storage_index,
         capacity, capacity, &serialized_size);
-    if (xml_status != TURBO_XML_OK || serialized_size >= capacity) {
+    if (xml_status != SALTS_XML_OK || serialized_size >= capacity) {
         return ast_fail(
             diagnostic,
-            xml_status == TURBO_XML_ALLOCATION_FAILED
+            xml_status == SALTS_XML_ALLOCATION_FAILED
                 ? SCXML_ALLOCATION_FAILED
                 : SCXML_INVALID_STRUCTURE,
-            turbo_xml_node_location(source),
+            salts_xml_node_location(source),
             "SCXML AST source changed during inline serialization");
     }
     node->serialized_children.size = serialized_size;
@@ -284,60 +284,60 @@ static scxml_status write_serialized_children(
 }
 
 static scxml_status write_node(
-    scxml_ast_writer *writer, turbo_xml_node source,
+    scxml_ast_writer *writer, salts_xml_node source,
     scxml_ast_node_id parent, scxml_ast_node_id *out_id,
     scxml_diagnostic *diagnostic) {
     const scxml_ast_node_id node_id =
         (scxml_ast_node_id)writer->node_index++;
     scxml_ast_node *node = &writer->impl->nodes[node_id];
     scxml_ast_node_id previous_child = SCXML_AST_NODE_NONE;
-    const turbo_xml_string_view namespace_uri =
-        turbo_xml_node_namespace_uri(source);
+    const salts_xml_string_view namespace_uri =
+        salts_xml_node_namespace_uri(source);
     size_t index;
     scxml_status status;
     node->id = node_id;
-    node->xml_kind = turbo_xml_node_type(source);
-    node->kind = node->xml_kind == TURBO_XML_ELEMENT &&
+    node->xml_kind = salts_xml_node_type(source);
+    node->kind = node->xml_kind == SALTS_XML_ELEMENT &&
             view_equal(namespace_uri, SCXML_AST_NAMESPACE)
-        ? element_kind(turbo_xml_node_local_name(source))
+        ? element_kind(salts_xml_node_local_name(source))
         : SCXML_ELEMENT_UNKNOWN;
     node->parent = parent;
     node->first_child = SCXML_AST_NODE_NONE;
     node->next_sibling = SCXML_AST_NODE_NONE;
     node->first_child_index = writer->child_index;
-    node->child_count = turbo_xml_node_child_count(source);
+    node->child_count = salts_xml_node_child_count(source);
     writer->child_index += node->child_count;
     node->first_attribute = writer->attribute_index;
-    node->attribute_count = turbo_xml_node_attribute_count(source);
-    node->name = copy_view(writer, turbo_xml_node_local_name(source));
+    node->attribute_count = salts_xml_node_attribute_count(source);
+    node->name = copy_view(writer, salts_xml_node_local_name(source));
     node->namespace_uri = copy_view(writer, namespace_uri);
-    node->value = copy_view(writer, turbo_xml_node_value(source));
-    node->text = copy_view(writer, turbo_xml_node_text_view(source));
-    node->location = turbo_xml_node_location(source);
+    node->value = copy_view(writer, salts_xml_node_value(source));
+    node->text = copy_view(writer, salts_xml_node_text_view(source));
+    node->location = salts_xml_node_location(source);
     for (index = 0u; index < node->attribute_count; ++index) {
-        const turbo_xml_attribute source_attribute =
-            turbo_xml_node_attribute_at(source, index);
+        const salts_xml_attribute source_attribute =
+            salts_xml_node_attribute_at(source, index);
         scxml_ast_attribute *attribute =
             &writer->impl->attributes[writer->attribute_index++];
-        const turbo_xml_string_view attribute_namespace =
-            turbo_xml_attribute_namespace_uri(source_attribute);
+        const salts_xml_string_view attribute_namespace =
+            salts_xml_attribute_namespace_uri(source_attribute);
         attribute->kind = attribute_namespace.size == 0u
             ? attribute_kind(
-                  turbo_xml_attribute_local_name(source_attribute))
+                  salts_xml_attribute_local_name(source_attribute))
             : SCXML_ATTRIBUTE_UNKNOWN;
         attribute->name = copy_view(
-            writer, turbo_xml_attribute_local_name(source_attribute));
+            writer, salts_xml_attribute_local_name(source_attribute));
         attribute->namespace_uri = copy_view(writer, attribute_namespace);
         attribute->value = copy_view(
-            writer, turbo_xml_attribute_value(source_attribute));
-        attribute->location = turbo_xml_attribute_location(source_attribute);
+            writer, salts_xml_attribute_value(source_attribute));
+        attribute->location = salts_xml_attribute_location(source_attribute);
     }
     status = write_serialized_children(writer, source, node, diagnostic);
     if (status != SCXML_OK) return status;
     for (index = 0u; index < node->child_count; ++index) {
         scxml_ast_node_id child = SCXML_AST_NODE_NONE;
         status = write_node(
-            writer, turbo_xml_node_child_at(source, index), node_id,
+            writer, salts_xml_node_child_at(source, index), node_id,
             &child, diagnostic);
         if (status != SCXML_OK) return status;
         writer->impl->children[node->first_child_index + index] = child;
@@ -390,7 +390,7 @@ scxml_ast_limits scxml_ast_default_limits(void) {
 }
 
 scxml_status scxml_ast_build(
-    scxml_ast *out, turbo_xml_node root,
+    scxml_ast *out, salts_xml_node root,
     const scxml_ast_limits *limits_or_null,
     scxml_diagnostic *diagnostic) {
     const scxml_ast_limits limits = limits_or_null != NULL
@@ -405,19 +405,19 @@ scxml_status scxml_ast_build(
     if (out == NULL || out->impl != NULL || root.impl == NULL ||
         limits.max_nodes == 0u || limits.max_attributes == 0u ||
         limits.max_storage_bytes == 0u || limits.max_depth == 0u ||
-        turbo_xml_node_type(root) != TURBO_XML_ELEMENT) {
+        salts_xml_node_type(root) != SALTS_XML_ELEMENT) {
         return ast_fail(
             diagnostic, SCXML_INVALID_ARGUMENT,
-            root.impl != NULL ? turbo_xml_node_location(root)
-                              : (turbo_xml_location){0u, 0u, 0u},
+            root.impl != NULL ? salts_xml_node_location(root)
+                              : (salts_xml_location){0u, 0u, 0u},
             "SCXML AST output root and limits must be valid");
     }
-    if (!view_equal(turbo_xml_node_local_name(root), "scxml") ||
+    if (!view_equal(salts_xml_node_local_name(root), "scxml") ||
         !view_equal(
-            turbo_xml_node_namespace_uri(root), SCXML_AST_NAMESPACE)) {
+            salts_xml_node_namespace_uri(root), SCXML_AST_NAMESPACE)) {
         return ast_fail(
             diagnostic, SCXML_INVALID_NAMESPACE,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "root must be W3C SCXML scxml element");
     }
     status = measure_node(root, &limits, 1u, &measurement, diagnostic);
@@ -433,14 +433,14 @@ scxml_status scxml_ast_build(
             &ignored_bytes)) {
         return ast_fail(
             diagnostic, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "SCXML AST allocation size overflow");
     }
     impl = (scxml_ast_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         return ast_fail(
             diagnostic, SCXML_ALLOCATION_FAILED,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "SCXML AST allocation failed");
     }
     impl->nodes = (scxml_ast_node *)calloc(
@@ -460,7 +460,7 @@ scxml_status scxml_ast_build(
         destroy_impl(impl);
         return ast_fail(
             diagnostic, SCXML_ALLOCATION_FAILED,
-            turbo_xml_node_location(root),
+            salts_xml_node_location(root),
             "SCXML AST allocation failed");
     }
     impl->node_count = measurement.node_count;
@@ -480,7 +480,7 @@ scxml_status scxml_ast_build(
             ? status
             : ast_fail(
                   diagnostic, SCXML_INVALID_STRUCTURE,
-                  turbo_xml_node_location(root),
+                  salts_xml_node_location(root),
                   "SCXML AST source changed during construction");
     }
     out->impl = impl;
@@ -569,7 +569,7 @@ const scxml_ast_attribute *scxml_ast_node_attribute_at(
 
 scxml_attribute_kind scxml_ast_attribute_kind_from_name(
     const char *local_name) {
-    const turbo_xml_string_view name = {
+    const salts_xml_string_view name = {
         local_name, local_name != NULL ? strlen(local_name) : 0u};
     return local_name != NULL
         ? attribute_kind(name) : SCXML_ATTRIBUTE_UNKNOWN;

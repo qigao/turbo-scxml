@@ -174,7 +174,7 @@ rg -n "fit\\(|it_only\\(|TODO|FIXME|HACK" include src tests README.md docs/specs
 Expected: Release 13/13, Debug/ASan 13/13, CHTTP 18/18, QuickJS 13/13,
 clean diff check, and no focused tests or placeholder markers in changed code.
 Then configure `tests/install_consumer` with `TURBOSCXML_ROOT` naming the
-Release install and `ROCIDA_ROOT` naming the matching Rocida profile; build and
+Release install and `SALTS_ROOT` naming the matching Salts profile; build and
 run `turboscxml_install_consumer`, `turboscxml_ccxml_install_consumer`, and
 `turboscxml_ccxml_install_consumer_cpp`. All three must exit zero.
 
