@@ -7,7 +7,8 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_ACCEPT = 1,
     CCXML_ACTION_EXIT,
     CCXML_ACTION_CREATE_CALL,
-    CCXML_ACTION_DISCONNECT
+    CCXML_ACTION_DISCONNECT,
+    CCXML_ACTION_REJECT
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
@@ -32,6 +33,7 @@ typedef struct ccxml_program_impl {
     size_t max_transition_actions;
     bool uses_create_call;
     bool uses_disconnect;
+    bool uses_reject;
 } ccxml_program_impl;
 
 typedef struct ccxml_session_impl {

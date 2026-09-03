@@ -236,7 +236,7 @@ static ccxml_status validate_transition(
         name = turbo_xml_node_local_name(action);
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
-            !view_equal(name, "disconnect")) {
+            !view_equal(name, "disconnect") && !view_equal(name, "reject")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -425,9 +425,12 @@ static void copy_program(
                         action_row->destination_size);
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
-                } else {
+                } else if (view_equal(action_name, "disconnect")) {
                     action_row->kind = CCXML_ACTION_DISCONNECT;
                     impl->uses_disconnect = true;
+                } else {
+                    action_row->kind = CCXML_ACTION_REJECT;
+                    impl->uses_reject = true;
                 }
                 ++row->action_count;
             }

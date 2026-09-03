@@ -274,4 +274,67 @@ spec("CCXML program") {
             check_null(program.impl);
         }
     }
+
+    group("reject") {
+        it("accepts the empty default-target form") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<reject/></transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            check_not_null(program.impl);
+            check_equal(ccxml_program_action_count(&program), (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an explicit connection expression") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<reject connectionid=\"'call-7'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects optional attributes outside the slice") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<reject reason=\"'busy'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects nested executable content") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<reject><exit/></reject>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+    }
 }
