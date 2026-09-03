@@ -128,6 +128,65 @@ static ccxml_status validate_empty_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_create_call(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute destination_attribute = {0};
+    turbo_xml_string_view expression;
+    char quote;
+    size_t index;
+    size_t retained_size;
+    ccxml_status status = validate_attributes(
+        action, "dest", true, &destination_attribute, diagnostic);
+    if (status != CCXML_OK) return status;
+    expression = turbo_xml_attribute_value(destination_attribute);
+    if (expression.data == NULL || expression.size < 2u ||
+        (expression.data[0] != '\'' && expression.data[0] != '"') ||
+        expression.data[expression.size - 1u] != expression.data[0]) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(destination_attribute),
+            "CCXML createcall dest must be a quoted string literal");
+    }
+    quote = expression.data[0];
+    if (expression.size == 2u) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_attribute_location(destination_attribute),
+            "CCXML createcall dest must be nonempty");
+    }
+    for (index = 1u; index + 1u < expression.size; ++index) {
+        if (expression.data[index] == '\\' || expression.data[index] == quote) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(destination_attribute),
+                "CCXML createcall dest escapes are not supported");
+        }
+    }
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "CCXML createcall must be empty");
+        }
+    }
+    if (!checked_add(expression.size - 2u, 1u, &retained_size) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "CCXML action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     turbo_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
@@ -175,14 +234,16 @@ static ccxml_status validate_transition(
                 "unsupported CCXML executable content");
         }
         name = turbo_xml_node_local_name(action);
-        if (!view_equal(name, "accept") && !view_equal(name, "exit")) {
+        if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
+            !view_equal(name, "createcall")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
                 "unsupported CCXML executable content");
         }
-        status = validate_empty_action(
-            action, measurement, limits, diagnostic);
+        status = view_equal(name, "createcall")
+            ? validate_create_call(action, measurement, limits, diagnostic)
+            : validate_empty_action(action, measurement, limits, diagnostic);
         if (status != CCXML_OK) return status;
         ++local_action_count;
     }
@@ -327,9 +388,43 @@ static void copy_program(
                 const turbo_xml_node action =
                     turbo_xml_node_child_at(transition, child_index);
                 if (turbo_xml_node_type(action) != TURBO_XML_ELEMENT) continue;
-                impl->actions[action_index++].kind = view_equal(
-                    turbo_xml_node_local_name(action), "accept")
-                    ? CCXML_ACTION_ACCEPT : CCXML_ACTION_EXIT;
+                ccxml_action_row *action_row = &impl->actions[action_index++];
+                const turbo_xml_string_view action_name =
+                    turbo_xml_node_local_name(action);
+                if (view_equal(action_name, "accept")) {
+                    action_row->kind = CCXML_ACTION_ACCEPT;
+                } else if (view_equal(action_name, "exit")) {
+                    action_row->kind = CCXML_ACTION_EXIT;
+                } else {
+                    size_t create_attribute_index;
+                    turbo_xml_attribute destination_attribute = {0};
+                    turbo_xml_string_view expression;
+                    action_row->kind = CCXML_ACTION_CREATE_CALL;
+                    impl->uses_create_call = true;
+                    for (create_attribute_index = 0u;
+                         create_attribute_index <
+                             turbo_xml_node_attribute_count(action);
+                         ++create_attribute_index) {
+                        const turbo_xml_attribute candidate =
+                            turbo_xml_node_attribute_at(
+                                action, create_attribute_index);
+                        if (view_equal(
+                                turbo_xml_attribute_local_name(candidate),
+                                "dest")) {
+                            destination_attribute = candidate;
+                            break;
+                        }
+                    }
+                    expression =
+                        turbo_xml_attribute_value(destination_attribute);
+                    action_row->destination = cursor;
+                    action_row->destination_size = expression.size - 2u;
+                    memcpy(
+                        cursor, expression.data + 1u,
+                        action_row->destination_size);
+                    cursor[action_row->destination_size] = '\0';
+                    cursor += action_row->destination_size + 1u;
+                }
                 ++row->action_count;
             }
         }
