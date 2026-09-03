@@ -186,7 +186,7 @@ git commit -m "docs(ccxml): define createcall incubation profile"
 git push
 ```
 
-- [ ] **Step 4: Verify the PR state**
+- [x] **Step 4: Verify the PR state**
 
 ```powershell
 gh pr view 35 --json url,state,mergeable,mergeStateStatus,statusCheckRollup
