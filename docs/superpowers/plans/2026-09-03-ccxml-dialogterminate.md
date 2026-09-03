@@ -63,8 +63,8 @@ start a dialog on one dispatch and terminate its written ID on a later
 dispatch.
 
 - [x] Add a two-dispatch CMeta lifecycle test and commit the integration slice.
-- [ ] Document supported termination semantics and deferred immediate mode.
-- [ ] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
+- [x] Document supported termination semantics and deferred immediate mode.
+- [x] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
   consumer verification serially.
 - [ ] Self-review, scan test hygiene, commit, push, update PR #35, and confirm
   its final merge state.

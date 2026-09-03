@@ -128,7 +128,7 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和直接
-`<dialogstart/>` VoiceXML provider 启动路径：
+`<dialogstart/>`/normal `<dialogterminate/>` VoiceXML provider 生命周期：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -162,6 +162,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
   <dialogstart dialogid="dialog.id"
                src="'https://voice.example/menu.vxml'"
                connectionid="event$.connectionid"/>
+</transition>
+<transition event="dialog.stop">
+  <dialogterminate dialogid="dialog.id"/>
 </transition>
 ```
 
@@ -262,6 +265,13 @@ datamodel；旧 createconference writeback 前缀在只使用写回时继续有�
 dialog ID。URI 策略、抓取、VoiceXML 解释器、媒体 bridge 和结果事件均由
 provider 负责；核心不内置这些实现。
 
+`<dialogterminate/>` 的 `dialogid` 接受非空字符串字面量或点分 NCName
+datamodel location。省略 `immediate` 使用 normal termination（`false`）；核心
+把求值后的 ID 和该模式交给追加的 `prepare_dialog_terminate`，不要求当前 Event
+携带 connection ID，也不会终止 CCXML session。provider 负责权威 dialog 状态、
+normal cleanup/返回值、媒体 bridge teardown、`conference.unjoined` 和唯一的
+最终 `dialog.exit`。literal 形式不要求 datamodel。
+
 ```c
 ccxml_cmeta_datamodel model = {0};
 ccxml_cmeta_datamodel_config_v1 model_config = {
@@ -282,8 +292,9 @@ ccxml_session_config session_config = {
 ```
 
 当前明确不支持 SIP/RTP backend、完整 dialog 生命周期（`<dialogprepare/>`、
-`<dialogterminate/>`，以及 `<dialogstart/>` 的 prepared dialog、conference、
-parameters、media direction、显式 MIME、fetch/hints 等形式）、
+`<dialogterminate/>` 的显式 `immediate`/`hints`，以及 `<dialogstart/>` 的 prepared
+dialog、conference、parameters、media direction、显式 MIME、fetch/hints 等
+形式）、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
@@ -317,7 +328,9 @@ merge 切片见
 销毁与 CMeta 读取边界见
 [`docs/specs/ccxml-destroyconference-design.md`](docs/specs/ccxml-destroyconference-design.md)，
 直接 dialog 启动与 provider/ID 写回边界见
-[`docs/specs/ccxml-dialogstart-design.md`](docs/specs/ccxml-dialogstart-design.md)。
+[`docs/specs/ccxml-dialogstart-design.md`](docs/specs/ccxml-dialogstart-design.md)，normal
+dialog termination 边界见
+[`docs/specs/ccxml-dialogterminate-design.md`](docs/specs/ccxml-dialogterminate-design.md)。
 
 ## CMeta 表达式
 
