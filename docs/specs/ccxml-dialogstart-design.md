@@ -18,6 +18,9 @@ current event connection. `dialogid` is optional in CCXML 1.0 but required by
 this narrower profile so the immediately created Dialog Object remains
 addressable before its asynchronous result event.
 
+Standard reference:
+[W3C CCXML 1.0, `dialogstart`](https://www.w3.org/TR/ccxml/#dialogstart).
+
 ## Compiler contract
 
 `dialogid` is a required dotted NCName write location. `src` is a required,

@@ -127,7 +127,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
-`<createconference/>`/`<destroyconference/>` conference 生命周期：
+`<createconference/>`/`<destroyconference/>` conference 生命周期和直接
+`<dialogstart/>` VoiceXML provider 启动路径：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -156,6 +157,11 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="conference.release">
   <destroyconference conferenceid="conference.id"/>
+</transition>
+<transition event="connection.connected">
+  <dialogstart dialogid="dialog.id"
+               src="'https://voice.example/menu.vxml'"
+               connectionid="event$.connectionid"/>
 </transition>
 ```
 
@@ -247,6 +253,15 @@ session，只在没有其他 session attachment 时销毁全局 conference，并
 `conference.destroyed` 或 `error.conference.destroy`。literal 形式不要求
 datamodel；旧 createconference writeback 前缀在只使用写回时继续有效。
 
+`<dialogstart/>` 当前要求 `dialogid` 是点分 NCName 写入位置，`src` 是非空
+字符串字面量，`connectionid` 必须严格为 `event$.connectionid`。追加的
+`prepare_dialog_start` 接收 source、默认 `application/voicexml+xml` MIME 和
+当前 Event 的 connection ID，并返回 provider 生成的 dialog ID 与启动 ticket。
+核心先提交 CMeta/datamodel ID 写回，再提交 provider 启动，因此异步
+`dialog.started`、`error.dialog.notstarted` 或最终 `dialog.exit` 不会观察到旧
+dialog ID。URI 策略、抓取、VoiceXML 解释器、媒体 bridge 和结果事件均由
+provider 负责；核心不内置这些实现。
+
 ```c
 ccxml_cmeta_datamodel model = {0};
 ccxml_cmeta_datamodel_config_v1 model_config = {
@@ -266,7 +281,9 @@ ccxml_session_config session_config = {
     .datamodel_user = &model};
 ```
 
-当前明确不支持 SIP/RTP backend、dialog 生命周期、
+当前明确不支持 SIP/RTP backend、完整 dialog 生命周期（`<dialogprepare/>`、
+`<dialogterminate/>`，以及 `<dialogstart/>` 的 prepared dialog、conference、
+parameters、media direction、显式 MIME、fetch/hints 等形式）、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
@@ -278,8 +295,8 @@ ECMAScript、条件表达式、
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>`、文档切换和
-VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
+`<send>`、文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
+而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
@@ -298,7 +315,9 @@ merge 切片见
 创建与 CMeta 写回边界见
 [`docs/specs/ccxml-createconference-design.md`](docs/specs/ccxml-createconference-design.md)，conference
 销毁与 CMeta 读取边界见
-[`docs/specs/ccxml-destroyconference-design.md`](docs/specs/ccxml-destroyconference-design.md)。
+[`docs/specs/ccxml-destroyconference-design.md`](docs/specs/ccxml-destroyconference-design.md)，
+直接 dialog 启动与 provider/ID 写回边界见
+[`docs/specs/ccxml-dialogstart-design.md`](docs/specs/ccxml-dialogstart-design.md)。
 
 ## CMeta 表达式
 
