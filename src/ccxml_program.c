@@ -466,6 +466,221 @@ static ccxml_status validate_destination_action(
     return CCXML_OK;
 }
 
+static ccxml_status decode_send_literal(
+    salts_xml_attribute attribute, char **out_value, size_t *out_size,
+    ccxml_diagnostic *diagnostic) {
+    const salts_xml_string_view expression =
+        salts_xml_attribute_value(attribute);
+    scxml_xml_decode_status decode_status;
+    char *value;
+    char quote;
+    size_t decoded_size = 0u;
+    size_t value_size;
+    size_t index;
+    if (out_value == NULL || out_size == NULL) return CCXML_INVALID_ARGUMENT;
+    *out_value = NULL;
+    *out_size = 0u;
+    decode_status = scxml_xml_decode_attribute_entities(
+        expression.data, expression.size, NULL, 0u, &decoded_size);
+    if (decode_status != SCXML_XML_DECODE_OK) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            decode_status == SCXML_XML_DECODE_INVALID_CHARACTER_REFERENCE
+                ? "CCXML send literal has an invalid XML character reference"
+                : "CCXML send literal has an unsupported XML entity reference");
+    }
+    if (decoded_size < 2u) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(attribute),
+            "CCXML send value must be a quoted string literal");
+    }
+    value = (char *)malloc(decoded_size);
+    if (value == NULL) {
+        return fail(
+            diagnostic, CCXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "CCXML send literal decoding allocation failed");
+    }
+    decode_status = scxml_xml_decode_attribute_entities(
+        expression.data, expression.size,
+        value, decoded_size, &decoded_size);
+    if (decode_status != SCXML_XML_DECODE_OK) {
+        free(value);
+        return fail(
+            diagnostic, CCXML_INVALID_CONTRACT,
+            salts_xml_attribute_location(attribute),
+            "CCXML send literal decoding changed between passes");
+    }
+    if ((value[0] != '\'' && value[0] != '"') ||
+        value[decoded_size - 1u] != value[0]) {
+        free(value);
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(attribute),
+            "CCXML send value must be a quoted string literal");
+    }
+    if (decoded_size == 2u) {
+        free(value);
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "CCXML send string literal must be nonempty");
+    }
+    quote = value[0];
+    for (index = 1u; index + 1u < decoded_size; ++index) {
+        if (value[index] == '\\' || value[index] == quote) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML send literal decodes to an unsupported escape or quote");
+        }
+    }
+    value_size = decoded_size - 2u;
+    memmove(value, value + 1u, value_size);
+    *out_value = value;
+    *out_size = value_size;
+    return CCXML_OK;
+}
+
+static size_t copy_send_literal(
+    salts_xml_attribute attribute, char *output) {
+    const salts_xml_string_view expression =
+        salts_xml_attribute_value(attribute);
+    size_t decoded_size = 0u;
+    if (scxml_xml_decode_attribute_entities(
+            expression.data, expression.size,
+            NULL, 0u, &decoded_size) != SCXML_XML_DECODE_OK ||
+        scxml_xml_decode_attribute_entities(
+            expression.data, expression.size,
+            output, decoded_size, &decoded_size) != SCXML_XML_DECODE_OK) {
+        return 0u;
+    }
+    memmove(output, output + 1u, decoded_size - 2u);
+    output[decoded_size - 2u] = '\0';
+    return decoded_size - 2u;
+}
+
+static bool send_event_name_valid(const char *name, size_t name_size) {
+    size_t index;
+    if (name == NULL || name_size == 0u) return false;
+    if (!((name[0] >= 'A' && name[0] <= 'Z') ||
+          (name[0] >= 'a' && name[0] <= 'z') || name[0] == '_'))
+        return false;
+    for (index = 1u; index < name_size; ++index) {
+        const char value = name[index];
+        if (!((value >= 'A' && value <= 'Z') ||
+              (value >= 'a' && value <= 'z') ||
+              (value >= '0' && value <= '9') ||
+              value == '_' || value == '.'))
+            return false;
+    }
+    return true;
+}
+
+static ccxml_status validate_send_action(
+    salts_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    salts_xml_attribute target_attribute = {0};
+    salts_xml_attribute name_attribute = {0};
+    salts_xml_attribute type_attribute = {0};
+    char *target_value = NULL;
+    char *name_value = NULL;
+    char *type_value = NULL;
+    size_t target_size = 0u;
+    size_t name_size = 0u;
+    size_t type_size = 0u;
+    size_t retained_size = 0u;
+    size_t part_size;
+    size_t index;
+    ccxml_status status;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view namespace_uri =
+            salts_xml_attribute_namespace_uri(attribute);
+        const salts_xml_string_view local_name =
+            salts_xml_attribute_local_name(attribute);
+        salts_xml_attribute *slot = NULL;
+        if (namespace_uri.size == 0u && view_equal(local_name, "target"))
+            slot = &target_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "name"))
+            slot = &name_attribute;
+        else if (namespace_uri.size == 0u &&
+                 view_equal(local_name, "targettype"))
+            slot = &type_attribute;
+        if (slot == NULL || slot->impl != NULL) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate CCXML send attribute");
+        }
+        *slot = attribute;
+    }
+    if (target_attribute.impl == NULL || name_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            salts_xml_node_location(action),
+            "CCXML send requires target and name");
+    }
+    status = decode_send_literal(
+        target_attribute, &target_value, &target_size, diagnostic);
+    if (status != CCXML_OK) goto cleanup;
+    status = decode_send_literal(
+        name_attribute, &name_value, &name_size, diagnostic);
+    if (status != CCXML_OK) goto cleanup;
+    if (!send_event_name_valid(name_value, name_size)) {
+        status = fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "CCXML send name has invalid event-name syntax");
+        goto cleanup;
+    }
+    if (type_attribute.impl != NULL) {
+        status = decode_send_literal(
+            type_attribute, &type_value, &type_size, diagnostic);
+        if (status != CCXML_OK) goto cleanup;
+    }
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            status = fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(child),
+                "CCXML send inline content is unsupported");
+            goto cleanup;
+        }
+    }
+    if (!checked_add(target_size, 1u, &part_size) ||
+        !checked_add(retained_size, part_size, &retained_size) ||
+        !checked_add(name_size, 1u, &part_size) ||
+        !checked_add(retained_size, part_size, &retained_size) ||
+        (type_attribute.impl != NULL &&
+         (!checked_add(type_size, 1u, &part_size) ||
+          !checked_add(retained_size, part_size, &retained_size))) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        status = fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(action),
+            "CCXML send action or retained-string limit exceeded");
+        goto cleanup;
+    }
+    status = CCXML_OK;
+
+cleanup:
+    free(type_value);
+    free(name_value);
+    free(target_value);
+    return status;
+}
+
 static ccxml_status validate_two_identifier_action(
     salts_xml_node action, const char *id1_name, const char *id2_name,
     ccxml_measurement *measurement,
@@ -1217,7 +1432,7 @@ static ccxml_status validate_transition(
             !view_equal(name, "dialogprepare") &&
             !view_equal(name, "dialogstart") &&
             !view_equal(name, "dialogterminate") &&
-            !view_equal(name, "assign")) {
+            !view_equal(name, "assign") && !view_equal(name, "send")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 salts_xml_node_location(action),
@@ -1267,6 +1482,9 @@ static ccxml_status validate_transition(
                     salts_xml_node_location(action),
                     "assign must name the declared root string var");
             }
+        } else if (view_equal(name, "send")) {
+            status = validate_send_action(
+                action, measurement, limits, diagnostic);
         } else {
             status = validate_empty_action(
                 action, measurement, limits, diagnostic);
@@ -1818,6 +2036,33 @@ static void copy_program(
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
                     impl->uses_assign = true;
+                } else if (view_equal(action_name, "send")) {
+                    const salts_xml_attribute target_attribute =
+                        node_unqualified_attribute(action, "target");
+                    const salts_xml_attribute name_attribute =
+                        node_unqualified_attribute(action, "name");
+                    const salts_xml_attribute type_attribute =
+                        node_unqualified_attribute(action, "targettype");
+                    static const char default_type[] = "ccxml";
+                    action_row->kind = CCXML_ACTION_SEND;
+                    action_row->destination = cursor;
+                    action_row->destination_size =
+                        copy_send_literal(target_attribute, cursor);
+                    cursor += action_row->destination_size + 1u;
+                    action_row->name = cursor;
+                    action_row->name_size =
+                        copy_send_literal(name_attribute, cursor);
+                    cursor += action_row->name_size + 1u;
+                    if (type_attribute.impl != NULL) {
+                        action_row->target_type = cursor;
+                        action_row->target_type_size =
+                            copy_send_literal(type_attribute, cursor);
+                        cursor += action_row->target_type_size + 1u;
+                    } else {
+                        action_row->target_type = default_type;
+                        action_row->target_type_size = sizeof(default_type) - 1u;
+                    }
+                    impl->uses_send = true;
                 } else {
                     size_t bridge_attribute_index;
                     salts_xml_attribute id1_attribute = {0};
@@ -1890,6 +2135,7 @@ ccxml_status ccxml_compile(
     salts_xml_diagnostic xml_diagnostic = {0};
     ccxml_measurement measurement = {0};
     ccxml_program_impl *impl = NULL;
+    size_t storage_allocation_bytes = 0u;
     ccxml_status status;
     salts_xml_status xml_status;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
@@ -1919,6 +2165,15 @@ ccxml_status ccxml_compile(
     status = validate_document(
         salts_xml_document_root(&document), &measurement, &limits, diagnostic);
     if (status != CCXML_OK) goto cleanup;
+    if (measurement.name_bytes != 0u &&
+        !checked_add(
+            measurement.name_bytes, 1u, &storage_allocation_bytes)) {
+        status = fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(salts_xml_document_root(&document)),
+            "CCXML program storage size overflow");
+        goto cleanup;
+    }
     impl = (ccxml_program_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         status = fail(
@@ -1934,7 +2189,7 @@ ccxml_status ccxml_compile(
         impl->actions = (ccxml_action_row *)calloc(
             measurement.action_count, sizeof(*impl->actions));
     if (measurement.name_bytes != 0u)
-        impl->storage = (char *)malloc(measurement.name_bytes);
+        impl->storage = (char *)malloc(storage_allocation_bytes);
     if ((measurement.transition_count != 0u && impl->transitions == NULL) ||
         (measurement.action_count != 0u && impl->actions == NULL) ||
         (measurement.name_bytes != 0u && impl->storage == NULL)) {

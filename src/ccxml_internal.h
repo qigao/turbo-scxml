@@ -19,7 +19,8 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_DIALOG_START,
     CCXML_ACTION_PREPARED_DIALOG_START,
     CCXML_ACTION_DIALOG_TERMINATE,
-    CCXML_ACTION_ASSIGN_STRING
+    CCXML_ACTION_ASSIGN_STRING,
+    CCXML_ACTION_SEND
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
@@ -32,6 +33,10 @@ typedef struct ccxml_action_row {
     size_t id2_size;
     const char *location;
     size_t location_size;
+    const char *name;
+    size_t name_size;
+    const char *target_type;
+    size_t target_type_size;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -77,6 +82,7 @@ typedef struct ccxml_program_impl {
     bool uses_assign;
     bool uses_statevariable;
     bool uses_condition;
+    bool uses_send;
 } ccxml_program_impl;
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;
@@ -87,6 +93,8 @@ typedef struct ccxml_session_impl {
     void *telephony_user;
     ccxml_datamodel_adapter_v1 datamodel;
     void *datamodel_user;
+    scxml_event_io_adapter event_io;
+    void *event_io_user;
     cflow_executor executor;
     cflow_statechart_instance instance;
     cflow_statechart_guard_binding *guard_bindings;

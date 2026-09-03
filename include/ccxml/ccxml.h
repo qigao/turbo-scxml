@@ -384,6 +384,12 @@ typedef struct ccxml_session_config {
     /** Required when the program reads/writes strings or uses conditions. */
     const ccxml_datamodel_adapter_v1 *datamodel;
     void *datamodel_user;
+    /**
+     * Required by programs containing send. The shared table supplies the
+     * ticket protocol; its user implements CCXML targettype semantics.
+     */
+    const scxml_event_io_adapter *event_io;
+    void *event_io_user;
 } ccxml_session_config;
 
 typedef struct ccxml_session {
@@ -397,12 +403,12 @@ ccxml_status ccxml_session_init(
 ccxml_status ccxml_session_dispatch(
     ccxml_session *session, const ccxml_event *event);
 
-/** Stop accepting events and close the adapter exactly once. */
+/** Stop accepting events and close each attached adapter exactly once. */
 void ccxml_session_close(ccxml_session *session);
 
 bool ccxml_session_is_terminated(const ccxml_session *session);
 
-/** Close and destroy when the adapter is quiescent; otherwise return BUSY. */
+/** Close and destroy when every adapter is quiescent; otherwise return BUSY. */
 ccxml_status ccxml_session_destroy(ccxml_session *session);
 
 #ifdef __cplusplus

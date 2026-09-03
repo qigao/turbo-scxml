@@ -133,7 +133,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
-`<dialogterminate/>` VoiceXML provider 生命周期：
+`<dialogterminate/>` VoiceXML provider 生命周期，以及受限 `<send/>`（字面量
+`target`/`name`、可选字面量 `targettype`，默认 `ccxml`）：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -181,6 +182,9 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 </transition>
 <transition event="dialog.stop">
   <dialogterminate dialogid="dialog.id"/>
+</transition>
+<transition event="call.notice.ready">
+  <send target="'session:supervisor'" name="'call.notice'"/>
 </transition>
 ```
 
@@ -234,6 +238,15 @@ adapter 一次。
 `<createcall/>` commit 后由 provider 异步发起呼叫，并通过已有 event dispatch
 边界回送 `connection.progressing`、`connection.connected` 或
 `connection.failed`。核心不包含 SIP/RTP backend，也不会伪造平台结果。
+
+`<send/>` 复用 `scxml_event_io_adapter` 的 move-only prepare/commit/discard
+边界；`scxml_send_request.type` 承载 CCXML `targettype`，具体 `ccxml`、`dialog`
+或 `basichttp` 路由由 session-bound 宿主实现，而不是套用 SCXML target 规则。
+commit 后的 `send.successful` 或 `error.send.*` 也由宿主通过串行 CCXML event
+dispatch 边界回送，核心不自行合成平台结果。
+当前尚不支持 `delay`、`sendid`、`namelist` 和 inline content，这些形式会在
+compile 阶段被明确拒绝。
+
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
 
@@ -366,9 +379,12 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>`、文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
+`<send>` 的 `delay`/`sendid`/`namelist`/inline content 或非字面量表达式、
+文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
+send 切片与共享 Event I/O 边界见
+[`docs/specs/ccxml-send-design.md`](docs/specs/ccxml-send-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见

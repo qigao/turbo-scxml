@@ -13,9 +13,10 @@ dispatches one external event synchronously, selects the first matching
 transition in document order, stages every action effect, and either commits
 all staged effects or discards them all.
 
-SIP/RTP backends, document replacement, general ECMAScript, `<send>`, and a
-built-in VoiceXML interpreter are outside this slice. The compiler rejects
-unsupported constructs instead of silently approximating them.
+SIP/RTP backends, document replacement, general ECMAScript, full `<send>`
+expressions/payloads, and a built-in VoiceXML interpreter are outside this
+slice. The compiler rejects unsupported constructs instead of silently
+approximating them.
 
 Normative references:
 
@@ -33,9 +34,11 @@ application -> TurboSCXML::CCXML -> TurboSCXML::SCXML -> Salts
 ```
 
 The first slice deliberately reuses the SCXML adapter status and CFlow
-move-only effect ticket contracts. CCXML owns its XML syntax, program, session,
-event selection, and telephony vocabulary; no CCXML element is admitted by the
-SCXML compiler.
+move-only effect ticket contracts. Its restricted `<send>` action also reuses
+the `scxml_event_io_adapter` table and `scxml_send_request` envelope while the
+session-bound host retains CCXML target-type semantics. CCXML owns its XML
+syntax, program, session, event selection, and telephony vocabulary; no CCXML
+element is admitted by the SCXML compiler.
 
 ## Public contract
 

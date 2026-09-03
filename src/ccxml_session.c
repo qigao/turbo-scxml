@@ -24,6 +24,22 @@ static ccxml_telephony_adapter_v1 copy_adapter(
     return copy;
 }
 
+static bool event_io_send_adapter_valid(
+    const scxml_event_io_adapter *adapter) {
+    const uint64_t known = SCXML_EVENT_IO_CAP_SEND |
+        SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL |
+        SCXML_EVENT_IO_CAP_PAYLOAD | SCXML_EVENT_IO_CAP_CONTENT;
+    return adapter != NULL && adapter->abi_version == SCXML_ADAPTER_ABI &&
+           adapter->struct_size == sizeof(*adapter) &&
+           (adapter->capabilities & ~known) == 0u &&
+           (adapter->capabilities & SCXML_EVENT_IO_CAP_SEND) != 0u &&
+           adapter->prepare_send != NULL && adapter->close != NULL &&
+           adapter->is_quiescent != NULL &&
+           ((adapter->capabilities & SCXML_EVENT_IO_CAP_CANCEL) == 0u ||
+            ((adapter->capabilities & SCXML_EVENT_IO_CAP_DELAYED_SEND) != 0u &&
+             adapter->prepare_cancel != NULL));
+}
+
 static bool datamodel_write_adapter_valid(
     const ccxml_datamodel_adapter_v1 *adapter) {
     const size_t write_size =
@@ -92,6 +108,8 @@ static void close_adapter(ccxml_session_impl *impl) {
     if (impl == NULL || impl->closed) return;
     impl->closed = true;
     impl->telephony.close(impl->telephony_user);
+    if (impl->event_io.close != NULL)
+        impl->event_io.close(impl->event_io_user);
 }
 
 static void discard_tickets(
@@ -289,6 +307,8 @@ ccxml_status ccxml_session_init(
     const ccxml_program_impl *program;
     ccxml_telephony_adapter_v1 telephony;
     ccxml_datamodel_adapter_v1 datamodel = {0};
+    scxml_event_io_adapter event_io = {0};
+    void *event_io_user = NULL;
     ccxml_session_impl *impl;
     cflow_statechart_instance_config native_config = {0};
     cflow_statechart_instance_status native_status;
@@ -304,6 +324,12 @@ ccxml_status ccxml_session_init(
     }
     program = (const ccxml_program_impl *)config->program->impl;
     telephony = copy_adapter(config->telephony);
+    if (program->uses_send) {
+        if (!event_io_send_adapter_valid(config->event_io))
+            return CCXML_INVALID_ARGUMENT;
+        event_io = *config->event_io;
+        event_io_user = config->event_io_user;
+    }
     if (program->initial_variable != NULL || program->uses_assign) {
         if (!datamodel_write_adapter_valid(config->datamodel))
             return CCXML_INVALID_ARGUMENT;
@@ -564,6 +590,8 @@ ccxml_status ccxml_session_init(
     impl->telephony_user = config->telephony_user;
     impl->datamodel = datamodel;
     impl->datamodel_user = config->datamodel_user;
+    impl->event_io = event_io;
+    impl->event_io_user = event_io_user;
     impl->ticket_capacity = program->max_transition_effects;
     guard_count = cflow_statechart_guard_count(&program->statechart);
     executable_count =
@@ -571,6 +599,7 @@ ccxml_status ccxml_session_init(
     if (guard_count > SIZE_MAX / sizeof(*impl->guard_bindings) ||
         guard_count > SIZE_MAX / sizeof(*impl->transition_bindings) ||
         executable_count > SIZE_MAX / sizeof(*impl->executable_bindings)) {
+        close_adapter(impl);
         free(impl->tickets);
         free(impl);
         return CCXML_LIMIT_EXCEEDED;
@@ -588,6 +617,7 @@ ccxml_status ccxml_session_init(
          (impl->guard_bindings == NULL ||
           impl->transition_bindings == NULL)) ||
         (executable_count != 0u && impl->executable_bindings == NULL)) {
+        close_adapter(impl);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -622,6 +652,7 @@ ccxml_status ccxml_session_init(
                 status = CCXML_INVALID_CONTRACT;
             }
             if (status != CCXML_OK) {
+                close_adapter(impl);
                 destroy_conditions(impl);
                 free(impl->transition_bindings);
                 free(impl->executable_bindings);
@@ -646,6 +677,7 @@ ccxml_status ccxml_session_init(
         }
     }
     if (!cflow_executor_serial_init(&impl->executor)) {
+        close_adapter(impl);
         destroy_conditions(impl);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
@@ -671,6 +703,7 @@ ccxml_status ccxml_session_init(
         cflow_statechart_instance_init(&impl->instance, &native_config);
     if (native_status != CFLOW_STATECHART_INSTANCE_OK) {
         cflow_executor_destroy(&impl->executor);
+        close_adapter(impl);
         destroy_conditions(impl);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
@@ -705,6 +738,7 @@ ccxml_status ccxml_session_init(
             cflow_statechart_instance_close(&impl->instance);
             (void)cflow_statechart_instance_destroy(&impl->instance);
             cflow_executor_destroy(&impl->executor);
+            close_adapter(impl);
             destroy_conditions(impl);
             free(impl->transition_bindings);
             free(impl->executable_bindings);
@@ -740,6 +774,25 @@ static ccxml_status execute_transition_actions(
                     impl->datamodel_user, action->location,
                     action->location_size, action->destination,
                     action->destination_size, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+        }
+        if (action->kind == CCXML_ACTION_SEND) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const scxml_send_request request = {
+                .event = action->name,
+                .event_size = action->name_size,
+                .target = action->destination,
+                .target_size = action->destination_size,
+                .type = action->target_type,
+                .type_size = action->target_type_size,
+                .payload = {.kind = SCXML_PAYLOAD_NONE}};
+            const scxml_adapter_status adapter_status =
+                impl->event_io.prepare_send(
+                    impl->event_io_user, &request, &ticket, &error);
             const ccxml_status status = retain_ticket(
                 impl, adapter_status, ticket, &prepared);
             (void)error;
@@ -1308,6 +1361,9 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
     cflow_statechart_instance_close(&impl->instance);
     close_adapter(impl);
     if (!impl->telephony.is_quiescent(impl->telephony_user))
+        return CCXML_BUSY;
+    if (impl->event_io.is_quiescent != NULL &&
+        !impl->event_io.is_quiescent(impl->event_io_user))
         return CCXML_BUSY;
     if (cflow_statechart_instance_destroy(&impl->instance) !=
         CFLOW_STATECHART_INSTANCE_OK)
