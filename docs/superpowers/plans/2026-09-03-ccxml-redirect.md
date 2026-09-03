@@ -129,7 +129,7 @@ install consumer with the matching Rocida root and vcpkg prefix, then build and
 run core C, CCXML C, and CCXML C++ consumers with matching runtime paths.
 Expected counts are 13/13, 13/13, 18/18, and 13/13; consumers exit zero.
 
-- [ ] **Step 3: Review, publish, and finalize**
+- [x] **Step 3: Review, publish, and finalize**
 
 Run `git diff --check`, scan source/tests for focused tests and placeholder
 markers, and review every change against the spec. Commit documentation, push,
