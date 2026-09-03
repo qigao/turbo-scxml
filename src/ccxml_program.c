@@ -128,7 +128,7 @@ static ccxml_status validate_empty_action(
     return CCXML_OK;
 }
 
-static ccxml_status validate_create_call(
+static ccxml_status validate_destination_action(
     turbo_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     turbo_xml_attribute destination_attribute = {0};
@@ -146,21 +146,21 @@ static ccxml_status validate_create_call(
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
             turbo_xml_attribute_location(destination_attribute),
-            "CCXML createcall dest must be a quoted string literal");
+            "CCXML destination must be a quoted string literal");
     }
     quote = expression.data[0];
     if (expression.size == 2u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             turbo_xml_attribute_location(destination_attribute),
-            "CCXML createcall dest must be nonempty");
+            "CCXML destination must be nonempty");
     }
     for (index = 1u; index + 1u < expression.size; ++index) {
         if (expression.data[index] == '\\' || expression.data[index] == quote) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_attribute_location(destination_attribute),
-                "CCXML createcall dest escapes are not supported");
+                "CCXML destination escapes are not supported");
         }
     }
     for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
@@ -169,7 +169,7 @@ static ccxml_status validate_create_call(
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(child),
-                "CCXML createcall must be empty");
+                "CCXML destination action must be empty");
         }
     }
     if (!checked_add(expression.size - 2u, 1u, &retained_size) ||
@@ -236,14 +236,17 @@ static ccxml_status validate_transition(
         name = turbo_xml_node_local_name(action);
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
-            !view_equal(name, "disconnect") && !view_equal(name, "reject")) {
+            !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
+            !view_equal(name, "redirect")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
                 "unsupported CCXML executable content");
         }
-        status = view_equal(name, "createcall")
-            ? validate_create_call(action, measurement, limits, diagnostic)
+        status = (view_equal(name, "createcall") ||
+                  view_equal(name, "redirect"))
+            ? validate_destination_action(
+                  action, measurement, limits, diagnostic)
             : validate_empty_action(action, measurement, limits, diagnostic);
         if (status != CCXML_OK) return status;
         ++local_action_count;
@@ -396,19 +399,25 @@ static void copy_program(
                     action_row->kind = CCXML_ACTION_ACCEPT;
                 } else if (view_equal(action_name, "exit")) {
                     action_row->kind = CCXML_ACTION_EXIT;
-                } else if (view_equal(action_name, "createcall")) {
-                    size_t create_attribute_index;
+                } else if (view_equal(action_name, "createcall") ||
+                           view_equal(action_name, "redirect")) {
+                    size_t destination_attribute_index;
                     turbo_xml_attribute destination_attribute = {0};
                     turbo_xml_string_view expression;
-                    action_row->kind = CCXML_ACTION_CREATE_CALL;
-                    impl->uses_create_call = true;
-                    for (create_attribute_index = 0u;
-                         create_attribute_index <
+                    if (view_equal(action_name, "createcall")) {
+                        action_row->kind = CCXML_ACTION_CREATE_CALL;
+                        impl->uses_create_call = true;
+                    } else {
+                        action_row->kind = CCXML_ACTION_REDIRECT;
+                        impl->uses_redirect = true;
+                    }
+                    for (destination_attribute_index = 0u;
+                         destination_attribute_index <
                              turbo_xml_node_attribute_count(action);
-                         ++create_attribute_index) {
+                         ++destination_attribute_index) {
                         const turbo_xml_attribute candidate =
                             turbo_xml_node_attribute_at(
-                                action, create_attribute_index);
+                                action, destination_attribute_index);
                         if (view_equal(
                                 turbo_xml_attribute_local_name(candidate),
                                 "dest")) {
