@@ -120,6 +120,15 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         }
     }
+    if (program->uses_redirect) {
+        const size_t redirect_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_redirect) +
+            sizeof(telephony.prepare_redirect);
+        if (config->telephony->struct_size < redirect_size ||
+            telephony.prepare_redirect == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
@@ -232,6 +241,28 @@ ccxml_status ccxml_session_dispatch(
                 return CCXML_INVALID_EVENT;
             }
             adapter_status = impl->telephony.prepare_reject(
+                impl->telephony_user, &request, &ticket, &error);
+            (void)error;
+            {
+                const ccxml_status status = retain_ticket(
+                    impl, adapter_status, ticket, &prepared);
+                if (status != CCXML_OK) return status;
+            }
+        }
+        if (action->kind == CCXML_ACTION_REDIRECT) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            scxml_adapter_status adapter_status;
+            const ccxml_redirect_request request = {
+                .connection_id = event->connection_id,
+                .connection_id_size = event->connection_id_size,
+                .destination = action->destination,
+                .destination_size = action->destination_size};
+            if (!connection_id_valid(event)) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_EVENT;
+            }
+            adapter_status = impl->telephony.prepare_redirect(
                 impl->telephony_user, &request, &ticket, &error);
             (void)error;
             {
