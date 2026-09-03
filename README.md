@@ -124,11 +124,15 @@ router、默认拒绝的目标 resolver、正数网络 deadline、固定容量�
 TurboSCXML 公共 adapter/effect 契约上的 CCXML 1.0 孵化实现，不表示完整
 CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文档顺序的
 精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
-单个字符串字面量 `dest` 表达式的 `<createcall/>`：
+单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
+`<disconnect/>`：
 
 ```xml
 <transition event="ccxml.loaded">
   <createcall dest="'tel:+12025550123'"/>
+</transition>
+<transition event="connection.connected">
+  <disconnect/>
 </transition>
 ```
 
@@ -159,12 +163,23 @@ adapter 一次。
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
 
+`<disconnect/>` 默认使用当前 Event 的非空 connection identifier。commit
+仅向 provider 提交断开请求，不终止 CCXML session；provider 应随后通过同一
+event dispatch 边界回送 `connection.disconnected` 或失败事件。缺失或非法的
+当前 connection identifier 返回 `CCXML_INVALID_EVENT`，并回滚同一 transition
+中更早准备的 effects。`prepare_disconnect` 同样是 `struct_size` 保护的追加
+capability，不使用该 action 的旧 provider 仍保持兼容。connection registry
+与实际电话连接生命周期继续由 provider 管理。
+
 当前明确不支持 SIP/RTP backend、conference/dialog、ECMAScript、条件表达式、
-事件模式、`<createcall>` 的可选属性或非字面量表达式、`<send>`、文档切换和
+事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
+`connectionid`/`reason`/`hints` 属性、`<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 外呼切片的所有权与 ABI 语义见
-[`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)。
+[`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
+断开连接切片见
+[`docs/specs/ccxml-disconnect-design.md`](docs/specs/ccxml-disconnect-design.md)。
 
 ## CMeta 表达式
 
