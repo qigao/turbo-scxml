@@ -14,6 +14,7 @@ typedef struct ccxml_measurement {
     size_t action_count;
     size_t name_bytes;
     size_t max_transition_actions;
+    size_t max_transition_effects;
 } ccxml_measurement;
 
 static bool checked_add(size_t left, size_t right, size_t *out) {
@@ -54,6 +55,91 @@ static bool node_is_ignorable(turbo_xml_node node) {
            kind == TURBO_XML_PROCESSING_INSTRUCTION ||
            (kind == TURBO_XML_TEXT &&
             text_is_whitespace(turbo_xml_node_value(node)));
+}
+
+static bool decode_utf8(
+    const char *data, size_t size, size_t *cursor, uint32_t *out_codepoint) {
+    const size_t start = *cursor;
+    const unsigned char lead = (unsigned char)data[start];
+    size_t width;
+    size_t index;
+    uint32_t value;
+    if (lead <= 0x7fu) {
+        *out_codepoint = lead;
+        *cursor = start + 1u;
+        return true;
+    }
+    if (lead >= 0xc2u && lead <= 0xdfu) {
+        width = 2u;
+        value = lead & 0x1fu;
+    } else if (lead >= 0xe0u && lead <= 0xefu) {
+        width = 3u;
+        value = lead & 0x0fu;
+    } else if (lead >= 0xf0u && lead <= 0xf4u) {
+        width = 4u;
+        value = lead & 0x07u;
+    } else {
+        return false;
+    }
+    if (width > size - start) return false;
+    for (index = 1u; index < width; ++index) {
+        const unsigned char continuation = (unsigned char)data[start + index];
+        if ((continuation & 0xc0u) != 0x80u) return false;
+        value = (value << 6u) | (continuation & 0x3fu);
+    }
+    if ((width == 3u && value < 0x800u) ||
+        (width == 4u && value < 0x10000u) ||
+        (value >= 0xd800u && value <= 0xdfffu) || value > 0x10ffffu)
+        return false;
+    *out_codepoint = value;
+    *cursor = start + width;
+    return true;
+}
+
+static bool ncname_start(uint32_t codepoint) {
+    return codepoint == '_' || (codepoint >= 'A' && codepoint <= 'Z') ||
+           (codepoint >= 'a' && codepoint <= 'z') ||
+           (codepoint >= 0xc0u && codepoint <= 0xd6u) ||
+           (codepoint >= 0xd8u && codepoint <= 0xf6u) ||
+           (codepoint >= 0xf8u && codepoint <= 0x2ffu) ||
+           (codepoint >= 0x370u && codepoint <= 0x37du) ||
+           (codepoint >= 0x37fu && codepoint <= 0x1fffu) ||
+           (codepoint >= 0x200cu && codepoint <= 0x200du) ||
+           (codepoint >= 0x2070u && codepoint <= 0x218fu) ||
+           (codepoint >= 0x2c00u && codepoint <= 0x2fefu) ||
+           (codepoint >= 0x3001u && codepoint <= 0xd7ffu) ||
+           (codepoint >= 0xf900u && codepoint <= 0xfdcfu) ||
+           (codepoint >= 0xfdf0u && codepoint <= 0xfffdu) ||
+           (codepoint >= 0x10000u && codepoint <= 0xeffffu);
+}
+
+static bool ncname_continue(uint32_t codepoint) {
+    return ncname_start(codepoint) || codepoint == '-' ||
+           (codepoint >= '0' && codepoint <= '9') || codepoint == 0xb7u ||
+           (codepoint >= 0x300u && codepoint <= 0x36fu) ||
+           (codepoint >= 0x203fu && codepoint <= 0x2040u);
+}
+
+static bool dotted_location_valid(turbo_xml_string_view location) {
+    size_t cursor = 0u;
+    bool segment_start = true;
+    if (location.data == NULL || location.size == 0u) return false;
+    while (cursor < location.size) {
+        uint32_t codepoint;
+        if (location.data[cursor] == '.') {
+            if (segment_start) return false;
+            segment_start = true;
+            ++cursor;
+            continue;
+        }
+        if (!decode_utf8(
+                location.data, location.size, &cursor, &codepoint) ||
+            (segment_start ? !ncname_start(codepoint)
+                           : !ncname_continue(codepoint)))
+            return false;
+        segment_start = false;
+    }
+    return !segment_start;
 }
 
 static ccxml_status fail(
@@ -272,6 +358,87 @@ static ccxml_status validate_two_identifier_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_create_conference_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute id_attribute = {0};
+    turbo_xml_attribute name_attribute = {0};
+    turbo_xml_string_view location;
+    turbo_xml_string_view name_expression = {0};
+    size_t index;
+    size_t retained_size;
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(action, index);
+        const turbo_xml_string_view namespace_uri =
+            turbo_xml_attribute_namespace_uri(attribute);
+        const turbo_xml_string_view local_name =
+            turbo_xml_attribute_local_name(attribute);
+        turbo_xml_attribute *slot = NULL;
+        if (namespace_uri.size == 0u && view_equal(local_name, "conferenceid"))
+            slot = &id_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "confname"))
+            slot = &name_attribute;
+        if (slot == NULL || slot->impl != NULL) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate createconference attribute");
+        }
+        *slot = attribute;
+    }
+    if (id_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(action),
+            "createconference requires conferenceid");
+    }
+    location = turbo_xml_attribute_value(id_attribute);
+    if (location.data == NULL || location.size == 0u) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_attribute_location(id_attribute),
+            "createconference conferenceid must be nonempty");
+    }
+    if (!dotted_location_valid(location)) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(id_attribute),
+            "createconference conferenceid must be a dotted NCName location");
+    }
+    if (name_attribute.impl != NULL) {
+        status = validate_string_literal(
+            name_attribute, &name_expression, diagnostic);
+        if (status != CCXML_OK) return status;
+    }
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "createconference must be empty");
+        }
+    }
+    if (!checked_add(location.size, 1u, &retained_size) ||
+        (name_attribute.impl != NULL &&
+         (!checked_add(retained_size, name_expression.size - 1u,
+                       &retained_size))) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "createconference action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     turbo_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
@@ -279,6 +446,7 @@ static ccxml_status validate_transition(
     turbo_xml_string_view event;
     size_t index;
     size_t local_action_count = 0u;
+    size_t local_effect_count = 0u;
     ccxml_status status = validate_attributes(
         transition, "event", true, &event_attribute, diagnostic);
     if (status != CCXML_OK) return status;
@@ -323,7 +491,8 @@ static ccxml_status validate_transition(
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
             !view_equal(name, "redirect") && !view_equal(name, "join") &&
-            !view_equal(name, "unjoin") && !view_equal(name, "merge")) {
+            !view_equal(name, "unjoin") && !view_equal(name, "merge") &&
+            !view_equal(name, "createconference")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -339,15 +508,21 @@ static ccxml_status validate_transition(
             status = validate_two_identifier_action(
                 action, "connectionid1", "connectionid2", measurement,
                 limits, diagnostic);
+        } else if (view_equal(name, "createconference")) {
+            status = validate_create_conference_action(
+                action, measurement, limits, diagnostic);
         } else {
             status = validate_empty_action(
                 action, measurement, limits, diagnostic);
         }
         if (status != CCXML_OK) return status;
         ++local_action_count;
+        local_effect_count += view_equal(name, "createconference") ? 2u : 1u;
     }
     if (local_action_count > measurement->max_transition_actions)
         measurement->max_transition_actions = local_action_count;
+    if (local_effect_count > measurement->max_transition_effects)
+        measurement->max_transition_effects = local_effect_count;
     return CCXML_OK;
 }
 
@@ -535,6 +710,43 @@ static void copy_program(
                 } else if (view_equal(action_name, "reject")) {
                     action_row->kind = CCXML_ACTION_REJECT;
                     impl->uses_reject = true;
+                } else if (view_equal(action_name, "createconference")) {
+                    size_t conference_attribute_index;
+                    turbo_xml_attribute id_attribute = {0};
+                    turbo_xml_attribute name_attribute = {0};
+                    turbo_xml_string_view value;
+                    action_row->kind = CCXML_ACTION_CREATE_CONFERENCE;
+                    impl->uses_create_conference = true;
+                    for (conference_attribute_index = 0u;
+                         conference_attribute_index <
+                             turbo_xml_node_attribute_count(action);
+                         ++conference_attribute_index) {
+                        const turbo_xml_attribute candidate =
+                            turbo_xml_node_attribute_at(
+                                action, conference_attribute_index);
+                        const turbo_xml_string_view local_name =
+                            turbo_xml_attribute_local_name(candidate);
+                        if (view_equal(local_name, "conferenceid"))
+                            id_attribute = candidate;
+                        else if (view_equal(local_name, "confname"))
+                            name_attribute = candidate;
+                    }
+                    value = turbo_xml_attribute_value(id_attribute);
+                    action_row->location = cursor;
+                    action_row->location_size = value.size;
+                    memcpy(cursor, value.data, value.size);
+                    cursor[value.size] = '\0';
+                    cursor += value.size + 1u;
+                    if (name_attribute.impl != NULL) {
+                        value = turbo_xml_attribute_value(name_attribute);
+                        action_row->destination = cursor;
+                        action_row->destination_size = value.size - 2u;
+                        memcpy(
+                            cursor, value.data + 1u,
+                            action_row->destination_size);
+                        cursor[action_row->destination_size] = '\0';
+                        cursor += action_row->destination_size + 1u;
+                    }
                 } else {
                     size_t bridge_attribute_index;
                     turbo_xml_attribute id1_attribute = {0};
@@ -664,6 +876,7 @@ ccxml_status ccxml_compile(
     impl->transition_count = measurement.transition_count;
     impl->action_count = measurement.action_count;
     impl->max_transition_actions = measurement.max_transition_actions;
+    impl->max_transition_effects = measurement.max_transition_effects;
     copy_program(impl, turbo_xml_document_root(&document));
     out->impl = impl;
     impl = NULL;

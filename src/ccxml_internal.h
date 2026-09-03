@@ -12,7 +12,8 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_REDIRECT,
     CCXML_ACTION_JOIN,
     CCXML_ACTION_UNJOIN,
-    CCXML_ACTION_MERGE
+    CCXML_ACTION_MERGE,
+    CCXML_ACTION_CREATE_CONFERENCE
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
@@ -23,6 +24,8 @@ typedef struct ccxml_action_row {
     size_t id1_size;
     const char *id2;
     size_t id2_size;
+    const char *location;
+    size_t location_size;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -39,6 +42,7 @@ typedef struct ccxml_program_impl {
     size_t transition_count;
     size_t action_count;
     size_t max_transition_actions;
+    size_t max_transition_effects;
     bool uses_create_call;
     bool uses_disconnect;
     bool uses_reject;
@@ -46,6 +50,7 @@ typedef struct ccxml_program_impl {
     bool uses_join;
     bool uses_unjoin;
     bool uses_merge;
+    bool uses_create_conference;
 } ccxml_program_impl;
 
 typedef struct ccxml_session_impl {
