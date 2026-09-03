@@ -127,8 +127,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
-`<createconference/>`/`<destroyconference/>` conference 生命周期和直接
-detached `<dialogprepare/>`、直接 `<dialogstart/>` 和 normal
+`<createconference/>`/`<destroyconference/>` conference 生命周期和
+detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 `<dialogterminate/>` VoiceXML provider 生命周期：
 
 ```xml
@@ -163,7 +163,11 @@ detached `<dialogprepare/>`、直接 `<dialogstart/>` 和 normal
   <dialogprepare dialogid="dialog.prepared"
                  src="'https://voice.example/menu.vxml'"/>
 </transition>
-<transition event="dialog.cancel">
+<transition event="connection.connected">
+  <dialogstart prepareddialogid="dialog.prepared"
+               connectionid="event$.connectionid"/>
+</transition>
+<transition event="dialog.stop">
   <dialogterminate dialogid="dialog.prepared"/>
 </transition>
 <transition event="connection.connected">
@@ -281,6 +285,14 @@ CMeta/datamodel ID 写回，再发布异步准备；provider 负责 URI 抓取�
 环境准备以及 `dialog.prepared`/`error.dialog.notprepared`。已准备或正在准备的
 dialog 可由现有 `<dialogterminate/>` 取消。
 
+prepared `<dialogstart/>` 要求 `prepareddialogid` 是点分 NCName 可读位置，
+`connectionid` 必须严格为 `event$.connectionid`。核心先验证当前 Event 的
+connection ID，再通过 CMeta/datamodel 读取 prepared dialog ID，并把两个求值后
+的 ID 交给追加的 `prepare_prepared_dialog_start`。它不会创建或写回新的 dialog
+ID；provider 负责 prepared registry 查找、状态校验、媒体 attach、VoiceXML
+执行，以及异步 `dialog.started`/`error.dialog.notstarted` 和最终
+`dialog.exit`。该 profile 与现有 direct-source `<dialogstart/>` 并存。
+
 `<dialogterminate/>` 的 `dialogid` 接受非空字符串字面量或点分 NCName
 datamodel location。省略 `immediate` 使用 normal termination（`false`）；核心
 把求值后的 ID 和该模式交给追加的 `prepare_dialog_terminate`，不要求当前 Event
@@ -310,7 +322,7 @@ ccxml_session_config session_config = {
 当前明确不支持 SIP/RTP backend、完整 dialog 生命周期（`<dialogprepare/>` 的
 connection/conference、parameters、media direction、显式 MIME、fetch/hints 等
 可选形式，`<dialogterminate/>` 的显式 `immediate`/`hints`，以及
-`<dialogstart/>` 的 prepared dialog、conference、parameters、media direction、
+`<dialogstart/>` 的 conference、parameters、media direction、
 显式 MIME、fetch/hints 等形式）、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
@@ -349,7 +361,9 @@ merge 切片见
 dialog termination 边界见
 [`docs/specs/ccxml-dialogterminate-design.md`](docs/specs/ccxml-dialogterminate-design.md)，
 detached dialog preparation 边界见
-[`docs/specs/ccxml-dialogprepare-design.md`](docs/specs/ccxml-dialogprepare-design.md)。
+[`docs/specs/ccxml-dialogprepare-design.md`](docs/specs/ccxml-dialogprepare-design.md)，
+prepared dialog 启动与 CMeta 读取边界见
+[`docs/specs/ccxml-prepared-dialogstart-design.md`](docs/specs/ccxml-prepared-dialogstart-design.md)。
 
 ## CMeta 表达式
 

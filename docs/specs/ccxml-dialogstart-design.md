@@ -65,10 +65,12 @@ datamodel state nor provider-visible dialog start changes before commit.
 
 ## Deferred standard surface
 
-`prepareddialogid`, `conferenceid`, `type`, `namelist`, `parameters`,
-`mediadirection`, `maxage`, `maxstale`, `enctype`, `method`, `hints`, arbitrary
-ECMAScript expressions, and escaped literals remain unsupported. Dialog
-prepare and terminate are separate follow-on slices.
+Within this direct-source profile, `prepareddialogid`, `conferenceid`, `type`,
+`namelist`, `parameters`, `mediadirection`, `maxage`, `maxstale`, `enctype`,
+`method`, `hints`, arbitrary ECMAScript expressions, and escaped literals
+remain unsupported. Prepared start is available as a separate strict profile
+specified in
+[`ccxml-prepared-dialogstart-design.md`](ccxml-prepared-dialogstart-design.md).
 
 ## Verification
 

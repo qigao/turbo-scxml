@@ -63,8 +63,9 @@ commit.
 
 `connectionid`, `conferenceid`, `type`, `namelist`, `parameters`,
 `mediadirection`, `maxage`, `maxstale`, `enctype`, `method`, `hints`, arbitrary
-ECMAScript expressions, and escaped literals remain unsupported. Starting a
-prepared dialog is a separate follow-on slice.
+ECMAScript expressions, and escaped literals remain unsupported. The
+complementary bounded prepared-start profile is specified in
+[`ccxml-prepared-dialogstart-design.md`](ccxml-prepared-dialogstart-design.md).
 
 ## Verification
 
