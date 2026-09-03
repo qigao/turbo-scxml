@@ -92,6 +92,12 @@ turboscxml_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
+  ccxml_send_test
+  ccxml_send_test.c
+  LIBS TurboSCXML::CCXML
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
   ccxml_cmeta_test
   ccxml_cmeta_test.c
   LIBS TurboSCXML::CCXML)

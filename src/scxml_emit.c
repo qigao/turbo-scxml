@@ -1057,7 +1057,7 @@ static scxml_status emit_send_step(scxml_build *build,
             build, id_attribute, &descriptor->request.send.id,
             &descriptor->request.send.id_size) ||
         (delay_attribute.impl != NULL &&
-         !scxml_analyze_parse_delay_ms(scxml_syntax_attribute_value(delay_attribute),
+         !scxml_time_parse_ms(scxml_syntax_attribute_value(delay_attribute),
                          &descriptor->request.send.delay_ms))) {
         return scxml_analyze_fail(build, SCXML_NATIVE_IR_REJECTED,
                           scxml_syntax_node_location(node),

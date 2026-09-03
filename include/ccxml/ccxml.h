@@ -189,7 +189,8 @@ typedef struct ccxml_dialog_terminate_request {
  * performs the already-prepared write without failure or allocation.
  * Neither write operation may retain pointers supplied by the core after
  * returning. Read operations are side-effect free and return bounded borrowed
- * views under the lifetime documented below.
+ * views under the lifetime documented below. Payload reads are side-effect
+ * free and return either one scalar or one borrowed CMeta object view.
  */
 typedef struct ccxml_datamodel_adapter_v1 {
     uint32_t abi_version;
@@ -208,7 +209,8 @@ typedef struct ccxml_datamodel_adapter_v1 {
         const char **out_error);
     /**
      * Return a borrowed value valid through the immediately following
-     * telephony prepare callback. The core does not retain the view.
+     * consuming telephony or Event I/O prepare callback. The core does not
+     * retain the view.
      */
     scxml_adapter_status (*read_string)(
         void *user, const char *location, size_t location_size,
@@ -225,6 +227,18 @@ typedef struct ccxml_datamodel_adapter_v1 {
     /** Destroy one successfully compiled condition and clear its handle. */
     void (*destroy_condition)(
         void *user, ccxml_condition *condition);
+    /** Optional tail operations required by non-empty send namelists. */
+    scxml_adapter_status (*validate_payload_location)(
+        void *user, const char *location, size_t location_size,
+        const char **out_error);
+    /**
+     * Every view returned while materializing one namelist remains valid
+     * through the immediately following Event I/O prepare callback. The core
+     * and Event I/O provider must not retain any of those views.
+     */
+    scxml_adapter_status (*read_payload)(
+        void *user, const char *location, size_t location_size,
+        scxml_content_view *out_value, const char **out_error);
 } ccxml_datamodel_adapter_v1;
 
 /** Opaque owner for the built-in synchronous CMeta datamodel adapter. */
@@ -381,9 +395,16 @@ typedef struct ccxml_session_config {
     /** Operations are copied; user remains borrowed through destruction. */
     const ccxml_telephony_adapter_v1 *telephony;
     void *telephony_user;
-    /** Required when the program reads/writes strings or uses conditions. */
+    /** Required when the program reads/writes data or uses conditions. */
     const ccxml_datamodel_adapter_v1 *datamodel;
     void *datamodel_user;
+    /**
+     * Required by programs containing send or cancel. The shared table
+     * supplies the ticket protocol; its user implements CCXML targettype,
+     * delayed-send, and cancellation semantics.
+     */
+    const scxml_event_io_adapter *event_io;
+    void *event_io_user;
 } ccxml_session_config;
 
 typedef struct ccxml_session {
@@ -397,12 +418,12 @@ ccxml_status ccxml_session_init(
 ccxml_status ccxml_session_dispatch(
     ccxml_session *session, const ccxml_event *event);
 
-/** Stop accepting events and close the adapter exactly once. */
+/** Stop accepting events and close each attached adapter exactly once. */
 void ccxml_session_close(ccxml_session *session);
 
 bool ccxml_session_is_terminated(const ccxml_session *session);
 
-/** Close and destroy when the adapter is quiescent; otherwise return BUSY. */
+/** Close and destroy when every adapter is quiescent; otherwise return BUSY. */
 ccxml_status ccxml_session_destroy(ccxml_session *session);
 
 #ifdef __cplusplus
