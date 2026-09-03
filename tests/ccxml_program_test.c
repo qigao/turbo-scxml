@@ -1307,6 +1307,167 @@ spec("CCXML program") {
         }
     }
 
+    group("dialogterminate") {
+        it("retains a dotted dialog identifier location") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(
+                impl->actions[0].kind,
+                CCXML_ACTION_DIALOG_TERMINATE);
+            check_equal(impl->actions[0].location, "dialog.id");
+            check_equal(impl->actions[0].location_size, (size_t)9);
+            check_null(impl->actions[0].id1);
+            check_true(impl->uses_datamodel_read);
+            check_equal(impl->max_transition_effects, (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("retains a quoted dialog identifier value") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid=\"'dialog-42'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(impl->actions[0].id1, "dialog-42");
+            check_equal(impl->actions[0].id1_size, (size_t)9);
+            check_null(impl->actions[0].location);
+            check_false(impl->uses_datamodel_read);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires dialogid") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an empty dialog identifier literal") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid=\"''\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects expressions outside the bounded profile") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id + suffix'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects explicit immediate mode") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id' immediate='false'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects hints outside the bounded profile") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id' hints='x'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects nested executable content") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id'>"
+                "<exit/></dialogterminate>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("charges the identifier NUL to the retained-name budget") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.stop'>"
+                "<dialogterminate dialogid='dialog.id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_limits limits = ccxml_default_limits();
+            limits.max_name_bytes = 21u;
+
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+    }
+
     group("merge") {
         it("accepts and retains two quoted connection identifiers") {
             char source[] =

@@ -591,6 +591,66 @@ static ccxml_status validate_dialog_start_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_dialog_terminate_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute id_attribute = {0};
+    turbo_xml_string_view expression;
+    size_t index;
+    size_t retained_size;
+    ccxml_status status = validate_attributes(
+        action, "dialogid", true, &id_attribute, diagnostic);
+    if (status != CCXML_OK) return status;
+    expression = turbo_xml_attribute_value(id_attribute);
+    if (expression.data == NULL || expression.size == 0u) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_attribute_location(id_attribute),
+            "dialogterminate dialogid must be nonempty");
+    }
+    if (expression.data[0] == '\'' || expression.data[0] == '"') {
+        status = validate_string_literal(
+            id_attribute, &expression, diagnostic);
+        if (status != CCXML_OK) return status;
+        retained_size = expression.size - 1u;
+    } else {
+        if (!dotted_location_valid(expression)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(id_attribute),
+                "dialogterminate dialogid must be a quoted string "
+                "or dotted NCName location");
+        }
+        if (!checked_add(expression.size, 1u, &retained_size)) {
+            return fail(
+                diagnostic, CCXML_LIMIT_EXCEEDED,
+                turbo_xml_attribute_location(id_attribute),
+                "dialogterminate identifier limit exceeded");
+        }
+    }
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "dialogterminate must be empty");
+        }
+    }
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "dialogterminate action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     turbo_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
@@ -646,7 +706,8 @@ static ccxml_status validate_transition(
             !view_equal(name, "unjoin") && !view_equal(name, "merge") &&
             !view_equal(name, "createconference") &&
             !view_equal(name, "destroyconference") &&
-            !view_equal(name, "dialogstart")) {
+            !view_equal(name, "dialogstart") &&
+            !view_equal(name, "dialogterminate")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -670,6 +731,9 @@ static ccxml_status validate_transition(
                 action, measurement, limits, diagnostic);
         } else if (view_equal(name, "dialogstart")) {
             status = validate_dialog_start_action(
+                action, measurement, limits, diagnostic);
+        } else if (view_equal(name, "dialogterminate")) {
+            status = validate_dialog_terminate_action(
                 action, measurement, limits, diagnostic);
         } else {
             status = validate_empty_action(
@@ -991,6 +1055,45 @@ static void copy_program(
                         action_row->destination_size);
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
+                } else if (view_equal(
+                               action_name, "dialogterminate")) {
+                    size_t dialog_attribute_index;
+                    turbo_xml_attribute id_attribute = {0};
+                    turbo_xml_string_view expression;
+                    action_row->kind = CCXML_ACTION_DIALOG_TERMINATE;
+                    impl->uses_dialog_terminate = true;
+                    for (dialog_attribute_index = 0u;
+                         dialog_attribute_index <
+                             turbo_xml_node_attribute_count(action);
+                         ++dialog_attribute_index) {
+                        const turbo_xml_attribute candidate =
+                            turbo_xml_node_attribute_at(
+                                action, dialog_attribute_index);
+                        if (view_equal(
+                                turbo_xml_attribute_local_name(candidate),
+                                "dialogid")) {
+                            id_attribute = candidate;
+                            break;
+                        }
+                    }
+                    expression = turbo_xml_attribute_value(id_attribute);
+                    if (expression.data[0] == '\'' ||
+                        expression.data[0] == '"') {
+                        action_row->id1 = cursor;
+                        action_row->id1_size = expression.size - 2u;
+                        memcpy(
+                            cursor, expression.data + 1u,
+                            action_row->id1_size);
+                        cursor[action_row->id1_size] = '\0';
+                        cursor += action_row->id1_size + 1u;
+                    } else {
+                        action_row->location = cursor;
+                        action_row->location_size = expression.size;
+                        memcpy(cursor, expression.data, expression.size);
+                        cursor[expression.size] = '\0';
+                        cursor += expression.size + 1u;
+                        impl->uses_datamodel_read = true;
+                    }
                 } else {
                     size_t bridge_attribute_index;
                     turbo_xml_attribute id1_attribute = {0};
