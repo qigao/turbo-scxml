@@ -1534,7 +1534,7 @@ spec("CCXML send") {
                 compile_actions(
                     &delayed_program,
                     "<send target=\"'session:callee'\" "
-                    "name=\"'call.notice'\" delay=payload.count/>"),
+                    "name=\"'call.notice'\" delay='payload.count'/>"),
                 CCXML_OK);
             check_equal(
                 init_send_session_with_datamodel(
@@ -1566,7 +1566,7 @@ spec("CCXML send") {
                 compile_actions(
                     &program,
                     "<send target=\"'session:callee'\" "
-                    "name=\"'call.notice'\" delay=payload.text/>"),
+                    "name=\"'call.notice'\" delay='payload.text'/>"),
                 CCXML_OK);
             check_equal(
                 init_send_session_with_datamodel(

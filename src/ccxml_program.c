@@ -785,7 +785,6 @@ static ccxml_status validate_send_action(
             !scxml_time_parse_ms(
                 (salts_xml_string_view){delay_value, delay_size},
                 &delay_ms)) {
-            free(delay_value);
             status = fail(
                 diagnostic, CCXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(delay_attribute),
