@@ -65,5 +65,5 @@ bridge validation, media teardown, and asynchronous outcomes.
   unsupported boundary.
 - [x] Fresh-configure/build/test all four supported presets and install/run the
   core C, CCXML C, and CCXML C++ consumers.
-- [ ] Run diff/style scans, self-review against the design, commit docs, push,
+- [x] Run diff/style scans, self-review against the design, commit docs, push,
   update PR #35, verify it is clean/mergeable, check this final step, and push.
