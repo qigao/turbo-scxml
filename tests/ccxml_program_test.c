@@ -1116,6 +1116,178 @@ spec("CCXML program") {
         }
     }
 
+    group("dialogprepare") {
+        it("retains a detached source and dialog ID write location") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' "
+                "src=\"'app.vxml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(
+                impl->actions[0].kind, CCXML_ACTION_DIALOG_PREPARE);
+            check_equal(impl->actions[0].destination, "app.vxml");
+            check_equal(impl->actions[0].destination_size, (size_t)8);
+            check_equal(impl->actions[0].location, "dialog.prepared");
+            check_equal(impl->actions[0].location_size, (size_t)15);
+            check_equal(impl->max_transition_effects, (size_t)2);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires dialogid") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare src=\"'app.vxml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("requires src") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects a nonliteral source expression") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' src='dialog_uri'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an empty source literal") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' src=\"''\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an invalid dialog ID write location") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog..prepared' "
+                "src=\"'app.vxml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects media targets") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' "
+                "src=\"'app.vxml'\" connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects options outside the detached VoiceXML profile") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' "
+                "src=\"'app.vxml'\" type=\"'application/voicexml+xml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects nested executable content") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' "
+                "src=\"'app.vxml'\"><exit/></dialogprepare>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("charges both retained values including their NUL bytes") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='dialog.prepare'>"
+                "<dialogprepare dialogid='dialog.prepared' "
+                "src=\"'app.vxml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_limits limits = ccxml_default_limits();
+            limits.max_name_bytes = 39u;
+
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+    }
+
     group("dialogstart") {
         it("retains a direct source and dialog ID write location") {
             char source[] =

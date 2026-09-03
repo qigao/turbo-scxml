@@ -591,6 +591,84 @@ static ccxml_status validate_dialog_start_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_dialog_prepare_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute dialog_id_attribute = {0};
+    turbo_xml_attribute source_attribute = {0};
+    turbo_xml_string_view location;
+    turbo_xml_string_view source_expression;
+    size_t index;
+    size_t retained_size;
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(action, index);
+        const turbo_xml_string_view namespace_uri =
+            turbo_xml_attribute_namespace_uri(attribute);
+        const turbo_xml_string_view local_name =
+            turbo_xml_attribute_local_name(attribute);
+        turbo_xml_attribute *slot = NULL;
+        if (namespace_uri.size == 0u && view_equal(local_name, "dialogid"))
+            slot = &dialog_id_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "src"))
+            slot = &source_attribute;
+        if (slot == NULL || slot->impl != NULL) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate dialogprepare attribute");
+        }
+        *slot = attribute;
+    }
+    if (dialog_id_attribute.impl == NULL || source_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(action),
+            "dialogprepare requires dialogid and src");
+    }
+    location = turbo_xml_attribute_value(dialog_id_attribute);
+    if (location.data == NULL || location.size == 0u) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_attribute_location(dialog_id_attribute),
+            "dialogprepare dialogid must be nonempty");
+    }
+    if (!dotted_location_valid(location)) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(dialog_id_attribute),
+            "dialogprepare dialogid must be a dotted NCName location");
+    }
+    status = validate_string_literal(
+        source_attribute, &source_expression, diagnostic);
+    if (status != CCXML_OK) return status;
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "dialogprepare must be empty");
+        }
+    }
+    if (!checked_add(location.size, 1u, &retained_size) ||
+        !checked_add(
+            retained_size, source_expression.size - 1u, &retained_size) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "dialogprepare action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_dialog_terminate_action(
     turbo_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
@@ -706,6 +784,7 @@ static ccxml_status validate_transition(
             !view_equal(name, "unjoin") && !view_equal(name, "merge") &&
             !view_equal(name, "createconference") &&
             !view_equal(name, "destroyconference") &&
+            !view_equal(name, "dialogprepare") &&
             !view_equal(name, "dialogstart") &&
             !view_equal(name, "dialogterminate")) {
             return fail(
@@ -729,6 +808,9 @@ static ccxml_status validate_transition(
         } else if (view_equal(name, "destroyconference")) {
             status = validate_destroy_conference_action(
                 action, measurement, limits, diagnostic);
+        } else if (view_equal(name, "dialogprepare")) {
+            status = validate_dialog_prepare_action(
+                action, measurement, limits, diagnostic);
         } else if (view_equal(name, "dialogstart")) {
             status = validate_dialog_start_action(
                 action, measurement, limits, diagnostic);
@@ -744,6 +826,7 @@ static ccxml_status validate_transition(
         if (!checked_add(
                 local_effect_count,
                 view_equal(name, "createconference") ||
+                        view_equal(name, "dialogprepare") ||
                         view_equal(name, "dialogstart")
                     ? 2u : 1u,
                 &local_effect_count)) {
@@ -1020,13 +1103,19 @@ static void copy_program(
                         cursor += expression.size + 1u;
                         impl->uses_datamodel_read = true;
                     }
-                } else if (view_equal(action_name, "dialogstart")) {
+                } else if (view_equal(action_name, "dialogprepare") ||
+                           view_equal(action_name, "dialogstart")) {
                     size_t dialog_attribute_index;
                     turbo_xml_attribute id_attribute = {0};
                     turbo_xml_attribute source_attribute = {0};
                     turbo_xml_string_view value;
-                    action_row->kind = CCXML_ACTION_DIALOG_START;
-                    impl->uses_dialog_start = true;
+                    if (view_equal(action_name, "dialogprepare")) {
+                        action_row->kind = CCXML_ACTION_DIALOG_PREPARE;
+                        impl->uses_dialog_prepare = true;
+                    } else {
+                        action_row->kind = CCXML_ACTION_DIALOG_START;
+                        impl->uses_dialog_start = true;
+                    }
                     for (dialog_attribute_index = 0u;
                          dialog_attribute_index <
                              turbo_xml_node_attribute_count(action);
