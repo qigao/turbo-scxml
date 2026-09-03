@@ -182,7 +182,7 @@ are 13/13, 13/13, 18/18, and 13/13. Install with
 `install-win-release-user`, then fresh-configure/build/run the installed core C,
 CCXML C, and CCXML C++ consumers; all three must exit zero.
 
-- [ ] **Step 3: Review, publish, and finalize**
+- [x] **Step 3: Review, publish, and finalize**
 
 Run `git diff --check`; scan changed source/tests for `fit(`, `it_only(`,
 `TODO`, `FIXME`, and `HACK`; and review every design requirement against the
