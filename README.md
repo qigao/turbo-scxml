@@ -125,7 +125,7 @@ TurboSCXML 公共 adapter/effect 契约上的 CCXML 1.0 孵化实现，不表示
 CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文档顺序的
 精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
-`<disconnect/>`：
+`<disconnect/>`/`<reject/>`：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -133,6 +133,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="connection.connected">
   <disconnect/>
+</transition>
+<transition event="connection.alerting">
+  <reject/>
 </transition>
 ```
 
@@ -171,15 +174,24 @@ event dispatch 边界回送 `connection.disconnected` 或失败事件。缺失�
 capability，不使用该 action 的旧 provider 仍保持兼容。connection registry
 与实际电话连接生命周期继续由 provider 管理。
 
+`<reject/>` 同样默认使用当前 Event 的非空 connection identifier，并通过追加的
+`prepare_reject` capability 提交。核心不猜测连接是否处于 `ALERTING`：provider
+依据权威连接状态执行，并异步回送 `connection.disconnected`、
+`connection.reject.failed` 或 `connection.failed`。提交 reject 不会终止
+CCXML session；缺失或非法 identifier 仍按事务规则回滚。
+
 当前明确不支持 SIP/RTP backend、conference/dialog、ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
+`connectionid`/`reason`/`hints` 属性、`<reject>` 的
 `connectionid`/`reason`/`hints` 属性、`<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见
-[`docs/specs/ccxml-disconnect-design.md`](docs/specs/ccxml-disconnect-design.md)。
+[`docs/specs/ccxml-disconnect-design.md`](docs/specs/ccxml-disconnect-design.md)，
+拒接切片见
+[`docs/specs/ccxml-reject-design.md`](docs/specs/ccxml-reject-design.md)。
 
 ## CMeta 表达式
 
