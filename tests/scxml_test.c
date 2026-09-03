@@ -3113,6 +3113,20 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
+    it("accepts signed and leading-decimal CSS time delays") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"
+            "<state id='a'><onentry>"
+            "<send event='first' id='first-id' delay='+1.5s'/>"
+            "<send event='second' id='second-id' delay='.5s'/>"
+            "</onentry></state></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+
+        check_equal(compile_status(source, &program, &diagnostic), SCXML_OK);
+        scxml_program_destroy(&program);
+    }
+
     it("rejects non-literal and malformed send and cancel forms") {
         static const char prefix[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0'>"

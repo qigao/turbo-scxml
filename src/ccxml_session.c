@@ -327,6 +327,10 @@ ccxml_status ccxml_session_init(
     if (program->uses_send) {
         if (!event_io_send_adapter_valid(config->event_io))
             return CCXML_INVALID_ARGUMENT;
+        if (program->uses_delayed_send &&
+            (config->event_io->capabilities &
+             SCXML_EVENT_IO_CAP_DELAYED_SEND) == 0u)
+            return CCXML_INVALID_ARGUMENT;
         event_io = *config->event_io;
         event_io_user = config->event_io_user;
     }
@@ -789,6 +793,7 @@ static ccxml_status execute_transition_actions(
                 .target_size = action->destination_size,
                 .type = action->target_type,
                 .type_size = action->target_type_size,
+                .delay_ms = action->delay_ms,
                 .payload = {.kind = SCXML_PAYLOAD_NONE}};
             const scxml_adapter_status adapter_status =
                 impl->event_io.prepare_send(

@@ -134,7 +134,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 `<dialogterminate/>` VoiceXML provider 生命周期，以及受限 `<send/>`（字面量
-`target`/`name`、可选字面量 `targettype`，默认 `ccxml`）：
+`target`/`name`、可选字面量 `targettype` 与 CSS 时间 `delay`，默认 `ccxml` 和
+零延迟）：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -184,7 +185,7 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
   <dialogterminate dialogid="dialog.id"/>
 </transition>
 <transition event="call.notice.ready">
-  <send target="'session:supervisor'" name="'call.notice'"/>
+  <send target="'session:supervisor'" name="'call.notice'" delay="'250ms'"/>
 </transition>
 ```
 
@@ -242,10 +243,13 @@ adapter 一次。
 `<send/>` 复用 `scxml_event_io_adapter` 的 move-only prepare/commit/discard
 边界；`scxml_send_request.type` 承载 CCXML `targettype`，具体 `ccxml`、`dialog`
 或 `basichttp` 路由由 session-bound 宿主实现，而不是套用 SCXML target 规则。
+字面量 `delay` 在 compile 阶段解析为精确毫秒；只有实际包含非零延迟的 program
+才要求 adapter 声明 `SCXML_EVENT_IO_CAP_DELAYED_SEND`，省略或零延迟仍可使用
+仅支持 SEND 的 adapter。
 commit 后的 `send.successful` 或 `error.send.*` 也由宿主通过串行 CCXML event
 dispatch 边界回送，核心不自行合成平台结果。
-当前尚不支持 `delay`、`sendid`、`namelist` 和 inline content，这些形式会在
-compile 阶段被明确拒绝。
+当前尚不支持动态 `delay` 表达式、`sendid`、`namelist` 和 inline content，
+这些形式会在 compile 阶段被明确拒绝。
 
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
@@ -379,12 +383,14 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>` 的 `delay`/`sendid`/`namelist`/inline content 或非字面量表达式、
+`<send>` 的动态 `delay`/`sendid`/`namelist`/inline content 或其他非字面量表达式、
 文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 send 切片与共享 Event I/O 边界见
 [`docs/specs/ccxml-send-design.md`](docs/specs/ccxml-send-design.md)，
+literal delay 增量见
+[`docs/specs/ccxml-send-delay-design.md`](docs/specs/ccxml-send-delay-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见

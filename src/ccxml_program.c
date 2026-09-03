@@ -1,4 +1,5 @@
 #include "ccxml_internal.h"
+#include "scxml_time.h"
 #include "scxml_xml_decode.h"
 
 #include <stdio.h>
@@ -586,12 +587,16 @@ static ccxml_status validate_send_action(
     salts_xml_attribute target_attribute = {0};
     salts_xml_attribute name_attribute = {0};
     salts_xml_attribute type_attribute = {0};
+    salts_xml_attribute delay_attribute = {0};
     char *target_value = NULL;
     char *name_value = NULL;
     char *type_value = NULL;
+    char *delay_value = NULL;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
+    size_t delay_size = 0u;
+    uint64_t delay_ms = 0u;
     size_t retained_size = 0u;
     size_t part_size;
     size_t index;
@@ -611,6 +616,8 @@ static ccxml_status validate_send_action(
         else if (namespace_uri.size == 0u &&
                  view_equal(local_name, "targettype"))
             slot = &type_attribute;
+        else if (namespace_uri.size == 0u && view_equal(local_name, "delay"))
+            slot = &delay_attribute;
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
@@ -643,6 +650,21 @@ static ccxml_status validate_send_action(
             type_attribute, &type_value, &type_size, diagnostic);
         if (status != CCXML_OK) goto cleanup;
     }
+    if (delay_attribute.impl != NULL) {
+        status = decode_send_literal(
+            delay_attribute, &delay_value, &delay_size, diagnostic);
+        if (status != CCXML_OK) goto cleanup;
+        if (!scxml_time_parse_ms(
+                (salts_xml_string_view){delay_value, delay_size},
+                &delay_ms)) {
+            status = fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(delay_attribute),
+                "CCXML send delay must be a non-negative ms or s literal "
+                "with millisecond precision");
+            goto cleanup;
+        }
+    }
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
@@ -660,6 +682,9 @@ static ccxml_status validate_send_action(
         (type_attribute.impl != NULL &&
          (!checked_add(type_size, 1u, &part_size) ||
           !checked_add(retained_size, part_size, &retained_size))) ||
+        (delay_attribute.impl != NULL &&
+         (!checked_add(delay_size, 1u, &part_size) ||
+          !checked_add(retained_size, part_size, &retained_size))) ||
         measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
                      &measurement->action_count) ||
@@ -675,6 +700,7 @@ static ccxml_status validate_send_action(
     status = CCXML_OK;
 
 cleanup:
+    free(delay_value);
     free(type_value);
     free(name_value);
     free(target_value);
@@ -2043,6 +2069,8 @@ static void copy_program(
                         node_unqualified_attribute(action, "name");
                     const salts_xml_attribute type_attribute =
                         node_unqualified_attribute(action, "targettype");
+                    const salts_xml_attribute delay_attribute =
+                        node_unqualified_attribute(action, "delay");
                     static const char default_type[] = "ccxml";
                     action_row->kind = CCXML_ACTION_SEND;
                     action_row->destination = cursor;
@@ -2061,6 +2089,18 @@ static void copy_program(
                     } else {
                         action_row->target_type = default_type;
                         action_row->target_type_size = sizeof(default_type) - 1u;
+                    }
+                    if (delay_attribute.impl != NULL) {
+                        action_row->delay = cursor;
+                        action_row->delay_size =
+                            copy_send_literal(delay_attribute, cursor);
+                        (void)scxml_time_parse_ms(
+                            (salts_xml_string_view){
+                                action_row->delay, action_row->delay_size},
+                            &action_row->delay_ms);
+                        cursor += action_row->delay_size + 1u;
+                        if (action_row->delay_ms != 0u)
+                            impl->uses_delayed_send = true;
                     }
                     impl->uses_send = true;
                 } else {

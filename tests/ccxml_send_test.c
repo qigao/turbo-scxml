@@ -305,13 +305,56 @@ spec("CCXML send") {
                 CCXML_INVALID_STRUCTURE);
         }
 
+        it("accepts literal CSS time delays") {
+            static const char *const values[] = {
+                "'250ms'", "'1s'", "'1.5s'", "'.5s'", "'+1.5s'",
+                "'0s'", "&apos;.5s&apos;", "'18446744073709551615ms'",
+                "'18446744073709551.615s'"};
+            size_t index;
+            for (index = 0u; index < sizeof(values) / sizeof(values[0]);
+                 ++index) {
+                char action[256];
+                ccxml_program program = {0};
+                const int written = snprintf(
+                    action, sizeof(action),
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=\"%s\"/>",
+                    values[index]);
+                check_true(written > 0 && (size_t)written < sizeof(action));
+                check_equal(compile_actions(&program, action), CCXML_OK);
+                ccxml_program_destroy(&program);
+            }
+        }
+
+        it("rejects malformed literal CSS time delays") {
+            static const char *const values[] = {
+                "''", "'-1s'", "'1'", "'1m'", "'1.0001s'", "'.s'",
+                "'+'", "'18446744073709552s'",
+                "'18446744073709551.616s'"};
+            size_t index;
+            for (index = 0u; index < sizeof(values) / sizeof(values[0]);
+                 ++index) {
+                char action[256];
+                ccxml_program program = {0};
+                const int written = snprintf(
+                    action, sizeof(action),
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=\"%s\"/>",
+                    values[index]);
+                check_true(written > 0 && (size_t)written < sizeof(action));
+                check_equal(
+                    compile_actions(&program, action),
+                    CCXML_INVALID_STRUCTURE);
+            }
+        }
+
         it("rejects deferred attributes and inline content") {
             ccxml_program program = {0};
             check_equal(
                 compile_actions(
                     &program,
                     "<send target=\"'session:callee'\" name=\"'call.notice'\" "
-                    "delay=\"'1s'\"/>"),
+                    "delay='dynamic'/>"),
                 CCXML_UNSUPPORTED_FEATURE);
             check_equal(
                 compile_actions(
@@ -372,6 +415,30 @@ spec("CCXML send") {
             ccxml_program_destroy(&program);
         }
 
+        it("charges an explicit delay to the retained-byte limit") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+                "delay=\"'250ms'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_program program = {0};
+
+            limits.max_name_bytes = 35u;
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            limits.max_name_bytes = 36u;
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("rejects delimiters and backslashes introduced by XML entities") {
             ccxml_program program = {0};
             check_equal(
@@ -417,6 +484,81 @@ spec("CCXML send") {
             check_equal(send.delay_ms, (uint64_t)0);
             check_equal(send.payload_kind, SCXML_PAYLOAD_NONE);
 
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires delayed-send capability only for nonzero delays") {
+            ccxml_program delayed_program = {0};
+            ccxml_program zero_program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter delayed_adapter = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            check_equal(
+                compile_actions(
+                    &delayed_program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=\"'250ms'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &delayed_program, &telephony, &send,
+                    &event_io_adapter),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(
+                init_send_session(
+                    &session, &delayed_program, &telephony, &send,
+                    &delayed_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.delay_ms, UINT64_C(250));
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+
+            session = (ccxml_session){0};
+            telephony = (effect_probe){.quiescent = true};
+            send = (send_probe){.effects.quiescent = true};
+            check_equal(
+                compile_actions(
+                    &zero_program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=\"'0s'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &zero_program, &telephony, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&zero_program);
+            ccxml_program_destroy(&delayed_program);
+        }
+
+        it("forwards fractional seconds as exact milliseconds") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter delayed_adapter = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" delay=\"'+1.5s'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send,
+                    &delayed_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.delay_ms, UINT64_C(1500));
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&program);
         }

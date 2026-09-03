@@ -37,6 +37,9 @@ typedef struct ccxml_action_row {
     size_t name_size;
     const char *target_type;
     size_t target_type_size;
+    const char *delay;
+    size_t delay_size;
+    uint64_t delay_ms;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -83,6 +86,7 @@ typedef struct ccxml_program_impl {
     bool uses_statevariable;
     bool uses_condition;
     bool uses_send;
+    bool uses_delayed_send;
 } ccxml_program_impl;
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;

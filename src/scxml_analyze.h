@@ -2,6 +2,7 @@
 #define SCXML_ANALYZE_H
 
 #include "scxml_impl.h"
+#include "scxml_time.h"
 
 bool scxml_analyze_checked_add(size_t left, size_t right, size_t *out);
 bool scxml_analyze_checked_multiply(size_t left, size_t right, size_t *out);
@@ -49,8 +50,6 @@ bool scxml_analyze_completion_token(
     salts_xml_string_view token, salts_xml_string_view *state_name);
 bool scxml_analyze_completion_descriptor_matches(
     salts_xml_string_view descriptor, salts_xml_string_view state_name);
-bool scxml_analyze_parse_delay_ms(
-    salts_xml_string_view value, uint64_t *out_ms);
 bool scxml_analyze_cmeta_content_kind_is_scalar(cmeta_data_kind kind);
 scxml_status scxml_analyze_inspect_inline_content(
     scxml_build *build, scxml_syntax_node content,
