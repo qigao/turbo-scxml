@@ -56,5 +56,5 @@ the connection registry with the provider.
 - [x] Run Release, Debug/ASan, CHTTP, QuickJS, install, and all three installed
   consumer checks.
 - [x] Run `git diff --check` and scan for focused tests/placeholders.
-- [ ] Mark this plan complete, commit documentation, push, update PR #35, and
+- [x] Mark this plan complete, commit documentation, push, update PR #35, and
   verify its merge state.
