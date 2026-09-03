@@ -126,7 +126,7 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
-全双工 `<join/>`：
+全双工 `<join/>` 和双资源 `<unjoin/>`：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -143,6 +143,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="conference.request">
   <join id1="'call-a'" id2="'conference-b'"/>
+</transition>
+<transition event="conference.release">
+  <unjoin id1="'call-a'" id2="'conference-b'"/>
 </transition>
 ```
 
@@ -200,13 +203,21 @@ provider 权威校验 connection/conference/dialog ID、session ownership、已�
 bridge 与媒体容量，并异步回送 `conference.joined` 或
 `error.conference.join`；核心不维护资源/bridge registry，也不伪造结果事件。
 
+`<unjoin/>` 同样要求两个非空字符串字面量 ID。追加的 `prepare_unjoin`
+capability 只提交 bridge teardown 请求；provider 校验资源、session ownership
+和已有 bridge，负责媒体拆除及通知 fan-out，并异步回送
+`conference.unjoined` 或 `error.conference.unjoin`。它不依赖当前 Event 的
+connection identifier，也不终止 CCXML session；不使用 unjoin 的 join-era
+adapter 前缀继续有效。
+
 当前明确不支持 SIP/RTP backend、conference 创建/销毁、dialog 生命周期、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
 `connectionid`/`reason`/`hints` 属性、`<redirect>` 的
 `connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的
-`duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<send>`、文档切换和
+`duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<unjoin>` 的 `hints`
+属性或非字面量 ID、`<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 外呼切片的所有权与 ABI 语义见
@@ -218,7 +229,9 @@ VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心�
 重定向切片见
 [`docs/specs/ccxml-redirect-design.md`](docs/specs/ccxml-redirect-design.md)，
 bridge join 切片见
-[`docs/specs/ccxml-join-design.md`](docs/specs/ccxml-join-design.md)。
+[`docs/specs/ccxml-join-design.md`](docs/specs/ccxml-join-design.md)，bridge unjoin
+切片见
+[`docs/specs/ccxml-unjoin-design.md`](docs/specs/ccxml-unjoin-design.md)。
 
 ## CMeta 表达式
 
