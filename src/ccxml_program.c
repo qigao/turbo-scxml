@@ -199,8 +199,9 @@ static ccxml_status validate_destination_action(
     return CCXML_OK;
 }
 
-static ccxml_status validate_bridge_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
+static ccxml_status validate_two_identifier_action(
+    turbo_xml_node action, const char *id1_name, const char *id2_name,
+    ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     turbo_xml_attribute id1_attribute = {0};
     turbo_xml_attribute id2_attribute = {0};
@@ -219,16 +220,17 @@ static ccxml_status validate_bridge_action(
         const turbo_xml_string_view local_name =
             turbo_xml_attribute_local_name(attribute);
         turbo_xml_attribute *slot = NULL;
-        if (namespace_uri.size == 0u && view_equal(local_name, "id1")) {
+        if (namespace_uri.size == 0u && view_equal(local_name, id1_name)) {
             slot = &id1_attribute;
-        } else if (namespace_uri.size == 0u && view_equal(local_name, "id2")) {
+        } else if (namespace_uri.size == 0u &&
+                   view_equal(local_name, id2_name)) {
             slot = &id2_attribute;
         }
         if (slot == NULL || slot->impl != NULL) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_attribute_location(attribute),
-                "unsupported or duplicate CCXML bridge-action attribute");
+                "unsupported or duplicate CCXML two-ID action attribute");
         }
         *slot = attribute;
     }
@@ -236,7 +238,7 @@ static ccxml_status validate_bridge_action(
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             turbo_xml_node_location(action),
-            "CCXML bridge action requires id1 and id2");
+            "CCXML two-ID action requires both identifiers");
     }
     status = validate_string_literal(
         id1_attribute, &id1_expression, diagnostic);
@@ -250,7 +252,7 @@ static ccxml_status validate_bridge_action(
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(child),
-                "CCXML bridge action must be empty");
+                "CCXML two-ID action must be empty");
         }
     }
     if (!checked_add(id1_expression.size - 2u, 1u, &id1_retained_size) ||
@@ -265,7 +267,7 @@ static ccxml_status validate_bridge_action(
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
             turbo_xml_node_location(action),
-            "CCXML bridge action or retained-string limit exceeded");
+            "CCXML two-ID action or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
@@ -321,7 +323,7 @@ static ccxml_status validate_transition(
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
             !view_equal(name, "redirect") && !view_equal(name, "join") &&
-            !view_equal(name, "unjoin")) {
+            !view_equal(name, "unjoin") && !view_equal(name, "merge")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -331,8 +333,12 @@ static ccxml_status validate_transition(
             status = validate_destination_action(
                 action, measurement, limits, diagnostic);
         } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
-            status = validate_bridge_action(
-                action, measurement, limits, diagnostic);
+            status = validate_two_identifier_action(
+                action, "id1", "id2", measurement, limits, diagnostic);
+        } else if (view_equal(name, "merge")) {
+            status = validate_two_identifier_action(
+                action, "connectionid1", "connectionid2", measurement,
+                limits, diagnostic);
         } else {
             status = validate_empty_action(
                 action, measurement, limits, diagnostic);
@@ -534,12 +540,20 @@ static void copy_program(
                     turbo_xml_attribute id1_attribute = {0};
                     turbo_xml_attribute id2_attribute = {0};
                     turbo_xml_string_view expression;
+                    const bool is_merge = view_equal(action_name, "merge");
+                    const char *id1_name =
+                        is_merge ? "connectionid1" : "id1";
+                    const char *id2_name =
+                        is_merge ? "connectionid2" : "id2";
                     if (view_equal(action_name, "join")) {
                         action_row->kind = CCXML_ACTION_JOIN;
                         impl->uses_join = true;
-                    } else {
+                    } else if (view_equal(action_name, "unjoin")) {
                         action_row->kind = CCXML_ACTION_UNJOIN;
                         impl->uses_unjoin = true;
+                    } else {
+                        action_row->kind = CCXML_ACTION_MERGE;
+                        impl->uses_merge = true;
                     }
                     for (bridge_attribute_index = 0u;
                          bridge_attribute_index <
@@ -550,9 +564,9 @@ static void copy_program(
                                 action, bridge_attribute_index);
                         const turbo_xml_string_view local_name =
                             turbo_xml_attribute_local_name(candidate);
-                        if (view_equal(local_name, "id1")) {
+                        if (view_equal(local_name, id1_name)) {
                             id1_attribute = candidate;
-                        } else if (view_equal(local_name, "id2")) {
+                        } else if (view_equal(local_name, id2_name)) {
                             id2_attribute = candidate;
                         }
                     }

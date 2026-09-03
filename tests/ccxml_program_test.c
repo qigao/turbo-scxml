@@ -795,4 +795,184 @@ spec("CCXML program") {
             check_null(program.impl);
         }
     }
+
+    group("merge") {
+        it("accepts and retains two quoted connection identifiers") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            check_not_null(program.impl);
+            check_equal(ccxml_program_action_count(&program), (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires connectionid1") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("requires connectionid2") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an empty connectionid1 literal") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"''\" connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an empty connectionid2 literal") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" connectionid2=\"''\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("rejects a nonliteral connection expression") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1='call_a' "
+                "connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects an escaped connection literal") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call\\\\b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects duplicate connection attributes") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid1=\"'call-c'\" connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_XML_ERROR);
+            check_null(program.impl);
+        }
+
+        it("rejects optional attributes outside the slice") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call-b'\" hints=\"'fast'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects nested executable content") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call-b'\"><exit/></merge>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("charges both identifiers to the retained-name budget") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='conference.request'>"
+                "<merge connectionid1=\"'call-a'\" "
+                "connectionid2=\"'call-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_limits limits = ccxml_default_limits();
+            limits.max_name_bytes = 32u;
+
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+    }
 }
