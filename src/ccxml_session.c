@@ -282,6 +282,17 @@ ccxml_status ccxml_session_init(
             }
         }
     }
+    if (program->uses_prepared_dialog_start) {
+        const size_t prepared_dialog_start_size =
+            offsetof(
+                ccxml_telephony_adapter_v1,
+                prepare_prepared_dialog_start) +
+            sizeof(telephony.prepare_prepared_dialog_start);
+        if (config->telephony->struct_size < prepared_dialog_start_size ||
+            telephony.prepare_prepared_dialog_start == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->uses_dialog_terminate) {
         const size_t dialog_terminate_size =
             offsetof(
@@ -302,7 +313,8 @@ ccxml_status ccxml_session_init(
             const ccxml_action_row *action = &program->actions[action_index];
             const char *error = NULL;
             if ((action->kind == CCXML_ACTION_DESTROY_CONFERENCE ||
-                 action->kind == CCXML_ACTION_DIALOG_TERMINATE) &&
+                 action->kind == CCXML_ACTION_DIALOG_TERMINATE ||
+                 action->kind == CCXML_ACTION_PREPARED_DIALOG_START) &&
                 action->location != NULL &&
                 datamodel.validate_readable_string_location(
                     config->datamodel_user, action->location,
@@ -671,6 +683,44 @@ ccxml_status ccxml_session_dispatch(
                     impl->tickets[prepared - 1u];
                 impl->tickets[prepared - 1u] = swap;
             }
+        }
+        if (action->kind == CCXML_ACTION_PREPARED_DIALOG_START) {
+            cflow_statechart_effect_ticket ticket = {0};
+            ccxml_string_view dialog_id = {0};
+            const char *error = NULL;
+            scxml_adapter_status adapter_status;
+            ccxml_status status;
+            if (!connection_id_valid(event)) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_EVENT;
+            }
+            adapter_status = impl->datamodel.read_string(
+                impl->datamodel_user, action->location,
+                action->location_size, &dialog_id, &error);
+            (void)error;
+            if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_ADAPTER_ERROR;
+            }
+            if (dialog_id.data == NULL || dialog_id.size == 0u ||
+                memchr(dialog_id.data, '\0', dialog_id.size) != NULL) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            {
+                const ccxml_prepared_dialog_start_request request = {
+                    .dialog_id = dialog_id.data,
+                    .dialog_id_size = dialog_id.size,
+                    .connection_id = event->connection_id,
+                    .connection_id_size = event->connection_id_size};
+                adapter_status =
+                    impl->telephony.prepare_prepared_dialog_start(
+                        impl->telephony_user, &request, &ticket, &error);
+            }
+            status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
         }
         if (action->kind == CCXML_ACTION_DIALOG_TERMINATE) {
             cflow_statechart_effect_ticket ticket = {0};

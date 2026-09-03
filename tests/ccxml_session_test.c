@@ -69,6 +69,11 @@ struct provider_probe {
     size_t dialog_id_result_size;
     size_t dialog_prepare_commit_sequence;
     size_t dialog_start_commit_sequence;
+    char started_prepared_dialog_id[64];
+    size_t started_prepared_dialog_id_size;
+    char prepared_dialog_connection_id[64];
+    size_t prepared_dialog_connection_id_size;
+    size_t prepared_dialog_start_commit_sequence;
     char terminated_dialog_id[64];
     size_t terminated_dialog_id_size;
     bool dialog_terminate_immediate;
@@ -87,7 +92,8 @@ enum {
     PROVIDER_DESTROY_CONFERENCE,
     PROVIDER_DIALOG_START,
     PROVIDER_DIALOG_TERMINATE,
-    PROVIDER_DIALOG_PREPARE
+    PROVIDER_DIALOG_PREPARE,
+    PROVIDER_PREPARED_DIALOG_START
 };
 
 static void ticket_commit(void *user) {
@@ -109,6 +115,11 @@ static void ticket_commit(void *user) {
     if (ticket->owner->prepare_kinds[ticket->ordinal - 1u] ==
         PROVIDER_DIALOG_PREPARE) {
         ticket->owner->dialog_prepare_commit_sequence =
+            ++transaction_commit_sequence;
+    }
+    if (ticket->owner->prepare_kinds[ticket->ordinal - 1u] ==
+        PROVIDER_PREPARED_DIALOG_START) {
+        ticket->owner->prepared_dialog_start_commit_sequence =
             ++transaction_commit_sequence;
     }
     ++ticket->owner->commit_count;
@@ -356,6 +367,25 @@ static scxml_adapter_status prepare_dialog_terminate(
         probe, PROVIDER_DIALOG_TERMINATE, out_ticket, out_error);
 }
 
+static scxml_adapter_status prepare_prepared_dialog_start(
+    void *user, const ccxml_prepared_dialog_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->started_prepared_dialog_id_size = request->dialog_id_size;
+    memcpy(
+        probe->started_prepared_dialog_id, request->dialog_id,
+        request->dialog_id_size);
+    probe->started_prepared_dialog_id[request->dialog_id_size] = '\0';
+    probe->prepared_dialog_connection_id_size =
+        request->connection_id_size;
+    memcpy(
+        probe->prepared_dialog_connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->prepared_dialog_connection_id[request->connection_id_size] = '\0';
+    return prepare_effect(
+        probe, PROVIDER_PREPARED_DIALOG_START, out_ticket, out_error);
+}
+
 static void provider_close(void *user) {
     provider_probe *probe = (provider_probe *)user;
     ++probe->close_count;
@@ -383,7 +413,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .prepare_destroy_conference = prepare_destroy_conference,
     .prepare_dialog_start = prepare_dialog_start,
     .prepare_dialog_terminate = prepare_dialog_terminate,
-    .prepare_dialog_prepare = prepare_dialog_prepare};
+    .prepare_dialog_prepare = prepare_dialog_prepare,
+    .prepare_prepared_dialog_start = prepare_prepared_dialog_start};
 
 typedef struct datamodel_probe datamodel_probe;
 
@@ -3221,6 +3252,312 @@ spec("CCXML session") {
                 .program = &program,
                 .telephony = &legacy,
                 .telephony_user = &provider};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+    }
+
+    group("prepared dialogstart") {
+        it("reads the prepared ID and starts it on the current connection") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .read_result = "prepared-42",
+                .read_result_size = sizeof("prepared-42") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(datamodel.readable_validate_count, (size_t)1);
+            check_equal(datamodel.location, "dialog.prepared");
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.read_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(
+                provider.prepare_kinds[0],
+                (size_t)PROVIDER_PREPARED_DIALOG_START);
+            check_equal(provider.started_prepared_dialog_id, "prepared-42");
+            check_equal(provider.prepared_dialog_connection_id, "call-7");
+            check_equal(provider.commit_count, (size_t)1);
+            check_equal(datamodel.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a missing connection before reading the datamodel") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .read_result = "prepared-43",
+                .read_result_size = sizeof("prepared-43") - 1u};
+            ccxml_event event = alerting_event();
+            event.connection_id = NULL;
+            event.connection_id_size = 0u;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_EVENT);
+            check_equal(datamodel.read_count, (size_t)0);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back earlier effects when the datamodel read is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {.reject_read = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><dialogstart "
+                    "prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+            check_equal(provider.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects empty and embedded-NUL prepared IDs") {
+            static const char embedded_nul[] = {'b', 'a', 'd', '\0', 'i', 'd'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            datamodel = (datamodel_probe){
+                .read_result = embedded_nul,
+                .read_result_size = sizeof(embedded_nul)};
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back earlier effects when the provider refuses startup") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            datamodel_probe datamodel = {
+                .read_result = "prepared-44",
+                .read_result_size = sizeof("prepared-44") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><dialogstart "
+                    "prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(provider.prepare_count, (size_t)2);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+            check_equal(provider.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a malformed provider ticket") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .malformed_ticket = true,
+                .quiescent = true};
+            datamodel_probe datamodel = {
+                .read_result = "prepared-45",
+                .read_result_size = sizeof("prepared-45") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("validates the readable location during initialization") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .reject_readable_validation = true};
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            check_equal(datamodel.readable_validate_count, (size_t)1);
+            check_equal(datamodel.location, "dialog.prepared");
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires readable datamodel and appended provider capabilities") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_telephony_adapter_v1 legacy_provider = provider_adapter;
+            ccxml_datamodel_adapter_v1 legacy_datamodel = datamodel_adapter;
+            ccxml_session_config config;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogstart prepareddialogid='dialog.prepared' "
+                    "connectionid='event$.connectionid'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session(&session, &program, &provider),
+                CCXML_INVALID_ARGUMENT);
+
+            legacy_provider.struct_size = offsetof(
+                ccxml_telephony_adapter_v1,
+                prepare_prepared_dialog_start);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy_provider,
+                .telephony_user = &provider,
+                .datamodel = &datamodel_adapter,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+
+            legacy_datamodel.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1,
+                validate_readable_string_location);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &legacy_datamodel,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("preserves the provider prefix through dialogprepare") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(
+                    ccxml_telephony_adapter_v1,
+                    prepare_dialog_prepare) +
+                sizeof(legacy.prepare_dialog_prepare);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogprepare dialogid='dialog.prepared' "
+                    "src=\"'app.vxml'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &provider,
+                .datamodel = &datamodel_adapter,
+                .datamodel_user = &datamodel};
             check_equal(ccxml_session_init(&session, &config), CCXML_OK);
 
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
