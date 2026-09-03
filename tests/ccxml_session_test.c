@@ -38,6 +38,10 @@ struct provider_probe {
     size_t redirected_connection_id_size;
     char redirected_destination[64];
     size_t redirected_destination_size;
+    char joined_id1[64];
+    size_t joined_id1_size;
+    char joined_id2[64];
+    size_t joined_id2_size;
 };
 
 enum {
@@ -45,7 +49,8 @@ enum {
     PROVIDER_CREATE_CALL,
     PROVIDER_DISCONNECT,
     PROVIDER_REJECT,
-    PROVIDER_REDIRECT
+    PROVIDER_REDIRECT,
+    PROVIDER_JOIN
 };
 
 static void ticket_commit(void *user) {
@@ -161,6 +166,19 @@ static scxml_adapter_status prepare_redirect(
     return prepare_effect(probe, PROVIDER_REDIRECT, out_ticket, out_error);
 }
 
+static scxml_adapter_status prepare_join(
+    void *user, const ccxml_join_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    provider_probe *probe = (provider_probe *)user;
+    probe->joined_id1_size = request->id1_size;
+    memcpy(probe->joined_id1, request->id1, request->id1_size);
+    probe->joined_id1[request->id1_size] = '\0';
+    probe->joined_id2_size = request->id2_size;
+    memcpy(probe->joined_id2, request->id2, request->id2_size);
+    probe->joined_id2[request->id2_size] = '\0';
+    return prepare_effect(probe, PROVIDER_JOIN, out_ticket, out_error);
+}
+
 static void provider_close(void *user) {
     provider_probe *probe = (provider_probe *)user;
     ++probe->close_count;
@@ -180,7 +198,8 @@ static const ccxml_telephony_adapter_v1 provider_adapter = {
     .prepare_create_call = prepare_create_call,
     .prepare_disconnect = prepare_disconnect,
     .prepare_reject = prepare_reject,
-    .prepare_redirect = prepare_redirect};
+    .prepare_redirect = prepare_redirect,
+    .prepare_join = prepare_join};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -1245,10 +1264,193 @@ spec("CCXML session") {
             provider_probe probe = {.quiescent = true};
             ccxml_telephony_adapter_v1 truncated = provider_adapter;
             ccxml_session_config config;
-            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+            truncated.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_redirect) +
+                sizeof(truncated.prepare_redirect) - 1u;
 
             check_equal(
                 compile_program(&program, "<redirect dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &truncated,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+    }
+
+    group("join") {
+        it("commits the ordered resource identifiers from program storage") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<join id1=\"'call-a'\" id2=\"'conference-b'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(compile_document(&program, source), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(probe.prepare_count, (size_t)1);
+            check_equal(probe.prepare_kinds[0], (size_t)PROVIDER_JOIN);
+            check_equal(probe.joined_id1, "call-a");
+            check_equal(probe.joined_id1_size, sizeof("call-a") - 1u);
+            check_equal(probe.joined_id2, "conference-b");
+            check_equal(
+                probe.joined_id2_size, sizeof("conference-b") - 1u);
+            check_equal(probe.commit_count, (size_t)1);
+            check_equal(probe.discard_count, (size_t)0);
+            check_false(ccxml_session_is_terminated(&session));
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("commits mixed effects in document order") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/>"
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(
+                probe.prepare_kinds[0], (size_t)PROVIDER_CREATE_CALL);
+            check_equal(probe.prepare_kinds[1], (size_t)PROVIDER_JOIN);
+            check_equal(probe.commit_order[0], (size_t)1);
+            check_equal(probe.commit_order[1], (size_t)2);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards earlier effects in reverse order when join is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {
+                .reject_on_prepare = 3u,
+                .quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/><disconnect/>"
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"),
+                CCXML_OK);
+            check_equal(init_session(&session, &program, &probe), CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(probe.prepare_count, (size_t)3);
+            check_equal(probe.commit_count, (size_t)0);
+            check_equal(probe.discard_count, (size_t)2);
+            check_equal(probe.discard_order[0], (size_t)2);
+            check_equal(probe.discard_order[1], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts the redirect adapter prefix for older programs") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_join);
+
+            check_equal(
+                compile_program(&program, "<redirect dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the appended operation for a join program") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 legacy = provider_adapter;
+            ccxml_session_config config;
+            legacy.struct_size =
+                offsetof(ccxml_telephony_adapter_v1, prepare_join);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &legacy,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a null join operation") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 incomplete = provider_adapter;
+            ccxml_session_config config;
+            incomplete.prepare_join = NULL;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &incomplete,
+                .telephony_user = &probe};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a truncated join callback field") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe probe = {.quiescent = true};
+            ccxml_telephony_adapter_v1 truncated = provider_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = sizeof(ccxml_telephony_adapter_v1) - 1u;
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<join id1=\"'call-a'\" id2=\"'call-b'\"/>"),
                 CCXML_OK);
             config = (ccxml_session_config){
                 .program = &program,

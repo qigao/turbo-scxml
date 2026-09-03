@@ -129,6 +129,15 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         }
     }
+    if (program->uses_join) {
+        const size_t join_size =
+            offsetof(ccxml_telephony_adapter_v1, prepare_join) +
+            sizeof(telephony.prepare_join);
+        if (config->telephony->struct_size < join_size ||
+            telephony.prepare_join == NULL) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
@@ -270,6 +279,22 @@ ccxml_status ccxml_session_dispatch(
                     impl, adapter_status, ticket, &prepared);
                 if (status != CCXML_OK) return status;
             }
+        }
+        if (action->kind == CCXML_ACTION_JOIN) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const ccxml_join_request request = {
+                .id1 = action->id1,
+                .id1_size = action->id1_size,
+                .id2 = action->id2,
+                .id2_size = action->id2_size};
+            const scxml_adapter_status adapter_status =
+                impl->telephony.prepare_join(
+                    impl->telephony_user, &request, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
         }
     }
     for (index = 0u; index < prepared; ++index) {
