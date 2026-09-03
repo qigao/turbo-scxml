@@ -45,13 +45,13 @@
 `bool immediate`, plus `prepare_dialog_terminate(user, request, ticket,
 out_error)`.
 
-- [ ] Add RED TinyTest cases for literal and location values, `immediate ==
+- [x] Add RED TinyTest cases for literal and location values, `immediate ==
   false`, location validation/read failures, malformed values/tickets,
   provider refusal rollback, document-order commit, required capability, and
   prior provider-prefix compatibility.
-- [ ] Append the public request/callback, validate feature-specific adapter
+- [x] Append the public request/callback, validate feature-specific adapter
   tails, resolve the identifier, and retain the provider ticket.
-- [ ] Run focused program/session tests and commit.
+- [x] Run focused program/session tests and commit.
 
 ### Task 3: Verify lifecycle, document, and publish
 

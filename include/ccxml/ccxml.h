@@ -151,6 +151,14 @@ typedef struct ccxml_dialog_start_request {
     size_t connection_id_size;
 } ccxml_dialog_start_request;
 
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_dialog_terminate_request {
+    const char *dialog_id;
+    size_t dialog_id_size;
+    /** False for the currently supported normal-termination profile. */
+    bool immediate;
+} ccxml_dialog_terminate_request;
+
 /**
  * Synchronous string datamodel boundary copied by session initialization.
  *
@@ -305,6 +313,12 @@ typedef struct ccxml_telephony_adapter_v1 {
         void *user,
         const ccxml_dialog_start_request *request,
         ccxml_string_view *out_dialog_id,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+    /** Optional tail operation, required by dialogterminate programs. */
+    scxml_adapter_status (*prepare_dialog_terminate)(
+        void *user,
+        const ccxml_dialog_terminate_request *request,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
 } ccxml_telephony_adapter_v1;
