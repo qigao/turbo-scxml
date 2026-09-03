@@ -17,6 +17,7 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_DESTROY_CONFERENCE,
     CCXML_ACTION_DIALOG_PREPARE,
     CCXML_ACTION_DIALOG_START,
+    CCXML_ACTION_PREPARED_DIALOG_START,
     CCXML_ACTION_DIALOG_TERMINATE
 } ccxml_action_kind;
 
@@ -59,6 +60,7 @@ typedef struct ccxml_program_impl {
     bool uses_datamodel_read;
     bool uses_dialog_prepare;
     bool uses_dialog_start;
+    bool uses_prepared_dialog_start;
     bool uses_dialog_terminate;
 } ccxml_program_impl;
 

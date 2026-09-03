@@ -1479,6 +1479,177 @@ spec("CCXML program") {
         }
     }
 
+    group("prepared dialogstart") {
+        it("retains a prepared dialog ID read location") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(
+                impl->actions[0].kind,
+                CCXML_ACTION_PREPARED_DIALOG_START);
+            check_equal(impl->actions[0].location, "dialog.prepared");
+            check_equal(impl->actions[0].location_size, (size_t)15);
+            check_null(impl->actions[0].destination);
+            check_true(impl->uses_datamodel_read);
+            check_true(impl->uses_prepared_dialog_start);
+            check_equal(impl->max_transition_effects, (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires prepareddialogid") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("requires connectionid") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("requires a dotted prepared dialog ID location") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog..prepared' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects a literal prepared dialog ID") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid=\"'dialog-42'\" "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("requires the exact current event connection expression") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "connectionid='connection.id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects direct-start and optional attributes") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "connectionid='event$.connectionid' src=\"'app.vxml'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, source, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("rejects dialogid and nested executable content") {
+            const char *with_dialog_id =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "dialogid='dialog.new' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            const char *with_content =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "connectionid='event$.connectionid'><exit/></dialogstart>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_source(&program, with_dialog_id, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+            check_equal(
+                compile_source(&program, with_content, &diagnostic),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("charges the retained location including its NUL byte") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.connected'>"
+                "<dialogstart prepareddialogid='dialog.prepared' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_limits limits = ccxml_default_limits();
+            limits.max_name_bytes = 36u;
+
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+    }
+
     group("dialogterminate") {
         it("retains a dotted dialog identifier location") {
             char source[] =
