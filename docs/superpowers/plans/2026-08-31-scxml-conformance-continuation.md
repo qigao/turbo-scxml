@@ -6,9 +6,9 @@
 
 **Architecture:** Keep `tests/w3c/manifest.tsv` as the corpus fact source and `tests/scxml_w3c_conformance_test.c` as the strict executor. Each local fixture removes only generator metadata, timeout safety nets, and `conf:pass`/`conf:fail`; it preserves the semantic witness using ordinary SCXML states, events, `In(id)`, and terminal `pass`/`fail` states. No production API or runtime behavior changes are planned; if a fixture exposes a runtime defect, its failing fixture becomes the regression test before the minimal runtime fix.
 
-**Tech Stack:** C11, TurboSCXML, TurboUtils CFlow/CMeta, TinyTest, CMake/CTest presets.
+**Tech Stack:** C11, TurboSCXML, Salts CFlow/CMeta, TinyTest, CMake/CTest presets.
 
-**Spec:** `docs/specs/scxml-core-design.md`; normative corpus source is the W3C SCXML Implementation Report suite linked by each manifest row; tracking issue is `qigao/turbo-utils#122`.
+**Spec:** `docs/specs/scxml-core-design.md`; normative corpus source is the W3C SCXML Implementation Report suite linked by each manifest row; tracking issue is `qigao/salts#122`.
 
 ## Global Constraints
 
@@ -148,7 +148,7 @@
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-08-31-scxml-conformance-continuation.md`
-- External tracker: `https://github.com/qigao/turbo-utils/issues/122`
+- External tracker: `https://github.com/qigao/salts/issues/122`
 
 **Interfaces:**
 - Consumes: verified 39/129/34 manifest counts and the complete 202-row inventory.
