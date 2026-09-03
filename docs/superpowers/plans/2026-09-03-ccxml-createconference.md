@@ -70,5 +70,5 @@ TinyTest
   and unsupported optional forms.
 - [x] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
   consumer verification.
-- [ ] Self-review the diff, check formatting/test hygiene, commit docs, push,
+- [x] Self-review the diff, check formatting/test hygiene, commit docs, push,
   update PR #35, and confirm its merge state.
