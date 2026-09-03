@@ -1,6 +1,8 @@
 #include "ccxml_internal.h"
 
+#include <inttypes.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -324,17 +326,22 @@ ccxml_status ccxml_session_init(
     }
     program = (const ccxml_program_impl *)config->program->impl;
     telephony = copy_adapter(config->telephony);
-    if (program->uses_send) {
+    if (program->uses_send || program->uses_cancel) {
         if (!event_io_send_adapter_valid(config->event_io))
             return CCXML_INVALID_ARGUMENT;
         if (program->uses_delayed_send &&
             (config->event_io->capabilities &
              SCXML_EVENT_IO_CAP_DELAYED_SEND) == 0u)
             return CCXML_INVALID_ARGUMENT;
+        if (program->uses_cancel &&
+            (config->event_io->capabilities &
+             SCXML_EVENT_IO_CAP_CANCEL) == 0u)
+            return CCXML_INVALID_ARGUMENT;
         event_io = *config->event_io;
         event_io_user = config->event_io_user;
     }
-    if (program->initial_variable != NULL || program->uses_assign) {
+    if (program->initial_variable != NULL || program->uses_assign ||
+        program->uses_send_id) {
         if (!datamodel_write_adapter_valid(config->datamodel))
             return CCXML_INVALID_ARGUMENT;
         datamodel = copy_datamodel_adapter(config->datamodel);
@@ -352,7 +359,9 @@ ccxml_status ccxml_session_init(
              ++action_index) {
             const ccxml_action_row *action = &program->actions[action_index];
             const char *error = NULL;
-            if (action->kind == CCXML_ACTION_ASSIGN_STRING &&
+            if ((action->kind == CCXML_ACTION_ASSIGN_STRING ||
+                 (action->kind == CCXML_ACTION_SEND &&
+                  action->location != NULL)) &&
                 datamodel.validate_string_location(
                     config->datamodel_user, action->location,
                     action->location_size, &error) !=
@@ -564,7 +573,8 @@ ccxml_status ccxml_session_init(
             const char *error = NULL;
             if ((action->kind == CCXML_ACTION_DESTROY_CONFERENCE ||
                  action->kind == CCXML_ACTION_DIALOG_TERMINATE ||
-                 action->kind == CCXML_ACTION_PREPARED_DIALOG_START) &&
+                 action->kind == CCXML_ACTION_PREPARED_DIALOG_START ||
+                 action->kind == CCXML_ACTION_CANCEL) &&
                 action->location != NULL &&
                 datamodel.validate_readable_string_location(
                     config->datamodel_user, action->location,
@@ -579,8 +589,22 @@ ccxml_status ccxml_session_init(
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
     }
+    if (program->uses_send_id &&
+        SCXML_EVENT_METADATA_CAPACITY < CCXML_SEND_ID_MAX_SIZE)
+        return CCXML_LIMIT_EXCEEDED;
     impl = (ccxml_session_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return CCXML_ALLOCATION_FAILED;
+    if (program->uses_send_id) {
+        salts_uuid_t uuid;
+        if (salts_uuid_v4_generate(&uuid) != SALTS_OK ||
+            salts_uuid_format(
+                &uuid, impl->send_namespace,
+                sizeof(impl->send_namespace)) != SALTS_OK) {
+            free(impl);
+            return CCXML_INVALID_CONTRACT;
+        }
+        impl->next_send_token = UINT64_C(1);
+    }
     if (program->max_transition_effects != 0u) {
         impl->tickets = (cflow_statechart_effect_ticket *)calloc(
             program->max_transition_effects, sizeof(*impl->tickets));
@@ -784,9 +808,11 @@ static ccxml_status execute_transition_actions(
             if (status != CCXML_OK) return status;
         }
         if (action->kind == CCXML_ACTION_SEND) {
-            cflow_statechart_effect_ticket ticket = {0};
+            cflow_statechart_effect_ticket send_ticket = {0};
+            cflow_statechart_effect_ticket datamodel_ticket = {0};
             const char *error = NULL;
-            const scxml_send_request request = {
+            char id_storage[SCXML_EVENT_METADATA_CAPACITY + 1u] = {0};
+            scxml_send_request request = {
                 .event = action->name,
                 .event_size = action->name_size,
                 .target = action->destination,
@@ -795,10 +821,83 @@ static ccxml_status execute_transition_actions(
                 .type_size = action->target_type_size,
                 .delay_ms = action->delay_ms,
                 .payload = {.kind = SCXML_PAYLOAD_NONE}};
-            const scxml_adapter_status adapter_status =
+            scxml_adapter_status adapter_status;
+            ccxml_status status;
+            if (action->location != NULL) {
+                const uint64_t token = impl->next_send_token;
+                const int written = token == 0u ? -1 : snprintf(
+                    id_storage, sizeof(id_storage), "send.%s.%" PRIu64,
+                    impl->send_namespace, token);
+                if (written < 0 ||
+                    (size_t)written > SCXML_EVENT_METADATA_CAPACITY) {
+                    discard_tickets(impl->tickets, prepared);
+                    return token == 0u
+                        ? CCXML_LIMIT_EXCEEDED : CCXML_INVALID_CONTRACT;
+                }
+                impl->next_send_token = token == UINT64_MAX
+                    ? UINT64_C(0) : token + UINT64_C(1);
+                request.id = id_storage;
+                request.id_size = (size_t)written;
+            }
+            adapter_status =
                 impl->event_io.prepare_send(
+                    impl->event_io_user, &request, &send_ticket, &error);
+            status = retain_ticket(
+                impl, adapter_status, send_ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+            if (action->location != NULL) {
+                error = NULL;
+                adapter_status = impl->datamodel.prepare_assign_string(
+                    impl->datamodel_user, action->location,
+                    action->location_size, request.id, request.id_size,
+                    &datamodel_ticket, &error);
+                status = retain_ticket(
+                    impl, adapter_status, datamodel_ticket, &prepared);
+                (void)error;
+                if (status != CCXML_OK) return status;
+                {
+                    cflow_statechart_effect_ticket swap =
+                        impl->tickets[prepared - 2u];
+                    impl->tickets[prepared - 2u] =
+                        impl->tickets[prepared - 1u];
+                    impl->tickets[prepared - 1u] = swap;
+                }
+            }
+        }
+        if (action->kind == CCXML_ACTION_CANCEL) {
+            cflow_statechart_effect_ticket ticket = {0};
+            ccxml_string_view send_id = {
+                .data = action->id1, .size = action->id1_size};
+            const char *error = NULL;
+            scxml_adapter_status adapter_status;
+            ccxml_status status;
+            if (action->location != NULL) {
+                adapter_status = impl->datamodel.read_string(
+                    impl->datamodel_user, action->location,
+                    action->location_size, &send_id, &error);
+                (void)error;
+                if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+                    discard_tickets(impl->tickets, prepared);
+                    return adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                        ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+                }
+            }
+            if (send_id.data == NULL || send_id.size == 0u ||
+                send_id.size > SCXML_EVENT_METADATA_CAPACITY ||
+                memchr(send_id.data, '\0', send_id.size) != NULL) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            {
+                const scxml_cancel_request request = {
+                    .send_id = send_id.data,
+                    .send_id_size = send_id.size};
+                error = NULL;
+                adapter_status = impl->event_io.prepare_cancel(
                     impl->event_io_user, &request, &ticket, &error);
-            const ccxml_status status = retain_ticket(
+            }
+            status = retain_ticket(
                 impl, adapter_status, ticket, &prepared);
             (void)error;
             if (status != CCXML_OK) return status;

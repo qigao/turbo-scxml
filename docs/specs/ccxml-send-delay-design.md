@@ -13,8 +13,9 @@ compile-time string-literal `delay` expression:
 The [W3C CCXML `<send>` contract](https://www.w3.org/TR/ccxml/#Send)
 defines `delay` as an ECMAScript expression whose result is a CSS2 time
 designation. The current bounded profile admits only a quoted string literal
-result. Arbitrary ECMAScript expressions, `sendid`, `namelist`, inline content,
-and `<cancel>` remain separate slices.
+result. Arbitrary ECMAScript delay expressions, `namelist`, and inline content
+remain deferred. The subsequent send-identifier/cancel slice is documented in
+`docs/specs/ccxml-send-cancel-design.md`.
 
 ## Compiler contract
 

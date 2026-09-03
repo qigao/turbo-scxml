@@ -36,10 +36,27 @@ typedef struct send_probe {
     size_t target_size;
     char type[64];
     size_t type_size;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t id_size;
+    char ids[4][SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t id_sizes[4];
+    size_t send_count;
+    char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t cancel_id_size;
+    size_t cancel_count;
     uint64_t delay_ms;
     scxml_payload_kind payload_kind;
 } send_probe;
+
+typedef struct datamodel_probe {
+    effect_probe effects;
+    char value[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t value_size;
+    char pending[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t pending_size;
+    bool reject_validation;
+    bool reject_read;
+} datamodel_probe;
 
 static size_t transaction_sequence;
 
@@ -122,8 +139,36 @@ static scxml_adapter_status prepare_send(
     memcpy(probe->type, request->type, request->type_size);
     probe->type[request->type_size] = '\0';
     probe->id_size = request->id_size;
+    if (request->id_size != 0u) {
+        memcpy(probe->id, request->id, request->id_size);
+        probe->id[request->id_size] = '\0';
+    }
+    if (probe->send_count < 4u) {
+        probe->id_sizes[probe->send_count] = request->id_size;
+        if (request->id_size != 0u) {
+            memcpy(
+                probe->ids[probe->send_count], request->id,
+                request->id_size);
+            probe->ids[probe->send_count][request->id_size] = '\0';
+        }
+    }
+    ++probe->send_count;
     probe->delay_ms = request->delay_ms;
     probe->payload_kind = request->payload.kind;
+    return prepare_effect(&probe->effects, out_ticket, out_error);
+}
+
+static scxml_adapter_status prepare_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    send_probe *probe = (send_probe *)user;
+    probe->cancel_id_size = request->send_id_size;
+    if (request->send_id_size <= SCXML_EVENT_METADATA_CAPACITY) {
+        memcpy(
+            probe->cancel_id, request->send_id, request->send_id_size);
+        probe->cancel_id[request->send_id_size] = '\0';
+    }
+    ++probe->cancel_count;
     return prepare_effect(&probe->effects, out_ticket, out_error);
 }
 
@@ -144,6 +189,80 @@ static const scxml_event_io_adapter event_io_adapter = {
     .prepare_send = prepare_send,
     .close = send_close,
     .is_quiescent = send_is_quiescent};
+
+static scxml_adapter_status validate_string_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_validation ||
+        location_size != sizeof("request.pending") - 1u ||
+        memcmp(location, "request.pending", location_size) != 0) {
+        if (out_error != NULL) *out_error = "invalid test location";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status validate_readable_string_location(
+    void *user, const char *location, size_t location_size,
+    const char **out_error) {
+    return validate_string_location(
+        user, location, location_size, out_error);
+}
+
+static void datamodel_commit(void *user) {
+    effect_ticket *ticket = (effect_ticket *)user;
+    datamodel_probe *probe;
+    if (ticket == NULL || ticket->owner == NULL || !ticket->live) return;
+    probe = (datamodel_probe *)ticket->owner;
+    memcpy(probe->value, probe->pending, probe->pending_size);
+    probe->value[probe->pending_size] = '\0';
+    probe->value_size = probe->pending_size;
+    effect_commit(user);
+}
+
+static scxml_adapter_status prepare_assign_string(
+    void *user, const char *location, size_t location_size,
+    const char *value, size_t value_size,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    scxml_adapter_status status;
+    if (validate_string_location(
+            user, location, location_size, out_error) !=
+            SCXML_ADAPTER_ACCEPTED ||
+        value == NULL || value_size > SCXML_EVENT_METADATA_CAPACITY)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    memcpy(probe->pending, value, value_size);
+    probe->pending[value_size] = '\0';
+    probe->pending_size = value_size;
+    status = prepare_effect(&probe->effects, out_ticket, out_error);
+    if (status == SCXML_ADAPTER_ACCEPTED)
+        out_ticket->commit = datamodel_commit;
+    return status;
+}
+
+static scxml_adapter_status read_string(
+    void *user, const char *location, size_t location_size,
+    ccxml_string_view *out_value, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    if (probe->reject_read || out_value == NULL ||
+        validate_string_location(
+            user, location, location_size, out_error) !=
+            SCXML_ADAPTER_ACCEPTED)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    *out_value = (ccxml_string_view){probe->value, probe->value_size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
+    .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
+    .struct_size = sizeof(ccxml_datamodel_adapter_v1),
+    .validate_string_location = validate_string_location,
+    .prepare_assign_string = prepare_assign_string,
+    .validate_readable_string_location =
+        validate_readable_string_location,
+    .read_string = read_string};
 
 static scxml_adapter_status reject_condition_compile(
     void *user, const char *source, size_t source_size,
@@ -209,6 +328,21 @@ static ccxml_status init_send_session(
     return ccxml_session_init(session, &config);
 }
 
+static ccxml_status init_send_session_with_datamodel(
+    ccxml_session *session, const ccxml_program *program,
+    effect_probe *telephony, datamodel_probe *datamodel, send_probe *send,
+    const scxml_event_io_adapter *adapter) {
+    const ccxml_session_config config = {
+        .program = program,
+        .telephony = &telephony_adapter,
+        .telephony_user = telephony,
+        .datamodel = &datamodel_adapter,
+        .datamodel_user = datamodel,
+        .event_io = adapter,
+        .event_io_user = send};
+    return ccxml_session_init(session, &config);
+}
+
 static ccxml_event alerting_event(void) {
     const ccxml_event event = {
         .name = "connection.alerting",
@@ -242,6 +376,114 @@ spec("CCXML send") {
                     "name=\"'call.notice'\"/>"),
                 CCXML_OK);
             ccxml_program_destroy(&program);
+        }
+
+        it("accepts a dotted sendid location") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.pending'/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+            program = (ccxml_program){0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" "
+                    "sendid='request&#46;pending'/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("accepts cancel identifiers from a location or literal") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program, "<cancel sendid='request.pending'/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+            program = (ccxml_program){0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel sendid='&apos;send.fixed.7&apos;'/>"),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects invalid sendid locations") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid=''/>"),
+                CCXML_INVALID_STRUCTURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid=\"'request.id'\"/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request..id'/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send xmlns:x='urn:test' target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" x:sendid='request.id'/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.id' "
+                    "sendid='request.other'/>"),
+                CCXML_XML_ERROR);
+        }
+
+        it("rejects malformed cancel actions") {
+            ccxml_program program = {0};
+            check_equal(
+                compile_actions(&program, "<cancel/>"),
+                CCXML_INVALID_STRUCTURE);
+            check_equal(
+                compile_actions(&program, "<cancel sendid=''/>"),
+                CCXML_INVALID_STRUCTURE);
+            check_equal(
+                compile_actions(
+                    &program, "<cancel sendid='&apos;&apos;'/>"),
+                CCXML_INVALID_STRUCTURE);
+            check_equal(
+                compile_actions(&program, "<cancel sendid='request..id'/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(&program, "<cancel sendid='makeId()'/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel xmlns:x='urn:test' "
+                    "x:sendid=\"'send.fixed.7'\"/>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel sendid=\"'send.fixed.7'\"><accept/></cancel>"),
+                CCXML_UNSUPPORTED_FEATURE);
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel sendid=\"'send.fixed.7'\" "
+                    "sendid=\"'send.fixed.8'\"/>"),
+                CCXML_XML_ERROR);
         }
 
         it("rejects missing required attributes") {
@@ -360,12 +602,6 @@ spec("CCXML send") {
                 compile_actions(
                     &program,
                     "<send target=\"'session:callee'\" name=\"'call.notice'\" "
-                    "sendid='request.id'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_equal(
-                compile_actions(
-                    &program,
-                    "<send target=\"'session:callee'\" name=\"'call.notice'\" "
                     "namelist='payload'/>"),
                 CCXML_UNSUPPORTED_FEATURE);
             check_equal(
@@ -439,6 +675,67 @@ spec("CCXML send") {
             ccxml_program_destroy(&program);
         }
 
+        it("charges sendid and cancel operands to the retained-byte limit") {
+            const char *send_source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+                "sendid='request.pending'/>"
+                "</transition></eventprocessor></ccxml>";
+            const char *cancel_source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<cancel sendid=\"'send.fixed.7'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_program program = {0};
+
+            limits.max_name_bytes = 62u;
+            check_equal(
+                ccxml_compile(
+                    &program, send_source, strlen(send_source),
+                    &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            limits.max_name_bytes = 63u;
+            check_equal(
+                ccxml_compile(
+                    &program, send_source, strlen(send_source),
+                    &limits, &diagnostic),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+
+            limits.max_name_bytes = 32u;
+            check_equal(
+                ccxml_compile(
+                    &program, cancel_source, strlen(cancel_source),
+                    &limits, &diagnostic),
+                CCXML_LIMIT_EXCEEDED);
+            limits.max_name_bytes = 33u;
+            check_equal(
+                ccxml_compile(
+                    &program, cancel_source, strlen(cancel_source),
+                    &limits, &diagnostic),
+                CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects a cancel literal above Event I/O metadata capacity") {
+            char identifier[SCXML_EVENT_METADATA_CAPACITY + 2u];
+            char action[SCXML_EVENT_METADATA_CAPACITY + 64u];
+            ccxml_program program = {0};
+            int written;
+
+            memset(identifier, 'a', SCXML_EVENT_METADATA_CAPACITY + 1u);
+            identifier[SCXML_EVENT_METADATA_CAPACITY + 1u] = '\0';
+            written = snprintf(
+                action, sizeof(action),
+                "<cancel sendid=\"'%s'\"/>", identifier);
+            check_true(written > 0 && (size_t)written < sizeof(action));
+            check_equal(
+                compile_actions(&program, action), CCXML_LIMIT_EXCEEDED);
+        }
+
         it("rejects delimiters and backslashes introduced by XML entities") {
             ccxml_program program = {0};
             check_equal(
@@ -457,6 +754,351 @@ spec("CCXML send") {
     }
 
     group("runtime") {
+        it("requires a writable sendid location") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            datamodel_probe datamodel = {
+                .effects.quiescent = true,
+                .reject_validation = true};
+            ccxml_status status;
+
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.pending'/>"),
+                CCXML_OK);
+            status = init_send_session(
+                &session, &program, &telephony, &send, &event_io_adapter);
+            check_equal(status, CCXML_INVALID_ARGUMENT);
+            if (status == CCXML_OK)
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            session = (ccxml_session){0};
+            status = init_send_session_with_datamodel(
+                &session, &program, &telephony, &datamodel, &send,
+                &event_io_adapter);
+            check_equal(status, CCXML_INVALID_ARGUMENT);
+            if (status == CCXML_OK)
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires cancel capability") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_status status;
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND |
+                SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel sendid=\"'send&#46;fixed&#46;7'\"/>"),
+                CCXML_OK);
+            status = init_send_session(
+                &session, &program, &telephony, &send, &event_io_adapter);
+            check_equal(status, CCXML_INVALID_ARGUMENT);
+            if (status == CCXML_OK)
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            session = (ccxml_session){0};
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send, &capable),
+                CCXML_OK);
+            if (session.impl != NULL)
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("maps cancel rejection and malformed tickets") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {
+                .effects = {.reject = true, .quiescent = true}};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND |
+                SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(
+                compile_actions(
+                    &program, "<cancel sendid=\"'send.fixed.7'\"/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send, &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+
+            session = (ccxml_session){0};
+            send = (send_probe){
+                .effects = {.malformed = true, .quiescent = true}};
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send, &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("writes a generated sendid before send commit and cancels it later") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' "
+                "version='1.0'><eventprocessor>"
+                "<transition event='connection.alerting'>"
+                "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+                "delay=\"'250ms'\" sendid='request&#46;pending'/>"
+                "</transition><transition event='cancel.request'>"
+                "<cancel sendid='request&#46;pending'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+            const ccxml_event cancel_event = {
+                .name = "cancel.request",
+                .name_size = sizeof("cancel.request") - 1u};
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND |
+                SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), NULL, &diagnostic),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            transaction_sequence = 0u;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_true(send.id_size > sizeof("send.") - 1u);
+            check_equal(send.id_size, (size_t)43u);
+            check_equal(memcmp(send.id, "send.", 5u), 0);
+            check_equal(send.id[13], '-');
+            check_equal(send.id[18], '-');
+            check_equal(send.id[23], '-');
+            check_equal(send.id[28], '-');
+            check_equal(send.id[41], '.');
+            check_equal(send.id[42], '1');
+            check_equal(send.id, datamodel.value);
+            check_equal(send.id_size, datamodel.value_size);
+            check_equal(datamodel.effects.commit_sequence[0], (size_t)1u);
+            check_equal(send.effects.commit_sequence[0], (size_t)2u);
+            check_equal(send.delay_ms, UINT64_C(250));
+
+            check_equal(
+                ccxml_session_dispatch(&session, &cancel_event), CCXML_OK);
+            check_equal(send.cancel_count, (size_t)1u);
+            check_equal(send.cancel_id, datamodel.value);
+            check_equal(send.cancel_id_size, datamodel.value_size);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("generates a distinct sendid for every dispatch") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.pending'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.send_count, (size_t)2u);
+            check_true(send.id_sizes[0] != 0u);
+            check_equal(send.id_sizes[0], send.id_sizes[1]);
+            check_true(
+                memcmp(send.ids[0], send.ids[1], send.id_sizes[0]) != 0);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("consumes failed tokens and permanently exhausts at UINT64_MAX") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {
+                .effects = {.reject = true, .quiescent = true}};
+            ccxml_event event = alerting_event();
+            ccxml_session_impl *impl;
+
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.pending'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            impl = (ccxml_session_impl *)session.impl;
+            check_equal(impl->next_send_token, UINT64_C(1));
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(impl->next_send_token, UINT64_C(2));
+            check_equal(send.id[send.id_size - 1u], '1');
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+
+            session = (ccxml_session){0};
+            send = (send_probe){.effects.quiescent = true};
+            datamodel = (datamodel_probe){.effects.quiescent = true};
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            impl = (ccxml_session_impl *)session.impl;
+            impl->next_send_token = UINT64_MAX;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(impl->next_send_token, UINT64_C(0));
+            check_equal(send.id_size, (size_t)CCXML_SEND_ID_MAX_SIZE);
+            check_equal(
+                send.id + send.id_size - 20u,
+                "18446744073709551615");
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_LIMIT_EXCEEDED);
+            check_equal(send.send_count, (size_t)1u);
+            check_equal(impl->next_send_token, UINT64_C(0));
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("forwards a literal cancel identifier") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND |
+                SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<cancel sendid='&apos;send.fixed.7&apos;'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session(
+                    &session, &program, &telephony, &send, &capable),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(send.cancel_count, (size_t)1u);
+            check_equal(send.cancel_id, "send.fixed.7");
+            check_equal(send.effects.commit_count, (size_t)1u);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back send when sendid assignment is rejected") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .effects = {.reject = true, .quiescent = true}};
+            send_probe send = {.effects.quiescent = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_actions(
+                    &program,
+                    "<send target=\"'session:callee'\" "
+                    "name=\"'call.notice'\" sendid='request.pending'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &event_io_adapter),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(send.effects.discard_count, (size_t)1u);
+            check_equal(send.effects.commit_count, (size_t)0u);
+            check_equal(datamodel.value_size, (size_t)0u);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects empty or unreadable cancel locations") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            ccxml_event event = alerting_event();
+
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND |
+                SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(
+                compile_actions(
+                    &program, "<cancel sendid='request.pending'/>"),
+                CCXML_OK);
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(send.cancel_count, (size_t)0u);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+
+            session = (ccxml_session){0};
+            datamodel.reject_read = true;
+            check_equal(
+                init_send_session_with_datamodel(
+                    &session, &program, &telephony, &datamodel, &send,
+                    &capable),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("prepares and commits a default ccxml request") {
             ccxml_program program = {0};
             ccxml_session session = {0};

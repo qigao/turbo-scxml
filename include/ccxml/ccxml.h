@@ -208,7 +208,8 @@ typedef struct ccxml_datamodel_adapter_v1 {
         const char **out_error);
     /**
      * Return a borrowed value valid through the immediately following
-     * telephony prepare callback. The core does not retain the view.
+     * consuming telephony or Event I/O prepare callback. The core does not
+     * retain the view.
      */
     scxml_adapter_status (*read_string)(
         void *user, const char *location, size_t location_size,
@@ -385,8 +386,9 @@ typedef struct ccxml_session_config {
     const ccxml_datamodel_adapter_v1 *datamodel;
     void *datamodel_user;
     /**
-     * Required by programs containing send. The shared table supplies the
-     * ticket protocol; its user implements CCXML targettype semantics.
+     * Required by programs containing send or cancel. The shared table
+     * supplies the ticket protocol; its user implements CCXML targettype,
+     * delayed-send, and cancellation semantics.
      */
     const scxml_event_io_adapter *event_io;
     void *event_io_user;

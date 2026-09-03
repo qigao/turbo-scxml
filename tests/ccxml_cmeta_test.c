@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 
-enum { TEST_TEXT_CAPACITY = 31u };
+enum { TEST_TEXT_CAPACITY = 95u };
 
 typedef struct test_text {
     size_t size;
@@ -231,6 +231,90 @@ typedef struct conference_provider_probe {
     size_t expected_dialog_id_size;
     bool dialog_id_visible_at_commit;
 } conference_provider_probe;
+
+typedef struct send_cancel_probe {
+    bool live;
+    size_t commit_count;
+    size_t discard_count;
+    size_t close_count;
+    char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t send_id_size;
+    char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t cancel_id_size;
+} send_cancel_probe;
+
+static void send_cancel_commit(void *user) {
+    send_cancel_probe *probe = (send_cancel_probe *)user;
+    if (probe == NULL || !probe->live) return;
+    probe->live = false;
+    ++probe->commit_count;
+}
+
+static void send_cancel_discard(void *user) {
+    send_cancel_probe *probe = (send_cancel_probe *)user;
+    if (probe == NULL || !probe->live) return;
+    probe->live = false;
+    ++probe->discard_count;
+}
+
+static scxml_adapter_status cmeta_prepare_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    send_cancel_probe *probe = (send_cancel_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->id == NULL || request->id_size == 0u ||
+        request->id_size > SCXML_EVENT_METADATA_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    memcpy(probe->send_id, request->id, request->id_size);
+    probe->send_id[request->id_size] = '\0';
+    probe->send_id_size = request->id_size;
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = send_cancel_commit,
+        .discard = send_cancel_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status cmeta_prepare_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    send_cancel_probe *probe = (send_cancel_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->send_id == NULL || request->send_id_size == 0u ||
+        request->send_id_size > SCXML_EVENT_METADATA_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    memcpy(probe->cancel_id, request->send_id, request->send_id_size);
+    probe->cancel_id[request->send_id_size] = '\0';
+    probe->cancel_id_size = request->send_id_size;
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = send_cancel_commit,
+        .discard = send_cancel_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void send_cancel_close(void *user) {
+    ++((send_cancel_probe *)user)->close_count;
+}
+
+static bool send_cancel_quiescent(void *user) {
+    (void)user;
+    return true;
+}
+
+static const scxml_event_io_adapter send_cancel_adapter = {
+    .abi_version = SCXML_ADAPTER_ABI,
+    .struct_size = sizeof(scxml_event_io_adapter),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND |
+        SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
+    .prepare_send = cmeta_prepare_send,
+    .prepare_cancel = cmeta_prepare_cancel,
+    .close = send_cancel_close,
+    .is_quiescent = send_cancel_quiescent};
 
 static void provider_ticket_commit(void *user) {
     conference_provider_probe *probe = (conference_provider_probe *)user;
@@ -807,6 +891,64 @@ spec("CCXML CMeta datamodel") {
         check_equal(state.conference.id.data, "conf-e2e");
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("writes and later cancels a send ID through nested CMeta") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='send.now'>"
+            "<send target=\"'session:callee'\" name=\"'call.notice'\" "
+            "delay=\"'10ms'\" sendid='conference.id'/>"
+            "</transition><transition event='cancel.now'>"
+            "<cancel sendid='conference.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        send_cancel_probe event_io = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event send_event = {
+            .name = "send.now",
+            .name_size = sizeof("send.now") - 1u};
+        const ccxml_event cancel_event = {
+            .name = "cancel.now",
+            .name_size = sizeof("cancel.now") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel,
+            .event_io = &send_cancel_adapter,
+            .event_io_user = &event_io};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(
+            ccxml_session_dispatch(&session, &send_event), CCXML_OK);
+        check_true(state.conference.id.size > sizeof("send.") - 1u);
+        check_equal(state.conference.id.size, event_io.send_id_size);
+        check_equal(state.conference.id.data, event_io.send_id);
+        check_equal(
+            ccxml_session_dispatch(&session, &cancel_event), CCXML_OK);
+        check_equal(event_io.cancel_id_size, event_io.send_id_size);
+        check_equal(event_io.cancel_id, event_io.send_id);
+        check_equal(event_io.commit_count, (size_t)2u);
+        check_equal(event_io.discard_count, (size_t)0u);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(event_io.close_count, (size_t)1u);
         ccxml_cmeta_datamodel_destroy(&datamodel);
         ccxml_program_destroy(&program);
     }

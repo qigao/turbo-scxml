@@ -134,8 +134,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 `<dialogterminate/>` VoiceXML provider 生命周期，以及受限 `<send/>`（字面量
-`target`/`name`、可选字面量 `targettype` 与 CSS 时间 `delay`，默认 `ccxml` 和
-零延迟）：
+`target`/`name`、可选字面量 `targettype` 与 CSS 时间 `delay`、可选点分
+`sendid` 写回位置）和 `<cancel/>`，默认 `ccxml` 和零延迟：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -185,7 +185,11 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
   <dialogterminate dialogid="dialog.id"/>
 </transition>
 <transition event="call.notice.ready">
-  <send target="'session:supervisor'" name="'call.notice'" delay="'250ms'"/>
+  <send target="'session:supervisor'" name="'call.notice'" delay="'250ms'"
+        sendid="request.pending"/>
+</transition>
+<transition event="call.notice.cancel">
+  <cancel sendid="request.pending"/>
 </transition>
 ```
 
@@ -248,8 +252,14 @@ adapter 一次。
 仅支持 SEND 的 adapter。
 commit 后的 `send.successful` 或 `error.send.*` 也由宿主通过串行 CCXML event
 dispatch 边界回送，核心不自行合成平台结果。
-当前尚不支持动态 `delay` 表达式、`sendid`、`namelist` 和 inline content，
-这些形式会在 compile 阶段被明确拒绝。
+`sendid` 当前接受点分 NCName 可写字符串位置；核心按 session UUID 与递增 token
+生成有界 ID，先提交 datamodel 写回，再发布 send。`<cancel sendid="..."/>`
+接受点分可读字符串位置或字符串字面量，并复用 adapter 的
+`SCXML_EVENT_IO_CAP_CANCEL`/`prepare_cancel`。宿主继续拥有 delayed registry、
+取消竞态及 `cancel.successful`/`error.notallowed` 结果事件。由于外部 datamodel
+写入只在 transition commit 后可见，send 与读取其 ID 的 cancel 应位于不同
+transition。当前尚不支持动态 `delay`、任意 ECMAScript `sendid`、`namelist` 和
+inline content，这些形式会在 compile 阶段被明确拒绝。
 
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
@@ -383,7 +393,8 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>` 的动态 `delay`/`sendid`/`namelist`/inline content 或其他非字面量表达式、
+`<send>` 的动态 `delay`、任意 ECMAScript `sendid`、`namelist`/inline content
+或其他非字面量表达式、
 文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
@@ -391,6 +402,8 @@ send 切片与共享 Event I/O 边界见
 [`docs/specs/ccxml-send-design.md`](docs/specs/ccxml-send-design.md)，
 literal delay 增量见
 [`docs/specs/ccxml-send-delay-design.md`](docs/specs/ccxml-send-delay-design.md)，
+send identifier 与 cancel 增量见
+[`docs/specs/ccxml-send-cancel-design.md`](docs/specs/ccxml-send-cancel-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见
