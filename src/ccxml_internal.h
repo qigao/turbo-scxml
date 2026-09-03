@@ -57,6 +57,8 @@ typedef struct ccxml_session_impl {
     const ccxml_program_impl *program;
     ccxml_telephony_adapter_v1 telephony;
     void *telephony_user;
+    ccxml_datamodel_adapter_v1 datamodel;
+    void *datamodel_user;
     cflow_statechart_effect_ticket *tickets;
     size_t ticket_capacity;
     bool closed;

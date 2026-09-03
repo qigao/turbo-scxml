@@ -24,6 +24,26 @@ static ccxml_telephony_adapter_v1 copy_adapter(
     return copy;
 }
 
+static bool datamodel_adapter_valid(
+    const ccxml_datamodel_adapter_v1 *adapter) {
+    return adapter != NULL &&
+           adapter->abi_version == CCXML_DATAMODEL_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= sizeof(*adapter) &&
+           adapter->validate_string_location != NULL &&
+           adapter->prepare_assign_string != NULL;
+}
+
+static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
+    const ccxml_datamodel_adapter_v1 *adapter) {
+    ccxml_datamodel_adapter_v1 copy = {0};
+    if (adapter != NULL) {
+        const size_t copy_size = adapter->struct_size < sizeof(copy)
+            ? adapter->struct_size : sizeof(copy);
+        memcpy(&copy, adapter, copy_size);
+    }
+    return copy;
+}
+
 static void close_adapter(ccxml_session_impl *impl) {
     if (impl == NULL || impl->closed) return;
     impl->closed = true;
@@ -85,7 +105,9 @@ ccxml_status ccxml_session_init(
     ccxml_session *session, const ccxml_session_config *config) {
     const ccxml_program_impl *program;
     ccxml_telephony_adapter_v1 telephony;
+    ccxml_datamodel_adapter_v1 datamodel = {0};
     ccxml_session_impl *impl;
+    size_t action_index;
     if (session == NULL || session->impl != NULL || config == NULL ||
         config->program == NULL || config->program->impl == NULL ||
         !adapter_valid(config->telephony)) {
@@ -156,15 +178,41 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         }
     }
-    if (program->max_transition_actions >
+    if (program->uses_create_conference) {
+        const size_t create_conference_size =
+            offsetof(
+                ccxml_telephony_adapter_v1,
+                prepare_create_conference) +
+            sizeof(telephony.prepare_create_conference);
+        if (config->telephony->struct_size < create_conference_size ||
+            telephony.prepare_create_conference == NULL ||
+            !datamodel_adapter_valid(config->datamodel)) {
+            return CCXML_INVALID_ARGUMENT;
+        }
+        datamodel = copy_datamodel_adapter(config->datamodel);
+        for (action_index = 0u; action_index < program->action_count;
+             ++action_index) {
+            const ccxml_action_row *action = &program->actions[action_index];
+            const char *error = NULL;
+            if (action->kind == CCXML_ACTION_CREATE_CONFERENCE &&
+                datamodel.validate_string_location(
+                    config->datamodel_user, action->location,
+                    action->location_size, &error) !=
+                    SCXML_ADAPTER_ACCEPTED) {
+                (void)error;
+                return CCXML_INVALID_ARGUMENT;
+            }
+        }
+    }
+    if (program->max_transition_effects >
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
     }
     impl = (ccxml_session_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return CCXML_ALLOCATION_FAILED;
-    if (program->max_transition_actions != 0u) {
+    if (program->max_transition_effects != 0u) {
         impl->tickets = (cflow_statechart_effect_ticket *)calloc(
-            program->max_transition_actions, sizeof(*impl->tickets));
+            program->max_transition_effects, sizeof(*impl->tickets));
         if (impl->tickets == NULL) {
             free(impl);
             return CCXML_ALLOCATION_FAILED;
@@ -173,7 +221,9 @@ ccxml_status ccxml_session_init(
     impl->program = program;
     impl->telephony = telephony;
     impl->telephony_user = config->telephony_user;
-    impl->ticket_capacity = program->max_transition_actions;
+    impl->datamodel = datamodel;
+    impl->datamodel_user = config->datamodel_user;
+    impl->ticket_capacity = program->max_transition_effects;
     session->impl = impl;
     return CCXML_OK;
 }
@@ -343,6 +393,37 @@ ccxml_status ccxml_session_dispatch(
                     impl->telephony_user, &request, &ticket, &error);
             const ccxml_status status = retain_ticket(
                 impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+        }
+        if (action->kind == CCXML_ACTION_CREATE_CONFERENCE) {
+            cflow_statechart_effect_ticket provider_ticket = {0};
+            cflow_statechart_effect_ticket datamodel_ticket = {0};
+            ccxml_string_view conference_id = {0};
+            const char *error = NULL;
+            const ccxml_create_conference_request request = {
+                .conference_name = action->destination,
+                .conference_name_size = action->destination_size};
+            scxml_adapter_status adapter_status =
+                impl->telephony.prepare_create_conference(
+                    impl->telephony_user, &request, &conference_id,
+                    &provider_ticket, &error);
+            ccxml_status status = retain_ticket(
+                impl, adapter_status, provider_ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
+            if (conference_id.data == NULL || conference_id.size == 0u ||
+                memchr(conference_id.data, '\0', conference_id.size) != NULL) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            error = NULL;
+            adapter_status = impl->datamodel.prepare_assign_string(
+                impl->datamodel_user, action->location,
+                action->location_size, conference_id.data,
+                conference_id.size, &datamodel_ticket, &error);
+            status = retain_ticket(
+                impl, adapter_status, datamodel_ticket, &prepared);
             (void)error;
             if (status != CCXML_OK) return status;
         }

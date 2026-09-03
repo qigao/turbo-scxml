@@ -9,6 +9,7 @@ extern "C" {
 
 #define CCXML_DIAGNOSTIC_CAPACITY 256u
 #define CCXML_TELEPHONY_ADAPTER_ABI_V1 1u
+#define CCXML_DATAMODEL_ADAPTER_ABI_V1 1u
 
 typedef enum ccxml_status {
     CCXML_OK = 0,
@@ -61,7 +62,14 @@ typedef struct ccxml_event {
     size_t name_size;
     const char *connection_id;
     size_t connection_id_size;
+    const char *conference_id;
+    size_t conference_id_size;
 } ccxml_event;
+
+typedef struct ccxml_string_view {
+    const char *data;
+    size_t size;
+} ccxml_string_view;
 
 /** Borrowed request fields valid only during one prepare callback. */
 typedef struct ccxml_accept_request {
@@ -118,6 +126,35 @@ typedef struct ccxml_merge_request {
     const char *connection_id2;
     size_t connection_id2_size;
 } ccxml_merge_request;
+
+/** Borrowed request fields valid only during one prepare callback. */
+typedef struct ccxml_create_conference_request {
+    /** Optional provider lookup/attachment name; empty when omitted. */
+    const char *conference_name;
+    size_t conference_name_size;
+} ccxml_create_conference_request;
+
+/**
+ * Synchronous left-value boundary copied by session initialization.
+ *
+ * Validation runs once per compiled write location before the session is
+ * published. Assignment prepare must copy location/value bytes it retains and
+ * must not mutate live state. ACCEPTED transfers one move-only effect ticket;
+ * commit performs the already-prepared write without failure or allocation.
+ * Neither operation may retain pointers supplied by the core after returning.
+ */
+typedef struct ccxml_datamodel_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_adapter_status (*validate_string_location)(
+        void *user, const char *location, size_t location_size,
+        const char **out_error);
+    scxml_adapter_status (*prepare_assign_string)(
+        void *user, const char *location, size_t location_size,
+        const char *value, size_t value_size,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
+} ccxml_datamodel_adapter_v1;
 
 /**
  * Versioned telephony bridge copied by session initialization.
@@ -179,6 +216,18 @@ typedef struct ccxml_telephony_adapter_v1 {
         const ccxml_merge_request *request,
         cflow_statechart_effect_ticket *out_ticket,
         const char **out_error);
+    /**
+     * Optional tail operation, required by createconference programs.
+     * ACCEPTED must publish a nonempty callback-scoped identifier as well as a
+     * valid ticket. The core copies that identifier through its datamodel
+     * adapter before this callback's borrowed output expires.
+     */
+    scxml_adapter_status (*prepare_create_conference)(
+        void *user,
+        const ccxml_create_conference_request *request,
+        ccxml_string_view *out_conference_id,
+        cflow_statechart_effect_ticket *out_ticket,
+        const char **out_error);
 } ccxml_telephony_adapter_v1;
 
 typedef struct ccxml_session_config {
@@ -187,6 +236,9 @@ typedef struct ccxml_session_config {
     /** Operations are copied; user remains borrowed through destruction. */
     const ccxml_telephony_adapter_v1 *telephony;
     void *telephony_user;
+    /** Required only when the program writes provider-generated identifiers. */
+    const ccxml_datamodel_adapter_v1 *datamodel;
+    void *datamodel_user;
 } ccxml_session_config;
 
 typedef struct ccxml_session {
