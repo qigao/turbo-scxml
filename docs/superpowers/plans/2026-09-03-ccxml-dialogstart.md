@@ -68,5 +68,5 @@ TinyTest
 - [x] Document syntax, ownership, event responsibility, and deferred forms.
 - [x] Run Release, Debug/MSVC ASan, CHTTP, QuickJS, install, and installed C/C++
   consumer verification serially because presets share `vcpkg_installed`.
-- [ ] Self-review, scan test hygiene, commit, push, update PR #35, and confirm
+- [x] Self-review, scan test hygiene, commit, push, update PR #35, and confirm
   its final merge state.
