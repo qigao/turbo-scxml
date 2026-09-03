@@ -126,7 +126,7 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
-全双工 `<join/>` 和双资源 `<unjoin/>`：
+全双工 `<join/>`、双资源 `<unjoin/>`，以及两个连接的 `<merge/>`：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -146,6 +146,9 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 </transition>
 <transition event="conference.release">
   <unjoin id1="'call-a'" id2="'conference-b'"/>
+</transition>
+<transition event="connection.transfer">
+  <merge connectionid1="'call-a'" connectionid2="'call-b'"/>
 </transition>
 ```
 
@@ -210,6 +213,14 @@ capability 只提交 bridge teardown 请求；provider 校验资源、session ow
 connection identifier，也不终止 CCXML session；不使用 unjoin 的 join-era
 adapter 前缀继续有效。
 
+`<merge/>` 要求 `connectionid1` 和 `connectionid2` 都是非空字符串字面量。
+追加的 `prepare_merge` capability 提交 network-level merge 请求；provider
+权威校验两个连接及 session ownership，执行 signaling，并拆除受影响的 bridge
+和媒体路径。成功时 provider 为两个连接分别回送 `connection.merged`，并回送
+所需的 `conference.unjoined`；失败时回送单个 `connection.merge.failed`。核心
+不修改 provider connection 状态，也不终止 CCXML session。不使用 merge 的
+unjoin-era adapter 前缀继续有效。
+
 当前明确不支持 SIP/RTP backend、conference 创建/销毁、dialog 生命周期、
 ECMAScript、条件表达式、
 事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
@@ -217,7 +228,8 @@ ECMAScript、条件表达式、
 `connectionid`/`reason`/`hints` 属性、`<redirect>` 的
 `connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的
 `duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<unjoin>` 的 `hints`
-属性或非字面量 ID、`<send>`、文档切换和
+属性或非字面量 ID、`<merge>` 的 `hints` 属性或非字面量 connection ID、
+`<send>`、文档切换和
 VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
 外呼切片的所有权与 ABI 语义见
@@ -231,7 +243,9 @@ VoiceXML；编译器会拒绝这些 construct，而不是近似执行。核心�
 bridge join 切片见
 [`docs/specs/ccxml-join-design.md`](docs/specs/ccxml-join-design.md)，bridge unjoin
 切片见
-[`docs/specs/ccxml-unjoin-design.md`](docs/specs/ccxml-unjoin-design.md)。
+[`docs/specs/ccxml-unjoin-design.md`](docs/specs/ccxml-unjoin-design.md)，network
+merge 切片见
+[`docs/specs/ccxml-merge-design.md`](docs/specs/ccxml-merge-design.md)。
 
 ## CMeta 表达式
 
