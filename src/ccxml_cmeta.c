@@ -1,5 +1,7 @@
 #include <ccxml/ccxml.h>
 
+#include "scxml_expr.h"
+
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -19,6 +21,10 @@ typedef struct ccxml_cmeta_assignment_ticket {
     void *allocation;
     void *replacement;
 } ccxml_cmeta_assignment_ticket;
+
+typedef struct ccxml_cmeta_condition {
+    scxml_expr_program program;
+} ccxml_cmeta_condition;
 
 static void set_error(const char **out_error, const char *message) {
     if (out_error != NULL) *out_error = message;
@@ -314,6 +320,114 @@ static scxml_adapter_status cmeta_read_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static bool reject_active_state(
+    void *user, const char *name, size_t name_size,
+    cflow_machine_state_id *out_state) {
+    (void)user;
+    (void)name;
+    (void)name_size;
+    (void)out_state;
+    return false;
+}
+
+static bool no_active_state(
+    void *user, cflow_machine_state_id state, bool *out_active) {
+    (void)user;
+    (void)state;
+    if (out_active == NULL) return false;
+    *out_active = false;
+    return true;
+}
+
+static scxml_adapter_status map_expression_status(
+    scxml_expr_status status) {
+    if (status == SCXML_EXPR_OK) return SCXML_ADAPTER_ACCEPTED;
+    if (status == SCXML_EXPR_ALLOCATION_FAILED)
+        return SCXML_ADAPTER_FULL;
+    if (status == SCXML_EXPR_INVALID_ARGUMENT)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    return SCXML_ADAPTER_ERROR_EXECUTION;
+}
+
+static scxml_adapter_status cmeta_compile_condition(
+    void *user, const char *source, size_t source_size,
+    ccxml_condition *out_condition, const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    ccxml_cmeta_condition *condition;
+    scxml_expr_limits limits;
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_status status;
+    set_error(out_error, NULL);
+    if (impl == NULL || source == NULL || source_size == 0u ||
+        out_condition == NULL || out_condition->impl != NULL) {
+        set_error(out_error, "invalid CCXML CMeta condition compile");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    condition = (ccxml_cmeta_condition *)calloc(1u, sizeof(*condition));
+    if (condition == NULL) {
+        set_error(out_error, "CCXML CMeta condition allocation failed");
+        return SCXML_ADAPTER_FULL;
+    }
+    limits = scxml_expr_default_limits();
+    limits.max_path_depth = impl->max_path_depth;
+    limits.max_string_bytes = impl->max_string_bytes;
+    status = scxml_expr_compile(
+        &condition->program, source, source_size, impl->root,
+        reject_active_state, NULL, &limits, &diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        scxml_expr_program_destroy(&condition->program);
+        free(condition);
+        set_error(out_error, "CCXML CMeta condition is invalid");
+        return map_expression_status(status);
+    }
+    out_condition->impl = condition;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status cmeta_evaluate_condition(
+    void *user, const ccxml_condition *condition,
+    const ccxml_event *event, bool *out_value,
+    const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const ccxml_cmeta_condition *compiled = condition != NULL
+        ? (const ccxml_cmeta_condition *)condition->impl : NULL;
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_system_values system_values = {0};
+    scxml_expr_status status;
+    set_error(out_error, NULL);
+    if (impl == NULL || compiled == NULL || event == NULL ||
+        event->name == NULL || event->name_size == 0u || out_value == NULL) {
+        set_error(out_error, "invalid CCXML CMeta condition evaluation");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    system_values.event_name = (scxml_expr_string_view){
+        .data = event->name, .size = event->name_size};
+    status = scxml_expr_evaluate_with_system(
+        &compiled->program, impl->state, no_active_state, NULL,
+        &system_values, out_value, &diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        set_error(out_error, "CCXML CMeta condition failed");
+    }
+    return map_expression_status(status);
+}
+
+static void cmeta_destroy_condition(
+    void *user, ccxml_condition *condition) {
+    ccxml_cmeta_condition *compiled = condition != NULL
+        ? (ccxml_cmeta_condition *)condition->impl : NULL;
+    (void)user;
+    if (compiled == NULL) return;
+    scxml_expr_program_destroy(&compiled->program);
+    free(compiled);
+    condition->impl = NULL;
+}
+
 static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
@@ -321,7 +435,10 @@ static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .prepare_assign_string = cmeta_prepare_assign_string,
     .validate_readable_string_location =
         cmeta_validate_readable_string_location,
-    .read_string = cmeta_read_string};
+    .read_string = cmeta_read_string,
+    .compile_condition = cmeta_compile_condition,
+    .evaluate_condition = cmeta_evaluate_condition,
+    .destroy_condition = cmeta_destroy_condition};
 
 ccxml_status ccxml_cmeta_datamodel_init(
     ccxml_cmeta_datamodel *datamodel,

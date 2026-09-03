@@ -123,7 +123,11 @@ router、默认拒绝的目标 resolver、正数网络 deadline、固定容量�
 安装包同时导出 `<ccxml/ccxml.h>` 与 `TurboSCXML::CCXML`。该组件是构建在
 TurboSCXML 公共 adapter/effect 契约上的 CCXML 1.0 孵化实现，不表示完整
 CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文档顺序的
-精确 `<transition event="...">` 匹配、空 `<accept/>`/`<exit/>`，以及带有
+大小写不敏感 `<transition event="...">` glob 匹配（`*` 匹配任意长度子串，
+省略 `event` 表示 catch-all）、一个 CMeta-backed 字符串 `<var>`、
+`eventprocessor@statevariable`、空白分隔的 `transition@state` 和字符串字面量
+`<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond`，以及空
+`<accept/>`/`<exit/>` 和带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
@@ -179,6 +183,32 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
   <dialogterminate dialogid="dialog.id"/>
 </transition>
 ```
+
+受限状态机切片使用一个 root 字符串变量；session 初始化成功时才提交初值，
+state guard 在事件选择阶段通过 `ccxml_datamodel_adapter_v1` 读取当前值。`state`
+可列出多个空白分隔的、大小写敏感的值，`assign` 只能写已声明变量且当前只接受
+非空字符串字面量。assignment 和同一 transition 的电话操作共享 CFlow effect
+journal，任一后续 prepare 失败都会回滚状态写入：
+
+```xml
+<var name="mode" expr="'waiting'"/>
+<eventprocessor statevariable="mode">
+  <transition state="waiting idle" event="connection.connected"
+              cond="mode != &quot;disabled&quot;">
+    <assign name="mode" expr="'active'"/>
+  </transition>
+  <transition state="active" event="dialog.exit">
+    <exit/>
+  </transition>
+</eventprocessor>
+```
+
+`cond` 的 XML 实体在 program compile 阶段解码并计入 retained-byte 上限；
+session admission 再通过 `ccxml_datamodel_adapter_v1` 的可选 condition tail 编译
+一次。每次 dispatch 在 event/state 匹配后求值，false 继续检查下一条 transition，
+adapter 错误则停止本次选择。内置 CMeta adapter 复用 TurboSCXML 的有界布尔
+表达式 VM，可读取 CMeta root 字段和 `_event.name`；不支持 SCXML `In()` 或通用
+ECMAScript。旧 adapter 不使用 `cond` 时仍按原 size prefix 工作。
 
 ```cmake
 find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML
@@ -324,8 +354,9 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 可选形式，`<dialogterminate/>` 的显式 `immediate`/`hints`，以及
 `<dialogstart/>` 的 conference、parameters、media direction、
 显式 MIME、fetch/hints 等形式）、
-ECMAScript、条件表达式、
-事件模式、`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
+通用 ECMAScript、非 CMeta datamodel 的条件表达式、多 root 变量、非字符串变量以及
+非字面量 `<var>`/`<assign>` 表达式，
+`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
 `connectionid`/`reason`/`hints` 属性、`<redirect>` 的
 `connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的

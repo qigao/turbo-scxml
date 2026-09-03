@@ -7,15 +7,15 @@ TurboSCXML package. It is an incubation boundary, not a claim of complete
 W3C CCXML 1.0 conformance.
 
 The slice accepts a bounded CCXML document containing one `<eventprocessor>`
-whose `<transition>` children use exact event names and whose executable
-content contains empty `<accept/>` and `<exit/>` actions. A session dispatches
-one external event synchronously, selects the first matching transition in
-document order, stages every telephony effect, and either commits all staged
-effects or discards them all.
+whose `<transition>` children use case-insensitive CCXML event patterns and
+optional CMeta-backed string state filtering and boolean conditions. A session
+dispatches one external event synchronously, selects the first matching
+transition in document order, stages every action effect, and either commits
+all staged effects or discards them all.
 
-SIP, RTP, conferences, dialogs, document replacement, event-name patterns,
-ECMAScript expressions, `<send>`, and VoiceXML are outside this slice. The
-compiler rejects these constructs instead of silently approximating them.
+SIP/RTP backends, document replacement, general ECMAScript, `<send>`, and a
+built-in VoiceXML interpreter are outside this slice. The compiler rejects
+unsupported constructs instead of silently approximating them.
 
 Normative references:
 
@@ -59,15 +59,55 @@ telephony adapter user until successful destruction.
 </ccxml>
 ```
 
+The bounded state-machine extension additionally accepts one root string
+`<var name="..." expr="'literal'"/>`, a matching
+`eventprocessor@statevariable`, whitespace-separated `transition@state`
+values, and `<assign name="..." expr="'literal'"/>` targeting that declared
+variable. A transition may also carry one nonempty `cond` whose XML entities
+decode to a bounded datamodel expression. It does not provide a general
+ECMAScript evaluator.
+
 The root namespace and version are exact. There must be exactly one
-`eventprocessor`. A transition must have exactly one nonempty `event`
-attribute. Names are copied and bounded by `max_name_bytes`. Foreign elements,
-extra attributes, non-whitespace text, and unsupported standard elements return
+`eventprocessor`. A transition may have one nonempty `event` pattern; omitting
+it compiles to the catch-all pattern `*`. Pattern matching is ASCII
+case-insensitive and each `*` matches zero or more event-name characters.
+Patterns are copied and bounded by `max_name_bytes`. Foreign elements, extra
+attributes, non-whitespace text, and unsupported standard elements return
 `CCXML_UNSUPPORTED_FEATURE` or `CCXML_INVALID_STRUCTURE` with a source
 diagnostic.
 
-The event supplied to `ccxml_session_dispatch` has an exact name and an
-optional connection identifier. `<accept/>` uses the current event's
+The root variable and every assignment location are validated through the
+write side of `ccxml_datamodel_adapter_v1`; the statevariable is validated
+through its readable tail. Session initialization commits the declared
+literal only after the native CFlow instance is ready. A state-filtered CFlow
+guard reads the current string before selecting a transition and compares it
+case-sensitively with the whitespace-separated state tokens. A read failure
+stops selection for that event. `<assign>` produces an ordinary move-only
+effect ticket, so state changes commit or roll back with all other effects in
+the selected transition.
+
+Condition source bytes are XML-decoded and copied into the immutable program.
+Because the datamodel schema is bound at session initialization, condition
+syntax and types are compiled during session admission through the optional
+tail of `ccxml_datamodel_adapter_v1`. Each successful compile returns one
+opaque `ccxml_condition` owned by the session and destroyed exactly once on
+admission rollback or session destruction. Adapters without the tail remain
+compatible for programs that do not contain `cond`.
+
+The built-in CMeta adapter compiles each condition once through the existing
+TurboSCXML expression VM, using its configured path and string bounds. It
+supports CMeta boolean expressions over the root schema plus `_event.name`;
+SCXML `In()` and general ECMAScript are outside this profile. A CFlow guard
+evaluates the condition only after its event and optional state match. False
+continues document-order selection; compile or evaluation failure returns an
+adapter error and prevents later guards from handling that event. Root variable
+initializers commit only after every condition and the native CFlow instance
+have initialized successfully.
+
+The event supplied to `ccxml_session_dispatch` has a bounded name and an
+optional connection identifier. The first matching transition is selected in
+document order. An unhandled `error.*`, `ccxml.kill`, or `ccxml.kill.*` event
+terminates the session; other unmatched events are dropped. `<accept/>` uses the current event's
 connection identifier, matching CCXML's current-event default. It fails with
 `CCXML_INVALID_EVENT` if no identifier is present.
 
@@ -101,9 +141,12 @@ Explicit `ccxml_session_close` is idempotent and also closes the adapter once.
 
 ## Ownership and concurrency
 
-- Programs own transition rows, action rows, and copied event-name bytes.
-- Sessions own only transaction scratch storage and a copied adapter table.
-- Sessions borrow programs and adapter users.
+- Programs own transition rows, action rows, and copied event/state/condition/
+  literal bytes.
+- Sessions own transaction scratch storage, copied adapter tables, and compiled
+  condition handles.
+- Sessions borrow programs, adapter users, and the CMeta state supplied to the
+  datamodel adapter.
 - Compile and destruction are single-owner operations.
 - Dispatch, close, and destroy are serialized by the caller in this MVP.
 - Provider callbacks must be nonblocking; asynchronous work remains provider
@@ -126,10 +169,15 @@ The MVP is complete when tests prove:
 
 1. valid source compiles and copies its input;
 2. wrong namespace/version and unsupported syntax fail deterministically;
-3. the first exact matching transition stages and commits `<accept/>`;
+3. the first case-insensitive wildcard-matching transition stages and commits
+   `<accept/>`;
 4. unmatched events produce no provider effect;
 5. adapter rejection discards earlier tickets and preserves a live session;
 6. invalid accepted tickets are rejected;
 7. `<exit/>` terminates and closes exactly once;
 8. destroy waits for provider quiescence;
 9. the installed C and C++ consumer can include and link `TurboSCXML::CCXML`.
+10. statevariable guards select by the current CMeta string, assignment
+    effects commit atomically, and later action failure rolls them back.
+11. CMeta conditions compile once per session, reevaluate against committed
+    state, stop later guards on failure, and release every opaque handle.

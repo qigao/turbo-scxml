@@ -1,4 +1,5 @@
 #include "ccxml_internal.h"
+#include "scxml_xml_decode.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +17,18 @@ typedef struct ccxml_measurement {
     size_t max_transition_actions;
     size_t max_transition_effects;
 } ccxml_measurement;
+
+static const cmeta_type_identity ccxml_event_identity =
+    CMETA_TYPE_ID_ATOM_INIT("turbo.ccxml.event");
+static const cmeta_type_traits ccxml_event_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
+const cmeta_type_desc ccxml_event_cmeta_type = {
+    .name = "ccxml_event",
+    .size = sizeof(ccxml_event),
+    .align = _Alignof(ccxml_event),
+    .kind = CMETA_T_OBJECT,
+    .traits = &ccxml_event_traits,
+    .identity = &ccxml_event_identity};
 
 static bool checked_add(size_t left, size_t right, size_t *out) {
     if (out == NULL || left > SIZE_MAX - right) return false;
@@ -65,6 +78,29 @@ static bool node_has_unqualified_attribute(
             turbo_xml_node_attribute_at(node, index);
         if (turbo_xml_attribute_namespace_uri(attribute).size == 0u &&
             view_equal(turbo_xml_attribute_local_name(attribute), name))
+            return true;
+    }
+    return false;
+}
+
+static turbo_xml_attribute node_unqualified_attribute(
+    turbo_xml_node node, const char *name) {
+    size_t index;
+    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(node, index);
+        if (turbo_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(turbo_xml_attribute_local_name(attribute), name))
+            return attribute;
+    }
+    return (turbo_xml_attribute){0};
+}
+
+static bool view_has_nonspace(turbo_xml_string_view view) {
+    size_t index;
+    for (index = 0u; index < view.size; ++index) {
+        const char value = view.data[index];
+        if (value != ' ' && value != '\t' && value != '\r' && value != '\n')
             return true;
     }
     return false;
@@ -165,6 +201,138 @@ static ccxml_status fail(
         (void)snprintf(
             diagnostic->message, sizeof(diagnostic->message), "%s", message);
     }
+    return status;
+}
+
+static ccxml_status build_native_statechart(
+    ccxml_program_impl *impl, turbo_xml_location location,
+    ccxml_diagnostic *diagnostic) {
+    const size_t runtime_transition_count =
+        impl->transition_count != 0u ? impl->transition_count : 1u;
+    const cflow_statechart_state states[] = {
+        {1u, 0u, CFLOW_STATECHART_COMPOUND, 0u},
+        {2u, 1u, CFLOW_STATECHART_INITIAL, 1u},
+        {3u, 1u, CFLOW_STATECHART_ATOMIC, 2u}};
+    const cflow_event_type event = {1u, &ccxml_event_cmeta_type};
+    cflow_statechart_guard *guards = NULL;
+    cflow_statechart_executable *executables = NULL;
+    cflow_statechart_transition *transitions = NULL;
+    cflow_statechart_transition_action *transition_actions = NULL;
+    cflow_statechart_definition definition = {0};
+    cflow_statechart_status native_status;
+    size_t index;
+    ccxml_status status = CCXML_OK;
+
+    if (runtime_transition_count > SIZE_MAX / sizeof(*guards) ||
+        runtime_transition_count >= SIZE_MAX / sizeof(*transitions) ||
+        impl->transition_count > SIZE_MAX / sizeof(*executables) ||
+        impl->transition_count > SIZE_MAX / sizeof(*transition_actions)) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED, location,
+            "CCXML native Statechart lowering exceeds storage limits");
+    }
+    guards = (cflow_statechart_guard *)calloc(
+        runtime_transition_count, sizeof(*guards));
+    transitions = (cflow_statechart_transition *)calloc(
+        runtime_transition_count + 1u, sizeof(*transitions));
+    if (impl->transition_count != 0u) {
+        executables = (cflow_statechart_executable *)calloc(
+            impl->transition_count, sizeof(*executables));
+        transition_actions = (cflow_statechart_transition_action *)calloc(
+            impl->transition_count, sizeof(*transition_actions));
+    }
+    if (guards == NULL || transitions == NULL ||
+        (impl->transition_count != 0u &&
+         (executables == NULL || transition_actions == NULL))) {
+        status = fail(
+            diagnostic, CCXML_ALLOCATION_FAILED, location,
+            "CCXML native Statechart lowering allocation failed");
+        goto cleanup;
+    }
+    transitions[0] = (cflow_statechart_transition){
+        1u,
+        2u,
+        CFLOW_STATECHART_TRIGGER_EVENTLESS,
+        0u,
+        0u,
+        0u,
+        3u,
+        CFLOW_STATECHART_TRANSITION_EXTERNAL,
+        0u,
+        0u};
+    for (index = 0u; index < runtime_transition_count; ++index) {
+        const cflow_statechart_guard_id guard_id =
+            (cflow_statechart_guard_id)(index + 1u);
+        const cflow_statechart_transition_id transition_id =
+            (cflow_statechart_transition_id)(index + 2u);
+        const bool reads_state = index < impl->transition_count &&
+            (impl->transitions[index].state != NULL ||
+             impl->transitions[index].condition != NULL);
+        guards[index] = (cflow_statechart_guard){
+            guard_id,
+            &cmeta_type_bool,
+            reads_state ? CMETA_EFFECT_MAY_FAIL : CMETA_EFFECT_PURE,
+            reads_state
+                ? CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS
+                : CMETA_PROP_STABLE | CMETA_PROP_NO_ALIAS};
+        transitions[index + 1u] = (cflow_statechart_transition){
+            transition_id,
+            3u,
+            CFLOW_STATECHART_TRIGGER_EVENT,
+            1u,
+            0u,
+            guard_id,
+            0u,
+            CFLOW_STATECHART_TRANSITION_INTERNAL,
+            (uint32_t)(index + 1u),
+            (uint32_t)(index + 1u)};
+        if (index < impl->transition_count) {
+            const cflow_statechart_executable_id executable_id =
+                (cflow_statechart_executable_id)(index + 1u);
+            executables[index] = (cflow_statechart_executable){
+                executable_id,
+                &cmeta_type_bool,
+                CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL |
+                    CMETA_EFFECT_IO,
+                CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS};
+            transition_actions[index] =
+                (cflow_statechart_transition_action){
+                    transition_id, executable_id, 0u};
+        }
+    }
+    definition = (cflow_statechart_definition){
+        .state_type = &cmeta_type_bool,
+        .states = states,
+        .state_count = sizeof(states) / sizeof(states[0]),
+        .events = &event,
+        .event_count = 1u,
+        .guards = guards,
+        .guard_count = runtime_transition_count,
+        .executables = executables,
+        .executable_count = impl->transition_count,
+        .transitions = transitions,
+        .transition_count = runtime_transition_count + 1u,
+        .transition_actions = transition_actions,
+        .transition_action_count = impl->transition_count};
+    native_status = cflow_statechart_build(&impl->statechart, &definition);
+    if (native_status != CFLOW_STATECHART_OK) {
+        char message[CCXML_DIAGNOSTIC_CAPACITY];
+        (void)snprintf(
+            message, sizeof(message),
+            "native Statechart rejected CCXML lowering (status=%d)",
+            (int)native_status);
+        status = fail(
+            diagnostic,
+            native_status == CFLOW_STATECHART_ALLOCATION_FAILED
+                ? CCXML_ALLOCATION_FAILED : CCXML_INVALID_CONTRACT,
+            location, message);
+    }
+
+cleanup:
+    free(transition_actions);
+    free(transitions);
+    free(executables);
+    free(guards);
     return status;
 }
 
@@ -826,19 +994,130 @@ static ccxml_status validate_dialog_terminate_action(
     return CCXML_OK;
 }
 
+static ccxml_status validate_string_binding(
+    turbo_xml_node node, bool counts_as_action,
+    ccxml_measurement *measurement, const ccxml_limits *limits,
+    ccxml_diagnostic *diagnostic, turbo_xml_string_view *out_name) {
+    turbo_xml_attribute name_attribute = {0};
+    turbo_xml_attribute expression_attribute = {0};
+    turbo_xml_string_view name;
+    turbo_xml_string_view expression;
+    size_t retained_size;
+    size_t index;
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(node); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(node, index);
+        const turbo_xml_string_view local_name =
+            turbo_xml_attribute_local_name(attribute);
+        if (turbo_xml_attribute_namespace_uri(attribute).size != 0u) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "namespaced CCXML variable attributes are unsupported");
+        }
+        if (view_equal(local_name, "name") && name_attribute.impl == NULL)
+            name_attribute = attribute;
+        else if (view_equal(local_name, "expr") &&
+                 expression_attribute.impl == NULL)
+            expression_attribute = attribute;
+        else
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate CCXML variable attribute");
+    }
+    if (name_attribute.impl == NULL || expression_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(node),
+            "CCXML string variable requires name and expr");
+    }
+    name = turbo_xml_attribute_value(name_attribute);
+    if (!dotted_location_valid(name)) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            turbo_xml_attribute_location(name_attribute),
+            "CCXML string variable name must be a dotted NCName location");
+    }
+    status = validate_string_literal(
+        expression_attribute, &expression, diagnostic);
+    if (status != CCXML_OK) return status;
+    for (index = 0u; index < turbo_xml_node_child_count(node); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(node, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "CCXML string variable element must be empty");
+        }
+    }
+    if (!checked_add(name.size, 1u, &retained_size) ||
+        !checked_add(retained_size, expression.size - 1u, &retained_size) ||
+        (counts_as_action &&
+         (measurement->action_count >= limits->max_actions ||
+          !checked_add(measurement->action_count, 1u,
+                       &measurement->action_count))) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(node),
+            counts_as_action
+                ? "CCXML assign action or retained-string limit exceeded"
+                : "CCXML var retained-string limit exceeded");
+    }
+    if (out_name != NULL) *out_name = name;
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     turbo_xml_node transition, ccxml_measurement *measurement,
-    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    const ccxml_limits *limits, bool has_statevariable,
+    turbo_xml_string_view declared_variable,
+    ccxml_diagnostic *diagnostic) {
     turbo_xml_attribute event_attribute = {0};
+    turbo_xml_attribute state_attribute = {0};
+    turbo_xml_attribute condition_attribute = {0};
     turbo_xml_string_view event;
+    turbo_xml_string_view state = {0};
+    turbo_xml_string_view condition = {0};
+    size_t condition_decoded_size = 0u;
     size_t index;
     size_t local_action_count = 0u;
     size_t local_effect_count = 0u;
-    ccxml_status status = validate_attributes(
-        transition, "event", true, &event_attribute, diagnostic);
-    if (status != CCXML_OK) return status;
-    event = turbo_xml_attribute_value(event_attribute);
-    if (event.data == NULL || event.size == 0u) {
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(transition);
+         ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(transition, index);
+        const turbo_xml_string_view name =
+            turbo_xml_attribute_local_name(attribute);
+        if (turbo_xml_attribute_namespace_uri(attribute).size != 0u) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "namespaced transition attributes are unsupported");
+        }
+        if (view_equal(name, "event") && event_attribute.impl == NULL)
+            event_attribute = attribute;
+        else if (view_equal(name, "state") && state_attribute.impl == NULL)
+            state_attribute = attribute;
+        else if (view_equal(name, "cond") &&
+                 condition_attribute.impl == NULL)
+            condition_attribute = attribute;
+        else
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate CCXML transition attribute");
+    }
+    event = event_attribute.impl != NULL
+        ? turbo_xml_attribute_value(event_attribute)
+        : (turbo_xml_string_view){.data = "*", .size = 1u};
+    if (event_attribute.impl != NULL &&
+        (event.data == NULL || event.size == 0u)) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             turbo_xml_attribute_location(event_attribute),
@@ -848,13 +1127,58 @@ static ccxml_status validate_transition(
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
             turbo_xml_attribute_location(event_attribute),
-            "CCXML MVP supports one exact event name per transition");
+            "CCXML transition event pattern cannot contain whitespace");
+    }
+    if (state_attribute.impl != NULL) {
+        state = turbo_xml_attribute_value(state_attribute);
+        if (!has_statevariable) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                turbo_xml_attribute_location(state_attribute),
+                "transition state requires eventprocessor statevariable");
+        }
+        if (!view_has_nonspace(state)) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                turbo_xml_attribute_location(state_attribute),
+                "CCXML transition state list must be nonempty");
+        }
+    }
+    if (condition_attribute.impl != NULL) {
+        scxml_xml_decode_status decode_status;
+        condition = turbo_xml_attribute_value(condition_attribute);
+        if (!view_has_nonspace(condition)) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                turbo_xml_attribute_location(condition_attribute),
+                "CCXML transition condition must be nonempty");
+        }
+        decode_status = scxml_xml_decode_attribute_entities(
+            condition.data, condition.size, NULL, 0u,
+            &condition_decoded_size);
+        if (decode_status != SCXML_XML_DECODE_OK ||
+            condition_decoded_size == 0u) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                turbo_xml_attribute_location(condition_attribute),
+                decode_status ==
+                        SCXML_XML_DECODE_INVALID_CHARACTER_REFERENCE
+                    ? "CCXML condition has an invalid XML character reference"
+                    : "CCXML condition has an unsupported XML entity reference");
+        }
     }
     if (measurement->transition_count >= limits->max_transitions ||
         !checked_add(measurement->transition_count, 1u,
                      &measurement->transition_count) ||
         !checked_add(measurement->name_bytes, event.size + 1u,
                      &measurement->name_bytes) ||
+        (state_attribute.impl != NULL &&
+         !checked_add(measurement->name_bytes, state.size + 1u,
+                      &measurement->name_bytes)) ||
+        (condition_attribute.impl != NULL &&
+         !checked_add(measurement->name_bytes,
+                      condition_decoded_size + 1u,
+                      &measurement->name_bytes)) ||
         measurement->name_bytes > limits->max_name_bytes) {
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
@@ -883,7 +1207,8 @@ static ccxml_status validate_transition(
             !view_equal(name, "destroyconference") &&
             !view_equal(name, "dialogprepare") &&
             !view_equal(name, "dialogstart") &&
-            !view_equal(name, "dialogterminate")) {
+            !view_equal(name, "dialogterminate") &&
+            !view_equal(name, "assign")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
@@ -918,6 +1243,21 @@ static ccxml_status validate_transition(
         } else if (view_equal(name, "dialogterminate")) {
             status = validate_dialog_terminate_action(
                 action, measurement, limits, diagnostic);
+        } else if (view_equal(name, "assign")) {
+            turbo_xml_string_view assignment_name = {0};
+            status = validate_string_binding(
+                action, true, measurement, limits,
+                diagnostic, &assignment_name);
+            if (status == CCXML_OK &&
+                (declared_variable.data == NULL ||
+                 declared_variable.size != assignment_name.size ||
+                 memcmp(declared_variable.data, assignment_name.data,
+                        assignment_name.size) != 0)) {
+                status = fail(
+                    diagnostic, CCXML_INVALID_STRUCTURE,
+                    turbo_xml_node_location(action),
+                    "assign must name the declared root string var");
+            }
         } else {
             status = validate_empty_action(
                 action, measurement, limits, diagnostic);
@@ -948,13 +1288,33 @@ static ccxml_status validate_transition(
 
 static ccxml_status validate_eventprocessor(
     turbo_xml_node processor, ccxml_measurement *measurement,
-    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic,
+    turbo_xml_string_view declared_variable,
+    turbo_xml_string_view *out_statevariable) {
+    turbo_xml_attribute statevariable_attribute = {0};
+    turbo_xml_string_view statevariable = {0};
     size_t index;
-    if (turbo_xml_node_attribute_count(processor) != 0u) {
-        return fail(
-            diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_node_location(processor),
-            "CCXML MVP eventprocessor does not accept attributes");
+    ccxml_status status = validate_attributes(
+        processor, "statevariable", false,
+        &statevariable_attribute, diagnostic);
+    if (status != CCXML_OK) return status;
+    if (statevariable_attribute.impl != NULL) {
+        statevariable = turbo_xml_attribute_value(statevariable_attribute);
+        if (!dotted_location_valid(statevariable)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(statevariable_attribute),
+                "eventprocessor statevariable must be a dotted NCName location");
+        }
+        if (!checked_add(
+                measurement->name_bytes, statevariable.size + 1u,
+                &measurement->name_bytes) ||
+            measurement->name_bytes > limits->max_name_bytes) {
+            return fail(
+                diagnostic, CCXML_LIMIT_EXCEEDED,
+                turbo_xml_attribute_location(statevariable_attribute),
+                "eventprocessor statevariable exceeds retained-name limit");
+        }
     }
     for (index = 0u; index < turbo_xml_node_child_count(processor); ++index) {
         const turbo_xml_node transition =
@@ -969,11 +1329,14 @@ static ccxml_status validate_eventprocessor(
                 "eventprocessor accepts transition elements only");
         }
         {
-            const ccxml_status status = validate_transition(
-                transition, measurement, limits, diagnostic);
-            if (status != CCXML_OK) return status;
+            const ccxml_status transition_status = validate_transition(
+                transition, measurement, limits,
+                statevariable_attribute.impl != NULL,
+                declared_variable, diagnostic);
+            if (transition_status != CCXML_OK) return transition_status;
         }
     }
+    if (out_statevariable != NULL) *out_statevariable = statevariable;
     return CCXML_OK;
 }
 
@@ -981,8 +1344,13 @@ static ccxml_status validate_document(
     turbo_xml_node root, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     turbo_xml_attribute version_attribute = {0};
+    turbo_xml_node processor = {0};
+    turbo_xml_node variable = {0};
+    turbo_xml_string_view variable_name = {0};
+    turbo_xml_string_view statevariable = {0};
     size_t index;
     size_t processor_count = 0u;
+    size_t variable_count = 0u;
     ccxml_status status;
     if (turbo_xml_node_type(root) != TURBO_XML_ELEMENT ||
         !view_equal(turbo_xml_node_local_name(root), "ccxml") ||
@@ -1003,31 +1371,64 @@ static ccxml_status validate_document(
     }
     for (index = 0u; index < turbo_xml_node_child_count(root); ++index) {
         const turbo_xml_node child = turbo_xml_node_child_at(root, index);
+        turbo_xml_string_view name;
         if (node_is_ignorable(child)) continue;
         if (turbo_xml_node_type(child) != TURBO_XML_ELEMENT ||
-            !view_equal(turbo_xml_node_namespace_uri(child), CCXML_NAMESPACE) ||
-            !view_equal(turbo_xml_node_local_name(child), "eventprocessor")) {
+            !view_equal(turbo_xml_node_namespace_uri(child), CCXML_NAMESPACE)) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(child),
-                "CCXML MVP root accepts eventprocessor only");
+                "unsupported CCXML root content");
         }
-        ++processor_count;
-        if (processor_count > 1u) {
+        name = turbo_xml_node_local_name(child);
+        if (view_equal(name, "eventprocessor")) {
+            processor = child;
+            ++processor_count;
+        } else if (view_equal(name, "var")) {
+            variable = child;
+            ++variable_count;
+        } else {
             return fail(
-                diagnostic, CCXML_INVALID_STRUCTURE,
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(child),
-                "CCXML MVP requires exactly one eventprocessor");
+                "CCXML root supports one string var and eventprocessor");
         }
-        status = validate_eventprocessor(
-            child, measurement, limits, diagnostic);
-        if (status != CCXML_OK) return status;
+        if (processor_count > 1u || variable_count > 1u) {
+            return fail(
+                diagnostic,
+                processor_count > 1u
+                    ? CCXML_INVALID_STRUCTURE : CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                processor_count > 1u
+                    ? "CCXML MVP requires exactly one eventprocessor"
+                    : "CCXML bounded profile supports one root string var");
+        }
     }
     if (processor_count != 1u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             turbo_xml_node_location(root),
             "CCXML MVP requires exactly one eventprocessor");
+    }
+    if (variable_count != 0u) {
+        status = validate_string_binding(
+            variable, false, measurement, limits,
+            diagnostic, &variable_name);
+        if (status != CCXML_OK) return status;
+    }
+    status = validate_eventprocessor(
+        processor, measurement, limits, diagnostic,
+        variable_name, &statevariable);
+    if (status != CCXML_OK) return status;
+    if (statevariable.data != NULL &&
+        (variable_name.data == NULL ||
+         variable_name.size != statevariable.size ||
+         memcmp(variable_name.data, statevariable.data,
+                statevariable.size) != 0)) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(processor),
+            "eventprocessor statevariable must name the root string var");
     }
     return CCXML_OK;
 }
@@ -1043,15 +1444,55 @@ static void copy_program(
         const turbo_xml_node processor =
             turbo_xml_node_child_at(root, root_index);
         size_t processor_index;
-        if (turbo_xml_node_type(processor) != TURBO_XML_ELEMENT ||
-            !view_equal(turbo_xml_node_local_name(processor), "eventprocessor"))
+        if (turbo_xml_node_type(processor) != TURBO_XML_ELEMENT)
             continue;
+        if (view_equal(turbo_xml_node_local_name(processor), "var")) {
+            const turbo_xml_attribute name_attribute =
+                node_unqualified_attribute(processor, "name");
+            const turbo_xml_attribute expression_attribute =
+                node_unqualified_attribute(processor, "expr");
+            const turbo_xml_string_view name =
+                turbo_xml_attribute_value(name_attribute);
+            const turbo_xml_string_view expression =
+                turbo_xml_attribute_value(expression_attribute);
+            impl->initial_variable = cursor;
+            impl->initial_variable_size = name.size;
+            memcpy(cursor, name.data, name.size);
+            cursor[name.size] = '\0';
+            cursor += name.size + 1u;
+            impl->initial_value = cursor;
+            impl->initial_value_size = expression.size - 2u;
+            memcpy(cursor, expression.data + 1u, impl->initial_value_size);
+            cursor[impl->initial_value_size] = '\0';
+            cursor += impl->initial_value_size + 1u;
+            continue;
+        }
+        if (!view_equal(
+                turbo_xml_node_local_name(processor), "eventprocessor"))
+            continue;
+        {
+            const turbo_xml_attribute statevariable_attribute =
+                node_unqualified_attribute(processor, "statevariable");
+            if (statevariable_attribute.impl != NULL) {
+                const turbo_xml_string_view statevariable =
+                    turbo_xml_attribute_value(statevariable_attribute);
+                impl->statevariable = cursor;
+                impl->statevariable_size = statevariable.size;
+                memcpy(cursor, statevariable.data, statevariable.size);
+                cursor[statevariable.size] = '\0';
+                cursor += statevariable.size + 1u;
+                impl->uses_statevariable = true;
+                impl->uses_datamodel_read = true;
+            }
+        }
         for (processor_index = 0u;
              processor_index < turbo_xml_node_child_count(processor);
              ++processor_index) {
             const turbo_xml_node transition =
                 turbo_xml_node_child_at(processor, processor_index);
             turbo_xml_attribute event_attribute = {0};
+            turbo_xml_attribute state_attribute = {0};
+            turbo_xml_attribute condition_attribute = {0};
             turbo_xml_string_view event;
             size_t attribute_index;
             size_t child_index;
@@ -1065,10 +1506,18 @@ static void copy_program(
                 if (view_equal(
                         turbo_xml_attribute_local_name(candidate), "event")) {
                     event_attribute = candidate;
-                    break;
-                }
+                } else if (view_equal(
+                               turbo_xml_attribute_local_name(candidate),
+                               "state"))
+                    state_attribute = candidate;
+                else if (view_equal(
+                             turbo_xml_attribute_local_name(candidate),
+                             "cond"))
+                    condition_attribute = candidate;
             }
-            event = turbo_xml_attribute_value(event_attribute);
+            event = event_attribute.impl != NULL
+                ? turbo_xml_attribute_value(event_attribute)
+                : (turbo_xml_string_view){.data = "*", .size = 1u};
             row = &impl->transitions[transition_index++];
             row->event = cursor;
             row->event_size = event.size;
@@ -1076,6 +1525,28 @@ static void copy_program(
             memcpy(cursor, event.data, event.size);
             cursor[event.size] = '\0';
             cursor += event.size + 1u;
+            if (state_attribute.impl != NULL) {
+                const turbo_xml_string_view state =
+                    turbo_xml_attribute_value(state_attribute);
+                row->state = cursor;
+                row->state_size = state.size;
+                memcpy(cursor, state.data, state.size);
+                cursor[state.size] = '\0';
+                cursor += state.size + 1u;
+            }
+            if (condition_attribute.impl != NULL) {
+                const turbo_xml_string_view condition =
+                    turbo_xml_attribute_value(condition_attribute);
+                size_t decoded_size = 0u;
+                row->condition = cursor;
+                (void)scxml_xml_decode_attribute_entities(
+                    condition.data, condition.size, cursor,
+                    condition.size, &decoded_size);
+                row->condition_size = decoded_size;
+                cursor[decoded_size] = '\0';
+                cursor += decoded_size + 1u;
+                impl->uses_condition = true;
+            }
             for (child_index = 0u;
                  child_index < turbo_xml_node_child_count(transition);
                  ++child_index) {
@@ -1316,6 +1787,28 @@ static void copy_program(
                         cursor += expression.size + 1u;
                         impl->uses_datamodel_read = true;
                     }
+                } else if (view_equal(action_name, "assign")) {
+                    const turbo_xml_attribute name_attribute =
+                        node_unqualified_attribute(action, "name");
+                    const turbo_xml_attribute expression_attribute =
+                        node_unqualified_attribute(action, "expr");
+                    turbo_xml_string_view value =
+                        turbo_xml_attribute_value(name_attribute);
+                    action_row->kind = CCXML_ACTION_ASSIGN_STRING;
+                    action_row->location = cursor;
+                    action_row->location_size = value.size;
+                    memcpy(cursor, value.data, value.size);
+                    cursor[value.size] = '\0';
+                    cursor += value.size + 1u;
+                    value = turbo_xml_attribute_value(expression_attribute);
+                    action_row->destination = cursor;
+                    action_row->destination_size = value.size - 2u;
+                    memcpy(
+                        cursor, value.data + 1u,
+                        action_row->destination_size);
+                    cursor[action_row->destination_size] = '\0';
+                    cursor += action_row->destination_size + 1u;
+                    impl->uses_assign = true;
                 } else {
                     size_t bridge_attribute_index;
                     turbo_xml_attribute id1_attribute = {0};
@@ -1447,12 +1940,17 @@ ccxml_status ccxml_compile(
     impl->max_transition_actions = measurement.max_transition_actions;
     impl->max_transition_effects = measurement.max_transition_effects;
     copy_program(impl, turbo_xml_document_root(&document));
+    status = build_native_statechart(
+        impl, turbo_xml_node_location(turbo_xml_document_root(&document)),
+        diagnostic);
+    if (status != CCXML_OK) goto cleanup;
     out->impl = impl;
     impl = NULL;
     status = CCXML_OK;
 
 cleanup:
     if (impl != NULL) {
+        cflow_statechart_destroy(&impl->statechart);
         free(impl->storage);
         free(impl->actions);
         free(impl->transitions);
@@ -1466,6 +1964,7 @@ void ccxml_program_destroy(ccxml_program *program) {
     ccxml_program_impl *impl = program != NULL
         ? (ccxml_program_impl *)program->impl : NULL;
     if (impl == NULL) return;
+    cflow_statechart_destroy(&impl->statechart);
     free(impl->storage);
     free(impl->actions);
     free(impl->transitions);

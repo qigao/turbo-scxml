@@ -72,6 +72,11 @@ typedef struct ccxml_string_view {
     size_t size;
 } ccxml_string_view;
 
+/** Opaque single-owner condition compiled by a datamodel adapter. */
+typedef struct ccxml_condition {
+    void *impl;
+} ccxml_condition;
+
 /** Borrowed request fields valid only during one prepare callback. */
 typedef struct ccxml_accept_request {
     const char *connection_id;
@@ -208,6 +213,18 @@ typedef struct ccxml_datamodel_adapter_v1 {
     scxml_adapter_status (*read_string)(
         void *user, const char *location, size_t location_size,
         ccxml_string_view *out_value, const char **out_error);
+    /** Optional tail operations required by transition-condition programs. */
+    scxml_adapter_status (*compile_condition)(
+        void *user, const char *source, size_t source_size,
+        ccxml_condition *out_condition, const char **out_error);
+    /** Evaluate without mutation; event fields are borrowed for this call. */
+    scxml_adapter_status (*evaluate_condition)(
+        void *user, const ccxml_condition *condition,
+        const ccxml_event *event, bool *out_value,
+        const char **out_error);
+    /** Destroy one successfully compiled condition and clear its handle. */
+    void (*destroy_condition)(
+        void *user, ccxml_condition *condition);
 } ccxml_datamodel_adapter_v1;
 
 /** Opaque owner for the built-in synchronous CMeta datamodel adapter. */

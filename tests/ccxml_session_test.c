@@ -436,6 +436,13 @@ struct datamodel_probe {
     bool reject_read;
     bool reject_prepare;
     bool malformed_ticket;
+    bool reject_condition_compile;
+    bool reject_condition_evaluate;
+    size_t reject_condition_compile_at;
+    bool condition_result;
+    size_t condition_compile_count;
+    size_t condition_evaluate_count;
+    size_t condition_destroy_count;
     char location[64];
     size_t location_size;
     char value[64];
@@ -540,6 +547,52 @@ static scxml_adapter_status read_string(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status compile_condition(
+    void *user, const char *source, size_t source_size,
+    ccxml_condition *out_condition, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->condition_compile_count;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_condition_compile ||
+        (probe->reject_condition_compile_at != 0u &&
+         probe->condition_compile_count ==
+             probe->reject_condition_compile_at)) {
+        if (out_error != NULL) *out_error = "test condition compile refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    if (source == NULL || source_size == 0u || out_condition == NULL ||
+        out_condition->impl != NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    out_condition->impl = probe;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status evaluate_condition(
+    void *user, const ccxml_condition *condition,
+    const ccxml_event *event, bool *out_value,
+    const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->condition_evaluate_count;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_condition_evaluate) {
+        if (out_error != NULL) *out_error = "test condition evaluation refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    if (condition == NULL || condition->impl != probe || event == NULL ||
+        out_value == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_value = probe->condition_result;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void destroy_condition(
+    void *user, ccxml_condition *condition) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    if (condition == NULL || condition->impl == NULL) return;
+    ++probe->condition_destroy_count;
+    condition->impl = NULL;
+}
+
 static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
@@ -547,7 +600,10 @@ static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .prepare_assign_string = prepare_assign_string,
     .validate_readable_string_location =
         validate_readable_string_location,
-    .read_string = read_string};
+    .read_string = read_string,
+    .compile_condition = compile_condition,
+    .evaluate_condition = evaluate_condition,
+    .destroy_condition = destroy_condition};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -669,6 +725,52 @@ spec("CCXML session") {
         ccxml_program_destroy(&program);
     }
 
+    it("matches event names case-insensitively in document order") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='Connection.Alerting'><exit/></transition>"
+            "<transition event='connection.alerting'><accept/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.prepare_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("matches wildcard event patterns in document order") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='ERROR.*.NOT*'><exit/></transition>"
+            "<transition event='error.dialog.notstarted'><accept/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        const ccxml_event event = {
+            .name = "error.dialog.notstarted",
+            .name_size = sizeof("error.dialog.notstarted") - 1u};
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.prepare_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
     it("ignores an unmatched event without a provider effect") {
         ccxml_program program = {0};
         ccxml_session session = {0};
@@ -683,6 +785,182 @@ spec("CCXML session") {
         check_equal(probe.prepare_count, (size_t)0);
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("terminates on an unhandled error event") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        const ccxml_event event = {
+            .name = "error.provider",
+            .name_size = sizeof("error.provider") - 1u};
+
+        check_equal(compile_program(&program, "<exit/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.close_count, (size_t)1);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("terminates on an unhandled ccxml kill event") {
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        const ccxml_event event = {
+            .name = "CCXML.KILL",
+            .name_size = sizeof("CCXML.KILL") - 1u};
+
+        check_equal(compile_program(&program, "<exit/>"), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+        check_equal(probe.close_count, (size_t)1);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("keeps the session live when an error transition handles the event") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='error.*'></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        const ccxml_event event = {
+            .name = "error.provider",
+            .name_size = sizeof("error.provider") - 1u};
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(init_session(&session, &program, &probe), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_false(ccxml_session_is_terminated(&session));
+        check_equal(probe.close_count, (size_t)0);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("stops guard selection when the statevariable read fails") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'waiting'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting' event='connection.alerting'>"
+            "<exit/></transition>"
+            "<transition event='connection.alerting'><accept/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {.reject_read = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_OK);
+        check_equal(
+            ccxml_session_dispatch(&session, &event),
+            CCXML_ADAPTER_ERROR);
+        check_equal(provider.prepare_count, (size_t)0);
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("stops guard selection when condition evaluation fails") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='connection.alerting' cond='true'>"
+            "<exit/></transition>"
+            "<transition event='connection.alerting'><accept/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {.reject_condition_evaluate = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_OK);
+        check_equal(datamodel.condition_compile_count, (size_t)1);
+
+        check_equal(
+            ccxml_session_dispatch(&session, &event),
+            CCXML_ADAPTER_ERROR);
+        check_equal(datamodel.condition_evaluate_count, (size_t)1);
+        check_equal(provider.prepare_count, (size_t)0);
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(datamodel.condition_destroy_count, (size_t)1);
+        ccxml_program_destroy(&program);
+    }
+
+    it("requires the appended datamodel condition operations") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='advance' cond='true'>"
+            "<exit/></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {0};
+        ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+        ccxml_session_config config;
+        legacy.struct_size =
+            offsetof(ccxml_datamodel_adapter_v1, compile_condition);
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = &legacy,
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &config),
+            CCXML_INVALID_ARGUMENT);
+        check_null(session.impl);
+        check_equal(datamodel.condition_compile_count, (size_t)0);
+
+        ccxml_program_destroy(&program);
+    }
+
+    it("destroys compiled conditions when later admission fails") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor>"
+            "<transition event='first' cond='true'><exit/></transition>"
+            "<transition event='second' cond='false'><exit/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {.reject_condition_compile_at = 2u};
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_ADAPTER_ERROR);
+        check_null(session.impl);
+        check_equal(datamodel.condition_compile_count, (size_t)2);
+        check_equal(datamodel.condition_destroy_count, (size_t)1);
+
         ccxml_program_destroy(&program);
     }
 

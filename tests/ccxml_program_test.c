@@ -76,11 +76,103 @@ spec("CCXML program") {
         check_null(program.impl);
     }
 
-    it("requires a nonempty transition event") {
+    it("defaults an omitted transition event to a wildcard") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition><accept/></transition>"
             "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(compile_source(&program, source, &diagnostic), CCXML_OK);
+        check_equal(ccxml_program_transition_count(&program), (size_t)1);
+        check_equal(ccxml_program_transition_event(&program, 0u), "*");
+
+        ccxml_program_destroy(&program);
+    }
+
+    it("requires transition state to have an eventprocessor statevariable") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition state='waiting' event='advance'>"
+            "<exit/></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+    }
+
+    it("requires statevariable to name the root string variable") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='other' expr=\"'waiting'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting' event='advance'><exit/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+    }
+
+    it("accepts a retained transition condition") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor><transition event='advance' "
+            "cond='mode == &quot;idle&quot;'><exit/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(compile_source(&program, source, &diagnostic), CCXML_OK);
+        check_equal(ccxml_program_transition_count(&program), (size_t)1);
+
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects an empty transition condition") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='advance' cond=''>"
+            "<exit/></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+    }
+
+    it("rejects nonliteral string assignment expressions") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='advance'>"
+            "<assign name='mode' expr='nextMode'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
+    it("rejects assignment to an undeclared variable") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'waiting'\"/>"
+            "<eventprocessor><transition event='advance'>"
+            "<assign name='other' expr=\"'active'\"/>"
+            "</transition></eventprocessor></ccxml>";
         ccxml_program program = {0};
         ccxml_diagnostic diagnostic = {0};
 

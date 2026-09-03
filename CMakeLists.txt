@@ -72,6 +72,7 @@ add_library(turbo_scxml STATIC
   src/scxml_sequence.c
   src/scxml_scope.c
   src/scxml_foreach.c
+  src/scxml_xml_decode.c
   src/scxml_quickjs.c)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 

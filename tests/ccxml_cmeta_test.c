@@ -24,6 +24,7 @@ Struct(test_state,
     (test_conference, conference),
     (test_dialog, dialog),
     (test_text, read_only),
+    (test_text, mode),
     (int, count)
 );
 
@@ -193,6 +194,8 @@ static const cmeta_data_field_desc state_fields[] = {
      offsetof(test_state, dialog), &dialog_desc},
     {"test.ccxml.state.read-only", "read_only",
      offsetof(test_state, read_only), &borrowed_text_desc},
+    {"test.ccxml.state.mode", "mode",
+     offsetof(test_state, mode), &text_desc},
     {"test.ccxml.state.count", "count",
      offsetof(test_state, count), &cmeta_data_int}};
 
@@ -424,6 +427,187 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
+    it("routes repeated events through statevariable assignments") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting idle' event='advance'>"
+            "<assign name='mode' expr=\"'active'\"/>"
+            "</transition>"
+            "<transition state='active' event='advance'><exit/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "advance",
+            .name_size = sizeof("advance") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "idle");
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(state.mode.data, "active");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("reevaluates CMeta transition conditions after assignment") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor>"
+            "<transition event='advance' "
+            "cond='mode == &quot;active&quot;'><exit/></transition>"
+            "<transition event='advance' "
+            "cond='mode == &quot;idle&quot; &amp;&amp; "
+            "_event.name == &quot;advance&quot;'>"
+            "<assign name='mode' expr=\"'active'\"/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "advance",
+            .name_size = sizeof("advance") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "idle");
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(state.mode.data, "active");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects an invalid condition before committing root variables") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor><transition event='advance' cond='mode =='>"
+            "<exit/></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+
+        check_equal(
+            ccxml_session_init(&session, &session_config),
+            CCXML_ADAPTER_ERROR);
+        check_null(session.impl);
+        check_equal(state.mode.size, (size_t)0);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rolls back a state assignment when a later action fails") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'waiting'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting' event='connection.alerting'>"
+            "<assign name='mode' expr=\"'active'\"/><accept/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u,
+            .connection_id = "call-e2e",
+            .connection_id_size = sizeof("call-e2e") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "waiting");
+
+        check_equal(
+            ccxml_session_dispatch(&session, &event),
+            CCXML_ADAPTER_ERROR);
+        check_equal(state.mode.data, "waiting");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
     it("prepares, starts, and terminates a dialog through nested CMeta") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

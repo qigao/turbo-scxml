@@ -48,6 +48,19 @@ static bool datamodel_read_adapter_valid(
            adapter->read_string != NULL;
 }
 
+static bool datamodel_condition_adapter_valid(
+    const ccxml_datamodel_adapter_v1 *adapter) {
+    const size_t condition_size =
+        offsetof(ccxml_datamodel_adapter_v1, destroy_condition) +
+        sizeof(adapter->destroy_condition);
+    return adapter != NULL &&
+           adapter->abi_version == CCXML_DATAMODEL_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= condition_size &&
+           adapter->compile_condition != NULL &&
+           adapter->evaluate_condition != NULL &&
+           adapter->destroy_condition != NULL;
+}
+
 static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
     const ccxml_datamodel_adapter_v1 *adapter) {
     ccxml_datamodel_adapter_v1 copy = {0};
@@ -57,6 +70,22 @@ static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
         memcpy(&copy, adapter, copy_size);
     }
     return copy;
+}
+
+static void destroy_conditions(ccxml_session_impl *impl) {
+    size_t index;
+    if (impl == NULL || impl->transition_bindings == NULL ||
+        impl->datamodel.destroy_condition == NULL)
+        return;
+    for (index = 0u; index < impl->program->transition_count; ++index) {
+        ccxml_condition *condition =
+            &impl->transition_bindings[index].condition;
+        if (condition->impl != NULL) {
+            impl->datamodel.destroy_condition(
+                impl->datamodel_user, condition);
+            condition->impl = NULL;
+        }
+    }
 }
 
 static void close_adapter(ccxml_session_impl *impl) {
@@ -74,17 +103,156 @@ static void discard_tickets(
     }
 }
 
-static const ccxml_transition_row *find_transition(
-    const ccxml_program_impl *program, const ccxml_event *event) {
-    size_t index;
-    for (index = 0u; index < program->transition_count; ++index) {
-        const ccxml_transition_row *transition = &program->transitions[index];
-        if (transition->event_size == event->name_size &&
-            memcmp(transition->event, event->name, event->name_size) == 0)
-            return transition;
-    }
-    return NULL;
+static unsigned char ascii_fold(unsigned char value) {
+    return value >= (unsigned char)'A' && value <= (unsigned char)'Z'
+        ? (unsigned char)(value + ((unsigned char)'a' - (unsigned char)'A'))
+        : value;
 }
+
+static bool event_pattern_matches(
+    const char *pattern, size_t pattern_size,
+    const char *name, size_t name_size) {
+    size_t pattern_index = 0u;
+    size_t name_index = 0u;
+    size_t wildcard_index = SIZE_MAX;
+    size_t wildcard_name_index = 0u;
+    if (pattern == NULL || name == NULL) return false;
+    while (name_index < name_size) {
+        if (pattern_index < pattern_size &&
+            pattern[pattern_index] != '*' &&
+            ascii_fold((unsigned char)pattern[pattern_index]) ==
+                ascii_fold((unsigned char)name[name_index])) {
+            ++pattern_index;
+            ++name_index;
+        } else if (pattern_index < pattern_size &&
+                   pattern[pattern_index] == '*') {
+            wildcard_index = pattern_index++;
+            wildcard_name_index = name_index;
+        } else if (wildcard_index != SIZE_MAX) {
+            pattern_index = wildcard_index + 1u;
+            name_index = ++wildcard_name_index;
+        } else {
+            return false;
+        }
+    }
+    while (pattern_index < pattern_size && pattern[pattern_index] == '*')
+        ++pattern_index;
+    return pattern_index == pattern_size;
+}
+
+static bool unhandled_event_is_fatal(const ccxml_event *event) {
+    static const char error_pattern[] = "error.*";
+    static const char kill_name[] = "ccxml.kill";
+    static const char kill_pattern[] = "ccxml.kill.*";
+    return event_pattern_matches(
+               error_pattern, sizeof(error_pattern) - 1u,
+               event->name, event->name_size) ||
+           event_pattern_matches(
+               kill_name, sizeof(kill_name) - 1u,
+               event->name, event->name_size) ||
+           event_pattern_matches(
+               kill_pattern, sizeof(kill_pattern) - 1u,
+               event->name, event->name_size);
+}
+
+static bool state_list_matches(
+    const char *states, size_t states_size,
+    const char *value, size_t value_size) {
+    size_t cursor = 0u;
+    while (cursor < states_size) {
+        size_t start;
+        while (cursor < states_size &&
+               (states[cursor] == ' ' || states[cursor] == '\t' ||
+                states[cursor] == '\r' || states[cursor] == '\n'))
+            ++cursor;
+        start = cursor;
+        while (cursor < states_size &&
+               states[cursor] != ' ' && states[cursor] != '\t' &&
+               states[cursor] != '\r' && states[cursor] != '\n')
+            ++cursor;
+        if (cursor - start == value_size &&
+            memcmp(states + start, value, value_size) == 0)
+            return true;
+    }
+    return false;
+}
+
+static bool transition_guard(
+    void *user, const void *state, const cflow_event_view *event,
+    bool *out_enabled, const char **out_error) {
+    const ccxml_transition_binding *binding =
+        (const ccxml_transition_binding *)user;
+    ccxml_session_impl *impl;
+    const ccxml_event *ccxml_event_view;
+    ccxml_string_view state_value = {0};
+    const char *error = NULL;
+    scxml_adapter_status adapter_status;
+    (void)state;
+    if (out_error != NULL) *out_error = NULL;
+    if (out_enabled == NULL || binding == NULL || binding->session == NULL ||
+        event == NULL ||
+        event->id != 1u || event->payload_type != &ccxml_event_cmeta_type ||
+        event->payload == NULL) {
+        if (out_error != NULL)
+            *out_error = "invalid CCXML eventprocessor guard contract";
+        return false;
+    }
+    impl = binding->session;
+    ccxml_event_view = (const ccxml_event *)event->payload;
+    if (impl->dispatch_status != CCXML_OK) {
+        *out_enabled = false;
+        return true;
+    }
+    *out_enabled = binding->transition != NULL &&
+        event_pattern_matches(
+            binding->transition->event, binding->transition->event_size,
+            ccxml_event_view->name, ccxml_event_view->name_size);
+    if (!*out_enabled) return true;
+    if (binding->transition->state != NULL) {
+        adapter_status = impl->datamodel.read_string(
+            impl->datamodel_user, impl->program->statevariable,
+            impl->program->statevariable_size, &state_value, &error);
+        (void)error;
+        if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+            impl->dispatch_status = adapter_status ==
+                    SCXML_ADAPTER_INVALID_CONTRACT
+                ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+            *out_enabled = false;
+            return true;
+        }
+        if (state_value.data == NULL || state_value.size == 0u ||
+            memchr(state_value.data, '\0', state_value.size) != NULL) {
+            impl->dispatch_status = CCXML_INVALID_CONTRACT;
+            *out_enabled = false;
+            return true;
+        }
+        *out_enabled = state_list_matches(
+            binding->transition->state, binding->transition->state_size,
+            state_value.data, state_value.size);
+        if (!*out_enabled) return true;
+    }
+    if (binding->transition->condition != NULL) {
+        bool condition_value = false;
+        error = NULL;
+        adapter_status = impl->datamodel.evaluate_condition(
+            impl->datamodel_user, &binding->condition,
+            ccxml_event_view, &condition_value, &error);
+        (void)error;
+        if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+            impl->dispatch_status = adapter_status ==
+                    SCXML_ADAPTER_INVALID_CONTRACT
+                ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+            *out_enabled = false;
+            return true;
+        }
+        *out_enabled = condition_value;
+    }
+    return true;
+}
+
+static bool execute_transition_binding(
+    void *user, const cflow_statechart_executable_context *context,
+    const char **out_error);
 
 static ccxml_status retain_ticket(
     ccxml_session_impl *impl, scxml_adapter_status adapter_status,
@@ -122,7 +290,13 @@ ccxml_status ccxml_session_init(
     ccxml_telephony_adapter_v1 telephony;
     ccxml_datamodel_adapter_v1 datamodel = {0};
     ccxml_session_impl *impl;
+    cflow_statechart_instance_config native_config = {0};
+    cflow_statechart_instance_status native_status;
+    const bool initial_state = false;
+    size_t guard_count;
+    size_t executable_count;
     size_t action_index;
+    size_t transition_index;
     if (session == NULL || session->impl != NULL || config == NULL ||
         config->program == NULL || config->program->impl == NULL ||
         !adapter_valid(config->telephony)) {
@@ -130,6 +304,52 @@ ccxml_status ccxml_session_init(
     }
     program = (const ccxml_program_impl *)config->program->impl;
     telephony = copy_adapter(config->telephony);
+    if (program->initial_variable != NULL || program->uses_assign) {
+        if (!datamodel_write_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+        if (program->initial_variable != NULL) {
+            const char *error = NULL;
+            if (datamodel.validate_string_location(
+                    config->datamodel_user, program->initial_variable,
+                    program->initial_variable_size, &error) !=
+                SCXML_ADAPTER_ACCEPTED) {
+                (void)error;
+                return CCXML_INVALID_ARGUMENT;
+            }
+        }
+        for (action_index = 0u; action_index < program->action_count;
+             ++action_index) {
+            const ccxml_action_row *action = &program->actions[action_index];
+            const char *error = NULL;
+            if (action->kind == CCXML_ACTION_ASSIGN_STRING &&
+                datamodel.validate_string_location(
+                    config->datamodel_user, action->location,
+                    action->location_size, &error) !=
+                    SCXML_ADAPTER_ACCEPTED) {
+                (void)error;
+                return CCXML_INVALID_ARGUMENT;
+            }
+        }
+    }
+    if (program->uses_statevariable) {
+        const char *error = NULL;
+        if (!datamodel_read_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+        if (datamodel.validate_readable_string_location(
+                config->datamodel_user, program->statevariable,
+                program->statevariable_size, &error) !=
+            SCXML_ADAPTER_ACCEPTED) {
+            (void)error;
+            return CCXML_INVALID_ARGUMENT;
+        }
+    }
+    if (program->uses_condition) {
+        if (!datamodel_condition_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+    }
     if (program->uses_create_call) {
         const size_t create_call_size =
             offsetof(ccxml_telephony_adapter_v1, prepare_create_call) +
@@ -345,32 +565,185 @@ ccxml_status ccxml_session_init(
     impl->datamodel = datamodel;
     impl->datamodel_user = config->datamodel_user;
     impl->ticket_capacity = program->max_transition_effects;
+    guard_count = cflow_statechart_guard_count(&program->statechart);
+    executable_count =
+        cflow_statechart_executable_count(&program->statechart);
+    if (guard_count > SIZE_MAX / sizeof(*impl->guard_bindings) ||
+        guard_count > SIZE_MAX / sizeof(*impl->transition_bindings) ||
+        executable_count > SIZE_MAX / sizeof(*impl->executable_bindings)) {
+        free(impl->tickets);
+        free(impl);
+        return CCXML_LIMIT_EXCEEDED;
+    }
+    impl->guard_bindings = (cflow_statechart_guard_binding *)calloc(
+        guard_count, sizeof(*impl->guard_bindings));
+    impl->transition_bindings = (ccxml_transition_binding *)calloc(
+        guard_count, sizeof(*impl->transition_bindings));
+    if (executable_count != 0u) {
+        impl->executable_bindings =
+            (cflow_statechart_executable_binding *)calloc(
+                executable_count, sizeof(*impl->executable_bindings));
+    }
+    if ((guard_count != 0u &&
+         (impl->guard_bindings == NULL ||
+          impl->transition_bindings == NULL)) ||
+        (executable_count != 0u && impl->executable_bindings == NULL)) {
+        free(impl->transition_bindings);
+        free(impl->executable_bindings);
+        free(impl->guard_bindings);
+        free(impl->tickets);
+        free(impl);
+        return CCXML_ALLOCATION_FAILED;
+    }
+    for (transition_index = 0u; transition_index < guard_count;
+         ++transition_index) {
+        ccxml_transition_binding *binding =
+            &impl->transition_bindings[transition_index];
+        binding->session = impl;
+        binding->transition = transition_index < program->transition_count
+            ? &program->transitions[transition_index] : NULL;
+        if (binding->transition != NULL &&
+            binding->transition->condition != NULL) {
+            const char *error = NULL;
+            const scxml_adapter_status adapter_status =
+                impl->datamodel.compile_condition(
+                    impl->datamodel_user,
+                    binding->transition->condition,
+                    binding->transition->condition_size,
+                    &binding->condition, &error);
+            ccxml_status status = CCXML_OK;
+            (void)error;
+            if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+                status = adapter_status == SCXML_ADAPTER_FULL
+                    ? CCXML_ALLOCATION_FAILED
+                    : adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                        ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+            } else if (binding->condition.impl == NULL) {
+                status = CCXML_INVALID_CONTRACT;
+            }
+            if (status != CCXML_OK) {
+                destroy_conditions(impl);
+                free(impl->transition_bindings);
+                free(impl->executable_bindings);
+                free(impl->guard_bindings);
+                free(impl->tickets);
+                free(impl);
+                return status;
+            }
+        }
+        impl->guard_bindings[transition_index] =
+            (cflow_statechart_guard_binding){
+                .id = (cflow_statechart_guard_id)(transition_index + 1u),
+                .fn = transition_guard,
+                .user = binding};
+        if (transition_index < executable_count) {
+            impl->executable_bindings[transition_index] =
+                (cflow_statechart_executable_binding){
+                    .id = (cflow_statechart_executable_id)(
+                        transition_index + 1u),
+                    .user = binding,
+                    .contextual_fn = execute_transition_binding};
+        }
+    }
+    if (!cflow_executor_serial_init(&impl->executor)) {
+        destroy_conditions(impl);
+        free(impl->transition_bindings);
+        free(impl->executable_bindings);
+        free(impl->guard_bindings);
+        free(impl->tickets);
+        free(impl);
+        return CCXML_ALLOCATION_FAILED;
+    }
+    native_config = (cflow_statechart_instance_config){
+        .statechart = &program->statechart,
+        .initial_state = &initial_state,
+        .guards = impl->guard_bindings,
+        .guard_count = guard_count,
+        .executables = impl->executable_bindings,
+        .executable_count = executable_count,
+        .external_event_capacity = 1u,
+        .internal_event_capacity = 1u,
+        .completion_capacity = 1u,
+        .microstep_limit = 1u,
+        .executor = &impl->executor,
+        .effect_capacity = program->max_transition_effects != 0u ? 1u : 0u};
+    native_status =
+        cflow_statechart_instance_init(&impl->instance, &native_config);
+    if (native_status != CFLOW_STATECHART_INSTANCE_OK) {
+        cflow_executor_destroy(&impl->executor);
+        destroy_conditions(impl);
+        free(impl->transition_bindings);
+        free(impl->executable_bindings);
+        free(impl->guard_bindings);
+        free(impl->tickets);
+        free(impl);
+        return native_status == CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED
+            ? CCXML_ALLOCATION_FAILED : CCXML_INVALID_CONTRACT;
+    }
+    if (program->initial_variable != NULL) {
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        const scxml_adapter_status adapter_status =
+            impl->datamodel.prepare_assign_string(
+                impl->datamodel_user, program->initial_variable,
+                program->initial_variable_size, program->initial_value,
+                program->initial_value_size, &ticket, &error);
+        ccxml_status initialization_status = CCXML_OK;
+        (void)error;
+        if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+            initialization_status = adapter_status == SCXML_ADAPTER_FULL
+                ? CCXML_ALLOCATION_FAILED
+                : adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                    ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+        } else if (ticket.commit == NULL || ticket.discard == NULL) {
+            if (ticket.discard != NULL) ticket.discard(ticket.user);
+            initialization_status = CCXML_INVALID_CONTRACT;
+        } else {
+            ticket.commit(ticket.user);
+        }
+        if (initialization_status != CCXML_OK) {
+            cflow_statechart_instance_close(&impl->instance);
+            (void)cflow_statechart_instance_destroy(&impl->instance);
+            cflow_executor_destroy(&impl->executor);
+            destroy_conditions(impl);
+            free(impl->transition_bindings);
+            free(impl->executable_bindings);
+            free(impl->guard_bindings);
+            free(impl->tickets);
+            free(impl);
+            return initialization_status;
+        }
+    }
     session->impl = impl;
     return CCXML_OK;
 }
 
-ccxml_status ccxml_session_dispatch(
-    ccxml_session *session, const ccxml_event *event) {
-    ccxml_session_impl *impl = session != NULL
-        ? (ccxml_session_impl *)session->impl : NULL;
-    const ccxml_transition_row *transition;
+static ccxml_status execute_transition_actions(
+    ccxml_session_impl *impl, const ccxml_transition_row *transition,
+    const ccxml_event *event, size_t *out_prepared,
+    bool *out_exit_requested) {
     size_t index;
     size_t prepared = 0u;
     bool exit_requested = false;
-    if (impl == NULL || event == NULL || event->name == NULL ||
-        event->name_size == 0u ||
-        (event->connection_id == NULL && event->connection_id_size != 0u)) {
-        return CCXML_INVALID_ARGUMENT;
-    }
-    if (impl->closed || impl->terminated) return CCXML_CLOSED;
-    transition = find_transition(impl->program, event);
-    if (transition == NULL) return CCXML_OK;
     for (index = 0u; index < transition->action_count; ++index) {
         const ccxml_action_row *action =
             &impl->program->actions[transition->first_action + index];
         if (action->kind == CCXML_ACTION_EXIT) {
             exit_requested = true;
             break;
+        }
+        if (action->kind == CCXML_ACTION_ASSIGN_STRING) {
+            cflow_statechart_effect_ticket ticket = {0};
+            const char *error = NULL;
+            const scxml_adapter_status adapter_status =
+                impl->datamodel.prepare_assign_string(
+                    impl->datamodel_user, action->location,
+                    action->location_size, action->destination,
+                    action->destination_size, &ticket, &error);
+            const ccxml_status status = retain_ticket(
+                impl, adapter_status, ticket, &prepared);
+            (void)error;
+            if (status != CCXML_OK) return status;
         }
         if (action->kind == CCXML_ACTION_ACCEPT) {
             cflow_statechart_effect_ticket ticket = {0};
@@ -760,21 +1133,164 @@ ccxml_status ccxml_session_dispatch(
             if (status != CCXML_OK) return status;
         }
     }
-    for (index = 0u; index < prepared; ++index) {
+    *out_prepared = prepared;
+    *out_exit_requested = exit_requested;
+    return CCXML_OK;
+}
+
+static void commit_prepared_tickets(void *user) {
+    ccxml_session_impl *impl = (ccxml_session_impl *)user;
+    size_t index;
+    const size_t count = impl != NULL ? impl->prepared_ticket_count : 0u;
+    if (impl == NULL) return;
+    impl->prepared_ticket_count = 0u;
+    for (index = 0u; index < count; ++index) {
         cflow_statechart_effect_ticket *ticket = &impl->tickets[index];
         ticket->commit(ticket->user);
         *ticket = (cflow_statechart_effect_ticket){0};
     }
-    if (exit_requested) {
+}
+
+static void discard_prepared_tickets(void *user) {
+    ccxml_session_impl *impl = (ccxml_session_impl *)user;
+    const size_t count = impl != NULL ? impl->prepared_ticket_count : 0u;
+    if (impl == NULL) return;
+    impl->prepared_ticket_count = 0u;
+    discard_tickets(impl->tickets, count);
+}
+
+static bool execute_transition_binding(
+    void *user, const cflow_statechart_executable_context *context,
+    const char **out_error) {
+    ccxml_transition_binding *binding =
+        (ccxml_transition_binding *)user;
+    ccxml_session_impl *impl;
+    const ccxml_event *event;
+    bool staged_state;
+    bool exit_requested = false;
+    size_t prepared = 0u;
+    ccxml_status status;
+    if (out_error != NULL) *out_error = NULL;
+    if (binding == NULL || binding->session == NULL ||
+        binding->transition == NULL || context == NULL ||
+        context->state == NULL || context->out_state == NULL ||
+        context->event == NULL || context->event->id != 1u ||
+        context->event->payload_type != &ccxml_event_cmeta_type ||
+        context->event->payload == NULL) {
+        if (out_error != NULL)
+            *out_error = "invalid CCXML transition executable contract";
+        return false;
+    }
+    impl = binding->session;
+    event = (const ccxml_event *)context->event->payload;
+    impl->transition_selected = true;
+    staged_state = *(const bool *)context->state;
+    status = execute_transition_actions(
+        impl, binding->transition, event, &prepared, &exit_requested);
+    impl->dispatch_status = status;
+    impl->exit_requested = exit_requested;
+    if (status == CCXML_OK && prepared != 0u) {
+        const cflow_statechart_effect_ticket aggregate = {
+            .commit = commit_prepared_tickets,
+            .discard = discard_prepared_tickets,
+            .user = impl};
+        const char *stage_error = NULL;
+        if (impl->prepared_ticket_count != 0u ||
+            context->stage_effect == NULL) {
+            discard_tickets(impl->tickets, prepared);
+            impl->dispatch_status = CCXML_INVALID_CONTRACT;
+            if (out_error != NULL)
+                *out_error = "CCXML effect journal is unavailable";
+            return false;
+        }
+        impl->prepared_ticket_count = prepared;
+        if (!context->stage_effect(
+                context->effect_user, &aggregate, &stage_error)) {
+            discard_prepared_tickets(impl);
+            impl->dispatch_status = CCXML_LIMIT_EXCEEDED;
+            if (out_error != NULL) {
+                *out_error = stage_error != NULL
+                    ? stage_error : "CCXML effect staging failed";
+            }
+            return false;
+        }
+    }
+    *(bool *)context->out_state = staged_state;
+    return true;
+}
+
+static ccxml_status map_mailbox_status(cflow_mailbox_status status) {
+    switch (status) {
+        case CFLOW_MAILBOX_OK:
+            return CCXML_OK;
+        case CFLOW_MAILBOX_FULL:
+        case CFLOW_MAILBOX_BUFFER_TOO_SMALL:
+            return CCXML_LIMIT_EXCEEDED;
+        case CFLOW_MAILBOX_ALLOCATION_FAILED:
+            return CCXML_ALLOCATION_FAILED;
+        case CFLOW_MAILBOX_CLOSED:
+        case CFLOW_MAILBOX_CANCELLED:
+            return CCXML_CLOSED;
+        case CFLOW_MAILBOX_INVALID_ARGUMENT:
+        case CFLOW_MAILBOX_TYPE_MISMATCH:
+        case CFLOW_MAILBOX_EMPTY:
+        default:
+            return CCXML_INVALID_CONTRACT;
+    }
+}
+
+ccxml_status ccxml_session_dispatch(
+    ccxml_session *session, const ccxml_event *event) {
+    ccxml_session_impl *impl = session != NULL
+        ? (ccxml_session_impl *)session->impl : NULL;
+    const cflow_event_view native_event = {
+        1u, &ccxml_event_cmeta_type, event};
+    cflow_statechart_instance_stats stats = {0};
+    ccxml_status status;
+    if (impl == NULL || event == NULL || event->name == NULL ||
+        event->name_size == 0u ||
+        (event->connection_id == NULL && event->connection_id_size != 0u)) {
+        return CCXML_INVALID_ARGUMENT;
+    }
+    if (impl->closed || impl->terminated) return CCXML_CLOSED;
+    if (impl->dispatching) return CCXML_BUSY;
+    impl->dispatching = true;
+    impl->dispatch_status = CCXML_OK;
+    impl->transition_selected = false;
+    impl->exit_requested = false;
+    status = map_mailbox_status(
+        cflow_statechart_instance_try_send(&impl->instance, &native_event));
+    if (status != CCXML_OK) {
+        impl->dispatching = false;
+        return status;
+    }
+    if (!cflow_executor_wait_idle(&impl->executor)) {
+        impl->dispatching = false;
+        return CCXML_BUSY;
+    }
+    status = impl->dispatch_status;
+    if (!cflow_statechart_instance_get_stats(&impl->instance, &stats)) {
+        status = CCXML_INVALID_CONTRACT;
+    } else if (stats.errored && status == CCXML_OK) {
+        status = CCXML_INVALID_CONTRACT;
+    }
+    if (status == CCXML_OK && !impl->transition_selected &&
+        unhandled_event_is_fatal(event)) {
+        impl->exit_requested = true;
+    }
+    if (impl->exit_requested && status == CCXML_OK) {
         impl->terminated = true;
+        cflow_statechart_instance_close(&impl->instance);
         close_adapter(impl);
     }
-    return CCXML_OK;
+    impl->dispatching = false;
+    return status;
 }
 
 void ccxml_session_close(ccxml_session *session) {
     ccxml_session_impl *impl = session != NULL
         ? (ccxml_session_impl *)session->impl : NULL;
+    if (impl != NULL) cflow_statechart_instance_close(&impl->instance);
     close_adapter(impl);
 }
 
@@ -789,9 +1305,18 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
     if (session == NULL) return CCXML_INVALID_ARGUMENT;
     impl = (ccxml_session_impl *)session->impl;
     if (impl == NULL) return CCXML_OK;
+    cflow_statechart_instance_close(&impl->instance);
     close_adapter(impl);
     if (!impl->telephony.is_quiescent(impl->telephony_user))
         return CCXML_BUSY;
+    if (cflow_statechart_instance_destroy(&impl->instance) !=
+        CFLOW_STATECHART_INSTANCE_OK)
+        return CCXML_BUSY;
+    cflow_executor_destroy(&impl->executor);
+    destroy_conditions(impl);
+    free(impl->transition_bindings);
+    free(impl->executable_bindings);
+    free(impl->guard_bindings);
     free(impl->tickets);
     free(impl);
     session->impl = NULL;

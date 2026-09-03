@@ -1,5 +1,6 @@
 #include "scxml_emit.h"
 #include "scxml_quickjs.h"
+#include "scxml_xml_decode.h"
 
 #include <limits.h>
 #include "scxml_analyze.h"
@@ -57,49 +58,14 @@ static bool resolve_cmeta_condition_state(
     return true;
 }
 
-static bool append_utf8_codepoint(
-    char *output, size_t capacity, size_t *size, uint32_t codepoint) {
-    size_t required;
-    if (output == NULL || size == NULL || codepoint == 0u ||
-        codepoint > UINT32_C(0x10ffff) ||
-        (codepoint >= UINT32_C(0xd800) &&
-         codepoint <= UINT32_C(0xdfff))) {
-        return false;
-    }
-    required = codepoint <= UINT32_C(0x7f) ? 1u
-             : codepoint <= UINT32_C(0x7ff) ? 2u
-             : codepoint <= UINT32_C(0xffff) ? 3u
-                                             : 4u;
-    if (*size > capacity || required > capacity - *size) return false;
-    if (required == 1u) {
-        output[(*size)++] = (char)codepoint;
-    } else if (required == 2u) {
-        output[(*size)++] = (char)(UINT32_C(0xc0) | (codepoint >> 6u));
-        output[(*size)++] = (char)(UINT32_C(0x80) | (codepoint & 0x3fu));
-    } else if (required == 3u) {
-        output[(*size)++] = (char)(UINT32_C(0xe0) | (codepoint >> 12u));
-        output[(*size)++] =
-            (char)(UINT32_C(0x80) | ((codepoint >> 6u) & 0x3fu));
-        output[(*size)++] = (char)(UINT32_C(0x80) | (codepoint & 0x3fu));
-    } else {
-        output[(*size)++] = (char)(UINT32_C(0xf0) | (codepoint >> 18u));
-        output[(*size)++] =
-            (char)(UINT32_C(0x80) | ((codepoint >> 12u) & 0x3fu));
-        output[(*size)++] =
-            (char)(UINT32_C(0x80) | ((codepoint >> 6u) & 0x3fu));
-        output[(*size)++] = (char)(UINT32_C(0x80) | (codepoint & 0x3fu));
-    }
-    return true;
-}
-
 static scxml_status decode_cmeta_attribute_source(
     scxml_build *build, scxml_syntax_attribute attribute,
     const char *subject, char **out_source, size_t *out_size) {
     const turbo_xml_string_view source = scxml_syntax_attribute_value(attribute);
     char message[SCXML_DIAGNOSTIC_CAPACITY];
     char *decoded;
-    size_t input = 0u;
     size_t output = 0u;
+    scxml_xml_decode_status decode_status;
     if (out_source == NULL || out_size == NULL || source.size == 0u)
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_attribute_location(attribute),
@@ -115,77 +81,23 @@ static scxml_status decode_cmeta_attribute_source(
         return scxml_analyze_fail(build, SCXML_ALLOCATION_FAILED,
                           scxml_syntax_attribute_location(attribute),
                           "unable to decode CMeta attribute");
-    while (input < source.size) {
-        if (source.data[input] != '&') {
-            decoded[output++] = source.data[input++];
-            continue;
+    decode_status = scxml_xml_decode_attribute_entities(
+        source.data, source.size, decoded, source.size, &output);
+    if (decode_status != SCXML_XML_DECODE_OK) {
+        free(decoded);
+        if (decode_status ==
+            SCXML_XML_DECODE_INVALID_CHARACTER_REFERENCE) {
+            return scxml_analyze_fail(
+                build, SCXML_INVALID_STRUCTURE,
+                scxml_syntax_attribute_location(attribute),
+                "CMeta attribute has an invalid XML character reference");
         }
-        if (source.size - input >= 4u &&
-            memcmp(source.data + input, "&lt;", 4u) == 0) {
-            decoded[output++] = '<';
-            input += 4u;
-        } else if (source.size - input >= 4u &&
-                   memcmp(source.data + input, "&gt;", 4u) == 0) {
-            decoded[output++] = '>';
-            input += 4u;
-        } else if (source.size - input >= 5u &&
-                   memcmp(source.data + input, "&amp;", 5u) == 0) {
-            decoded[output++] = '&';
-            input += 5u;
-        } else if (source.size - input >= 6u &&
-                   memcmp(source.data + input, "&quot;", 6u) == 0) {
-            decoded[output++] = '"';
-            input += 6u;
-        } else if (source.size - input >= 6u &&
-                   memcmp(source.data + input, "&apos;", 6u) == 0) {
-            decoded[output++] = '\'';
-            input += 6u;
-        } else if (source.size - input >= 4u &&
-                   source.data[input + 1u] == '#') {
-            const bool hexadecimal =
-                input + 2u < source.size &&
-                (source.data[input + 2u] == 'x' ||
-                 source.data[input + 2u] == 'X');
-            const uint32_t base = hexadecimal ? 16u : 10u;
-            size_t cursor = input + (hexadecimal ? 3u : 2u);
-            uint32_t codepoint = 0u;
-            bool has_digit = false;
-            while (cursor < source.size && source.data[cursor] != ';') {
-                const unsigned char ch =
-                    (unsigned char)source.data[cursor];
-                uint32_t digit;
-                if (ch >= '0' && ch <= '9') digit = ch - '0';
-                else if (hexadecimal && ch >= 'a' && ch <= 'f')
-                    digit = UINT32_C(10) + ch - 'a';
-                else if (hexadecimal && ch >= 'A' && ch <= 'F')
-                    digit = UINT32_C(10) + ch - 'A';
-                else break;
-                if (codepoint > (UINT32_C(0x10ffff) - digit) / base)
-                    break;
-                codepoint = codepoint * base + digit;
-                has_digit = true;
-                ++cursor;
-            }
-            if (!has_digit || cursor >= source.size ||
-                source.data[cursor] != ';' ||
-                !append_utf8_codepoint(
-                    decoded, source.size, &output, codepoint)) {
-                free(decoded);
-                return scxml_analyze_fail(
-                    build, SCXML_INVALID_STRUCTURE,
-                    scxml_syntax_attribute_location(attribute),
-                    "CMeta attribute has an invalid XML character reference");
-            }
-            input = cursor + 1u;
-        } else {
-            free(decoded);
-            (void)snprintf(message, sizeof(message),
-                           "CMeta %s has an unsupported XML entity reference",
-                           subject != NULL ? subject : "attribute");
-            return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
-                              scxml_syntax_attribute_location(attribute),
-                              message);
-        }
+        (void)snprintf(message, sizeof(message),
+                       "CMeta %s has an unsupported XML entity reference",
+                       subject != NULL ? subject : "attribute");
+        return scxml_analyze_fail(
+            build, SCXML_INVALID_STRUCTURE,
+            scxml_syntax_attribute_location(attribute), message);
     }
     *out_source = decoded;
     *out_size = output;
