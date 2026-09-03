@@ -9,13 +9,18 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_CREATE_CALL,
     CCXML_ACTION_DISCONNECT,
     CCXML_ACTION_REJECT,
-    CCXML_ACTION_REDIRECT
+    CCXML_ACTION_REDIRECT,
+    CCXML_ACTION_JOIN
 } ccxml_action_kind;
 
 typedef struct ccxml_action_row {
     ccxml_action_kind kind;
     const char *destination;
     size_t destination_size;
+    const char *id1;
+    size_t id1_size;
+    const char *id2;
+    size_t id2_size;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -36,6 +41,7 @@ typedef struct ccxml_program_impl {
     bool uses_disconnect;
     bool uses_reject;
     bool uses_redirect;
+    bool uses_join;
 } ccxml_program_impl;
 
 typedef struct ccxml_session_impl {

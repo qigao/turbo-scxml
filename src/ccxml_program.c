@@ -128,41 +128,53 @@ static ccxml_status validate_empty_action(
     return CCXML_OK;
 }
 
-static ccxml_status validate_destination_action(
-    turbo_xml_node action, ccxml_measurement *measurement,
-    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
-    turbo_xml_attribute destination_attribute = {0};
-    turbo_xml_string_view expression;
+static ccxml_status validate_string_literal(
+    turbo_xml_attribute attribute, turbo_xml_string_view *out_expression,
+    ccxml_diagnostic *diagnostic) {
+    const turbo_xml_string_view expression =
+        turbo_xml_attribute_value(attribute);
     char quote;
     size_t index;
-    size_t retained_size;
-    ccxml_status status = validate_attributes(
-        action, "dest", true, &destination_attribute, diagnostic);
-    if (status != CCXML_OK) return status;
-    expression = turbo_xml_attribute_value(destination_attribute);
     if (expression.data == NULL || expression.size < 2u ||
         (expression.data[0] != '\'' && expression.data[0] != '"') ||
         expression.data[expression.size - 1u] != expression.data[0]) {
         return fail(
             diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            turbo_xml_attribute_location(destination_attribute),
-            "CCXML destination must be a quoted string literal");
+            turbo_xml_attribute_location(attribute),
+            "CCXML value must be a quoted string literal");
     }
     quote = expression.data[0];
     if (expression.size == 2u) {
         return fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
-            turbo_xml_attribute_location(destination_attribute),
-            "CCXML destination must be nonempty");
+            turbo_xml_attribute_location(attribute),
+            "CCXML string literal must be nonempty");
     }
     for (index = 1u; index + 1u < expression.size; ++index) {
         if (expression.data[index] == '\\' || expression.data[index] == quote) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                turbo_xml_attribute_location(destination_attribute),
-                "CCXML destination escapes are not supported");
+                turbo_xml_attribute_location(attribute),
+                "CCXML string literal escapes are not supported");
         }
     }
+    if (out_expression != NULL) *out_expression = expression;
+    return CCXML_OK;
+}
+
+static ccxml_status validate_destination_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute destination_attribute = {0};
+    turbo_xml_string_view expression;
+    size_t index;
+    size_t retained_size;
+    ccxml_status status = validate_attributes(
+        action, "dest", true, &destination_attribute, diagnostic);
+    if (status != CCXML_OK) return status;
+    status = validate_string_literal(
+        destination_attribute, &expression, diagnostic);
+    if (status != CCXML_OK) return status;
     for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
         const turbo_xml_node child = turbo_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
@@ -183,6 +195,77 @@ static ccxml_status validate_destination_action(
             diagnostic, CCXML_LIMIT_EXCEEDED,
             turbo_xml_node_location(action),
             "CCXML action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
+static ccxml_status validate_join_action(
+    turbo_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    turbo_xml_attribute id1_attribute = {0};
+    turbo_xml_attribute id2_attribute = {0};
+    turbo_xml_string_view id1_expression;
+    turbo_xml_string_view id2_expression;
+    size_t index;
+    size_t id1_retained_size;
+    size_t id2_retained_size;
+    size_t retained_size;
+    ccxml_status status;
+    for (index = 0u; index < turbo_xml_node_attribute_count(action); ++index) {
+        const turbo_xml_attribute attribute =
+            turbo_xml_node_attribute_at(action, index);
+        const turbo_xml_string_view namespace_uri =
+            turbo_xml_attribute_namespace_uri(attribute);
+        const turbo_xml_string_view local_name =
+            turbo_xml_attribute_local_name(attribute);
+        turbo_xml_attribute *slot = NULL;
+        if (namespace_uri.size == 0u && view_equal(local_name, "id1")) {
+            slot = &id1_attribute;
+        } else if (namespace_uri.size == 0u && view_equal(local_name, "id2")) {
+            slot = &id2_attribute;
+        }
+        if (slot == NULL || slot->impl != NULL) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_attribute_location(attribute),
+                "unsupported or duplicate CCXML join attribute");
+        }
+        *slot = attribute;
+    }
+    if (id1_attribute.impl == NULL || id2_attribute.impl == NULL) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE,
+            turbo_xml_node_location(action),
+            "CCXML join requires id1 and id2");
+    }
+    status = validate_string_literal(
+        id1_attribute, &id1_expression, diagnostic);
+    if (status != CCXML_OK) return status;
+    status = validate_string_literal(
+        id2_attribute, &id2_expression, diagnostic);
+    if (status != CCXML_OK) return status;
+    for (index = 0u; index < turbo_xml_node_child_count(action); ++index) {
+        const turbo_xml_node child = turbo_xml_node_child_at(action, index);
+        if (!node_is_ignorable(child)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                turbo_xml_node_location(child),
+                "CCXML join must be empty");
+        }
+    }
+    if (!checked_add(id1_expression.size - 2u, 1u, &id1_retained_size) ||
+        !checked_add(id2_expression.size - 2u, 1u, &id2_retained_size) ||
+        !checked_add(id1_retained_size, id2_retained_size, &retained_size) ||
+        measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            turbo_xml_node_location(action),
+            "CCXML join or retained-string limit exceeded");
     }
     return CCXML_OK;
 }
@@ -237,17 +320,22 @@ static ccxml_status validate_transition(
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
-            !view_equal(name, "redirect")) {
+            !view_equal(name, "redirect") && !view_equal(name, "join")) {
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 turbo_xml_node_location(action),
                 "unsupported CCXML executable content");
         }
-        status = (view_equal(name, "createcall") ||
-                  view_equal(name, "redirect"))
-            ? validate_destination_action(
-                  action, measurement, limits, diagnostic)
-            : validate_empty_action(action, measurement, limits, diagnostic);
+        if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
+            status = validate_destination_action(
+                action, measurement, limits, diagnostic);
+        } else if (view_equal(name, "join")) {
+            status = validate_join_action(
+                action, measurement, limits, diagnostic);
+        } else {
+            status = validate_empty_action(
+                action, measurement, limits, diagnostic);
+        }
         if (status != CCXML_OK) return status;
         ++local_action_count;
     }
@@ -437,9 +525,43 @@ static void copy_program(
                 } else if (view_equal(action_name, "disconnect")) {
                     action_row->kind = CCXML_ACTION_DISCONNECT;
                     impl->uses_disconnect = true;
-                } else {
+                } else if (view_equal(action_name, "reject")) {
                     action_row->kind = CCXML_ACTION_REJECT;
                     impl->uses_reject = true;
+                } else {
+                    size_t join_attribute_index;
+                    turbo_xml_attribute id1_attribute = {0};
+                    turbo_xml_attribute id2_attribute = {0};
+                    turbo_xml_string_view expression;
+                    action_row->kind = CCXML_ACTION_JOIN;
+                    impl->uses_join = true;
+                    for (join_attribute_index = 0u;
+                         join_attribute_index <
+                             turbo_xml_node_attribute_count(action);
+                         ++join_attribute_index) {
+                        const turbo_xml_attribute candidate =
+                            turbo_xml_node_attribute_at(
+                                action, join_attribute_index);
+                        const turbo_xml_string_view local_name =
+                            turbo_xml_attribute_local_name(candidate);
+                        if (view_equal(local_name, "id1")) {
+                            id1_attribute = candidate;
+                        } else if (view_equal(local_name, "id2")) {
+                            id2_attribute = candidate;
+                        }
+                    }
+                    expression = turbo_xml_attribute_value(id1_attribute);
+                    action_row->id1 = cursor;
+                    action_row->id1_size = expression.size - 2u;
+                    memcpy(cursor, expression.data + 1u, action_row->id1_size);
+                    cursor[action_row->id1_size] = '\0';
+                    cursor += action_row->id1_size + 1u;
+                    expression = turbo_xml_attribute_value(id2_attribute);
+                    action_row->id2 = cursor;
+                    action_row->id2_size = expression.size - 2u;
+                    memcpy(cursor, expression.data + 1u, action_row->id2_size);
+                    cursor[action_row->id2_size] = '\0';
+                    cursor += action_row->id2_size + 1u;
                 }
                 ++row->action_count;
             }
