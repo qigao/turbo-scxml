@@ -45,12 +45,12 @@ TinyTest
 **Files:** `tests/ccxml_session_test.c`, `include/ccxml/ccxml.h`,
 `src/ccxml_session.c`
 
-- [ ] Add RED tests for exact request bytes, session-time location validation,
+- [x] Add RED tests for exact request bytes, session-time location validation,
   current-event ID checks, write-before-publish order, rollback, malformed
   results/tickets, and provider callback tail size.
-- [ ] Append the request/callback API, validate required capabilities, and
+- [x] Append the request/callback API, validate required capabilities, and
   prepare/reorder the provider and datamodel tickets.
-- [ ] Run the focused runtime test and commit the transaction slice.
+- [x] Run the focused runtime test and commit the transaction slice.
 
 ### Task 3: Verify through the real CMeta adapter
 
