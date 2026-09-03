@@ -1,7 +1,7 @@
 #include "chttp_event_io_internal.h"
 #include "scxml_analyze.h"
 
-#include <turbo/error_codes.h>
+#include <salts/error_codes.h>
 
 #include <ctype.h>
 #include <string.h>
@@ -76,9 +76,9 @@ static int reply_without_binding(
     chttp_server_response *response, unsigned int status) {
     int result;
     result = chttp_server_reply(response, status, NULL, NULL, 0u);
-    turbo_mutex_lock(&processor->lock);
+    salts_mutex_lock(&processor->lock);
     ++processor->ingress_rejected;
-    turbo_mutex_unlock(&processor->lock);
+    salts_mutex_unlock(&processor->lock);
     return result;
 }
 
@@ -113,15 +113,15 @@ static int ingress_handler(
     int reply_status;
 
     if (processor == NULL || request == NULL || response == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     endpoint = chttp_server_request_param(request, "endpoint");
-    turbo_mutex_lock(&processor->lock);
+    salts_mutex_lock(&processor->lock);
     ++processor->ingress_requests;
-    turbo_mutex_unlock(&processor->lock);
+    salts_mutex_unlock(&processor->lock);
     if (endpoint == NULL)
         return reply_without_binding(processor, response, 404u);
     endpoint_size = strlen(endpoint);
-    turbo_mutex_lock(&processor->lock);
+    salts_mutex_lock(&processor->lock);
     for (index = 0u; index < processor->config.endpoint_capacity; ++index) {
         scxml_chttp_endpoint_row *row = &processor->endpoints[index];
         if (row->binding != NULL &&
@@ -132,12 +132,12 @@ static int ingress_handler(
         }
     }
     if (binding == NULL) {
-        turbo_mutex_unlock(&processor->lock);
+        salts_mutex_unlock(&processor->lock);
         return reply_without_binding(processor, response, 404u);
     }
     if (binding->state != SCXML_CHTTP_BINDING_ACTIVE ||
         binding->session == NULL || binding->program == NULL) {
-        turbo_mutex_unlock(&processor->lock);
+        salts_mutex_unlock(&processor->lock);
         return reply_without_binding(processor, response, 410u);
     }
     ++binding->active_callbacks;
@@ -145,7 +145,7 @@ static int ingress_handler(
     program = binding->program;
     decode = binding->decode;
     decode_user = binding->decode_user;
-    turbo_mutex_unlock(&processor->lock);
+    salts_mutex_unlock(&processor->lock);
 
     (void)program;
     content_type = chttp_server_request_header(request, "Content-Type");
@@ -176,7 +176,7 @@ static int ingress_handler(
         ingress.entries = form.entries;
         ingress.entry_count = form.entry_count;
     }
-    if (!scxml_analyze_is_xml_nmtoken((turbo_xml_string_view){
+    if (!scxml_analyze_is_xml_nmtoken((salts_xml_string_view){
             event_name, event_name_size})) {
         http_status = 400u;
         goto reply;
@@ -206,7 +206,7 @@ static int ingress_handler(
 reply:
     reply_status = chttp_server_reply(
         response, http_status, NULL, NULL, 0u);
-    turbo_mutex_lock(&processor->lock);
+    salts_mutex_lock(&processor->lock);
     if (http_status == 204u)
         ++processor->ingress_admitted;
     else
@@ -215,14 +215,14 @@ reply:
         --binding->active_callbacks;
     else
         ++processor->invariant_failures;
-    turbo_cond_broadcast(&processor->wake);
-    turbo_mutex_unlock(&processor->lock);
+    salts_cond_broadcast(&processor->wake);
+    salts_mutex_unlock(&processor->lock);
     return reply_status;
 }
 
 int scxml_chttp_ingress_register(scxml_chttp_processor_impl *processor) {
     if (processor == NULL || processor->route_path == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     return chttp_server_post(
         &processor->server, processor->route_path,
         ingress_handler, processor);

@@ -53,7 +53,7 @@ typedef enum scxml_status {
 } scxml_status;
 
 typedef struct scxml_limits {
-    turbo_xml_limits xml;
+    salts_xml_limits xml;
     size_t max_states;
     /** Maximum public compiled Event names; excludes one private routing slot. */
     size_t max_events;
@@ -63,7 +63,7 @@ typedef struct scxml_limits {
 
 typedef struct scxml_diagnostic {
     scxml_status status;
-    turbo_xml_location location;
+    salts_xml_location location;
     char message[SCXML_DIAGNOSTIC_CAPACITY];
 } scxml_diagnostic;
 

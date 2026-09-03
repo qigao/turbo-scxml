@@ -2,8 +2,8 @@
 
 #include <cflow/executor.h>
 #include <tinytest.h>
-#include <turbo/error_codes.h>
-#include <turbo/thread.h>
+#include <salts/error_codes.h>
+#include <salts/thread.h>
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -141,7 +141,7 @@ static int unused_resolver(
     void *user, const char *uri, size_t uri_size,
     scxml_chttp_resolved_target *out_target) {
     (void)user; (void)uri; (void)uri_size; (void)out_target;
-    return TURBO_EINVAL;
+    return SALTS_EINVAL;
 }
 
 static scxml_adapter_status unused_send(
@@ -183,7 +183,7 @@ static scxml_chttp_decode_status test_decode(
     probe->entries = ingress->entry_count;
     if (atomic_load(&probe->block)) {
         atomic_store(&probe->entered, true);
-        while (!atomic_load(&probe->release)) turbo_thread_yield();
+        while (!atomic_load(&probe->release)) salts_thread_yield();
     }
     if (probe->status != SCXML_CHTTP_DECODE_OK) return probe->status;
     if (!probe->return_cmeta) {
@@ -205,7 +205,7 @@ static scxml_chttp_decode_status test_decode(
 static void block_executor(void *user) {
     executor_blocker *blocker = (executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+    while (!atomic_load(&blocker->release)) salts_thread_yield();
 }
 
 static bool split_access_uri(ingress_fixture *fixture) {
@@ -270,8 +270,8 @@ static bool fixture_init(
         .request_timeout_ms = 500u, .worker_poll_ms = 1u,
         .resolve = unused_resolver};
     if (scxml_chttp_processor_init(
-            &fixture->processor, &processor_config) != TURBO_OK ||
-        scxml_chttp_processor_start(&fixture->processor) != TURBO_OK)
+            &fixture->processor, &processor_config) != SALTS_OK ||
+        scxml_chttp_processor_start(&fixture->processor) != SALTS_OK)
         return false;
     binding_config = (scxml_chttp_binding_config_v1){
         .abi_version = SCXML_CHTTP_ABI_V1,
@@ -282,12 +282,12 @@ static bool fixture_init(
         .decode_user = &fixture->decode};
     if (scxml_chttp_binding_init(
             &fixture->binding, &fixture->processor,
-            &binding_config) != TURBO_OK ||
+            &binding_config) != SALTS_OK ||
         !scxml_chttp_binding_ioprocessor(
             &fixture->binding, &fixture->descriptor) ||
         !split_access_uri(fixture) ||
         chttp_client_init(&fixture->client, &processor_config.client) !=
-            TURBO_OK)
+            SALTS_OK)
         return false;
     if (!activate) return true;
     if (cmeta_profile) {
@@ -333,7 +333,7 @@ static bool fixture_init(
     return status == CFLOW_STATECHART_INSTANCE_OK &&
         scxml_chttp_binding_activate(
             &fixture->binding, &fixture->session,
-            &fixture->program) == TURBO_OK;
+            &fixture->program) == SALTS_OK;
 }
 
 static unsigned int post_bytes(
@@ -348,7 +348,7 @@ static unsigned int post_bytes(
     chttp_response response = {0};
     chttp_error error = {0};
     unsigned int status = 0u;
-    if (chttp_post(&fixture->client, &options, &response, &error) == TURBO_OK)
+    if (chttp_post(&fixture->client, &options, &response, &error) == SALTS_OK)
         status = response.status_code;
     chttp_response_destroy(&response);
     return status;
@@ -393,7 +393,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &fixture.executor, block_executor, &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+        while (!atomic_load(&blocker.entered)) salts_thread_yield();
         check_equal(post(&fixture, fixture.target,
                         "application/x-www-form-urlencoded", "param1=2"),
                     204u);
@@ -425,7 +425,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &cmeta.executor, block_executor, &cmeta_blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&cmeta_blocker.entered)) turbo_thread_yield();
+        while (!atomic_load(&cmeta_blocker.entered)) salts_thread_yield();
         check_equal(post(&cmeta, cmeta.target,
                         "application/x-www-form-urlencoded", "param1=2"),
                     204u);
@@ -440,7 +440,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &raw.executor, block_executor, &raw_blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&raw_blocker.entered)) turbo_thread_yield();
+        while (!atomic_load(&raw_blocker.entered)) salts_thread_yield();
         check_equal(post_bytes(&raw, raw.target,
                         "text/plain; charset=utf-8",
                         raw_body, sizeof(raw_body) - 1u), 204u);
@@ -504,19 +504,19 @@ spec("TurboSCXML CHTTP ingress") {
     it("keeps session destruction behind an active decoder callback") {
         ingress_fixture fixture;
         blocking_call call = {0};
-        turbo_thread_t http_thread = NULL;
+        salts_thread_t http_thread = NULL;
         check_true(fixture_init(&fixture, true, true, false));
         call.fixture = &fixture;
         atomic_store(&fixture.decode.block, true);
-        check_equal(turbo_thread_create(
-                        &http_thread, blocking_http, &call), TURBO_OK);
-        while (!atomic_load(&fixture.decode.entered)) turbo_thread_yield();
+        check_equal(salts_thread_create(
+                        &http_thread, blocking_http, &call), SALTS_OK);
+        while (!atomic_load(&fixture.decode.entered)) salts_thread_yield();
         check_equal(scxml_session_destroy(&fixture.session),
                     CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
         check_not_null(fixture.session.impl);
         atomic_store(&fixture.decode.release, true);
-        check_equal(turbo_thread_join(&http_thread), TURBO_OK);
-        turbo_thread_destroy(&http_thread);
+        check_equal(salts_thread_join(&http_thread), SALTS_OK);
+        salts_thread_destroy(&http_thread);
         check_equal(call.status, 410u);
         check_equal(scxml_session_destroy(&fixture.session),
                     CFLOW_STATECHART_INSTANCE_OK);

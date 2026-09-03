@@ -157,6 +157,7 @@ typedef struct expr_parser {
     size_t max_register;
     scxml_expr_path_policy path_policy;
     expr_value_kind unresolved_kind;
+    scxml_expr_compile_policy policy;
     bool emit;
     scxml_expr_status status;
 } expr_parser;
@@ -264,6 +265,50 @@ static bool parser_event_field_kind(
     else
         return false;
     return true;
+}
+
+static uint32_t system_operand_flag(expr_operand_kind kind) {
+    switch (kind) {
+        case EXPR_OPERAND_SYSTEM_NAME:
+        case EXPR_OPERAND_SYSTEM_NAME_BOUND:
+            return SCXML_EXPR_SYSTEM_NAME;
+        case EXPR_OPERAND_SYSTEM_SESSION_ID:
+        case EXPR_OPERAND_SYSTEM_SESSION_ID_BOUND:
+            return SCXML_EXPR_SYSTEM_SESSION_ID;
+        case EXPR_OPERAND_SYSTEM_EVENT_BOUND:
+            return SCXML_EXPR_SYSTEM_EVENT;
+        case EXPR_OPERAND_SYSTEM_EVENT_NAME:
+            return SCXML_EXPR_SYSTEM_EVENT_NAME;
+        case EXPR_OPERAND_SYSTEM_EVENT_TYPE:
+            return SCXML_EXPR_SYSTEM_EVENT_TYPE;
+        case EXPR_OPERAND_SYSTEM_EVENT_SEND_ID:
+            return SCXML_EXPR_SYSTEM_EVENT_SEND_ID;
+        case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN:
+            return SCXML_EXPR_SYSTEM_EVENT_ORIGIN;
+        case EXPR_OPERAND_SYSTEM_EVENT_ORIGIN_TYPE:
+            return SCXML_EXPR_SYSTEM_EVENT_ORIGIN_TYPE;
+        case EXPR_OPERAND_SYSTEM_EVENT_INVOKE_ID:
+            return SCXML_EXPR_SYSTEM_EVENT_INVOKE_ID;
+        case EXPR_OPERAND_SYSTEM_EVENT_DATA:
+        case EXPR_OPERAND_SYSTEM_EVENT_DATA_LOCATION:
+            return SCXML_EXPR_SYSTEM_EVENT_DATA;
+        case EXPR_OPERAND_SYSTEM_IOPROCESSOR_LOCATION:
+        case EXPR_OPERAND_SYSTEM_IO_PROCESSORS_BOUND:
+            return SCXML_EXPR_SYSTEM_IOPROCESSORS;
+        default:
+            return 0u;
+    }
+}
+
+static bool parser_allow_system_operand(
+    expr_parser *parser, expr_operand_kind kind, size_t offset) {
+    const uint32_t flag = system_operand_flag(kind);
+    return flag != 0u &&
+           (parser->policy.allowed_system_operands & flag) != 0u
+        ? true
+        : parser_fail(
+              parser, SCXML_EXPR_UNKNOWN_LOCATION, offset,
+              "system operand is unavailable in this expression profile");
 }
 
 static void parser_next(expr_parser *parser) {
@@ -448,7 +493,7 @@ static bool parser_retain_ioprocessor_name(
     size_t scan;
     size_t selected_name_size = 0u;
     size_t selected_end = 0u;
-    turbo_xml_string_view selected_name;
+    salts_xml_string_view selected_name;
     while (name_offset < parser->source_size &&
            expr_space(parser->source[name_offset]))
         ++name_offset;
@@ -478,7 +523,7 @@ static bool parser_retain_ioprocessor_name(
         selected_name_size = name_end - name_offset;
         selected_end = property_end;
     }
-    selected_name = (turbo_xml_string_view){
+    selected_name = (salts_xml_string_view){
         parser->source + name_offset, selected_name_size};
     if (selected_end == 0u ||
         !scxml_analyze_is_xml_ncname(selected_name))
@@ -1052,11 +1097,14 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
     }
     if (token_text_equal(parser, "_name") ||
         token_text_equal(parser, "_sessionid")) {
+        const size_t offset = parser->token.offset;
         expr_operand operand = {0};
         uint32_t operand_index;
         operand.kind = token_text_equal(parser, "_name")
                            ? EXPR_OPERAND_SYSTEM_NAME
                            : EXPR_OPERAND_SYSTEM_SESSION_ID;
+        if (!parser_allow_system_operand(parser, operand.kind, offset))
+            return false;
         operand.value_kind = EXPR_VALUE_STRING;
         out->kind = EXPR_VALUE_STRING;
         out->reg = target;
@@ -1066,9 +1114,14 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                                        0u, operand_index, 0u);
     }
     if (token_text_equal(parser, "isBound")) {
+        const size_t offset = parser->token.offset;
         expr_operand operand = {
             .value_kind = EXPR_VALUE_BOOL};
         uint32_t operand_index;
+        if (!parser->policy.allow_is_bound)
+            return parser_fail(
+                parser, SCXML_EXPR_UNKNOWN_LOCATION, offset,
+                "isBound is unavailable in this expression profile");
         parser_next(parser);
         if (parser->token.kind != EXPR_TOKEN_LPAREN)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
@@ -1104,6 +1157,12 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
             operand.value.event_field = event_field;
             parser_next(parser);
         }
+        if (!parser_allow_system_operand(
+                parser,
+                operand.kind == EXPR_OPERAND_SYSTEM_EVENT_FIELD_BOUND
+                    ? operand.value.event_field : operand.kind,
+                offset))
+            return false;
         if (parser->token.kind != EXPR_TOKEN_RPAREN)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
                                parser->token.offset,
@@ -1139,6 +1198,9 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
             return parser_fail(
                 parser, SCXML_EXPR_UNKNOWN_LOCATION,
                 parser->token.offset, "unknown _event field");
+        if (!parser_allow_system_operand(
+                parser, operand.kind, event_offset))
+            return false;
         operand.value_kind = EXPR_VALUE_STRING;
         out->kind = EXPR_VALUE_STRING;
         out->reg = target;
@@ -1161,6 +1223,9 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
         const size_t offset = parser->token.offset;
         expr_operand operand = {0};
         uint32_t operand_index;
+        if (!parser_allow_system_operand(
+                parser, EXPR_OPERAND_SYSTEM_IOPROCESSOR_LOCATION, offset))
+            return false;
         parser_next(parser);
         if (parser->token.kind != EXPR_TOKEN_DOT) {
             return parser_fail(
@@ -1177,10 +1242,15 @@ static bool parser_parse_primary(expr_parser *parser, uint16_t target,
                                        0u, operand_index, 0u);
     }
     if (token_text_equal(parser, "In")) {
+        const size_t offset = parser->token.offset;
         expr_operand operand = {0};
         uint32_t operand_index;
         size_t name_offset;
         size_t name_size;
+        if (!parser->policy.allow_in)
+            return parser_fail(
+                parser, SCXML_EXPR_UNKNOWN_LOCATION, offset,
+                "In is unavailable in this expression profile");
         parser_next(parser);
         if (parser->token.kind != EXPR_TOKEN_LPAREN)
             return parser_fail(parser, SCXML_EXPR_SYNTAX_ERROR,
@@ -1549,12 +1619,20 @@ static scxml_expr_status expr_compile(
     scxml_expr_value_kind unresolved_kind,
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
+    const scxml_expr_compile_policy *policy_or_null,
     const scxml_expr_limits *limits_or_null,
     scxml_expr_diagnostic *diagnostic,
     bool require_boolean) {
     const scxml_expr_limits limits =
         limits_or_null != NULL ? *limits_or_null
                                : scxml_expr_default_limits();
+    const scxml_expr_compile_policy policy =
+        policy_or_null != NULL
+            ? *policy_or_null
+            : (scxml_expr_compile_policy){
+                  .allowed_system_operands = SCXML_EXPR_SYSTEM_ALL,
+                  .allow_in = true,
+                  .allow_is_bound = true};
     expr_parser parser;
     scxml_expr_program_impl *impl = NULL;
     qvm_diagnostic_t qvm_diagnostic;
@@ -1571,6 +1649,7 @@ static scxml_expr_status expr_compile(
         (path_policy == SCXML_EXPR_PATH_RUNTIME_MISSING &&
          (unresolved_kind < SCXML_EXPR_VALUE_BOOL ||
           unresolved_kind > SCXML_EXPR_VALUE_STRING)) ||
+        (policy.allowed_system_operands & ~SCXML_EXPR_SYSTEM_ALL) != 0u ||
         !scxml_expr_limits_valid(&limits))
         return expr_report(diagnostic, SCXML_EXPR_INVALID_ARGUMENT,
                            0u, "invalid SCXML expression compile arguments");
@@ -1587,6 +1666,7 @@ static scxml_expr_status expr_compile(
     parser.unresolved_kind = (expr_value_kind)unresolved_kind;
     parser.resolve_state = resolve_state;
     parser.resolve_user = resolve_user;
+    parser.policy = policy;
     parser.limits = limits;
     parser.diagnostic = diagnostic;
     parser.status = SCXML_EXPR_OK;
@@ -1630,6 +1710,7 @@ static scxml_expr_status expr_compile(
     parser.unresolved_kind = (expr_value_kind)unresolved_kind;
     parser.resolve_state = resolve_state;
     parser.resolve_user = resolve_user;
+    parser.policy = policy;
     parser.limits = limits;
     parser.diagnostic = diagnostic;
     parser.instructions = impl->instructions;
@@ -1691,7 +1772,27 @@ scxml_expr_status scxml_expr_compile(
     scxml_expr_diagnostic *diagnostic) {
     return expr_compile(out, source, source_size, root, NULL,
                         SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
-                        resolve_state, resolve_user, limits, diagnostic, true);
+                        resolve_state, resolve_user, NULL, limits,
+                        diagnostic, true);
+}
+
+scxml_expr_status scxml_expr_compile_with_policy(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_compile_policy *policy,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic) {
+    if (policy == NULL)
+        return expr_report(
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
+            "missing SCXML expression compile policy");
+    return expr_compile(out, source, source_size, root, NULL,
+                        SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
+                        resolve_state, resolve_user, policy, limits,
+                        diagnostic, true);
 }
 
 scxml_expr_status scxml_expr_compile_value(
@@ -1704,7 +1805,8 @@ scxml_expr_status scxml_expr_compile_value(
     scxml_expr_diagnostic *diagnostic) {
     return expr_compile(out, source, source_size, root, NULL,
                         SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
-                        resolve_state, resolve_user, limits, diagnostic, false);
+                        resolve_state, resolve_user, NULL, limits,
+                        diagnostic, false);
 }
 
 scxml_expr_status scxml_expr_compile_value_with_scope(
@@ -1718,7 +1820,8 @@ scxml_expr_status scxml_expr_compile_value_with_scope(
     scxml_expr_diagnostic *diagnostic) {
     return expr_compile(out, source, source_size, root, supplemental,
                         SCXML_EXPR_PATH_STRICT, SCXML_EXPR_VALUE_INVALID,
-                        resolve_state, resolve_user, limits, diagnostic, false);
+                        resolve_state, resolve_user, NULL, limits,
+                        diagnostic, false);
 }
 
 scxml_expr_status scxml_expr_compile_value_with_scope_policy(
@@ -1734,7 +1837,7 @@ scxml_expr_status scxml_expr_compile_value_with_scope_policy(
     scxml_expr_diagnostic *diagnostic) {
     return expr_compile(out, source, source_size, root, supplemental,
                         path_policy, unresolved_kind, resolve_state,
-                        resolve_user, limits, diagnostic, false);
+                        resolve_user, NULL, limits, diagnostic, false);
 }
 
 scxml_expr_status scxml_expr_compile_external(

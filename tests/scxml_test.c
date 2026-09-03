@@ -9,7 +9,7 @@
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
-#include <turbo/thread.h>
+#include <salts/thread.h>
 
 #define SCXML_LOG_CAPTURE_CAPACITY 4u
 #define SCXML_LOG_COMPONENT_CAPACITY 32u
@@ -17,7 +17,7 @@
 
 typedef struct scxml_log_capture {
     size_t count;
-    turbo_log_level_t levels[SCXML_LOG_CAPTURE_CAPACITY];
+    salts_log_level_t levels[SCXML_LOG_CAPTURE_CAPACITY];
     char components[SCXML_LOG_CAPTURE_CAPACITY]
                    [SCXML_LOG_COMPONENT_CAPACITY];
     char messages[SCXML_LOG_CAPTURE_CAPACITY][SCXML_LOG_MESSAGE_CAPACITY];
@@ -27,7 +27,7 @@ static scxml_status compile_status(
     const char *source, scxml_program *program,
     scxml_diagnostic *diagnostic);
 
-static void capture_scxml_log(const turbo_log_entry_t *entry,
+static void capture_scxml_log(const salts_log_entry_t *entry,
                               void *user_data) {
     scxml_log_capture *capture = (scxml_log_capture *)user_data;
     size_t index;
@@ -66,7 +66,7 @@ static bool run_log_program(const char *source, bool install_logger,
     cflow_statechart_instance_stats stats = {0};
     tlog_t *previous_logger = tlog_peek_default();
     tlog_t *logger = NULL;
-    turbo_log_sink_t *sink = NULL;
+    salts_log_sink_t *sink = NULL;
     bool executor_initialized = false;
     bool instance_initialized = false;
     bool succeeded = false;
@@ -78,10 +78,10 @@ static bool run_log_program(const char *source, bool install_logger,
     memset(capture, 0, sizeof(*capture));
     if (install_logger) {
         const tlog_config_t log_config = {
-            .min_level = TURBO_LOG_LEVEL_DEBUG, .buffer_size = 0u};
+            .min_level = SALTS_LOG_LEVEL_DEBUG, .buffer_size = 0u};
         logger = tlog_create(&log_config);
         if (logger == NULL) goto cleanup;
-        sink = turbo_sink_callback_create(capture_scxml_log, capture);
+        sink = salts_sink_callback_create(capture_scxml_log, capture);
         if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
         sink = NULL;
         tlog_set_default(logger);
@@ -124,7 +124,7 @@ cleanup:
     if (executor_initialized) cflow_executor_destroy(&executor);
     if (logger != NULL) tlog_flush(logger);
     tlog_set_default(previous_logger);
-    if (sink != NULL) turbo_sink_destroy(sink);
+    if (sink != NULL) salts_sink_destroy(sink);
     if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&program);
     return succeeded;
@@ -458,7 +458,7 @@ typedef struct scxml_executor_blocker {
 static void scxml_block_executor(void *user) {
     scxml_executor_blocker *blocker = (scxml_executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) turbo_thread_yield();
+    while (!atomic_load(&blocker->release)) salts_thread_yield();
 }
 
 static const cflow_statechart_state *find_state(
@@ -1674,7 +1674,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         check_true(done);
         check_false(errored);
         check_equal(capture.count, (size_t)1u);
-        check_equal(capture.levels[0], TURBO_LOG_LEVEL_DEBUG);
+        check_equal(capture.levels[0], SALTS_LOG_LEVEL_DEBUG);
         check_equal(capture.components[0], "cflow.scxml");
         check_equal(capture.messages[0], "entered");
     }
@@ -2831,10 +2831,10 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             .invoke = &adapter,
             .invoke_user = &probe};
         const tlog_config_t log_config = {
-            .min_level = TURBO_LOG_LEVEL_DEBUG, .buffer_size = 0u};
+            .min_level = SALTS_LOG_LEVEL_DEBUG, .buffer_size = 0u};
         tlog_t *previous_logger = tlog_peek_default();
         tlog_t *logger = tlog_create(&log_config);
-        turbo_log_sink_t *sink = turbo_sink_callback_create(
+        salts_log_sink_t *sink = salts_sink_callback_create(
             capture_scxml_log, &capture);
         cflow_event_view tick = {0};
         cflow_event_view done = {0};
@@ -2904,7 +2904,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
         tlog_set_default(previous_logger);
-        if (sink != NULL) turbo_sink_destroy(sink);
+        if (sink != NULL) salts_sink_destroy(sink);
         tlog_destroy(logger);
     }
 
@@ -2958,7 +2958,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         check_equal(cflow_executor_try_post(
                         &executor, scxml_block_executor, &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&blocker.entered)) turbo_thread_yield();
+        while (!atomic_load(&blocker.entered)) salts_thread_yield();
         check_equal(scxml_session_try_send(&session, &leave),
                     CFLOW_MAILBOX_OK);
         check_equal(scxml_session_report_invoke_done(

@@ -3,7 +3,7 @@
 #include "scxml_session.h"
 
 #include <cmeta/container.h>
-#include <turbo/clock.h>
+#include <salts/clock.h>
 
 #include <math.h>
 #include <stdint.h>
@@ -193,7 +193,7 @@ static const int64_t quickjs_min_safe_integer =
 
 static bool quickjs_deadline_expired(scxml_quickjs_runtime *runtime) {
     if (runtime == NULL || runtime->deadline_ms == 0u) return false;
-    if (turbo_monotonic_ms() < runtime->deadline_ms) return false;
+    if (salts_monotonic_ms() < runtime->deadline_ms) return false;
     runtime->interrupted = true;
     return true;
 }
@@ -207,7 +207,7 @@ static bool quickjs_deadline_begin(
     scxml_quickjs_runtime *runtime, uint64_t milliseconds) {
     uint64_t now;
     if (runtime->deadline_ms != 0u) return false;
-    now = turbo_monotonic_ms();
+    now = salts_monotonic_ms();
     runtime->deadline_ms = now > UINT64_MAX - milliseconds
         ? UINT64_MAX : now + milliseconds;
     runtime->interrupted = false;

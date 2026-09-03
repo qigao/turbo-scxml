@@ -1,7 +1,7 @@
 #include "chttp_event_io_internal.h"
 
-#include <turbo/error_codes.h>
-#include <turbo/platform.h>
+#include <salts/error_codes.h>
+#include <salts/platform.h>
 
 #include <stdio.h>
 #include <stdatomic.h>
@@ -107,7 +107,7 @@ static bool processor_config_valid(
         config->server.max_route_param_count == 0u ||
         config->server.max_route_param_bytes <
             (sizeof("endpoint") - 1u) +
-                (TURBO_UUID_STRING_SIZE - 1u) + 2u ||
+                (SALTS_UUID_STRING_SIZE - 1u) + 2u ||
         config->request_timeout_ms == 0u || config->worker_poll_ms == 0u ||
         config->resolve == NULL ||
         config->max_encoded_body_bytes >
@@ -126,7 +126,7 @@ static bool processor_config_valid(
         return false;
     endpoint_target_size = *out_base_path_size +
         (config->base_path[*out_base_path_size - 1u] == '/' ? 0u : 1u) +
-        (TURBO_UUID_STRING_SIZE - 1u);
+        (SALTS_UUID_STRING_SIZE - 1u);
     if (config->server.max_target_bytes < endpoint_target_size)
         return false;
     for (index = 0u; index < *out_authority_size; ++index) {
@@ -225,7 +225,7 @@ static bool downstream_adapter_valid(
 }
 
 static uint64_t stop_deadline(uint32_t timeout_ms) {
-    const uint64_t now = turbo_monotonic_ms();
+    const uint64_t now = salts_monotonic_ms();
     return timeout_ms == 0u ? UINT64_MAX :
         now > UINT64_MAX - timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
@@ -239,7 +239,7 @@ static bool remaining_timeout_ms(
         *out_timeout_ms = 0u;
         return true;
     }
-    now = turbo_monotonic_ms();
+    now = salts_monotonic_ms();
     if (now >= deadline_ms) return false;
     remaining = deadline_ms - now;
     *out_timeout_ms = remaining > UINT32_MAX
@@ -297,9 +297,9 @@ static int build_access_uri(
               has_slash ? "" : "/", endpoint->endpoint);
     if (written < 0 ||
         (size_t)written > processor->config.max_access_uri_bytes)
-        return TURBO_ENOSPC;
+        return SALTS_ENOSPC;
     endpoint->access_uri_size = (size_t)written;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static void processor_worker(void *user) {
@@ -308,7 +308,7 @@ static void processor_worker(void *user) {
     for (;;) {
         size_t completions = 0u;
         int poll_status;
-        turbo_mutex_lock(&processor->lock);
+        salts_mutex_lock(&processor->lock);
         if (processor->stop_requested) {
             const uint64_t generation = processor->stop_generation;
             const uint64_t deadline_ms = processor->stop_deadline_ms;
@@ -316,63 +316,63 @@ static void processor_worker(void *user) {
             bool client_destroyed = processor->client_destroyed;
             uint32_t remaining_ms;
             int stop_status;
-            turbo_mutex_unlock(&processor->lock);
+            salts_mutex_unlock(&processor->lock);
             {
                 const uint32_t delay_ms = atomic_exchange_explicit(
                     &DELAY_NEXT_WORKER_EXIT_MS, 0u, memory_order_acq_rel);
-                if (delay_ms != 0u) turbo_sleep_ms(delay_ms);
+                if (delay_ms != 0u) salts_sleep_ms(delay_ms);
             }
             if (!client_stopped) {
                 stop_status = remaining_timeout_ms(
                                   deadline_ms, &remaining_ms)
                     ? chttp_async_client_stop(
                           &processor->client, remaining_ms)
-                    : TURBO_ETIMEDOUT;
-                if (stop_status == TURBO_OK) client_stopped = true;
+                    : SALTS_ETIMEDOUT;
+                if (stop_status == SALTS_OK) client_stopped = true;
             } else {
-                stop_status = TURBO_OK;
+                stop_status = SALTS_OK;
             }
-            if (stop_status == TURBO_OK && !client_destroyed) {
+            if (stop_status == SALTS_OK && !client_destroyed) {
                 stop_status = chttp_async_client_destroy(&processor->client);
-                if (stop_status == TURBO_OK) client_destroyed = true;
+                if (stop_status == SALTS_OK) client_destroyed = true;
             }
-            turbo_mutex_lock(&processor->lock);
+            salts_mutex_lock(&processor->lock);
             processor->client_stopped = client_stopped;
             processor->client_destroyed = client_destroyed;
-            if (stop_status == TURBO_OK) {
-                processor->worker_stop_status = TURBO_OK;
+            if (stop_status == SALTS_OK) {
+                processor->worker_stop_status = SALTS_OK;
                 processor->stop_attempt_complete = true;
                 processor->worker_exited = true;
-                turbo_cond_broadcast(&processor->wake);
-                turbo_mutex_unlock(&processor->lock);
+                salts_cond_broadcast(&processor->wake);
+                salts_mutex_unlock(&processor->lock);
                 return;
             }
             if (processor->stop_generation == generation) {
                 processor->worker_stop_status = stop_status;
                 processor->stop_attempt_complete = true;
-                turbo_cond_broadcast(&processor->wake);
+                salts_cond_broadcast(&processor->wake);
                 while (processor->stop_generation == generation)
-                    turbo_cond_wait(&processor->wake, &processor->lock);
+                    salts_cond_wait(&processor->wake, &processor->lock);
             }
-            turbo_mutex_unlock(&processor->lock);
+            salts_mutex_unlock(&processor->lock);
             continue;
         }
-        turbo_mutex_unlock(&processor->lock);
+        salts_mutex_unlock(&processor->lock);
         while (scxml_chttp_egress_cancel_one(processor)) {}
         (void)scxml_chttp_egress_submit_one(processor);
         poll_status = chttp_async_client_poll(
             &processor->client, 0u, &completions);
-        if (poll_status != TURBO_OK && poll_status != TURBO_ESHUTDOWN) {
-            turbo_mutex_lock(&processor->lock);
+        if (poll_status != SALTS_OK && poll_status != SALTS_ESHUTDOWN) {
+            salts_mutex_lock(&processor->lock);
             ++processor->invariant_failures;
-            turbo_mutex_unlock(&processor->lock);
+            salts_mutex_unlock(&processor->lock);
         }
-        turbo_mutex_lock(&processor->lock);
+        salts_mutex_lock(&processor->lock);
         if (!processor->stop_requested)
-            (void)turbo_cond_timedwait(
+            (void)salts_cond_timedwait(
                 &processor->wake, &processor->lock,
                 (uint64_t)processor->config.worker_poll_ms * UINT64_C(1000000));
-        turbo_mutex_unlock(&processor->lock);
+        salts_mutex_unlock(&processor->lock);
     }
 }
 
@@ -387,20 +387,20 @@ int scxml_chttp_processor_init(
     size_t string_stride;
     size_t index;
     int status;
-    if (processor == NULL || config == NULL) return TURBO_EINVAL;
-    if (processor->impl != NULL) return TURBO_EALREADY;
+    if (processor == NULL || config == NULL) return SALTS_EINVAL;
+    if (processor->impl != NULL) return SALTS_EALREADY;
     if (!processor_config_valid(
             config, &authority_size, &base_path_size))
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     if (!calculate_storage_layout(
             config, authority_size, base_path_size, &layout))
-        return TURBO_ERANGE;
+        return SALTS_ERANGE;
     impl = (scxml_chttp_processor_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL) return TURBO_ENOMEM;
+    if (impl == NULL) return SALTS_ENOMEM;
     impl->storage = calloc(1u, layout.total);
     if (impl->storage == NULL) {
         free(impl);
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     storage = (unsigned char *)impl->storage;
     impl->config = *config;
@@ -453,38 +453,38 @@ int scxml_chttp_processor_init(
                      index * config->max_encoded_body_bytes);
         impl->cancel_tickets[index].processor = impl;
     }
-    turbo_mutex_init(&impl->lock);
+    salts_mutex_init(&impl->lock);
     if (impl->lock == NULL) {
         free(impl->storage);
         free(impl);
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
-    turbo_cond_init(&impl->wake);
+    salts_cond_init(&impl->wake);
     if (impl->wake == NULL) {
-        turbo_mutex_destroy(&impl->lock);
+        salts_mutex_destroy(&impl->lock);
         free(impl->storage);
         free(impl);
-        return TURBO_ENOMEM;
+        return SALTS_ENOMEM;
     }
     status = chttp_server_init(&impl->server, &config->server);
-    if (status != TURBO_OK) goto fail;
+    if (status != SALTS_OK) goto fail;
     status = scxml_chttp_ingress_register(impl);
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
         (void)chttp_server_destroy(&impl->server);
         goto fail;
     }
     status = chttp_async_client_init(&impl->client, &config->client);
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
         (void)chttp_server_destroy(&impl->server);
         goto fail;
     }
     impl->state = SCXML_CHTTP_PROCESSOR_INITIALIZED;
     processor->impl = impl;
-    return TURBO_OK;
+    return SALTS_OK;
 
 fail:
-    turbo_cond_destroy(&impl->wake);
-    turbo_mutex_destroy(&impl->lock);
+    salts_cond_destroy(&impl->wake);
+    salts_mutex_destroy(&impl->lock);
     free(impl->storage);
     free(impl);
     return status;
@@ -493,34 +493,34 @@ fail:
 int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     scxml_chttp_processor_impl *impl;
     int status;
-    if (processor == NULL || processor->impl == NULL) return TURBO_EINVAL;
+    if (processor == NULL || processor->impl == NULL) return SALTS_EINVAL;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    turbo_mutex_lock(&impl->lock);
+    salts_mutex_lock(&impl->lock);
     if (impl->state != SCXML_CHTTP_PROCESSOR_INITIALIZED) {
         status = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING
-            ? TURBO_EALREADY : TURBO_EBUSY;
-        turbo_mutex_unlock(&impl->lock);
+            ? SALTS_EALREADY : SALTS_EBUSY;
+        salts_mutex_unlock(&impl->lock);
         return status;
     }
     status = chttp_server_start(&impl->server);
-    if (status != TURBO_OK) {
-        turbo_mutex_unlock(&impl->lock);
+    if (status != SALTS_OK) {
+        salts_mutex_unlock(&impl->lock);
         return status;
     }
     impl->server_started = true;
     status = chttp_server_port(&impl->server, &impl->bound_port);
-    if (status != TURBO_OK) goto stop_server;
+    if (status != SALTS_OK) goto stop_server;
     impl->stop_requested = false;
     impl->worker_exited = false;
     status = atomic_exchange_explicit(
                  &FAIL_NEXT_WORKER_CREATE, false, memory_order_acq_rel)
-        ? TURBO_ENOMEM
-        : turbo_thread_create(&impl->worker, processor_worker, impl);
-    if (status != TURBO_OK) goto stop_server;
+        ? SALTS_ENOMEM
+        : salts_thread_create(&impl->worker, processor_worker, impl);
+    if (status != SALTS_OK) goto stop_server;
     impl->worker_started = true;
     impl->state = SCXML_CHTTP_PROCESSOR_RUNNING;
-    turbo_mutex_unlock(&impl->lock);
-    return TURBO_OK;
+    salts_mutex_unlock(&impl->lock);
+    return SALTS_OK;
 
 stop_server:
     {
@@ -528,19 +528,19 @@ stop_server:
             &impl->server, impl->config.request_timeout_ms);
         const int client_status = chttp_async_client_stop(
             &impl->client, impl->config.request_timeout_ms);
-        int destroy_status = TURBO_EBUSY;
-        if (server_status == TURBO_OK) impl->server_stopped = true;
-        if (client_status == TURBO_OK) {
+        int destroy_status = SALTS_EBUSY;
+        if (server_status == SALTS_OK) impl->server_stopped = true;
+        if (client_status == SALTS_OK) {
             impl->client_stopped = true;
             destroy_status = chttp_async_client_destroy(&impl->client);
-            if (destroy_status == TURBO_OK) impl->client_destroyed = true;
+            if (destroy_status == SALTS_OK) impl->client_destroyed = true;
         }
-        impl->state = server_status == TURBO_OK &&
-                      destroy_status == TURBO_OK
+        impl->state = server_status == SALTS_OK &&
+                      destroy_status == SALTS_OK
             ? SCXML_CHTTP_PROCESSOR_STOPPED
             : SCXML_CHTTP_PROCESSOR_STOPPING;
     }
-    turbo_mutex_unlock(&impl->lock);
+    salts_mutex_unlock(&impl->lock);
     return status;
 }
 
@@ -549,104 +549,104 @@ int scxml_chttp_processor_stop(
     scxml_chttp_processor_impl *impl;
     const uint64_t deadline_ms = stop_deadline(timeout_ms);
     uint32_t remaining_ms;
-    int first_status = TURBO_OK;
+    int first_status = SALTS_OK;
     int status;
-    if (processor == NULL || processor->impl == NULL) return TURBO_EINVAL;
+    if (processor == NULL || processor->impl == NULL) return SALTS_EINVAL;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    turbo_mutex_lock(&impl->lock);
+    salts_mutex_lock(&impl->lock);
     if (impl->live_bindings != 0u) {
-        turbo_mutex_unlock(&impl->lock);
-        return TURBO_EBUSY;
+        salts_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
     }
     if (impl->stop_active) {
-        turbo_mutex_unlock(&impl->lock);
-        return TURBO_EBUSY;
+        salts_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
     }
     if (impl->state == SCXML_CHTTP_PROCESSOR_STOPPED) {
-        turbo_mutex_unlock(&impl->lock);
-        return TURBO_EALREADY;
+        salts_mutex_unlock(&impl->lock);
+        return SALTS_EALREADY;
     }
     if (impl->state == SCXML_CHTTP_PROCESSOR_INITIALIZED) {
-        turbo_mutex_unlock(&impl->lock);
-        return TURBO_EBUSY;
+        salts_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
     }
     impl->stop_active = true;
     impl->state = SCXML_CHTTP_PROCESSOR_STOPPING;
-    turbo_mutex_unlock(&impl->lock);
+    salts_mutex_unlock(&impl->lock);
     if (impl->server_started && !impl->server_stopped) {
         chttp_server_stats server_stats;
         const bool force_terminal_error = atomic_exchange_explicit(
             &FORCE_NEXT_SERVER_TERMINAL_ERROR, false,
             memory_order_acq_rel);
         if (!remaining_timeout_ms(deadline_ms, &remaining_ms)) {
-            status = TURBO_ETIMEDOUT;
+            status = SALTS_ETIMEDOUT;
             goto finish;
         }
         status = chttp_server_stop(&impl->server, remaining_ms);
-        if (status == TURBO_OK && force_terminal_error)
-            status = TURBO_EIO;
-        if (status != TURBO_OK) {
+        if (status == SALTS_OK && force_terminal_error)
+            status = SALTS_EIO;
+        if (status != SALTS_OK) {
             if (chttp_server_get_stats(&impl->server, &server_stats) !=
-                    TURBO_OK ||
+                    SALTS_OK ||
                 server_stats.running || server_stats.stopping)
                 goto finish;
-            if (impl->shutdown_terminal_status == TURBO_OK)
+            if (impl->shutdown_terminal_status == SALTS_OK)
                 impl->shutdown_terminal_status = status;
             first_status = impl->shutdown_terminal_status;
         }
         impl->server_stopped = true;
     }
     if (impl->worker_started) {
-        turbo_mutex_lock(&impl->lock);
+        salts_mutex_lock(&impl->lock);
         if (!impl->worker_exited) {
             ++impl->stop_generation;
             if (impl->stop_generation == 0u) ++impl->stop_generation;
             impl->stop_deadline_ms = deadline_ms;
             impl->stop_attempt_complete = false;
             impl->stop_requested = true;
-            turbo_cond_broadcast(&impl->wake);
+            salts_cond_broadcast(&impl->wake);
         }
         while (!impl->stop_attempt_complete && !impl->worker_exited) {
             if (deadline_ms == UINT64_MAX) {
-                turbo_cond_wait(&impl->wake, &impl->lock);
+                salts_cond_wait(&impl->wake, &impl->lock);
             } else {
                 if (!remaining_timeout_ms(deadline_ms, &remaining_ms)) {
-                    turbo_mutex_unlock(&impl->lock);
-                    status = TURBO_ETIMEDOUT;
+                    salts_mutex_unlock(&impl->lock);
+                    status = SALTS_ETIMEDOUT;
                     goto finish;
                 }
-                status = turbo_cond_timedwait(
+                status = salts_cond_timedwait(
                     &impl->wake, &impl->lock,
                     (uint64_t)remaining_ms * UINT64_C(1000000));
-                if (status != TURBO_OK && !impl->stop_attempt_complete &&
+                if (status != SALTS_OK && !impl->stop_attempt_complete &&
                     !impl->worker_exited) {
-                    turbo_mutex_unlock(&impl->lock);
-                    status = TURBO_ETIMEDOUT;
+                    salts_mutex_unlock(&impl->lock);
+                    status = SALTS_ETIMEDOUT;
                     goto finish;
                 }
             }
         }
         status = impl->worker_exited
-            ? TURBO_OK : impl->worker_stop_status;
-        turbo_mutex_unlock(&impl->lock);
-        if (status != TURBO_OK) goto finish;
-        status = turbo_thread_join(&impl->worker);
-        if (status != TURBO_OK) goto finish;
-        turbo_thread_destroy(&impl->worker);
+            ? SALTS_OK : impl->worker_stop_status;
+        salts_mutex_unlock(&impl->lock);
+        if (status != SALTS_OK) goto finish;
+        status = salts_thread_join(&impl->worker);
+        if (status != SALTS_OK) goto finish;
+        salts_thread_destroy(&impl->worker);
         impl->worker_started = false;
     }
     status = first_status;
 
 finish:
-    turbo_mutex_lock(&impl->lock);
+    salts_mutex_lock(&impl->lock);
     if (impl->server_stopped && !impl->worker_started &&
         impl->client_destroyed) {
         impl->state = SCXML_CHTTP_PROCESSOR_STOPPED;
-        if (impl->shutdown_terminal_status != TURBO_OK)
+        if (impl->shutdown_terminal_status != SALTS_OK)
             status = impl->shutdown_terminal_status;
     }
     impl->stop_active = false;
-    turbo_mutex_unlock(&impl->lock);
+    salts_mutex_unlock(&impl->lock);
     return status;
 }
 
@@ -654,27 +654,27 @@ int scxml_chttp_processor_destroy(scxml_chttp_processor *processor) {
     scxml_chttp_processor_impl *impl;
     int client_status;
     int server_status;
-    if (processor == NULL) return TURBO_EINVAL;
-    if (processor->impl == NULL) return TURBO_OK;
+    if (processor == NULL) return SALTS_EINVAL;
+    if (processor->impl == NULL) return SALTS_OK;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    turbo_mutex_lock(&impl->lock);
+    salts_mutex_lock(&impl->lock);
     if (impl->state != SCXML_CHTTP_PROCESSOR_STOPPED ||
         impl->live_bindings != 0u) {
-        turbo_mutex_unlock(&impl->lock);
-        return TURBO_EBUSY;
+        salts_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
     }
-    turbo_mutex_unlock(&impl->lock);
+    salts_mutex_unlock(&impl->lock);
     client_status = impl->client_destroyed
-        ? TURBO_OK : chttp_async_client_destroy(&impl->client);
+        ? SALTS_OK : chttp_async_client_destroy(&impl->client);
     server_status = chttp_server_destroy(&impl->server);
-    if (client_status != TURBO_OK) return client_status;
-    if (server_status != TURBO_OK) return server_status;
-    turbo_cond_destroy(&impl->wake);
-    turbo_mutex_destroy(&impl->lock);
+    if (client_status != SALTS_OK) return client_status;
+    if (server_status != SALTS_OK) return server_status;
+    salts_cond_destroy(&impl->wake);
+    salts_mutex_destroy(&impl->lock);
     free(impl->storage);
     free(impl);
     processor->impl = NULL;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 static scxml_adapter_status composite_prepare_send(
@@ -687,10 +687,10 @@ static scxml_adapter_status composite_prepare_send(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     memset(out_ticket, 0, sizeof(*out_ticket));
     *out_error = NULL;
-    turbo_mutex_lock(&binding->processor->lock);
+    salts_mutex_lock(&binding->processor->lock);
     open = binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE;
-    turbo_mutex_unlock(&binding->processor->lock);
+    salts_mutex_unlock(&binding->processor->lock);
     if (!open) return SCXML_ADAPTER_CLOSED;
     if (text_equal(
             request->type, request->type_size,
@@ -714,10 +714,10 @@ static scxml_adapter_status composite_prepare_cancel(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     memset(out_ticket, 0, sizeof(*out_ticket));
     *out_error = NULL;
-    turbo_mutex_lock(&binding->processor->lock);
+    salts_mutex_lock(&binding->processor->lock);
     open = binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE;
-    turbo_mutex_unlock(&binding->processor->lock);
+    salts_mutex_unlock(&binding->processor->lock);
     if (!open) return SCXML_ADAPTER_CLOSED;
     if ((binding->downstream.capabilities & SCXML_EVENT_IO_CAP_CANCEL) == 0u ||
         binding->downstream.prepare_cancel == NULL)
@@ -733,7 +733,7 @@ static void composite_close(void *user) {
     scxml_chttp_binding_impl *binding = (scxml_chttp_binding_impl *)user;
     bool close_downstream = false;
     if (binding == NULL || binding->processor == NULL) return;
-    turbo_mutex_lock(&binding->processor->lock);
+    salts_mutex_lock(&binding->processor->lock);
     if (binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE) {
         binding->state = SCXML_CHTTP_BINDING_CLOSING;
@@ -743,7 +743,7 @@ static void composite_close(void *user) {
         binding->downstream_close_called = true;
         close_downstream = true;
     }
-    turbo_mutex_unlock(&binding->processor->lock);
+    salts_mutex_unlock(&binding->processor->lock);
     if (close_downstream)
         binding->downstream.close(binding->downstream_user);
 }
@@ -753,19 +753,19 @@ static bool composite_is_quiescent(void *user) {
     bool downstream_quiescent;
     bool quiescent;
     if (binding == NULL || binding->processor == NULL) return false;
-    turbo_mutex_lock(&binding->processor->lock);
+    salts_mutex_lock(&binding->processor->lock);
     if (binding->state == SCXML_CHTTP_BINDING_QUIESCENT) {
-        turbo_mutex_unlock(&binding->processor->lock);
+        salts_mutex_unlock(&binding->processor->lock);
         return true;
     }
     if (binding->state != SCXML_CHTTP_BINDING_CLOSING) {
-        turbo_mutex_unlock(&binding->processor->lock);
+        salts_mutex_unlock(&binding->processor->lock);
         return false;
     }
-    turbo_mutex_unlock(&binding->processor->lock);
+    salts_mutex_unlock(&binding->processor->lock);
     downstream_quiescent =
         binding->downstream.is_quiescent(binding->downstream_user);
-    turbo_mutex_lock(&binding->processor->lock);
+    salts_mutex_lock(&binding->processor->lock);
     quiescent = binding->state == SCXML_CHTTP_BINDING_CLOSING &&
         downstream_quiescent && binding->active_callbacks == 0u &&
         binding->outbound_references == 0u;
@@ -774,7 +774,7 @@ static bool composite_is_quiescent(void *user) {
         binding->session = NULL;
         binding->program = NULL;
     }
-    turbo_mutex_unlock(&binding->processor->lock);
+    salts_mutex_unlock(&binding->processor->lock);
     return quiescent;
 }
 
@@ -784,28 +784,28 @@ int scxml_chttp_binding_init(
     scxml_chttp_processor_impl *processor_impl;
     scxml_chttp_binding_impl *impl;
     scxml_chttp_endpoint_row *endpoint = NULL;
-    turbo_uuid_t uuid;
+    salts_uuid_t uuid;
     uint64_t composite_capabilities;
     size_t index;
     int status;
     if (binding == NULL || processor == NULL || processor->impl == NULL ||
         config == NULL)
-        return TURBO_EINVAL;
-    if (binding->impl != NULL) return TURBO_EALREADY;
+        return SALTS_EINVAL;
+    if (binding->impl != NULL) return SALTS_EALREADY;
     if (config->abi_version != SCXML_CHTTP_ABI_V1 ||
         config->struct_size < sizeof(*config) ||
         !downstream_adapter_valid(config->scxml_adapter))
-        return TURBO_EINVAL;
-    status = turbo_uuid_v4_generate(&uuid);
-    if (status != TURBO_OK) return status;
+        return SALTS_EINVAL;
+    status = salts_uuid_v4_generate(&uuid);
+    if (status != SALTS_OK) return status;
     impl = (scxml_chttp_binding_impl *)calloc(1u, sizeof(*impl));
-    if (impl == NULL) return TURBO_ENOMEM;
+    if (impl == NULL) return SALTS_ENOMEM;
     processor_impl = (scxml_chttp_processor_impl *)processor->impl;
-    turbo_mutex_lock(&processor_impl->lock);
+    salts_mutex_lock(&processor_impl->lock);
     if (processor_impl->state != SCXML_CHTTP_PROCESSOR_RUNNING) {
-        turbo_mutex_unlock(&processor_impl->lock);
+        salts_mutex_unlock(&processor_impl->lock);
         free(impl);
-        return TURBO_EBUSY;
+        return SALTS_EBUSY;
     }
     for (index = 0u; index < processor_impl->config.endpoint_capacity;
          ++index) {
@@ -815,16 +815,16 @@ int scxml_chttp_binding_init(
         }
     }
     if (endpoint == NULL) {
-        turbo_mutex_unlock(&processor_impl->lock);
+        salts_mutex_unlock(&processor_impl->lock);
         free(impl);
-        return TURBO_ENOBUFS;
+        return SALTS_ENOBUFS;
     }
     ++endpoint->generation;
     if (endpoint->generation == 0u) ++endpoint->generation;
-    status = turbo_uuid_format(
+    status = salts_uuid_format(
         &uuid, endpoint->endpoint, sizeof(endpoint->endpoint));
-    if (status != TURBO_OK) {
-        turbo_mutex_unlock(&processor_impl->lock);
+    if (status != SALTS_OK) {
+        salts_mutex_unlock(&processor_impl->lock);
         free(impl);
         return status;
     }
@@ -854,19 +854,19 @@ int scxml_chttp_binding_init(
     impl->decode_user = config->decode_user;
     endpoint->binding = impl;
     status = build_access_uri(processor_impl, endpoint);
-    if (status != TURBO_OK) {
+    if (status != SALTS_OK) {
         endpoint->binding = NULL;
         endpoint->endpoint[0] = '\0';
         endpoint->access_uri[0] = '\0';
         endpoint->access_uri_size = 0u;
-        turbo_mutex_unlock(&processor_impl->lock);
+        salts_mutex_unlock(&processor_impl->lock);
         free(impl);
         return status;
     }
     ++processor_impl->live_bindings;
     binding->impl = impl;
-    turbo_mutex_unlock(&processor_impl->lock);
-    return TURBO_OK;
+    salts_mutex_unlock(&processor_impl->lock);
+    return SALTS_OK;
 }
 
 const scxml_event_io_adapter *scxml_chttp_binding_event_io_adapter(
@@ -890,7 +890,7 @@ bool scxml_chttp_binding_ioprocessor(
     if (binding == NULL || binding->impl == NULL || out_descriptor == NULL)
         return false;
     impl = (scxml_chttp_binding_impl *)binding->impl;
-    turbo_mutex_lock(&impl->processor->lock);
+    salts_mutex_lock(&impl->processor->lock);
     endpoint = &impl->processor->endpoints[impl->endpoint_index];
     available = endpoint->binding == impl &&
         endpoint->generation == impl->endpoint_generation &&
@@ -903,7 +903,7 @@ bool scxml_chttp_binding_ioprocessor(
             sizeof(SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI) - 1u,
             endpoint->access_uri, endpoint->access_uri_size};
     }
-    turbo_mutex_unlock(&impl->processor->lock);
+    salts_mutex_unlock(&impl->processor->lock);
     return available;
 }
 
@@ -912,55 +912,55 @@ int scxml_chttp_binding_activate(
     const scxml_program *program) {
     scxml_chttp_binding_impl *impl;
     scxml_ioprocessor_descriptor descriptor;
-    int status = TURBO_OK;
+    int status = SALTS_OK;
     if (binding == NULL || binding->impl == NULL || session == NULL ||
         session->impl == NULL || program == NULL || program->impl == NULL)
-        return TURBO_EINVAL;
+        return SALTS_EINVAL;
     impl = (scxml_chttp_binding_impl *)binding->impl;
     if (!scxml_chttp_binding_ioprocessor(binding, &descriptor) ||
         !scxml_session_matches_event_io(
             session, program, &impl->composite, impl, &descriptor))
-        return TURBO_EINVAL;
-    turbo_mutex_lock(&impl->processor->lock);
+        return SALTS_EINVAL;
+    salts_mutex_lock(&impl->processor->lock);
     if (impl->state == SCXML_CHTTP_BINDING_ACTIVE)
-        status = TURBO_EALREADY;
+        status = SALTS_EALREADY;
     else if (impl->state != SCXML_CHTTP_BINDING_RESERVED ||
              impl->processor->state != SCXML_CHTTP_PROCESSOR_RUNNING)
-        status = TURBO_EBUSY;
+        status = SALTS_EBUSY;
     else {
         impl->session = session;
         impl->program = program;
         impl->state = SCXML_CHTTP_BINDING_ACTIVE;
-        turbo_cond_signal(&impl->processor->wake);
+        salts_cond_signal(&impl->processor->wake);
     }
-    turbo_mutex_unlock(&impl->processor->lock);
+    salts_mutex_unlock(&impl->processor->lock);
     return status;
 }
 
 int scxml_chttp_binding_destroy(scxml_chttp_binding *binding) {
     scxml_chttp_binding_impl *impl;
     scxml_chttp_endpoint_row *endpoint;
-    if (binding == NULL) return TURBO_EINVAL;
-    if (binding->impl == NULL) return TURBO_OK;
+    if (binding == NULL) return SALTS_EINVAL;
+    if (binding->impl == NULL) return SALTS_OK;
     impl = (scxml_chttp_binding_impl *)binding->impl;
-    if (!composite_is_quiescent(impl)) return TURBO_EBUSY;
-    turbo_mutex_lock(&impl->processor->lock);
+    if (!composite_is_quiescent(impl)) return SALTS_EBUSY;
+    salts_mutex_lock(&impl->processor->lock);
     endpoint = &impl->processor->endpoints[impl->endpoint_index];
     if (endpoint->binding != impl ||
         endpoint->generation != impl->endpoint_generation) {
         ++impl->processor->invariant_failures;
-        turbo_mutex_unlock(&impl->processor->lock);
-        return TURBO_EIO;
+        salts_mutex_unlock(&impl->processor->lock);
+        return SALTS_EIO;
     }
     endpoint->binding = NULL;
     endpoint->endpoint[0] = '\0';
     endpoint->access_uri[0] = '\0';
     endpoint->access_uri_size = 0u;
     --impl->processor->live_bindings;
-    turbo_mutex_unlock(&impl->processor->lock);
+    salts_mutex_unlock(&impl->processor->lock);
     free(impl);
     binding->impl = NULL;
-    return TURBO_OK;
+    return SALTS_OK;
 }
 
 bool scxml_chttp_processor_get_stats(
@@ -974,7 +974,7 @@ bool scxml_chttp_processor_get_stats(
     if (processor == NULL || processor->impl == NULL || out_stats == NULL)
         return false;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    turbo_mutex_lock(&impl->lock);
+    salts_mutex_lock(&impl->lock);
     for (index = 0u; index < impl->config.endpoint_capacity; ++index) {
         const scxml_chttp_binding_impl *binding = impl->endpoints[index].binding;
         if (binding != NULL) {
@@ -998,6 +998,6 @@ bool scxml_chttp_processor_get_stats(
         .outbound_references = outbound_references,
         .running = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING,
         .stopping = impl->state == SCXML_CHTTP_PROCESSOR_STOPPING};
-    turbo_mutex_unlock(&impl->lock);
+    salts_mutex_unlock(&impl->lock);
     return true;
 }

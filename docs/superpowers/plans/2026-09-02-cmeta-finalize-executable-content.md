@@ -6,7 +6,7 @@
 
 **Architecture:** Keep invocation finalization inside the existing CFlow V4 host transaction. CMeta state writes continue through `cflow_statechart_host_context_edit_state`, raised events through the host internal-event journal, and sends/cancels through staged effect tickets. The compiler will stop imposing finalize-only restrictions; it will continue emitting finalize blocks as unbound `scxml_block` descriptors owned by invocation descriptors.
 
-**Tech Stack:** C11, TurboSCXML, TurboUtils CMeta, CFlow statechart runtime, Rocida TinyTest, CMake presets, MSVC/Ninja.
+**Tech Stack:** C11, TurboSCXML, TurboUtils CMeta, CFlow statechart runtime, Salts TinyTest, CMake presets, MSVC/Ninja.
 
 ---
 

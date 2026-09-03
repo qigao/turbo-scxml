@@ -44,6 +44,28 @@ typedef struct scxml_expr_program {
     void *impl;
 } scxml_expr_program;
 
+enum {
+    SCXML_EXPR_SYSTEM_NAME = UINT32_C(1) << 0u,
+    SCXML_EXPR_SYSTEM_SESSION_ID = UINT32_C(1) << 1u,
+    SCXML_EXPR_SYSTEM_EVENT = UINT32_C(1) << 2u,
+    SCXML_EXPR_SYSTEM_EVENT_NAME = UINT32_C(1) << 3u,
+    SCXML_EXPR_SYSTEM_EVENT_TYPE = UINT32_C(1) << 4u,
+    SCXML_EXPR_SYSTEM_EVENT_SEND_ID = UINT32_C(1) << 5u,
+    SCXML_EXPR_SYSTEM_EVENT_ORIGIN = UINT32_C(1) << 6u,
+    SCXML_EXPR_SYSTEM_EVENT_ORIGIN_TYPE = UINT32_C(1) << 7u,
+    SCXML_EXPR_SYSTEM_EVENT_INVOKE_ID = UINT32_C(1) << 8u,
+    SCXML_EXPR_SYSTEM_EVENT_DATA = UINT32_C(1) << 9u,
+    SCXML_EXPR_SYSTEM_IOPROCESSORS = UINT32_C(1) << 10u,
+    SCXML_EXPR_SYSTEM_ALL = (UINT32_C(1) << 11u) - UINT32_C(1)
+};
+
+/** Private compile-time allowlist for SCXML-only expression constructs. */
+typedef struct scxml_expr_compile_policy {
+    uint32_t allowed_system_operands;
+    bool allow_in;
+    bool allow_is_bound;
+} scxml_expr_compile_policy;
+
 typedef struct scxml_expr_string_view {
     const char *data;
     size_t size;
@@ -140,6 +162,16 @@ scxml_expr_status scxml_expr_compile(
     const cmeta_data_desc *root,
     scxml_expr_resolve_state_fn resolve_state,
     void *resolve_user,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic);
+
+scxml_expr_status scxml_expr_compile_with_policy(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_compile_policy *policy,
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic);
 

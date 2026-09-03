@@ -6,7 +6,7 @@
 
 **Architecture:** The transport-free core gains a session-owned supported-processor table and named external Event admission. A separate opaque CHTTP processor owns the listener, async client, worker, fixed endpoint rows, and fixed egress rows; per-session bindings decorate a required downstream SCXML adapter and participate in the existing close/quiescence protocol.
 
-**Tech Stack:** C11, TurboSCXML, Rocida CFlow/CMeta/Core/TinyTest, Rocida CHTTP/CNet, CMake Presets, W3C SCXML 1.0.
+**Tech Stack:** C11, TurboSCXML, Salts CFlow/CMeta/Core/TinyTest, Salts CHTTP/CNet, CMake Presets, W3C SCXML 1.0.
 
 **Spec:** `docs/specs/scxml-chttp-event-io-design.md`
 
@@ -16,8 +16,8 @@
 - Use `superpowers:using-git-worktrees` before implementation and preserve the existing untracked `docs/superpowers/plans/2026-08-31-uscxml-reference-guided-development.md` in the original checkout.
 - Follow strict red-green-refactor: add one focused TinyTest behavior, run it and observe the expected failure, then add only the production code needed for green.
 - Keep `TurboSCXML::SCXML` transport-free. No CHTTP type or header may appear in `include/scxml/scxml.h`, and its existing link interface must remain unchanged.
-- `TURBOSCXML_ENABLE_CHTTP_EVENT_IO` defaults to `OFF`. When `ON`, resolve `Rocida::CHTTP` only from the already selected `ROCIDA_ROOT`; never add a second package root or fallback search.
-- Feature-ON execution requires a CHTTP-enabled Rocida SDK installed at `$env{PKG_ROOT}/rocida/{debug,release}` before configuring TurboSCXML.
+- `TURBOSCXML_ENABLE_CHTTP_EVENT_IO` defaults to `OFF`. When `ON`, resolve `Salts::CHTTP` only from the already selected `SALTS_ROOT`; never add a second package root or fallback search.
+- Feature-ON execution requires a CHTTP-enabled Salts SDK installed at `$env{PKG_ROOT}/salts/{debug,release}` before configuring TurboSCXML.
 - Keep decoder and resolver extension points as typed C callbacks. Do not add adapter-local types to `CMETA_CALLABLE_TYPE_LIST`: that list changes the build-wide `cmeta_sig`/`cmeta_callable` ABI. CMeta is used for decoded Event data and its schema validation, not for transport callback dispatch.
 - Accept only `http://www.w3.org/TR/scxml/#BasicHTTPEventProcessor`; do not accept aliases, follow redirects, retry, downgrade HTTPS, or infer authorization from untrusted target text.
 - Every count, stride, byte total, endpoint, egress row, form entry, request body, and copied metadata field has a positive configured hard bound and overflow-checked aggregate allocation.
@@ -301,7 +301,7 @@ content. Every test names the production branch it catches.
 
 - [x] **Step 2: Configure feature ON and verify RED**
 
-Install the CHTTP-enabled Rocida SDK into the ordinary Release root, then
+Install the CHTTP-enabled Salts SDK into the ordinary Release root, then
 set `TURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON` in the public Release preset for the
 feature branch and run:
 
@@ -311,7 +311,7 @@ cmd /c "call \"\"C:\Program Files\Microsoft Visual Studio\2022\Professional\Comm
 
 Expected: the test target fails to compile/link because codec functions are
 not implemented. Separately configure once with the option OFF and verify the
-core still configures when `Rocida::CHTTP` is absent.
+core still configures when `Salts::CHTTP` is absent.
 
 - [x] **Step 3: Implement exact bounded form encoding and decoding**
 
@@ -344,23 +344,23 @@ option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO
   "Build the optional CHTTP BasicHTTP Event I/O processor" OFF)
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
-  if(NOT TARGET Rocida::CHTTP)
+  if(NOT TARGET Salts::CHTTP)
     message(FATAL_ERROR
-      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Rocida::CHTTP from ROCIDA_ROOT")
+      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Salts::CHTTP from SALTS_ROOT")
   endif()
   add_library(turbo_scxml_chttp_event_io
     src/chttp_event_io_codec.c)
   add_library(TurboSCXML::CHttpEventIO ALIAS turbo_scxml_chttp_event_io)
   target_link_libraries(turbo_scxml_chttp_event_io
-    PUBLIC TurboSCXML::SCXML Rocida::CHTTP
-    PRIVATE Rocida::Core)
+    PUBLIC TurboSCXML::SCXML Salts::CHTTP
+    PRIVATE Salts::Core)
   install(TARGETS turbo_scxml_chttp_event_io EXPORT TurboSCXMLTargets)
   install(FILES include/scxml/chttp_event_io.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
 ```
 
-The package config continues to find only the one selected Rocida package;
+The package config continues to find only the one selected Salts package;
 the exported optional target carries its CHTTP dependency. Register the codec
 test only when the feature is ON. Run the complete codec executable and verify
 every boundary case passes.
@@ -384,7 +384,7 @@ git commit -m "feat(scxml): add bounded BasicHTTP codec"
 - Modify: `tests/CMakeLists.txt`
 
 **Interfaces:**
-- Consumes: public versioned configs, Rocida mutex/condition/thread/UUID APIs, downstream `scxml_event_io_adapter`.
+- Consumes: public versioned configs, Salts mutex/condition/thread/UUID APIs, downstream `scxml_event_io_adapter`.
 - Produces: processor init/start/stop/destroy; binding init/accessors/activate/destroy; fixed endpoint rows; composite adapter close/quiescence/delegation skeleton.
 
 - [x] **Step 1: Add failing lifecycle and invalid-config tests**
@@ -398,9 +398,9 @@ quiescence, and a complete happy lifecycle.
 The happy path must follow the actual user protocol:
 
 ```c
-check_equal(scxml_chttp_processor_init(&processor, &processor_config), TURBO_OK);
-check_equal(scxml_chttp_processor_start(&processor), TURBO_OK);
-check_equal(scxml_chttp_binding_init(&binding, &processor, &binding_config), TURBO_OK);
+check_equal(scxml_chttp_processor_init(&processor, &processor_config), SALTS_OK);
+check_equal(scxml_chttp_processor_start(&processor), SALTS_OK);
+check_equal(scxml_chttp_binding_init(&binding, &processor, &binding_config), SALTS_OK);
 check_true(scxml_chttp_binding_ioprocessor(&binding, &descriptor));
 session_config.ioprocessors = &descriptor;
 session_config.ioprocessor_count = 1u;
@@ -409,11 +409,11 @@ session_config.event_io =
 session_config.adapter_user = scxml_chttp_binding_adapter_user(&binding);
 check_equal(scxml_session_init_cmeta(&session, &session_config, &data),
             CFLOW_STATECHART_INSTANCE_OK);
-check_equal(scxml_chttp_binding_activate(&binding, &session, &program), TURBO_OK);
+check_equal(scxml_chttp_binding_activate(&binding, &session, &program), SALTS_OK);
 check_equal(scxml_session_destroy(&session), CFLOW_STATECHART_INSTANCE_OK);
-check_equal(scxml_chttp_binding_destroy(&binding), TURBO_OK);
-check_equal(scxml_chttp_processor_stop(&processor, 1000u), TURBO_OK);
-check_equal(scxml_chttp_processor_destroy(&processor), TURBO_OK);
+check_equal(scxml_chttp_binding_destroy(&binding), SALTS_OK);
+check_equal(scxml_chttp_processor_stop(&processor, 1000u), SALTS_OK);
+check_equal(scxml_chttp_processor_destroy(&processor), SALTS_OK);
 ```
 
 - [x] **Step 2: Run lifecycle tests and verify RED**
@@ -425,7 +425,7 @@ symbols first; after API shells exist, invalid lifecycle assertions remain red.
 
 Allocate one processor implementation and one checked aggregate block holding
 endpoint rows, egress rows, and their fixed string/body strides. Generate each
-endpoint token with `turbo_uuid_v4_generate()` and format it into:
+endpoint token with `salts_uuid_v4_generate()` and format it into:
 
 ```text
 http://<advertised_authority><base_path>/<uuid>
@@ -524,7 +524,7 @@ invariant-failure statistic.
 The worker alone calls `chttp_async_client_submit/poll/stop/destroy`. Under the
 mutex it selects the lowest committed sequence that is due for each binding,
 marks it `SUBMITTING`, copies only the stable row handle, unlocks, and submits.
-Immediate `TURBO_ENOBUFS` returns the row to READY; other immediate failures
+Immediate `SALTS_ENOBUFS` returns the row to READY; other immediate failures
 enter COMPLETING from SUBMITTING and finish as communication failures. The
 CHTTP callback changes `SUBMITTED -> COMPLETING`, records status/metrics, then
 reports adapter completion or communication failure outside the processor
@@ -582,7 +582,7 @@ session, and call it with the blocking CHTTP client. Test each table row from
 the spec. The 204 test must prove response causality:
 
 ```c
-check_equal(chttp_post(&client, &options, &response, &error), TURBO_OK);
+check_equal(chttp_post(&client, &options, &response, &error), SALTS_OK);
 check_equal(response.status_code, 204u);
 check_equal(scxml_session_drain(&session, 8u, &processed),
             CFLOW_STATECHART_INSTANCE_OK);
@@ -800,7 +800,7 @@ Require zero test failures and no ASan diagnostics.
 - [x] **Step 5: Reconfigure feature OFF and prove dependency isolation**
 
 Set the option OFF in both public profiles, reconfigure Release with the normal
-non-CHTTP Rocida SDK, build, run complete CTest, install, and run the core
+non-CHTTP Salts SDK, build, run complete CTest, install, and run the core
 installed consumer. Inspect `INTERFACE_LINK_LIBRARIES` and require the existing
 `TurboSCXML::SCXML` dependency contract to remain exact.
 

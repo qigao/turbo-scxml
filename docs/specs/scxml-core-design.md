@@ -13,10 +13,10 @@ profile.
 ## Evolution status
 
 TurboSCXML is now an independent repository exposing
-`TurboSCXML::SCXML` and consuming an installed Rocida package. The
+`TurboSCXML::SCXML` and consuming an installed Salts package. The
 following decisions remain normative:
 
-- dependency direction is `TurboSCXML -> Rocida CFlow/CMeta/XmlParser`;
+- dependency direction is `TurboSCXML -> Salts CFlow/CMeta/XmlParser`;
 - one owning SCXML session is the sole mutable session-state owner;
 - external effects cross bounded, versioned prepare/commit/discard adapters;
 - cross-session routing, timers after adapter commit, transport, authorization,
@@ -40,7 +40,7 @@ target: its profile was marked at risk in the
 [2014 Candidate Recommendation](https://www.w3.org/TR/2014/CR-scxml-20140313/)
 and removed from the normative data-model definitions in the
 [2015 Recommendation](https://www.w3.org/TR/2015/REC-scxml-20150901/).
-The XPath query API supplied by Rocida XmlParser remains available to XML
+The XPath query API supplied by Salts XmlParser remains available to XML
 consumers, but parser query support is not treated as an SCXML expression,
 location, mutation, system-variable, or scripting profile. Missing XPath
 support must therefore not be reported as a TurboSCXML conformance gap or
@@ -48,11 +48,11 @@ roadmap item.
 
 ## Original phase scope
 
-This phase adds two independently linkable Rocida libraries:
+This phase adds two independently linkable Salts libraries:
 
-- `Rocida::XmlParser`, a bounded owning XML DOM facade over a private cxml
+- `Salts::XmlParser`, a bounded owning XML DOM facade over a private cxml
   implementation; and
-- `Rocida::CFlowScxml`, an optional SCXML Core frontend that validates and
+- `Salts::CFlowScxml`, an optional SCXML Core frontend that validates and
   compiles accepted XML into the existing format-neutral CFlow Statechart IR.
 
 The frontend covers `scxml`, `state`, `parallel`, `transition`, `initial`,
@@ -63,7 +63,7 @@ element outside this list are rejected during compilation with stable source
 diagnostics. There is no fallback and no full-SCXML-conformance claim.
 
 Existing CFlow and parser targets, headers, statechart semantics, and public
-ABI remain unchanged. `Rocida::CFlow` does not acquire an XML dependency.
+ABI remain unchanged. `Salts::CFlow` does not acquire an XML dependency.
 
 ## Evidence and boundary decision
 
@@ -76,7 +76,7 @@ ABI remain unchanged. `Rocida::CFlow` does not acquire an XML dependency.
   tracks a token line but does not retain columns or byte offsets on DOM nodes.
 - **Fact:** cxml exposes concrete node structs, global configuration, and
   stderr-oriented parse failures. Those contracts must not cross an installed
-  Rocida API boundary.
+  Salts API boundary.
 - **Inference:** directly linking cxml from CFlow would reverse the intended
   dependency and make the format-neutral runtime depend on one syntax. A
   separate frontend target preserves the current core and permits other input
@@ -85,9 +85,9 @@ ABI remain unchanged. `Rocida::CFlow` does not acquire an XML dependency.
 The dependency direction is therefore:
 
 ```text
-private cxml -> Rocida::XmlParser
-Rocida::XmlParser + Rocida::CFlow -> Rocida::CFlowScxml
-Rocida::CFlow -> Rocida::CMeta
+private cxml -> Salts::XmlParser
+Salts::XmlParser + Salts::CFlow -> Salts::CFlowScxml
+Salts::CFlow -> Salts::CMeta
 ```
 
 `CSerde` and `CBind` are not dependencies. They describe application data
@@ -98,8 +98,8 @@ phase may add a separate adapter without coupling the syntax parser to CSerde.
 
 ### Parse SCXML in TurboParser
 
-Rejected. Rocida owns both the parser engines and CFlow after the repository
-move, while TurboParser is now a thin consumer. A Rocida-to-TurboParser
+Rejected. Salts owns both the parser engines and CFlow after the repository
+move, while TurboParser is now a thin consumer. A Salts-to-TurboParser
 dependency would be cyclic at the package level.
 
 ### Expose cxml as the public XML API
@@ -127,7 +127,7 @@ copies the input so every returned string view and source location remains
 valid until document destruction.
 
 The document is the sole fact source. Nodes and attribute handles are borrowed
-views into it. They are invalid after `turbo_xml_document_destroy()`. The API
+views into it. They are invalid after `salts_xml_document_destroy()`. The API
 is single-threaded during construction and immutable/read-only after successful
 publication; concurrent read access is allowed only while the owner guarantees
 the document remains alive.
@@ -135,7 +135,7 @@ the document remains alive.
 Each element and attribute has a one-based line and column plus a zero-based
 UTF-8 byte offset. The vendored cxml lexer/parser retains these fields while
 building its DOM. Syntax failure returns the first failing token location and a
-stable Rocida diagnostic instead of relying on cxml stderr text.
+stable Salts diagnostic instead of relying on cxml stderr text.
 
 Limits cover input bytes, nodes, attributes, depth, and total retained string
 bytes. Adapter-owned allocation sizes use checked arithmetic. Exceeding a limit
@@ -229,14 +229,14 @@ context for the consumer to decide how and where to log.
 
 ## Build, install, and compatibility
 
-`Rocida::XmlParser` is a regular parser target. Its public link interface
+`Salts::XmlParser` is a regular parser target. Its public link interface
 contains only first-party targets required by its public header; cxml is
 private and is not installed or exported.
 
-`CFLOW_ENABLE_SCXML` controls `Rocida::CFlowScxml` and defaults to `OFF`.
+`CFLOW_ENABLE_SCXML` controls `Salts::CFlowScxml` and defaults to `OFF`.
 When disabled, neither the frontend target nor its header/install artifact is
-provided. When enabled, the target publicly links only `Rocida::CFlow` and
-`Rocida::XmlParser`. Package verification tests both the disabled boundary
+provided. When enabled, the target publicly links only `Salts::CFlow` and
+`Salts::XmlParser`. Package verification tests both the disabled boundary
 and an enabled installed consumer. Existing consumers linking only CFlow see no
 new transitive XML dependency.
 

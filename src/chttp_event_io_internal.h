@@ -3,8 +3,8 @@
 
 #include <scxml/chttp_event_io.h>
 
-#include <turbo/thread.h>
-#include <turbo_uuid.h>
+#include <salts/thread.h>
+#include <salts_uuid.h>
 
 typedef enum scxml_chttp_processor_state {
     SCXML_CHTTP_PROCESSOR_INITIALIZED = 1,
@@ -35,7 +35,7 @@ typedef enum scxml_chttp_egress_state {
 typedef struct scxml_chttp_endpoint_row {
     scxml_chttp_binding_impl *binding;
     uint32_t generation;
-    char endpoint[TURBO_UUID_STRING_SIZE];
+    char endpoint[SALTS_UUID_STRING_SIZE];
     char *access_uri;
     size_t access_uri_size;
 } scxml_chttp_endpoint_row;
@@ -72,9 +72,9 @@ struct scxml_chttp_processor_impl {
     scxml_chttp_processor_config_v1 config;
     chttp_server server;
     chttp_async_client client;
-    turbo_mutex_t lock;
-    turbo_cond_t wake;
-    turbo_thread_t worker;
+    salts_mutex_t lock;
+    salts_cond_t wake;
+    salts_thread_t worker;
     scxml_chttp_processor_state state;
     bool stop_active;
     bool stop_requested;

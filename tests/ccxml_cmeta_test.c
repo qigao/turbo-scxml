@@ -1,0 +1,1108 @@
+#include <ccxml/ccxml.h>
+
+#include "tinytest.h"
+
+#include <stddef.h>
+#include <string.h>
+
+enum { TEST_TEXT_CAPACITY = 31u };
+
+typedef struct test_text {
+    size_t size;
+    char data[TEST_TEXT_CAPACITY + 1u];
+} test_text;
+
+Struct(test_conference,
+    (test_text, id)
+);
+
+Struct(test_dialog,
+    (test_text, id)
+);
+
+Struct(test_state,
+    (test_conference, conference),
+    (test_dialog, dialog),
+    (test_text, read_only),
+    (test_text, mode),
+    (int, count)
+);
+
+static void text_move(void *destination, void *source) {
+    memcpy(destination, source, sizeof(test_text));
+    memset(source, 0, sizeof(test_text));
+}
+
+static void text_destroy(void *object) {
+    memset(object, 0, sizeof(test_text));
+}
+
+static const cmeta_type_traits text_traits = {
+    .flags = CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .move_construct = text_move,
+    .destroy = text_destroy};
+
+static const cmeta_type_desc text_type = {
+    .name = "ccxml_test_text",
+    .size = sizeof(test_text),
+    .align = _Alignof(test_text),
+    .kind = CMETA_T_OBJECT,
+    .traits = &text_traits};
+
+static bool text_is_zero(const void *object) {
+    return object != NULL && ((const test_text *)object)->size == 0u;
+}
+
+static cmeta_status text_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+    test_text *text = (test_text *)object;
+    if (text == NULL || (data == NULL && size != 0u))
+        return CMETA_INVALID_ARGUMENT;
+    if (size > max_bytes || size > TEST_TEXT_CAPACITY)
+        return CMETA_CAPACITY_EXCEEDED;
+    if (size != 0u) memcpy(text->data, data, size);
+    text->data[size] = '\0';
+    text->size = size;
+    return CMETA_OK;
+}
+
+static void text_restore_zero(void *object) {
+    if (object != NULL) memset(object, 0, sizeof(test_text));
+}
+
+static cmeta_status text_read(
+    const void *object, const unsigned char **out_data, size_t *out_size) {
+    const test_text *text = (const test_text *)object;
+    if (text == NULL || out_data == NULL || out_size == NULL ||
+        text->size > TEST_TEXT_CAPACITY)
+        return CMETA_INVALID_ARGUMENT;
+    *out_data = (const unsigned char *)text->data;
+    *out_size = text->size;
+    return CMETA_OK;
+}
+
+static const cmeta_data_buffer_shape text_shape = {
+    .ownership = CMETA_DATA_BUFFER_OWNED};
+
+static const cmeta_data_buffer_ops text_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &text_type,
+    .ownership = CMETA_DATA_BUFFER_OWNED,
+    .is_zero = text_is_zero,
+    .assign = text_assign,
+    .restore_zero = text_restore_zero,
+    .read = text_read};
+
+static const cmeta_data_desc text_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.text",
+    .display_name = "CCXML test text",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &text_type,
+    .shape = &text_shape,
+    .buffer_ops = &text_ops};
+
+static const cmeta_data_buffer_shape borrowed_text_shape = {
+    .ownership = CMETA_DATA_BUFFER_BORROWED};
+
+static const cmeta_data_buffer_ops borrowed_text_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &text_type,
+    .ownership = CMETA_DATA_BUFFER_BORROWED,
+    .is_zero = text_is_zero,
+    .assign = text_assign,
+    .restore_zero = text_restore_zero,
+    .read = text_read};
+
+static const cmeta_data_desc borrowed_text_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.borrowed-text",
+    .display_name = "CCXML borrowed test text",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &text_type,
+    .shape = &borrowed_text_shape,
+    .buffer_ops = &borrowed_text_ops};
+
+static const cmeta_type_traits aggregate_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
+
+static const cmeta_type_desc conference_type = {
+    .name = "ccxml_test_conference",
+    .size = sizeof(test_conference),
+    .align = _Alignof(test_conference),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc conference_fields[] = {
+    {"test.ccxml.conference.id", "id",
+     offsetof(test_conference, id), &text_desc}};
+
+static const cmeta_data_struct_shape conference_shape = {
+    .layout = StructMeta(test_conference),
+    .fields = conference_fields,
+    .field_count = sizeof(conference_fields) / sizeof(conference_fields[0])};
+
+static const cmeta_data_desc conference_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.conference",
+    .display_name = "CCXML test conference",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &conference_type,
+    .shape = &conference_shape};
+
+static const cmeta_type_desc dialog_type = {
+    .name = "ccxml_test_dialog",
+    .size = sizeof(test_dialog),
+    .align = _Alignof(test_dialog),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc dialog_fields[] = {
+    {"test.ccxml.dialog.id", "id",
+     offsetof(test_dialog, id), &text_desc}};
+
+static const cmeta_data_struct_shape dialog_shape = {
+    .layout = StructMeta(test_dialog),
+    .fields = dialog_fields,
+    .field_count = sizeof(dialog_fields) / sizeof(dialog_fields[0])};
+
+static const cmeta_data_desc dialog_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.dialog",
+    .display_name = "CCXML test dialog",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &dialog_type,
+    .shape = &dialog_shape};
+
+static const cmeta_type_desc state_type = {
+    .name = "ccxml_test_state",
+    .size = sizeof(test_state),
+    .align = _Alignof(test_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc state_fields[] = {
+    {"test.ccxml.state.conference", "conference",
+     offsetof(test_state, conference), &conference_desc},
+    {"test.ccxml.state.dialog", "dialog",
+     offsetof(test_state, dialog), &dialog_desc},
+    {"test.ccxml.state.read-only", "read_only",
+     offsetof(test_state, read_only), &borrowed_text_desc},
+    {"test.ccxml.state.mode", "mode",
+     offsetof(test_state, mode), &text_desc},
+    {"test.ccxml.state.count", "count",
+     offsetof(test_state, count), &cmeta_data_int}};
+
+static const cmeta_data_struct_shape state_shape = {
+    .layout = StructMeta(test_state),
+    .fields = state_fields,
+    .field_count = sizeof(state_fields) / sizeof(state_fields[0])};
+
+static const cmeta_data_desc state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.state",
+    .display_name = "CCXML test state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &state_type,
+    .shape = &state_shape};
+
+typedef struct conference_provider_probe {
+    bool live;
+    size_t commit_count;
+    size_t discard_count;
+    size_t close_count;
+    char destroyed_conference_id[32];
+    size_t destroyed_conference_id_size;
+    char dialog_source[32];
+    char dialog_connection_id[32];
+    char dialog_media_type[32];
+    char started_prepared_dialog_id[32];
+    char terminated_dialog_id[32];
+    bool terminate_immediate;
+    const test_text *published_dialog_id;
+    const char *expected_dialog_id;
+    size_t expected_dialog_id_size;
+    bool dialog_id_visible_at_commit;
+} conference_provider_probe;
+
+static void provider_ticket_commit(void *user) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (probe == NULL || !probe->live) return;
+    probe->live = false;
+    if (probe->published_dialog_id != NULL &&
+        probe->published_dialog_id->size == probe->expected_dialog_id_size &&
+        memcmp(
+            probe->published_dialog_id->data,
+            probe->expected_dialog_id,
+            probe->expected_dialog_id_size) == 0) {
+        probe->dialog_id_visible_at_commit = true;
+    }
+    ++probe->commit_count;
+}
+
+static void provider_ticket_discard(void *user) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (probe == NULL || !probe->live) return;
+    probe->live = false;
+    ++probe->discard_count;
+}
+
+static scxml_adapter_status unused_prepare_accept(
+    void *user, const ccxml_accept_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    (void)user;
+    (void)request;
+    (void)out_ticket;
+    if (out_error != NULL) *out_error = "accept is not used by this test";
+    return SCXML_ADAPTER_ERROR_EXECUTION;
+}
+
+static scxml_adapter_status provider_prepare_conference(
+    void *user, const ccxml_create_conference_request *request,
+    ccxml_string_view *out_conference_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    (void)request;
+    if (out_error != NULL) *out_error = NULL;
+    probe->live = true;
+    *out_conference_id = (ccxml_string_view){"conf-e2e", 8u};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status provider_prepare_destroy_conference(
+    void *user, const ccxml_destroy_conference_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    probe->destroyed_conference_id_size = request->conference_id_size;
+    memcpy(
+        probe->destroyed_conference_id, request->conference_id,
+        request->conference_id_size);
+    probe->destroyed_conference_id[request->conference_id_size] = '\0';
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status provider_prepare_dialog_start(
+    void *user, const ccxml_dialog_start_request *request,
+    ccxml_string_view *out_dialog_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(probe->dialog_source, request->source, request->source_size);
+    probe->dialog_source[request->source_size] = '\0';
+    memcpy(
+        probe->dialog_connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->dialog_connection_id[request->connection_id_size] = '\0';
+    memcpy(
+        probe->dialog_media_type, request->media_type,
+        request->media_type_size);
+    probe->dialog_media_type[request->media_type_size] = '\0';
+    probe->live = true;
+    probe->expected_dialog_id = "dialog-e2e";
+    probe->expected_dialog_id_size = 10u;
+    *out_dialog_id = (ccxml_string_view){"dialog-e2e", 10u};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status provider_prepare_dialog_prepare(
+    void *user, const ccxml_dialog_prepare_request *request,
+    ccxml_string_view *out_dialog_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(probe->dialog_source, request->source, request->source_size);
+    probe->dialog_source[request->source_size] = '\0';
+    memcpy(
+        probe->dialog_media_type, request->media_type,
+        request->media_type_size);
+    probe->dialog_media_type[request->media_type_size] = '\0';
+    probe->live = true;
+    probe->expected_dialog_id = "prepared-e2e";
+    probe->expected_dialog_id_size = 12u;
+    *out_dialog_id = (ccxml_string_view){"prepared-e2e", 12u};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status provider_prepare_dialog_terminate(
+    void *user, const ccxml_dialog_terminate_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(
+        probe->terminated_dialog_id, request->dialog_id,
+        request->dialog_id_size);
+    probe->terminated_dialog_id[request->dialog_id_size] = '\0';
+    probe->terminate_immediate = request->immediate;
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status provider_prepare_prepared_dialog_start(
+    void *user, const ccxml_prepared_dialog_start_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    conference_provider_probe *probe = (conference_provider_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    memcpy(
+        probe->started_prepared_dialog_id, request->dialog_id,
+        request->dialog_id_size);
+    probe->started_prepared_dialog_id[request->dialog_id_size] = '\0';
+    memcpy(
+        probe->dialog_connection_id, request->connection_id,
+        request->connection_id_size);
+    probe->dialog_connection_id[request->connection_id_size] = '\0';
+    probe->live = true;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = provider_ticket_commit,
+        .discard = provider_ticket_discard,
+        .user = probe};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void provider_close(void *user) {
+    ++((conference_provider_probe *)user)->close_count;
+}
+
+static bool provider_quiescent(void *user) {
+    (void)user;
+    return true;
+}
+
+static const ccxml_telephony_adapter_v1 conference_provider = {
+    .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1,
+    .struct_size = sizeof(ccxml_telephony_adapter_v1),
+    .prepare_accept = unused_prepare_accept,
+    .close = provider_close,
+    .is_quiescent = provider_quiescent,
+    .prepare_create_conference = provider_prepare_conference,
+    .prepare_destroy_conference =
+        provider_prepare_destroy_conference,
+    .prepare_dialog_start = provider_prepare_dialog_start,
+    .prepare_dialog_terminate =
+        provider_prepare_dialog_terminate,
+    .prepare_dialog_prepare =
+        provider_prepare_dialog_prepare,
+    .prepare_prepared_dialog_start =
+        provider_prepare_prepared_dialog_start};
+
+static ccxml_status initialize(
+    ccxml_cmeta_datamodel *datamodel, test_state *state,
+    size_t max_string_bytes) {
+    const ccxml_cmeta_datamodel_config_v1 config = {
+        .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+        .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+        .root = &state_desc,
+        .state = state,
+        .max_path_depth = 4u,
+        .max_string_bytes = max_string_bytes};
+    return ccxml_cmeta_datamodel_init(datamodel, &config);
+}
+
+spec("CCXML CMeta datamodel") {
+    it("routes repeated events through statevariable assignments") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting idle' event='advance'>"
+            "<assign name='mode' expr=\"'active'\"/>"
+            "</transition>"
+            "<transition state='active' event='advance'><exit/></transition>"
+            "</eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "advance",
+            .name_size = sizeof("advance") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "idle");
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(state.mode.data, "active");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("reevaluates CMeta transition conditions after assignment") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor>"
+            "<transition event='advance' "
+            "cond='mode == &quot;active&quot;'><exit/></transition>"
+            "<transition event='advance' "
+            "cond='mode == &quot;idle&quot; &amp;&amp; "
+            "_event.name == &quot;advance&quot;'>"
+            "<assign name='mode' expr=\"'active'\"/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "advance",
+            .name_size = sizeof("advance") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "idle");
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(state.mode.data, "active");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_true(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects an invalid condition before committing root variables") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'idle'\"/>"
+            "<eventprocessor><transition event='advance' cond='mode =='>"
+            "<exit/></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+
+        check_equal(
+            ccxml_session_init(&session, &session_config),
+            CCXML_ADAPTER_ERROR);
+        check_null(session.impl);
+        check_equal(state.mode.size, (size_t)0);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects SCXML-only system operands in CCXML conditions") {
+        static const char *const unsupported_conditions[] = {
+            "_event.type == \"external\"",
+            "_event.data == \"payload\"",
+            "_name == \"machine\"",
+            "_sessionid != \"\"",
+            "_ioprocessors.scxml.location != \"\"",
+            "isBound(_event.name)",
+            "In(\"active\")"};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        size_t index;
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        for (index = 0u;
+             index < sizeof(unsupported_conditions) /
+                         sizeof(unsupported_conditions[0]);
+             ++index) {
+            const char *source = unsupported_conditions[index];
+            ccxml_condition condition = {0};
+            const char *error = NULL;
+            check_equal(
+                adapter->compile_condition(
+                    &datamodel, source, strlen(source),
+                    &condition, &error),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_null(condition.impl);
+            check_not_null(error);
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rolls back a state assignment when a later action fails") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<var name='mode' expr=\"'waiting'\"/>"
+            "<eventprocessor statevariable='mode'>"
+            "<transition state='waiting' event='connection.alerting'>"
+            "<assign name='mode' expr=\"'active'\"/><accept/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u,
+            .connection_id = "call-e2e",
+            .connection_id_size = sizeof("call-e2e") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(state.mode.data, "waiting");
+
+        check_equal(
+            ccxml_session_dispatch(&session, &event),
+            CCXML_ADAPTER_ERROR);
+        check_equal(state.mode.data, "waiting");
+        check_false(ccxml_session_is_terminated(&session));
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("prepares, starts, and terminates a dialog through nested CMeta") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='ccxml.loaded'>"
+            "<dialogprepare dialogid='dialog.id' src=\"'menu.vxml'\"/>"
+            "</transition><transition event='connection.connected'>"
+            "<dialogstart prepareddialogid='dialog.id' "
+            "connectionid='event$.connectionid'/>"
+            "</transition><transition event='dialog.stop'>"
+            "<dialogterminate dialogid='dialog.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {
+            .published_dialog_id = &state.dialog.id};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "ccxml.loaded",
+            .name_size = sizeof("ccxml.loaded") - 1u};
+        const ccxml_event connected_event = {
+            .name = "connection.connected",
+            .name_size = sizeof("connection.connected") - 1u,
+            .connection_id = "call-e2e",
+            .connection_id_size = sizeof("call-e2e") - 1u};
+        const ccxml_event stop_event = {
+            .name = "dialog.stop",
+            .name_size = sizeof("dialog.stop") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.dialog_source, "menu.vxml");
+        check_equal(provider.dialog_connection_id, "");
+        check_equal(
+            provider.dialog_media_type,
+            "application/voicexml+xml");
+        check_true(provider.dialog_id_visible_at_commit);
+        check_equal(state.dialog.id.data, "prepared-e2e");
+        check_equal(state.dialog.id.size, (size_t)12);
+        check_equal(
+            ccxml_session_dispatch(&session, &connected_event), CCXML_OK);
+        check_equal(provider.started_prepared_dialog_id, "prepared-e2e");
+        check_equal(provider.dialog_connection_id, "call-e2e");
+        check_equal(
+            ccxml_session_dispatch(&session, &stop_event), CCXML_OK);
+        check_equal(provider.terminated_dialog_id, "prepared-e2e");
+        check_false(provider.terminate_immediate);
+        check_equal(provider.commit_count, (size_t)3);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("starts and normally terminates a dialog through nested CMeta") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<dialogstart dialogid='dialog.id' "
+            "src=\"'menu.vxml'\" "
+            "connectionid='event$.connectionid'/>"
+            "</transition><transition event='dialog.stop'>"
+            "<dialogterminate dialogid='dialog.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {
+            .published_dialog_id = &state.dialog.id};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u,
+            .connection_id = "call-e2e",
+            .connection_id_size = sizeof("call-e2e") - 1u};
+        const ccxml_event stop_event = {
+            .name = "dialog.stop",
+            .name_size = sizeof("dialog.stop") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.dialog_source, "menu.vxml");
+        check_equal(provider.dialog_connection_id, "call-e2e");
+        check_equal(
+            provider.dialog_media_type,
+            "application/voicexml+xml");
+        check_true(provider.dialog_id_visible_at_commit);
+        check_equal(state.dialog.id.data, "dialog-e2e");
+        check_equal(state.dialog.id.size, (size_t)10);
+        check_equal(
+            ccxml_session_dispatch(&session, &stop_event), CCXML_OK);
+        check_equal(provider.terminated_dialog_id, "dialog-e2e");
+        check_false(provider.terminate_immediate);
+        check_equal(provider.commit_count, (size_t)2);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("writes a provider-generated ID through a CCXML session") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='ccxml.loaded'>"
+            "<createconference conferenceid='conference.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "ccxml.loaded",
+            .name_size = sizeof("ccxml.loaded") - 1u};
+
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.commit_count, (size_t)1);
+        check_equal(provider.discard_count, (size_t)0);
+        check_equal(state.conference.id.data, "conf-e2e");
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("stages and commits a nested owned-string write") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const char *error = NULL;
+
+        memcpy(state.conference.id.data, "old", 3u);
+        state.conference.id.data[3] = '\0';
+        state.conference.id.size = 3u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->validate_string_location(
+                &datamodel, "conference.id", 13u, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(
+            adapter->prepare_assign_string(
+                &datamodel, "conference.id", 13u,
+                "conf-42", 7u, &ticket, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(state.conference.id.data, "old");
+        ticket.commit(ticket.user);
+        check_equal(state.conference.id.data, "conf-42");
+        check_equal(state.conference.id.size, (size_t)7);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("reads a nested conference ID through a CCXML session") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='ccxml.loaded'>"
+            "<destroyconference conferenceid='conference.id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        conference_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "ccxml.loaded",
+            .name_size = sizeof("ccxml.loaded") - 1u};
+
+        memcpy(state.conference.id.data, "conf-live", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), NULL, &diagnostic),
+            CCXML_OK);
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &conference_provider,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(
+            ccxml_session_init(&session, &session_config), CCXML_OK);
+        if (session.impl != NULL) {
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(provider.destroyed_conference_id, "conf-live");
+            check_equal(provider.commit_count, (size_t)1);
+            check_equal(state.conference.id.data, "conf-live");
+            check_equal(state.conference.id.size, (size_t)9);
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+    }
+
+    it("returns a bounded borrowed nested string view") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {0};
+
+        memcpy(state.conference.id.data, "conf-read", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_not_null(adapter->validate_readable_string_location);
+        check_not_null(adapter->read_string);
+        if (adapter->validate_readable_string_location != NULL &&
+            adapter->read_string != NULL) {
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "conference.id", 13u, NULL),
+                SCXML_ADAPTER_ACCEPTED);
+            check_equal(
+                adapter->read_string(
+                    &datamodel, "conference.id", 13u, &value, NULL),
+                SCXML_ADAPTER_ACCEPTED);
+            check_equal(value.size, (size_t)9);
+            check_equal((const char *)value.data, "conf-read");
+            check_equal(state.conference.id.data, "conf-read");
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("reads a borrowed string that is not a writable location") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {0};
+
+        memcpy(state.read_only.data, "conf-view", 9u);
+        state.read_only.data[9] = '\0';
+        state.read_only.size = 9u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->validate_string_location(
+                &datamodel, "read_only", 9u, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(
+            adapter->validate_readable_string_location(
+                &datamodel, "read_only", 9u, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(
+            adapter->read_string(
+                &datamodel, "read_only", 9u, &value, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(value.size, (size_t)9);
+        check_equal((const char *)value.data, "conf-view");
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects unreadable paths and non-string fields") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_not_null(adapter->validate_readable_string_location);
+        if (adapter->validate_readable_string_location != NULL) {
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "conference.missing", 18u, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_equal(
+                adapter->validate_readable_string_location(
+                    &datamodel, "count", 5u, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+        }
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects a string view above the configured read bound") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {(const char *)1, 99u};
+
+        memcpy(state.conference.id.data, "conf-wide", 9u);
+        state.conference.id.data[9] = '\0';
+        state.conference.id.size = 9u;
+        check_equal(initialize(&datamodel, &state, 4u), CCXML_OK);
+        check_not_null(adapter->read_string);
+        if (adapter->read_string != NULL) {
+            check_equal(
+                adapter->read_string(
+                    &datamodel, "conference.id", 13u, &value, NULL),
+                SCXML_ADAPTER_ERROR_EXECUTION);
+            check_null(value.data);
+            check_equal(value.size, (size_t)0);
+        }
+        check_equal(state.conference.id.data, "conf-wide");
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects empty and NUL-containing conference ID views") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        ccxml_string_view value = {(const char *)1, 99u};
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->read_string(
+                &datamodel, "conference.id", 13u, &value, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(value.data);
+        check_equal(value.size, (size_t)0);
+
+        memcpy(state.conference.id.data, "ab\0cd", 5u);
+        state.conference.id.size = 5u;
+        value = (ccxml_string_view){(const char *)1, 99u};
+        check_equal(
+            adapter->read_string(
+                &datamodel, "conference.id", 13u, &value, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(value.data);
+        check_equal(value.size, (size_t)0);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("discard leaves the live value unchanged") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+
+        memcpy(state.conference.id.data, "old", 3u);
+        state.conference.id.data[3] = '\0';
+        state.conference.id.size = 3u;
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->prepare_assign_string(
+                &datamodel, "conference.id", 13u,
+                "conf-43", 7u, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.discard(ticket.user);
+        check_equal(state.conference.id.data, "old");
+        check_equal(state.conference.id.size, (size_t)3);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects unresolved and non-string locations") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+
+        check_equal(initialize(&datamodel, &state, 16u), CCXML_OK);
+        check_equal(
+            adapter->validate_string_location(
+                &datamodel, "conference.missing", 18u, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(
+            adapter->validate_string_location(
+                &datamodel, "count", 5u, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("enforces the configured write bound during prepare") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+
+        check_equal(initialize(&datamodel, &state, 4u), CCXML_OK);
+        check_equal(
+            adapter->prepare_assign_string(
+                &datamodel, "conference.id", 13u,
+                "conf-44", 7u, &ticket, NULL),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(ticket.commit);
+        check_equal(state.conference.id.size, (size_t)0);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects invalid owner and config contracts") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &state_desc,
+            .state = &state,
+            .max_path_depth = 4u,
+            .max_string_bytes = 16u};
+
+        config.max_path_depth = 0u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.max_path_depth = 4u;
+        config.abi_version = 0u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        check_null(datamodel.impl);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+}

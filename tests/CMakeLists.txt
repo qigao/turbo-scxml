@@ -10,7 +10,7 @@ function(turboscxml_add_test target source)
     C_EXTENSIONS OFF)
   target_link_libraries(${target} PRIVATE
     TurboSCXML::SCXML
-    Rocida::TinyTest
+    Salts::TinyTest
     ${TEST_LIBS})
   if(TEST_INCLUDES)
     target_include_directories(${target} PRIVATE ${TEST_INCLUDES})
@@ -22,7 +22,7 @@ function(turboscxml_add_test target source)
 endfunction()
 
 turboscxml_add_test(scxml_test scxml_test.c
-  LIBS Rocida::Core
+  LIBS Salts::Core
   DEFINITIONS
     SCXML_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 
@@ -34,7 +34,7 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_event_io_contract_test
   scxml_event_io_contract_test.c
-  LIBS Rocida::Core
+  LIBS Salts::Core
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
@@ -47,14 +47,14 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
-  LIBS Rocida::Core Rocida::STL
+  LIBS Salts::Core Salts::CSTL
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 turboscxml_add_test(
   scxml_expr_test
   scxml_expr_test.c
-  LIBS Rocida::CMeta
+  LIBS Salts::CMeta
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
@@ -64,25 +64,42 @@ turboscxml_add_test(
 turboscxml_add_test(
   scxml_sequence_test
   scxml_sequence_test.c
-  LIBS Rocida::STL
+  LIBS Salts::CSTL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_foreach_test
   scxml_foreach_test.c
-  LIBS Rocida::STL
+  LIBS Salts::CSTL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_managed_foreach_test
   scxml_managed_foreach_test.c
-  LIBS Rocida::STL
+  LIBS Salts::CSTL
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
+  ccxml_program_test
+  ccxml_program_test.c
+  LIBS TurboSCXML::CCXML
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
+  ccxml_session_test
+  ccxml_session_test.c
+  LIBS TurboSCXML::CCXML
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+turboscxml_add_test(
+  ccxml_cmeta_test
+  ccxml_cmeta_test.c
+  LIBS TurboSCXML::CCXML)
 
 turboscxml_add_test(
   scxml_quickjs_test
   scxml_quickjs_test.c
-  LIBS Rocida::STL
+  LIBS Salts::CSTL
   INCLUDES ${PROJECT_SOURCE_DIR}/src
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")

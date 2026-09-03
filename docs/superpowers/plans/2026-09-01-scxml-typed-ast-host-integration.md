@@ -21,7 +21,7 @@
 
 - [x] Add private tests for typed element/attribute recognition, document order,
   parent/child/sibling IDs, copied text, source locations, and validity after
-  `turbo_xml_document_destroy()`.
+  `salts_xml_document_destroy()`.
 - [x] Add limit and malformed namespace/vocabulary tests with deterministic
   diagnostics and no partially published AST.
 - [x] Record RED, then implement two-pass count/storage construction using

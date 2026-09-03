@@ -28,34 +28,34 @@ if(ENABLE_SANITIZER_ADDRESS)
   endif()
 endif()
 
-if(NOT DEFINED ENV{ROCIDA_ROOT}
-   OR "$ENV{ROCIDA_ROOT}" STREQUAL "")
+if(NOT DEFINED ENV{SALTS_ROOT}
+   OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR
-    "ROCIDA_ROOT must name the installed Rocida profile")
+    "SALTS_ROOT must name the installed Salts profile")
 endif()
-file(TO_CMAKE_PATH "$ENV{ROCIDA_ROOT}" ROCIDA_ROOT_PATH)
-if(NOT IS_DIRECTORY "${ROCIDA_ROOT_PATH}")
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTS_ROOT_PATH)
+if(NOT IS_DIRECTORY "${SALTS_ROOT_PATH}")
   message(FATAL_ERROR
-    "ROCIDA_ROOT is not a directory: $ENV{ROCIDA_ROOT}")
+    "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
 endif()
 
-unset(Rocida_DIR CACHE)
-unset(Rocida_DIR)
-find_package(Rocida 1.1 CONFIG REQUIRED
-  PATHS "${ROCIDA_ROOT_PATH}"
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
+find_package(Salts 1.1 CONFIG REQUIRED
+  PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 
 foreach(required_target IN ITEMS
-    Rocida::CFlow
-    Rocida::CMeta
-    Rocida::CSerde
-    Rocida::CBind
-    Rocida::XmlParser
-    Rocida::Core
-    Rocida::QueryVM)
+    Salts::CFlow
+    Salts::CMeta
+    Salts::CSerde
+    Salts::CBind
+    Salts::XmlParser
+    Salts::Core
+    Salts::QueryVM)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
-      "Rocida SDK does not provide required target: ${required_target}")
+      "Salts SDK does not provide required target: ${required_target}")
   endif()
 endforeach()
 
@@ -72,6 +72,7 @@ add_library(turbo_scxml STATIC
   src/scxml_sequence.c
   src/scxml_scope.c
   src/scxml_foreach.c
+  src/scxml_xml_decode.c
   src/scxml_quickjs.c)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 
@@ -89,14 +90,14 @@ target_include_directories(turbo_scxml
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(turbo_scxml
   PUBLIC
-    Rocida::CFlow
-    Rocida::CMeta
-    Rocida::CSerde
-    Rocida::XmlParser
+    Salts::CFlow
+    Salts::CMeta
+    Salts::CSerde
+    Salts::XmlParser
   PRIVATE
-    Rocida::Core
-    Rocida::CBind
-    Rocida::QueryVM)
+    Salts::Core
+    Salts::CBind
+    Salts::QueryVM)
 target_compile_definitions(turbo_scxml
   PUBLIC TURBOSCXML_HAS_QUICKJS=$<BOOL:${TURBOSCXML_ENABLE_QUICKJS}>)
 if(TURBOSCXML_ENABLE_QUICKJS)
@@ -104,10 +105,32 @@ if(TURBOSCXML_ENABLE_QUICKJS)
   target_link_libraries(turbo_scxml PRIVATE qjs)
 endif()
 
+add_library(turbo_ccxml STATIC
+  src/ccxml_cmeta.c
+  src/ccxml_program.c
+  src/ccxml_session.c)
+add_library(TurboSCXML::CCXML ALIAS turbo_ccxml)
+set_target_properties(turbo_ccxml PROPERTIES
+  EXPORT_NAME CCXML
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_ccxml PUBLIC c_std_11)
+target_compile_options(turbo_ccxml
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_ccxml
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_ccxml
+  PUBLIC TurboSCXML::SCXML
+  PRIVATE Salts::XmlParser)
+
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
-  if(NOT TARGET Rocida::CHTTP)
+  if(NOT TARGET Salts::CHTTP)
     message(FATAL_ERROR
-      "TURBOSCXML_ENABLE_CHTTP_RESOURCE requires Rocida::CHTTP")
+      "TURBOSCXML_ENABLE_CHTTP_RESOURCE requires Salts::CHTTP")
   endif()
   add_library(turbo_scxml_chttp_resource STATIC
     src/scxml_chttp_resource.c)
@@ -127,15 +150,15 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   target_link_libraries(turbo_scxml_chttp_resource
     PUBLIC
       TurboSCXML::SCXML
-      Rocida::CHTTP
+      Salts::CHTTP
     PRIVATE
-      Rocida::Core)
+      Salts::Core)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
-  if(NOT TARGET Rocida::CHTTP)
+  if(NOT TARGET Salts::CHTTP)
     message(FATAL_ERROR
-      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Rocida::CHTTP")
+      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Salts::CHTTP")
   endif()
   add_library(turbo_scxml_chttp_event_io STATIC
     src/chttp_event_io_codec.c
@@ -154,22 +177,22 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(turbo_scxml_chttp_event_io
-    PUBLIC TurboSCXML::SCXML Rocida::CHTTP
-    PRIVATE Rocida::Core)
+    PUBLIC TurboSCXML::SCXML Salts::CHTTP
+    PRIVATE Salts::Core)
 endif()
 
 if(BUILD_TESTING)
   get_target_property(
-    CFLOW_PUBLIC_LINKS Rocida::CFlow INTERFACE_LINK_LIBRARIES)
+    CFLOW_PUBLIC_LINKS Salts::CFlow INTERFACE_LINK_LIBRARIES)
   if(CFLOW_PUBLIC_LINKS MATCHES "XmlParser|cxml|CSerde|SCXML")
     message(FATAL_ERROR
-      "Rocida::CFlow must remain independent of XML, CSerde, and SCXML")
+      "Salts::CFlow must remain independent of XML, CSerde, and SCXML")
   endif()
 
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Rocida::CFlow;Rocida::CMeta;Rocida::CSerde;Rocida::XmlParser;$<LINK_ONLY:Rocida::Core>;$<LINK_ONLY:Rocida::CBind>;$<LINK_ONLY:Rocida::QueryVM>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::CBind>;$<LINK_ONLY:Salts::QueryVM>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
@@ -178,12 +201,21 @@ if(BUILD_TESTING)
       "TurboSCXML::SCXML dependency contract changed")
   endif()
 
+  get_target_property(
+    TURBOCCXML_PUBLIC_LINKS turbo_ccxml INTERFACE_LINK_LIBRARIES)
+  set(TURBOCCXML_EXPECTED_LINKS
+    "TurboSCXML::SCXML;$<LINK_ONLY:Salts::XmlParser>")
+  if(NOT TURBOCCXML_PUBLIC_LINKS STREQUAL TURBOCCXML_EXPECTED_LINKS)
+    message(FATAL_ERROR
+      "TurboSCXML::CCXML dependency contract changed")
+  endif()
+
   if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     get_target_property(
       TURBOSCXML_CHTTP_PUBLIC_LINKS
       turbo_scxml_chttp_resource INTERFACE_LINK_LIBRARIES)
     set(TURBOSCXML_CHTTP_EXPECTED_LINKS
-      "TurboSCXML::SCXML;Rocida::CHTTP;$<LINK_ONLY:Rocida::Core>")
+      "TurboSCXML::SCXML;Salts::CHTTP;$<LINK_ONLY:Salts::Core>")
     if(NOT TURBOSCXML_CHTTP_PUBLIC_LINKS STREQUAL
        TURBOSCXML_CHTTP_EXPECTED_LINKS)
       message(FATAL_ERROR
@@ -196,7 +228,7 @@ if(BUILD_TESTING)
       TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS
       turbo_scxml_chttp_event_io INTERFACE_LINK_LIBRARIES)
     set(TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS
-      "TurboSCXML::SCXML;Rocida::CHTTP;$<LINK_ONLY:Rocida::Core>")
+      "TurboSCXML::SCXML;Salts::CHTTP;$<LINK_ONLY:Salts::Core>")
     if(NOT TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS STREQUAL
        TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS)
       message(FATAL_ERROR
@@ -204,14 +236,20 @@ if(BUILD_TESTING)
     endif()
   endif()
 
-  if(NOT TARGET Rocida::TinyTest)
+  if(NOT TARGET Salts::TinyTest)
     message(FATAL_ERROR
-      "BUILD_TESTING requires Rocida::TinyTest in the selected SDK")
+      "BUILD_TESTING requires Salts::TinyTest in the selected SDK")
   endif()
   add_subdirectory(tests)
 endif()
 
 install(TARGETS turbo_scxml
+  EXPORT TurboSCXMLTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(TARGETS turbo_ccxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -236,6 +274,9 @@ endif()
 install(
   FILES include/scxml/scxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+install(
+  FILES include/ccxml/ccxml.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(
     FILES include/scxml/chttp_resource.h

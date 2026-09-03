@@ -2,8 +2,8 @@
 
 #include "scxml_chttp_resource_internal.h"
 
-#include <turbo/error_codes.h>
-#include <turbo_vstr.h>
+#include <salts/error_codes.h>
+#include <salts_vstr.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -235,10 +235,10 @@ static bool allocate_request_storage(
 }
 
 static scxml_resource_status map_transport_status(int status) {
-    if (status == TURBO_ETIMEDOUT) return SCXML_RESOURCE_TIMEOUT;
-    if (status == TURBO_EMSGSIZE || status == TURBO_ENOBUFS)
+    if (status == SALTS_ETIMEDOUT) return SCXML_RESOURCE_TIMEOUT;
+    if (status == SALTS_EMSGSIZE || status == SALTS_ENOBUFS)
         return SCXML_RESOURCE_LIMIT_EXCEEDED;
-    if (status == TURBO_EPERM) return SCXML_RESOURCE_DENIED;
+    if (status == SALTS_EPERM) return SCXML_RESOURCE_DENIED;
     return SCXML_RESOURCE_FAILED;
 }
 
@@ -307,7 +307,7 @@ static scxml_resource_status acquire_response(
     transport_status = impl->transport.get(
         impl->transport_user, impl->config.client, &options,
         &response, &error);
-    if (transport_status != TURBO_OK) {
+    if (transport_status != SALTS_OK) {
         free(storage.allocation);
         return map_transport_status(transport_status);
     }

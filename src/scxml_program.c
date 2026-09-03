@@ -72,9 +72,9 @@ static scxml_status compile_scxml_model(
     scxml_limits limits = limits_or_null != NULL
                                     ? *limits_or_null
                                     : scxml_default_limits();
-    turbo_xml_document document = {0};
-    turbo_xml_diagnostic xml_diagnostic = {0};
-    turbo_xml_node xml_root;
+    salts_xml_document document = {0};
+    salts_xml_diagnostic xml_diagnostic = {0};
+    salts_xml_node xml_root;
     scxml_ast ast = {0};
     scxml_ast_limits ast_limits = {0};
     scxml_syntax_node root = {0};
@@ -89,7 +89,7 @@ static scxml_status compile_scxml_model(
     scxml_syntax_attribute datamodel;
     scxml_syntax_attribute binding;
     scxml_syntax_attribute document_name_attribute;
-    turbo_xml_string_view document_name = {NULL, 0u};
+    salts_xml_string_view document_name = {NULL, 0u};
     size_t index;
     size_t name_bytes = 0u;
     size_t retained_string_bytes = 0u;
@@ -122,17 +122,17 @@ static scxml_status compile_scxml_model(
         limits.max_states == 0u || limits.max_events == 0u ||
         limits.max_transitions == 0u || limits.max_name_bytes == 0u) {
         return scxml_analyze_fail(&build, SCXML_INVALID_ARGUMENT,
-                          (turbo_xml_location){0u, 0u, 0u},
+                          (salts_xml_location){0u, 0u, 0u},
                           "output/input and all SCXML limits must be valid");
     }
-    switch (turbo_xml_parse(&document, input, input_size, &limits.xml,
+    switch (salts_xml_parse(&document, input, input_size, &limits.xml,
                             &xml_diagnostic)) {
-        case TURBO_XML_OK: break;
-        case TURBO_XML_LIMIT_EXCEEDED:
+        case SALTS_XML_OK: break;
+        case SALTS_XML_LIMIT_EXCEEDED:
             return scxml_analyze_fail(&build, SCXML_LIMIT_EXCEEDED,
                               xml_diagnostic.location,
                               xml_diagnostic.message);
-        case TURBO_XML_ALLOCATION_FAILED:
+        case SALTS_XML_ALLOCATION_FAILED:
             return scxml_analyze_fail(&build, SCXML_ALLOCATION_FAILED,
                               xml_diagnostic.location,
                               xml_diagnostic.message);
@@ -141,7 +141,7 @@ static scxml_status compile_scxml_model(
                               xml_diagnostic.location,
                               xml_diagnostic.message);
     }
-    xml_root = turbo_xml_document_root(&document);
+    xml_root = salts_xml_document_root(&document);
     ast_limits.max_nodes = limits.xml.max_nodes;
     ast_limits.max_attributes = limits.xml.max_attributes;
     ast_limits.max_depth = limits.xml.max_depth;
@@ -151,14 +151,14 @@ static scxml_status compile_scxml_model(
             &ast_limits.max_storage_bytes)) {
         status = scxml_analyze_fail(
             &build, SCXML_LIMIT_EXCEEDED,
-            turbo_xml_node_location(xml_root),
+            salts_xml_node_location(xml_root),
             "SCXML AST storage limit overflow");
         goto cleanup;
     }
     status = scxml_ast_build(
         &ast, xml_root, &ast_limits, diagnostic);
     if (status != SCXML_OK) goto cleanup;
-    turbo_xml_document_destroy(&document);
+    salts_xml_document_destroy(&document);
     root = scxml_syntax_root(&ast);
     if (scxml_analyze_element_kind(root) != SCXML_ELEMENT_SCXML ||
         !scxml_analyze_view_equal_raw(scxml_syntax_node_namespace_uri(root),
@@ -570,7 +570,7 @@ static scxml_status compile_scxml_model(
     build.events[build.event_name_count] = (cflow_event_type){
         build.external_unmatched_event, &cmeta_type_bool};
     if (needs_execution_error) {
-        const turbo_xml_string_view execution_name = {
+        const salts_xml_string_view execution_name = {
             SCXML_ERROR_EXECUTION_EVENT,
             sizeof(SCXML_ERROR_EXECUTION_EVENT) - 1u};
         const scxml_name_ref *execution = scxml_analyze_find_name_ref(
@@ -763,10 +763,10 @@ static scxml_status compile_scxml_model(
          (SCXML_REQUIREMENT_EVENT_IO |
           SCXML_REQUIREMENT_INVOKE)) != 0u ||
         needs_execution_error) {
-        const turbo_xml_string_view execution_name = {
+        const salts_xml_string_view execution_name = {
             SCXML_ERROR_EXECUTION_EVENT,
             sizeof(SCXML_ERROR_EXECUTION_EVENT) - 1u};
-        const turbo_xml_string_view communication_name = {
+        const salts_xml_string_view communication_name = {
             SCXML_ERROR_COMMUNICATION_EVENT,
             sizeof(SCXML_ERROR_COMMUNICATION_EVENT) - 1u};
         const scxml_name_ref *execution = scxml_analyze_find_name_ref(
@@ -938,7 +938,7 @@ cleanup:
     }
     scxml_emit_free_build(&build);
     scxml_ast_destroy(&ast);
-    turbo_xml_document_destroy(&document);
+    salts_xml_document_destroy(&document);
     return status;
 }
 
@@ -1207,10 +1207,10 @@ const scxml_program_name *scxml_program_find_name(
     const char *name, size_t name_size) {
     size_t low = 0u;
     size_t high = count;
-    const turbo_xml_string_view wanted = {name, name_size};
+    const salts_xml_string_view wanted = {name, name_size};
     while (low < high) {
         const size_t middle = low + (high - low) / 2u;
-        const turbo_xml_string_view value = {
+        const salts_xml_string_view value = {
             names[middle].name, names[middle].size};
         if (scxml_analyze_compare_view(value, wanted) < 0) low = middle + 1u;
         else high = middle;
