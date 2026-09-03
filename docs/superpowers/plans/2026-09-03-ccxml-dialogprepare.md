@@ -55,10 +55,10 @@ TinyTest
 
 **Files:** `tests/ccxml_cmeta_test.c`
 
-- [ ] Add an end-to-end prepare-then-terminate test proving the generated ID
+- [x] Add an end-to-end prepare-then-terminate test proving the generated ID
   reaches a nested owned CMeta string before provider publication.
-- [ ] Reuse the production adapter without adding dialog-specific CMeta code.
-- [ ] Run focused CMeta/runtime tests and commit the integration slice.
+- [x] Reuse the production adapter without adding dialog-specific CMeta code.
+- [x] Run focused CMeta/runtime tests and commit the integration slice.
 
 ### Task 4: Document, verify, and publish
 
