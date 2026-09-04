@@ -151,6 +151,22 @@ spec("CCXML program") {
         check_null(program.impl);
     }
 
+    it("lowers an if elseif else action chain") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<if cond='first'><accept/><elseif cond='second'/><reject/>"
+            "<else/><disconnect/></if>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(compile_source(&program, source, &diagnostic), CCXML_OK);
+        check_equal(ccxml_program_action_count(&program), (size_t)7);
+
+        ccxml_program_destroy(&program);
+    }
+
     it("rejects nonliteral string assignment expressions") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

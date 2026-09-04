@@ -821,11 +821,13 @@ static scxml_status analyze_raise(scxml_build *build,
     return SCXML_OK;
 }
 
-bool scxml_analyze_parse_delay_ms(salts_xml_string_view value, uint64_t *out_ms) {
+bool scxml_time_parse_ms(salts_xml_string_view value, uint64_t *out_ms) {
     size_t number_size;
+    size_t number_start = 0u;
     size_t index;
     size_t dot = SIZE_MAX;
     size_t fraction_digits = 0u;
+    size_t digit_count = 0u;
     uint64_t whole = 0u;
     uint64_t fraction = 0u;
     bool seconds;
@@ -842,17 +844,21 @@ bool scxml_analyze_parse_delay_ms(salts_xml_string_view value, uint64_t *out_ms)
         return false;
     }
     if (number_size == 0u) return false;
-    for (index = 0u; index < number_size; ++index) {
+    if (value.data[0] == '+') {
+        number_start = 1u;
+        if (number_start == number_size) return false;
+    }
+    for (index = number_start; index < number_size; ++index) {
         const unsigned char digit = (unsigned char)value.data[index];
         if (digit == '.') {
-            if (!seconds || dot != SIZE_MAX || index == 0u ||
-                index + 1u == number_size) {
+            if (!seconds || dot != SIZE_MAX || index + 1u == number_size) {
                 return false;
             }
             dot = index;
             continue;
         }
         if (!isdigit(digit)) return false;
+        ++digit_count;
         if (dot == SIZE_MAX) {
             if (whole > (UINT64_MAX - (uint64_t)(digit - '0')) / 10u)
                 return false;
@@ -863,6 +869,7 @@ bool scxml_analyze_parse_delay_ms(salts_xml_string_view value, uint64_t *out_ms)
             fraction = fraction * 10u + (uint64_t)(digit - '0');
         }
     }
+    if (digit_count == 0u) return false;
     if (!seconds) {
         *out_ms = whole;
         return true;
@@ -1316,11 +1323,11 @@ static scxml_status analyze_send(scxml_build *build,
                           "send literal attributes must be non-empty and id must be an XML NCName");
     }
     if (delay_attribute.impl != NULL &&
-        !scxml_analyze_parse_delay_ms(scxml_syntax_attribute_value(delay_attribute),
+        !scxml_time_parse_ms(scxml_syntax_attribute_value(delay_attribute),
                         &delay_ms)) {
         return scxml_analyze_fail(build, SCXML_INVALID_STRUCTURE,
                           scxml_syntax_attribute_location(delay_attribute),
-                          "send delay must be an unsigned ms or s literal with millisecond precision");
+                          "send delay must be a non-negative ms or s literal with millisecond precision");
     }
     if (delay_ms != 0u && id_attribute.impl == NULL &&
         idlocation_attribute.impl == NULL) {

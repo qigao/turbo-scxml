@@ -126,14 +126,17 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 大小写不敏感 `<transition event="...">` glob 匹配（`*` 匹配任意长度子串，
 省略 `event` 表示 catch-all）、一个 CMeta-backed 字符串 `<var>`、
 `eventprocessor@statevariable`、空白分隔的 `transition@state` 和字符串字面量
-`<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond`，以及空
+`<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond` 和可嵌套的
+`<if cond="...">` / `<elseif cond="..."/>` / `<else/>` executable content，以及空
 `<accept/>`/`<exit/>` 和带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
-`<dialogterminate/>` VoiceXML provider 生命周期：
+`<dialogterminate/>` VoiceXML provider 生命周期，以及受限 `<send/>`（字面量
+`target`/`name`、可选字面量 `targettype` 与 CSS 时间 `delay`、可选点分
+`sendid` 写回位置）和 `<cancel/>`，默认 `ccxml` 和零延迟：
 
 ```xml
 <transition event="ccxml.loaded">
@@ -182,6 +185,13 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 <transition event="dialog.stop">
   <dialogterminate dialogid="dialog.id"/>
 </transition>
+<transition event="call.notice.ready">
+  <send target="'session:supervisor'" name="'call.notice'" delay="'250ms'"
+        sendid="request.pending"/>
+</transition>
+<transition event="call.notice.cancel">
+  <cancel sendid="request.pending"/>
+</transition>
 ```
 
 受限状态机切片使用一个 root 字符串变量；session 初始化成功时才提交初值，
@@ -210,6 +220,13 @@ adapter 错误则停止本次选择。内置 CMeta adapter 复用 TurboSCXML 的
 表达式 VM，可读取 CMeta root 字段和 `_event.name`；不支持 SCXML `In()` 或通用
 ECMAScript。旧 adapter 不使用 `cond` 时仍按原 size prefix 工作。
 
+`<if>` 的 `cond` 与每个 `<elseif>` 的 `cond` 使用相同的 CMeta condition tail：
+program 会把控制流 flatten 为有界 action rows，session admission 一次性编译所有
+条件，dispatch 只求值直到选中一个 branch。`<elseif>` 和 `<else>` 是空 branch
+marker，必须直接位于 `<if>` 内；`<else>` 至多一次且之后不能再出现 `<elseif>`。
+false branch 跳至下一个 marker，任何 condition 错误都会回滚该 transition 已准备的
+effects。XPath 与通用 ECMAScript 仍不在此 profile 内。
+
 ```cmake
 find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML
   PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
@@ -234,6 +251,29 @@ adapter 一次。
 `<createcall/>` commit 后由 provider 异步发起呼叫，并通过已有 event dispatch
 边界回送 `connection.progressing`、`connection.connected` 或
 `connection.failed`。核心不包含 SIP/RTP backend，也不会伪造平台结果。
+
+`<send/>` 复用 `scxml_event_io_adapter` 的 move-only prepare/commit/discard
+边界；`scxml_send_request.type` 承载 CCXML `targettype`，具体 `ccxml`、`dialog`
+或 `basichttp` 路由由 session-bound 宿主实现，而不是套用 SCXML target 规则。
+字面量 `delay` 在 compile 阶段解析为精确毫秒；只有实际包含非零延迟的 program
+才要求 adapter 声明 `SCXML_EVENT_IO_CAP_DELAYED_SEND`，省略或零延迟仍可使用
+仅支持 SEND 的 adapter。
+commit 后的 `send.successful` 或 `error.send.*` 也由宿主通过串行 CCXML event
+dispatch 边界回送，核心不自行合成平台结果。
+`sendid` 当前接受点分 NCName 可写字符串位置；核心按 session UUID 与递增 token
+生成有界 ID，先提交 datamodel 写回，再发布 send。`<cancel sendid="..."/>`
+接受点分可读字符串位置或字符串字面量，并复用 adapter 的
+`SCXML_EVENT_IO_CAP_CANCEL`/`prepare_cancel`。宿主继续拥有 delayed registry、
+取消竞态及 `cancel.successful`/`error.notallowed` 结果事件。`namelist` 接受最多
+`SCXML_PAYLOAD_MAX_ENTRIES` 个 XML 解码后的点分 NCName 位置，保留顺序和限定名，
+并通过共享 `scxml_payload_view` 传递标量或 CMeta 对象视图；非空列表要求
+datamodel payload-read 尾部能力与 `SCXML_EVENT_IO_CAP_PAYLOAD`。Event I/O
+provider 必须在 prepare 返回前复制需保留的数据。由于外部 datamodel
+写入只在 transition commit 后可见，send 与读取其 ID 的 cancel 应位于不同
+transition；同理，namelist 不会看到同一 transition 中更早 staged 的 assign。
+当前尚不支持动态 `delay`、任意 ECMAScript `sendid`、通用 ECMAScript namelist
+表达式和 inline content，这些形式会在 compile 阶段被明确拒绝。
+
 adapter 的 `prepare_create_call` 是 `struct_size` 保护的尾部 capability；只使用
 原有 action 的旧 v1 provider 前缀继续可用。
 
@@ -366,9 +406,19 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 非字面量 `confname` 或通用 ECMAScript 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
-`<send>`、文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
+`<send>` 的动态 `delay`、任意 ECMAScript `sendid`、非点分位置 namelist、
+inline content 或其他非字面量表达式、
+文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，
+send 切片与共享 Event I/O 边界见
+[`docs/specs/ccxml-send-design.md`](docs/specs/ccxml-send-design.md)，
+literal delay 增量见
+[`docs/specs/ccxml-send-delay-design.md`](docs/specs/ccxml-send-delay-design.md)，
+send identifier 与 cancel 增量见
+[`docs/specs/ccxml-send-cancel-design.md`](docs/specs/ccxml-send-cancel-design.md)，
+send namelist 与结构化 payload 增量见
+[`docs/specs/ccxml-send-namelist-design.md`](docs/specs/ccxml-send-namelist-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
 断开连接切片见

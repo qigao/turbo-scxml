@@ -2,6 +2,10 @@
 #define TURBO_CCXML_INTERNAL_H
 
 #include <ccxml/ccxml.h>
+#include <salts_uuid.h>
+
+#define CCXML_SEND_ID_MAX_SIZE \
+    ((sizeof("send.") - 1u) + SALTS_UUID_STRING_LENGTH + 1u + 20u)
 
 typedef enum ccxml_action_kind {
     CCXML_ACTION_ACCEPT = 1,
@@ -19,8 +23,19 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_DIALOG_START,
     CCXML_ACTION_PREPARED_DIALOG_START,
     CCXML_ACTION_DIALOG_TERMINATE,
-    CCXML_ACTION_ASSIGN_STRING
+    CCXML_ACTION_ASSIGN_STRING,
+    CCXML_ACTION_SEND,
+    CCXML_ACTION_CANCEL,
+    CCXML_ACTION_IF,
+    CCXML_ACTION_ELSEIF,
+    CCXML_ACTION_ELSE,
+    CCXML_ACTION_ENDIF
 } ccxml_action_kind;
+
+typedef struct ccxml_payload_row {
+    const char *name;
+    size_t name_size;
+} ccxml_payload_row;
 
 typedef struct ccxml_action_row {
     ccxml_action_kind kind;
@@ -32,6 +47,20 @@ typedef struct ccxml_action_row {
     size_t id2_size;
     const char *location;
     size_t location_size;
+    const char *name;
+    size_t name_size;
+    const char *target_type;
+    size_t target_type_size;
+    const char *condition;
+    size_t condition_size;
+    const char *delay;
+    size_t delay_size;
+    uint64_t delay_ms;
+    bool delay_is_dynamic;
+    size_t branch_next;
+    size_t block_end;
+    size_t payload_first;
+    size_t payload_count;
 } ccxml_action_row;
 
 typedef struct ccxml_transition_row {
@@ -49,6 +78,7 @@ typedef struct ccxml_program_impl {
     cflow_statechart statechart;
     ccxml_transition_row *transitions;
     ccxml_action_row *actions;
+    ccxml_payload_row *payloads;
     char *storage;
     const char *initial_variable;
     size_t initial_variable_size;
@@ -58,6 +88,8 @@ typedef struct ccxml_program_impl {
     size_t statevariable_size;
     size_t transition_count;
     size_t action_count;
+    size_t payload_count;
+    size_t max_send_payload_entries;
     size_t max_transition_actions;
     size_t max_transition_effects;
     bool uses_create_call;
@@ -77,9 +109,20 @@ typedef struct ccxml_program_impl {
     bool uses_assign;
     bool uses_statevariable;
     bool uses_condition;
+    bool uses_send;
+    bool uses_send_payload;
+    bool uses_send_delay;
+    bool uses_send_id;
+    bool uses_delayed_send;
+    bool uses_cancel;
 } ccxml_program_impl;
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;
+
+typedef struct ccxml_conditional_frame {
+    size_t block_end;
+    bool branch_taken;
+} ccxml_conditional_frame;
 
 typedef struct ccxml_session_impl {
     const ccxml_program_impl *program;
@@ -87,14 +130,23 @@ typedef struct ccxml_session_impl {
     void *telephony_user;
     ccxml_datamodel_adapter_v1 datamodel;
     void *datamodel_user;
+    scxml_event_io_adapter event_io;
+    void *event_io_user;
     cflow_executor executor;
     cflow_statechart_instance instance;
     cflow_statechart_guard_binding *guard_bindings;
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
+    ccxml_condition *action_conditions;
+    ccxml_conditional_frame *conditional_frames;
     cflow_statechart_effect_ticket *tickets;
+    scxml_payload_entry *payload_scratch;
     size_t ticket_capacity;
+    size_t payload_scratch_capacity;
+    size_t conditional_frame_capacity;
     size_t prepared_ticket_count;
+    char send_namespace[SALTS_UUID_STRING_SIZE];
+    uint64_t next_send_token;
     ccxml_status dispatch_status;
     bool closed;
     bool terminated;

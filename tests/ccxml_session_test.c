@@ -964,6 +964,84 @@ spec("CCXML session") {
         ccxml_program_destroy(&program);
     }
 
+    it("compiles and destroys conditional action expressions") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<if cond='first'><accept/><elseif cond='second'/><reject/>"
+            "<else/><disconnect/></if>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {0};
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_OK);
+        check_equal(datamodel.condition_compile_count, (size_t)2);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(datamodel.condition_destroy_count, (size_t)2);
+        ccxml_program_destroy(&program);
+    }
+
+    it("prepares only the true conditional branch") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<if cond='first'><accept/><elseif cond='second'/><reject/>"
+            "<else/><disconnect/></if>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {.condition_result = true};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(datamodel.condition_evaluate_count, (size_t)1);
+        check_equal(provider.prepare_count, (size_t)1);
+        check_equal(provider.prepare_kinds[0], (size_t)PROVIDER_ACCEPT);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
+    it("uses else after every conditional expression is false") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<if cond='first'><accept/><elseif cond='second'/><reject/>"
+            "<else/><disconnect/></if>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe provider = {.quiescent = true};
+        datamodel_probe datamodel = {.condition_result = false};
+        ccxml_event event = alerting_event();
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(
+            init_session_with_datamodel(
+                &session, &program, &provider, &datamodel),
+            CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(datamodel.condition_evaluate_count, (size_t)2);
+        check_equal(provider.prepare_count, (size_t)1);
+        check_equal(provider.prepare_kinds[0], (size_t)PROVIDER_DISCONNECT);
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_program_destroy(&program);
+    }
+
     it("rejects accept when the current event has no connection") {
         ccxml_program program = {0};
         ccxml_session session = {0};

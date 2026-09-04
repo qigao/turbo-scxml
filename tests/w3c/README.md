@@ -5,10 +5,11 @@ These fixtures are local transformations of documents from the
 The inventory follows the upstream 10 March 2015 report: 200 assertions expand
 to 202 test documents because assertion 403 has three starts. Of those
 documents, 168 are mandatory and 34 optional. TurboSCXML records all 168
-mandatory local transformations and 13 BasicHTTP optional transformations as
-PASS; the remaining 21 optional-profile documents are N/A. Passing this corpus is
-not W3C certification and is not, by itself, a claim of complete SCXML
-processor conformance.
+mandatory local transformations, 13 BasicHTTP optional transformations, and
+the targetless SCXML Event Processor transformation as PASS; the remaining 20
+optional-profile documents are N/A. Passing this corpus is not W3C
+certification and is not, by itself, a claim of complete SCXML processor
+conformance.
 
 `manifest.tsv` is the single machine-readable corpus fact source. Every
 upstream start document has one row. Its nine tab-separated columns record the
@@ -30,8 +31,8 @@ Status meanings are strict:
   implemented or testable TurboSCXML profile. The row states the missing
   assertion rather than silently omitting it.
 - `N/A` is reserved for optional profiles that TurboSCXML does not claim.
-  The current inventory contains ECMAScript and adjacent optional Event I/O
-  behavior; it contains no XPath-specific assertion rows.
+  The current inventory's remaining rows are all ECMAScript-profile behavior;
+  it contains no XPath-specific assertion rows.
 
 XPath is not a TurboSCXML roadmap gap. The XPath Data Model was marked at risk
 in the [2014 Candidate Recommendation](https://www.w3.org/TR/2014/CR-scxml-20140313/)
@@ -160,6 +161,7 @@ mixed completion-data outcomes.
 | `test190.scxml` | [test190.txml](https://www.w3.org/Voice/2013/scxml-irp/190/test190.txml) | A send to the current `#_scxml_sessionid` is admitted to that session's external queue after internal work. |
 | `test191.scxml` | [test191.txml](https://www.w3.org/Voice/2013/scxml-irp/191/test191.txml) | A child's initial `#_parent` send reaches the invoking parent's external queue through a pre-reserved host endpoint. |
 | `test192.scxml` | [test192.txml](https://www.w3.org/Voice/2013/scxml-irp/192/test192.txml) | A parent routes through its child's invoke-id alias and receives the child's `#_parent` reply. |
+| `test193.scxml` | [test193.txml](https://www.w3.org/Voice/2013/scxml-irp/193/test193.txml) | Two sends with neither `target` nor `targetexpr` use the canonical SCXML Event Processor and return to the sending session's external queue in commit order. |
 | `test347.scxml` | [test347.txml](https://www.w3.org/Voice/2013/scxml-irp/347/test347.txml) | Two independent sessions exchange three Events through host-owned external queues. |
 | `test348.scxml` | [test348.txml](https://www.w3.org/Voice/2013/scxml-irp/348/test348.txml) | The sent event name becomes the exact receiving `_event.name`. |
 | `test349.scxml` | [test349.txml](https://www.w3.org/Voice/2013/scxml-irp/349/test349.txml) | The receiving Event origin is the sender address and can route a reply. |
@@ -700,8 +702,12 @@ bundling a cross-session registry or transport. The public location-copy API
 lets a host register the exact address exposed through
 `_ioprocessors.scxml.location`, and
 `scxml_event_io_contract_test` demonstrates bounded routing and delivery
-through only public APIs. Tests 189-192, 347-354, 495-496, and 500-501 therefore
+through only public APIs. Tests 189-193, 347-354, 495-496, and 500-501 therefore
 exercise the logical SCXML Event Processor contract with that strict local host.
+Test 193 specifically requires both targetless requests to carry the canonical
+processor type and an empty target, then admits the committed Events back into
+the source session in order; observing `internal` before `event1` proves that
+both traverse the external queue rather than the internal queue.
 This evidence does not make the core library alone a standalone network
 service. When `TURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON`, the optional CHTTP module
 does provide a bounded BasicHTTP Event I/O Processor and the same strict

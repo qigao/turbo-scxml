@@ -13,9 +13,10 @@ dispatches one external event synchronously, selects the first matching
 transition in document order, stages every action effect, and either commits
 all staged effects or discards them all.
 
-SIP/RTP backends, document replacement, general ECMAScript, `<send>`, and a
-built-in VoiceXML interpreter are outside this slice. The compiler rejects
-unsupported constructs instead of silently approximating them.
+SIP/RTP backends, document replacement, general ECMAScript, full `<send>`
+expressions/inline payloads, and a built-in VoiceXML interpreter are outside this
+slice. The compiler rejects unsupported constructs instead of silently
+approximating them.
 
 Normative references:
 
@@ -33,9 +34,11 @@ application -> TurboSCXML::CCXML -> TurboSCXML::SCXML -> Salts
 ```
 
 The first slice deliberately reuses the SCXML adapter status and CFlow
-move-only effect ticket contracts. CCXML owns its XML syntax, program, session,
-event selection, and telephony vocabulary; no CCXML element is admitted by the
-SCXML compiler.
+move-only effect ticket contracts. Its restricted `<send>` action also reuses
+the `scxml_event_io_adapter` table and `scxml_send_request` envelope while the
+session-bound host retains CCXML target-type semantics. CCXML owns its XML
+syntax, program, session, event selection, and telephony vocabulary; no CCXML
+element is admitted by the SCXML compiler.
 
 ## Public contract
 
@@ -103,6 +106,17 @@ continues document-order selection; compile or evaluation failure returns an
 adapter error and prevents later guards from handling that event. Root variable
 initializers commit only after every condition and the native CFlow instance
 have initialized successfully.
+
+Executable content also accepts a nested `<if cond="...">` block. Its direct
+children are ordinary supported actions, zero or more empty
+`<elseif cond="..."/>` branch markers, and at most one empty `<else/>` marker.
+The compiler lowers each block to immutable `IF`, `ELSEIF`, `ELSE`, and `ENDIF`
+rows; every control row counts against `max_actions`, while only selected leaf
+actions consume effect-ticket capacity. Session admission compiles every `IF`
+and `ELSEIF` source through the same condition adapter tail. Dispatch uses
+preallocated frame scratch to evaluate branches in order, skip non-selected
+content, and roll back already prepared effects on an evaluation failure.
+XPath and a general ECMAScript runtime remain outside this bounded profile.
 
 The event supplied to `ccxml_session_dispatch` has a bounded name and an
 optional connection identifier. The first matching transition is selected in
