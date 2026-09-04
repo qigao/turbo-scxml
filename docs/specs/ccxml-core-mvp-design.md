@@ -107,6 +107,17 @@ adapter error and prevents later guards from handling that event. Root variable
 initializers commit only after every condition and the native CFlow instance
 have initialized successfully.
 
+Executable content also accepts a nested `<if cond="...">` block. Its direct
+children are ordinary supported actions, zero or more empty
+`<elseif cond="..."/>` branch markers, and at most one empty `<else/>` marker.
+The compiler lowers each block to immutable `IF`, `ELSEIF`, `ELSE`, and `ENDIF`
+rows; every control row counts against `max_actions`, while only selected leaf
+actions consume effect-ticket capacity. Session admission compiles every `IF`
+and `ELSEIF` source through the same condition adapter tail. Dispatch uses
+preallocated frame scratch to evaluate branches in order, skip non-selected
+content, and roll back already prepared effects on an evaluation failure.
+XPath and a general ECMAScript runtime remain outside this bounded profile.
+
 The event supplied to `ccxml_session_dispatch` has a bounded name and an
 optional connection identifier. The first matching transition is selected in
 document order. An unhandled `error.*`, `ccxml.kill`, or `ccxml.kill.*` event

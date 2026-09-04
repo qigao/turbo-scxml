@@ -166,16 +166,27 @@ static ccxml_datamodel_adapter_v1 copy_datamodel_adapter(
 
 static void destroy_conditions(ccxml_session_impl *impl) {
     size_t index;
-    if (impl == NULL || impl->transition_bindings == NULL ||
-        impl->datamodel.destroy_condition == NULL)
+    if (impl == NULL || impl->datamodel.destroy_condition == NULL)
         return;
-    for (index = 0u; index < impl->program->transition_count; ++index) {
-        ccxml_condition *condition =
-            &impl->transition_bindings[index].condition;
-        if (condition->impl != NULL) {
-            impl->datamodel.destroy_condition(
-                impl->datamodel_user, condition);
-            condition->impl = NULL;
+    if (impl->transition_bindings != NULL) {
+        for (index = 0u; index < impl->program->transition_count; ++index) {
+            ccxml_condition *condition =
+                &impl->transition_bindings[index].condition;
+            if (condition->impl != NULL) {
+                impl->datamodel.destroy_condition(
+                    impl->datamodel_user, condition);
+                condition->impl = NULL;
+            }
+        }
+    }
+    if (impl->action_conditions != NULL) {
+        for (index = 0u; index < impl->program->action_count; ++index) {
+            ccxml_condition *condition = &impl->action_conditions[index];
+            if (condition->impl != NULL) {
+                impl->datamodel.destroy_condition(
+                    impl->datamodel_user, condition);
+                condition->impl = NULL;
+            }
         }
     }
 }
@@ -698,6 +709,11 @@ ccxml_status ccxml_session_init(
         SIZE_MAX / sizeof(cflow_statechart_effect_ticket)) {
         return CCXML_LIMIT_EXCEEDED;
     }
+    if (program->action_count > SIZE_MAX / sizeof(ccxml_condition))
+        return CCXML_LIMIT_EXCEEDED;
+    if (program->max_transition_actions >
+        SIZE_MAX / sizeof(ccxml_conditional_frame))
+        return CCXML_LIMIT_EXCEEDED;
     if (program->max_send_payload_entries >
         SIZE_MAX / sizeof(scxml_payload_entry))
         return CCXML_LIMIT_EXCEEDED;
@@ -735,6 +751,28 @@ ccxml_status ccxml_session_init(
             return CCXML_ALLOCATION_FAILED;
         }
     }
+    if (program->uses_condition && program->action_count != 0u) {
+        impl->action_conditions = (ccxml_condition *)calloc(
+            program->action_count, sizeof(*impl->action_conditions));
+        if (impl->action_conditions == NULL) {
+            free(impl->payload_scratch);
+            free(impl->tickets);
+            free(impl);
+            return CCXML_ALLOCATION_FAILED;
+        }
+    }
+    if (program->max_transition_actions != 0u) {
+        impl->conditional_frames = (ccxml_conditional_frame *)calloc(
+            program->max_transition_actions,
+            sizeof(*impl->conditional_frames));
+        if (impl->conditional_frames == NULL) {
+            free(impl->action_conditions);
+            free(impl->payload_scratch);
+            free(impl->tickets);
+            free(impl);
+            return CCXML_ALLOCATION_FAILED;
+        }
+    }
     impl->program = program;
     impl->telephony = telephony;
     impl->telephony_user = config->telephony_user;
@@ -744,6 +782,7 @@ ccxml_status ccxml_session_init(
     impl->event_io_user = event_io_user;
     impl->ticket_capacity = program->max_transition_effects;
     impl->payload_scratch_capacity = program->max_send_payload_entries;
+    impl->conditional_frame_capacity = program->max_transition_actions;
     guard_count = cflow_statechart_guard_count(&program->statechart);
     executable_count =
         cflow_statechart_executable_count(&program->statechart);
@@ -752,6 +791,8 @@ ccxml_status ccxml_session_init(
         executable_count > SIZE_MAX / sizeof(*impl->executable_bindings)) {
         close_adapter(impl);
         free(impl->payload_scratch);
+        free(impl->action_conditions);
+        free(impl->conditional_frames);
         free(impl->tickets);
         free(impl);
         return CCXML_LIMIT_EXCEEDED;
@@ -771,6 +812,8 @@ ccxml_status ccxml_session_init(
         (executable_count != 0u && impl->executable_bindings == NULL)) {
         close_adapter(impl);
         free(impl->payload_scratch);
+        free(impl->action_conditions);
+        free(impl->conditional_frames);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -808,6 +851,8 @@ ccxml_status ccxml_session_init(
                 close_adapter(impl);
                 destroy_conditions(impl);
                 free(impl->payload_scratch);
+                free(impl->action_conditions);
+                free(impl->conditional_frames);
                 free(impl->transition_bindings);
                 free(impl->executable_bindings);
                 free(impl->guard_bindings);
@@ -830,10 +875,48 @@ ccxml_status ccxml_session_init(
                     .contextual_fn = execute_transition_binding};
         }
     }
+    for (action_index = 0u; action_index < program->action_count;
+         ++action_index) {
+        const ccxml_action_row *action = &program->actions[action_index];
+        ccxml_condition *condition = &impl->action_conditions[action_index];
+        const char *error = NULL;
+        scxml_adapter_status adapter_status;
+        ccxml_status status = CCXML_OK;
+        if (action->kind != CCXML_ACTION_IF &&
+            action->kind != CCXML_ACTION_ELSEIF)
+            continue;
+        adapter_status = impl->datamodel.compile_condition(
+            impl->datamodel_user, action->condition, action->condition_size,
+            condition, &error);
+        (void)error;
+        if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+            status = adapter_status == SCXML_ADAPTER_FULL
+                ? CCXML_ALLOCATION_FAILED
+                : adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                    ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+        } else if (condition->impl == NULL) {
+            status = CCXML_INVALID_CONTRACT;
+        }
+        if (status != CCXML_OK) {
+            close_adapter(impl);
+            destroy_conditions(impl);
+            free(impl->payload_scratch);
+            free(impl->action_conditions);
+            free(impl->conditional_frames);
+            free(impl->transition_bindings);
+            free(impl->executable_bindings);
+            free(impl->guard_bindings);
+            free(impl->tickets);
+            free(impl);
+            return status;
+        }
+    }
     if (!cflow_executor_serial_init(&impl->executor)) {
         close_adapter(impl);
         destroy_conditions(impl);
         free(impl->payload_scratch);
+        free(impl->action_conditions);
+        free(impl->conditional_frames);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -861,6 +944,8 @@ ccxml_status ccxml_session_init(
         close_adapter(impl);
         destroy_conditions(impl);
         free(impl->payload_scratch);
+        free(impl->action_conditions);
+        free(impl->conditional_frames);
         free(impl->transition_bindings);
         free(impl->executable_bindings);
         free(impl->guard_bindings);
@@ -897,6 +982,8 @@ ccxml_status ccxml_session_init(
             close_adapter(impl);
             destroy_conditions(impl);
             free(impl->payload_scratch);
+            free(impl->action_conditions);
+            free(impl->conditional_frames);
             free(impl->transition_bindings);
             free(impl->executable_bindings);
             free(impl->guard_bindings);
@@ -909,16 +996,117 @@ ccxml_status ccxml_session_init(
     return CCXML_OK;
 }
 
+static ccxml_status evaluate_action_condition(
+    ccxml_session_impl *impl, size_t action_index, const ccxml_event *event,
+    bool *out_value) {
+    const char *error = NULL;
+    scxml_adapter_status adapter_status;
+    if (impl == NULL || event == NULL || out_value == NULL ||
+        action_index >= impl->program->action_count ||
+        impl->action_conditions == NULL ||
+        impl->action_conditions[action_index].impl == NULL)
+        return CCXML_INVALID_CONTRACT;
+    adapter_status = impl->datamodel.evaluate_condition(
+        impl->datamodel_user, &impl->action_conditions[action_index], event,
+        out_value, &error);
+    (void)error;
+    if (adapter_status == SCXML_ADAPTER_ACCEPTED) return CCXML_OK;
+    return adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+        ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+}
+
 static ccxml_status execute_transition_actions(
     ccxml_session_impl *impl, const ccxml_transition_row *transition,
     const ccxml_event *event, size_t *out_prepared,
     bool *out_exit_requested) {
     size_t index;
+    size_t conditional_depth = 0u;
     size_t prepared = 0u;
     bool exit_requested = false;
-    for (index = 0u; index < transition->action_count; ++index) {
+    for (index = 0u; index < transition->action_count;) {
+        const size_t action_index = transition->first_action + index;
         const ccxml_action_row *action =
-            &impl->program->actions[transition->first_action + index];
+            &impl->program->actions[action_index];
+        if (action->kind == CCXML_ACTION_IF ||
+            action->kind == CCXML_ACTION_ELSEIF) {
+            ccxml_conditional_frame *frame;
+            bool condition_value = false;
+            ccxml_status status;
+            if (action->branch_next < transition->first_action ||
+                action->branch_next >= transition->first_action +
+                    transition->action_count ||
+                action->block_end < action->branch_next ||
+                action->block_end >= transition->first_action +
+                    transition->action_count) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            if (action->kind == CCXML_ACTION_IF) {
+                if (conditional_depth >= impl->conditional_frame_capacity ||
+                    impl->conditional_frames == NULL) {
+                    discard_tickets(impl->tickets, prepared);
+                    return CCXML_LIMIT_EXCEEDED;
+                }
+                frame = &impl->conditional_frames[conditional_depth++];
+                *frame = (ccxml_conditional_frame){
+                    .block_end = action->block_end,
+                    .branch_taken = false};
+            } else {
+                if (conditional_depth == 0u ||
+                    impl->conditional_frames[conditional_depth - 1u].block_end !=
+                        action->block_end) {
+                    discard_tickets(impl->tickets, prepared);
+                    return CCXML_INVALID_CONTRACT;
+                }
+                frame = &impl->conditional_frames[conditional_depth - 1u];
+                if (frame->branch_taken) {
+                    --conditional_depth;
+                    index = action->block_end - transition->first_action + 1u;
+                    continue;
+                }
+            }
+            status = evaluate_action_condition(
+                impl, action_index, event, &condition_value);
+            if (status != CCXML_OK) {
+                discard_tickets(impl->tickets, prepared);
+                return status;
+            }
+            frame->branch_taken = condition_value;
+            index = condition_value
+                ? index + 1u
+                : action->branch_next - transition->first_action;
+            continue;
+        }
+        if (action->kind == CCXML_ACTION_ELSE) {
+            ccxml_conditional_frame *frame;
+            if (conditional_depth == 0u ||
+                impl->conditional_frames[conditional_depth - 1u].block_end !=
+                    action->block_end ||
+                action->branch_next != action->block_end) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            frame = &impl->conditional_frames[conditional_depth - 1u];
+            if (frame->branch_taken) {
+                --conditional_depth;
+                index = action->block_end - transition->first_action + 1u;
+            } else {
+                frame->branch_taken = true;
+                ++index;
+            }
+            continue;
+        }
+        if (action->kind == CCXML_ACTION_ENDIF) {
+            if (conditional_depth == 0u ||
+                impl->conditional_frames[conditional_depth - 1u].block_end !=
+                    action_index) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            --conditional_depth;
+            ++index;
+            continue;
+        }
         if (action->kind == CCXML_ACTION_EXIT) {
             exit_requested = true;
             break;
@@ -1471,6 +1659,11 @@ static ccxml_status execute_transition_actions(
             (void)error;
             if (status != CCXML_OK) return status;
         }
+        ++index;
+    }
+    if (!exit_requested && conditional_depth != 0u) {
+        discard_tickets(impl->tickets, prepared);
+        return CCXML_INVALID_CONTRACT;
     }
     *out_prepared = prepared;
     *out_exit_requested = exit_requested;
@@ -1657,6 +1850,8 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
     cflow_executor_destroy(&impl->executor);
     destroy_conditions(impl);
     free(impl->transition_bindings);
+    free(impl->action_conditions);
+    free(impl->conditional_frames);
     free(impl->executable_bindings);
     free(impl->guard_bindings);
     free(impl->payload_scratch);

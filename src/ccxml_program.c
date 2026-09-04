@@ -21,6 +21,22 @@ typedef struct ccxml_measurement {
     size_t max_send_payload_entries;
 } ccxml_measurement;
 
+typedef enum ccxml_copy_item_kind {
+    CCXML_COPY_ITEM_LEAF = 1,
+    CCXML_COPY_ITEM_IF,
+    CCXML_COPY_ITEM_ELSEIF,
+    CCXML_COPY_ITEM_ELSE,
+    CCXML_COPY_ITEM_ENDIF
+} ccxml_copy_item_kind;
+
+typedef struct ccxml_copy_item {
+    salts_xml_node node;
+    ccxml_copy_item_kind kind;
+    size_t branch_next;
+    size_t block_end;
+    size_t branch_owner;
+} ccxml_copy_item;
+
 static const cmeta_type_identity ccxml_event_identity =
     CMETA_TYPE_ID_ATOM_INIT("turbo.ccxml.event");
 static const cmeta_type_traits ccxml_event_traits = {
@@ -1592,6 +1608,233 @@ static ccxml_status validate_string_binding(
     return CCXML_OK;
 }
 
+static ccxml_status measure_conditional_control(
+    salts_xml_node node, bool requires_condition, bool requires_empty,
+    ccxml_measurement *measurement, const ccxml_limits *limits,
+    ccxml_diagnostic *diagnostic) {
+    salts_xml_attribute condition_attribute = {0};
+    size_t index;
+    size_t condition_size = 0u;
+    size_t retained_size = 0u;
+    ccxml_status status;
+
+    if (requires_condition || requires_empty) {
+        status = validate_attributes(
+            node, requires_condition ? "cond" : NULL, requires_condition,
+            &condition_attribute, diagnostic);
+        if (status != CCXML_OK) return status;
+    }
+    if (requires_empty) {
+        for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+            const salts_xml_node child = salts_xml_node_child_at(node, index);
+            if (!node_is_ignorable(child)) {
+                return fail(
+                    diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "CCXML conditional branch marker must be empty");
+            }
+        }
+    }
+    if (requires_condition) {
+        const salts_xml_string_view condition =
+            salts_xml_attribute_value(condition_attribute);
+        const scxml_xml_decode_status decode_status =
+            scxml_xml_decode_attribute_entities(
+                condition.data, condition.size, NULL, 0u, &condition_size);
+        if (!view_has_nonspace(condition) ||
+            decode_status != SCXML_XML_DECODE_OK || condition_size == 0u) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(condition_attribute),
+                "CCXML conditional expression must be nonempty and XML-decodable");
+        }
+        if (!checked_add(condition_size, 1u, &retained_size)) {
+            return fail(
+                diagnostic, CCXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(condition_attribute),
+                "CCXML conditional expression storage overflow");
+        }
+    }
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size,
+                     &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED, salts_xml_node_location(node),
+            "CCXML conditional action or retained-string limit exceeded");
+    }
+    return CCXML_OK;
+}
+
+static ccxml_status validate_leaf_action(
+    salts_xml_node action, salts_xml_string_view name,
+    ccxml_measurement *measurement, const ccxml_limits *limits,
+    salts_xml_string_view declared_variable, size_t *out_effect_count,
+    ccxml_diagnostic *diagnostic) {
+    ccxml_status status;
+    if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
+        !view_equal(name, "createcall") && !view_equal(name, "disconnect") &&
+        !view_equal(name, "reject") && !view_equal(name, "redirect") &&
+        !view_equal(name, "join") && !view_equal(name, "unjoin") &&
+        !view_equal(name, "merge") && !view_equal(name, "createconference") &&
+        !view_equal(name, "destroyconference") &&
+        !view_equal(name, "dialogprepare") && !view_equal(name, "dialogstart") &&
+        !view_equal(name, "dialogterminate") && !view_equal(name, "assign") &&
+        !view_equal(name, "send") && !view_equal(name, "cancel")) {
+        return fail(
+            diagnostic, CCXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(action), "unsupported CCXML executable content");
+    }
+    if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
+        status = validate_destination_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
+        status = validate_two_identifier_action(
+            action, "id1", "id2", measurement, limits, diagnostic);
+    } else if (view_equal(name, "merge")) {
+        status = validate_two_identifier_action(
+            action, "connectionid1", "connectionid2", measurement, limits,
+            diagnostic);
+    } else if (view_equal(name, "createconference")) {
+        status = validate_create_conference_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "destroyconference")) {
+        status = validate_destroy_conference_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "dialogprepare")) {
+        status = validate_dialog_prepare_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "dialogstart")) {
+        status = node_has_unqualified_attribute(action, "prepareddialogid")
+            ? validate_prepared_dialog_start_action(action, measurement, limits, diagnostic)
+            : validate_dialog_start_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "dialogterminate")) {
+        status = validate_dialog_terminate_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "assign")) {
+        salts_xml_string_view assignment_name = {0};
+        status = validate_string_binding(
+            action, true, measurement, limits, diagnostic, &assignment_name);
+        if (status == CCXML_OK &&
+            (declared_variable.data == NULL ||
+             declared_variable.size != assignment_name.size ||
+             memcmp(declared_variable.data, assignment_name.data,
+                    assignment_name.size) != 0)) {
+            status = fail(
+                diagnostic, CCXML_INVALID_STRUCTURE, salts_xml_node_location(action),
+                "assign must name the declared root string var");
+        }
+    } else if (view_equal(name, "send")) {
+        status = validate_send_action(action, measurement, limits, diagnostic);
+    } else if (view_equal(name, "cancel")) {
+        status = validate_cancel_action(action, measurement, limits, diagnostic);
+    } else {
+        status = validate_empty_action(action, measurement, limits, diagnostic);
+    }
+    if (status != CCXML_OK) return status;
+    *out_effect_count = view_equal(name, "createconference") ||
+                        view_equal(name, "dialogprepare") ||
+                        (view_equal(name, "dialogstart") &&
+                         !node_has_unqualified_attribute(action, "prepareddialogid")) ||
+                        (view_equal(name, "send") &&
+                         node_has_unqualified_attribute(action, "sendid"))
+        ? 2u : 1u;
+    return CCXML_OK;
+}
+
+static ccxml_status validate_executable_action(
+    salts_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, salts_xml_string_view declared_variable,
+    size_t *local_action_count, size_t *local_effect_count,
+    ccxml_diagnostic *diagnostic);
+
+static ccxml_status validate_if_action(
+    salts_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, salts_xml_string_view declared_variable,
+    size_t *local_action_count, size_t *local_effect_count,
+    ccxml_diagnostic *diagnostic) {
+    size_t index;
+    bool seen_else = false;
+    ccxml_status status = measure_conditional_control(
+        action, true, false, measurement, limits, diagnostic);
+    if (status != CCXML_OK) return status;
+    ++*local_action_count;
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
+        salts_xml_string_view name;
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT ||
+            !view_equal(salts_xml_node_namespace_uri(child), CCXML_NAMESPACE)) {
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(child), "unsupported CCXML executable content");
+        }
+        name = salts_xml_node_local_name(child);
+        if (view_equal(name, "elseif")) {
+            if (seen_else) {
+                return fail(
+                    diagnostic, CCXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "CCXML elseif cannot follow else");
+            }
+            status = measure_conditional_control(
+                child, true, true, measurement, limits, diagnostic);
+            if (status != CCXML_OK) return status;
+            ++*local_action_count;
+        } else if (view_equal(name, "else")) {
+            if (seen_else) {
+                return fail(
+                    diagnostic, CCXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "CCXML if accepts at most one else");
+            }
+            seen_else = true;
+            status = measure_conditional_control(
+                child, false, true, measurement, limits, diagnostic);
+            if (status != CCXML_OK) return status;
+            ++*local_action_count;
+        } else {
+            status = validate_executable_action(
+                child, measurement, limits, declared_variable, local_action_count,
+                local_effect_count, diagnostic);
+            if (status != CCXML_OK) return status;
+        }
+    }
+    status = measure_conditional_control(
+        action, false, false, measurement, limits, diagnostic);
+    if (status != CCXML_OK) return status;
+    ++*local_action_count;
+    return CCXML_OK;
+}
+
+static ccxml_status validate_executable_action(
+    salts_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, salts_xml_string_view declared_variable,
+    size_t *local_action_count, size_t *local_effect_count,
+    ccxml_diagnostic *diagnostic) {
+    const salts_xml_string_view name = salts_xml_node_local_name(action);
+    size_t effect_count = 0u;
+    ccxml_status status;
+    if (view_equal(name, "if")) {
+        return validate_if_action(
+            action, measurement, limits, declared_variable, local_action_count,
+            local_effect_count, diagnostic);
+    }
+    if (view_equal(name, "elseif") || view_equal(name, "else")) {
+        return fail(
+            diagnostic, CCXML_INVALID_STRUCTURE, salts_xml_node_location(action),
+            "CCXML conditional branch marker must be inside if");
+    }
+    status = validate_leaf_action(
+        action, name, measurement, limits, declared_variable, &effect_count,
+        diagnostic);
+    if (status != CCXML_OK) return status;
+    ++*local_action_count;
+    if (!checked_add(*local_effect_count, effect_count, local_effect_count)) {
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED, salts_xml_node_location(action),
+            "CCXML transition effect limit exceeded");
+    }
+    return CCXML_OK;
+}
+
 static ccxml_status validate_transition(
     salts_xml_node transition, ccxml_measurement *measurement,
     const ccxml_limits *limits, bool has_statevariable,
@@ -1727,6 +1970,19 @@ static ccxml_status validate_transition(
                 "unsupported CCXML executable content");
         }
         name = salts_xml_node_local_name(action);
+        if (view_equal(name, "if")) {
+            status = validate_if_action(
+                action, measurement, limits, declared_variable,
+                &local_action_count, &local_effect_count, diagnostic);
+            if (status != CCXML_OK) return status;
+            continue;
+        }
+        if (view_equal(name, "elseif") || view_equal(name, "else")) {
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_node_location(action),
+                "CCXML conditional branch marker must be inside if");
+        }
         if (!view_equal(name, "accept") && !view_equal(name, "exit") &&
             !view_equal(name, "createcall") &&
             !view_equal(name, "disconnect") && !view_equal(name, "reject") &&
@@ -1971,6 +2227,94 @@ static ccxml_status validate_document(
     return CCXML_OK;
 }
 
+static ccxml_status append_copy_item(
+    ccxml_copy_item *items, size_t capacity, size_t *count,
+    salts_xml_node node, ccxml_copy_item_kind kind, size_t branch_owner,
+    size_t *out_index, ccxml_diagnostic *diagnostic) {
+    ccxml_copy_item *item;
+    if (items == NULL || count == NULL || *count >= capacity) {
+        return fail(
+            diagnostic, CCXML_INVALID_CONTRACT, salts_xml_node_location(node),
+            "CCXML executable-content emission exceeded admission");
+    }
+    item = &items[*count];
+    *item = (ccxml_copy_item){
+        .node = node,
+        .kind = kind,
+        .branch_next = SIZE_MAX,
+        .block_end = SIZE_MAX,
+        .branch_owner = branch_owner};
+    if (out_index != NULL) *out_index = *count;
+    ++*count;
+    return CCXML_OK;
+}
+
+static ccxml_status append_executable_copy_items(
+    salts_xml_node action, ccxml_copy_item *items, size_t capacity,
+    size_t *count, ccxml_diagnostic *diagnostic);
+
+static ccxml_status append_if_copy_items(
+    salts_xml_node action, ccxml_copy_item *items, size_t capacity,
+    size_t *count, ccxml_diagnostic *diagnostic) {
+    size_t if_index;
+    size_t previous_branch;
+    size_t index;
+    size_t end_index;
+    ccxml_status status = append_copy_item(
+        items, capacity, count, action, CCXML_COPY_ITEM_IF, 0u, &if_index,
+        diagnostic);
+    if (status != CCXML_OK) return status;
+    items[if_index].branch_owner = if_index;
+    previous_branch = if_index;
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
+        salts_xml_string_view name;
+        if (node_is_ignorable(child)) continue;
+        name = salts_xml_node_local_name(child);
+        if (view_equal(name, "elseif") || view_equal(name, "else")) {
+            size_t branch_index;
+            const ccxml_copy_item_kind kind = view_equal(name, "elseif")
+                ? CCXML_COPY_ITEM_ELSEIF : CCXML_COPY_ITEM_ELSE;
+            status = append_copy_item(
+                items, capacity, count, child, kind, if_index, &branch_index,
+                diagnostic);
+            if (status != CCXML_OK) return status;
+            items[previous_branch].branch_next = branch_index;
+            previous_branch = branch_index;
+        } else {
+            status = append_executable_copy_items(
+                child, items, capacity, count, diagnostic);
+            if (status != CCXML_OK) return status;
+        }
+    }
+    status = append_copy_item(
+        items, capacity, count, (salts_xml_node){0}, CCXML_COPY_ITEM_ENDIF,
+        if_index, &end_index, diagnostic);
+    if (status != CCXML_OK) return status;
+    items[previous_branch].branch_next = end_index;
+    for (index = if_index; index < end_index; ++index) {
+        if (items[index].branch_owner == if_index &&
+            (items[index].kind == CCXML_COPY_ITEM_IF ||
+             items[index].kind == CCXML_COPY_ITEM_ELSEIF ||
+             items[index].kind == CCXML_COPY_ITEM_ELSE)) {
+            items[index].block_end = end_index;
+        }
+    }
+    return CCXML_OK;
+}
+
+static ccxml_status append_executable_copy_items(
+    salts_xml_node action, ccxml_copy_item *items, size_t capacity,
+    size_t *count, ccxml_diagnostic *diagnostic) {
+    const salts_xml_string_view name = salts_xml_node_local_name(action);
+    if (view_equal(name, "if")) {
+        return append_if_copy_items(action, items, capacity, count, diagnostic);
+    }
+    return append_copy_item(
+        items, capacity, count, action, CCXML_COPY_ITEM_LEAF, SIZE_MAX, NULL,
+        diagnostic);
+}
+
 static ccxml_status copy_program(
     ccxml_program_impl *impl, salts_xml_node root,
     ccxml_diagnostic *diagnostic) {
@@ -1980,6 +2324,16 @@ static ccxml_status copy_program(
     size_t action_index = 0u;
     size_t payload_index = 0u;
     char *cursor = impl->storage;
+    ccxml_copy_item *items = NULL;
+    if (impl->max_transition_actions != 0u) {
+        items = (ccxml_copy_item *)calloc(
+            impl->max_transition_actions, sizeof(*items));
+        if (items == NULL) {
+            return fail(
+                diagnostic, CCXML_ALLOCATION_FAILED, salts_xml_node_location(root),
+                "CCXML executable-content emission allocation failed");
+        }
+    }
     for (root_index = 0u;
          root_index < salts_xml_node_child_count(root); ++root_index) {
         const salts_xml_node processor =
@@ -2088,16 +2442,60 @@ static ccxml_status copy_program(
                 cursor += decoded_size + 1u;
                 impl->uses_condition = true;
             }
+            {
+                size_t source_index;
+                size_t item_count = 0u;
+                for (source_index = 0u;
+                     source_index < salts_xml_node_child_count(transition);
+                     ++source_index) {
+                    const salts_xml_node source_action =
+                        salts_xml_node_child_at(transition, source_index);
+                    if (salts_xml_node_type(source_action) != SALTS_XML_ELEMENT)
+                        continue;
+                    status = append_executable_copy_items(
+                        source_action, items, impl->max_transition_actions,
+                        &item_count, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
+                }
             for (child_index = 0u;
-                 child_index < salts_xml_node_child_count(transition);
+                 child_index < item_count;
                  ++child_index) {
-                const salts_xml_node action =
-                    salts_xml_node_child_at(transition, child_index);
-                if (salts_xml_node_type(action) != SALTS_XML_ELEMENT) continue;
+                const ccxml_copy_item *item = &items[child_index];
+                const salts_xml_node action = item->node;
                 ccxml_action_row *action_row = &impl->actions[action_index++];
                 const salts_xml_string_view action_name =
-                    salts_xml_node_local_name(action);
-                if (view_equal(action_name, "accept")) {
+                    item->kind == CCXML_COPY_ITEM_LEAF
+                    ? salts_xml_node_local_name(action)
+                    : (salts_xml_string_view){0};
+                if (item->kind == CCXML_COPY_ITEM_IF ||
+                    item->kind == CCXML_COPY_ITEM_ELSEIF) {
+                    const salts_xml_attribute action_condition_attribute =
+                        node_unqualified_attribute(action, "cond");
+                    const salts_xml_string_view condition =
+                        salts_xml_attribute_value(action_condition_attribute);
+                    size_t decoded_size = 0u;
+                    action_row->kind = item->kind == CCXML_COPY_ITEM_IF
+                        ? CCXML_ACTION_IF : CCXML_ACTION_ELSEIF;
+                    action_row->condition = cursor;
+                    (void)scxml_xml_decode_attribute_entities(
+                        condition.data, condition.size, cursor, condition.size,
+                        &decoded_size);
+                    action_row->condition_size = decoded_size;
+                    cursor[decoded_size] = '\0';
+                    cursor += decoded_size + 1u;
+                    action_row->branch_next = row->first_action + item->branch_next;
+                    action_row->block_end = row->first_action + item->block_end;
+                    impl->uses_condition = true;
+                } else if (item->kind == CCXML_COPY_ITEM_ELSE) {
+                    action_row->kind = CCXML_ACTION_ELSE;
+                    action_row->branch_next = row->first_action + item->branch_next;
+                    action_row->block_end = row->first_action + item->block_end;
+                } else if (item->kind == CCXML_COPY_ITEM_ENDIF) {
+                    action_row->kind = CCXML_ACTION_ENDIF;
+                } else if (view_equal(action_name, "accept")) {
                     action_row->kind = CCXML_ACTION_ACCEPT;
                 } else if (view_equal(action_name, "exit")) {
                     action_row->kind = CCXML_ACTION_EXIT;
@@ -2534,13 +2932,17 @@ static ccxml_status copy_program(
                 }
                 ++row->action_count;
             }
+            }
         }
     }
-    if (payload_index != impl->payload_count)
+    if (payload_index != impl->payload_count) {
+        free(items);
         return fail(
             diagnostic, CCXML_INVALID_CONTRACT,
             salts_xml_node_location(root),
             "CCXML send payload emission mismatched admission");
+    }
+    free(items);
     return CCXML_OK;
 }
 

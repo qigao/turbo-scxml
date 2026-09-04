@@ -126,7 +126,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 大小写不敏感 `<transition event="...">` glob 匹配（`*` 匹配任意长度子串，
 省略 `event` 表示 catch-all）、一个 CMeta-backed 字符串 `<var>`、
 `eventprocessor@statevariable`、空白分隔的 `transition@state` 和字符串字面量
-`<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond`，以及空
+`<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond` 和可嵌套的
+`<if cond="...">` / `<elseif cond="..."/>` / `<else/>` executable content，以及空
 `<accept/>`/`<exit/>` 和带有
 单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
@@ -218,6 +219,13 @@ session admission 再通过 `ccxml_datamodel_adapter_v1` 的可选 condition tai
 adapter 错误则停止本次选择。内置 CMeta adapter 复用 TurboSCXML 的有界布尔
 表达式 VM，可读取 CMeta root 字段和 `_event.name`；不支持 SCXML `In()` 或通用
 ECMAScript。旧 adapter 不使用 `cond` 时仍按原 size prefix 工作。
+
+`<if>` 的 `cond` 与每个 `<elseif>` 的 `cond` 使用相同的 CMeta condition tail：
+program 会把控制流 flatten 为有界 action rows，session admission 一次性编译所有
+条件，dispatch 只求值直到选中一个 branch。`<elseif>` 和 `<else>` 是空 branch
+marker，必须直接位于 `<if>` 内；`<else>` 至多一次且之后不能再出现 `<elseif>`。
+false branch 跳至下一个 marker，任何 condition 错误都会回滚该 transition 已准备的
+effects。XPath 与通用 ECMAScript 仍不在此 profile 内。
 
 ```cmake
 find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML

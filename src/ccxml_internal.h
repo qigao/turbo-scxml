@@ -25,7 +25,11 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_DIALOG_TERMINATE,
     CCXML_ACTION_ASSIGN_STRING,
     CCXML_ACTION_SEND,
-    CCXML_ACTION_CANCEL
+    CCXML_ACTION_CANCEL,
+    CCXML_ACTION_IF,
+    CCXML_ACTION_ELSEIF,
+    CCXML_ACTION_ELSE,
+    CCXML_ACTION_ENDIF
 } ccxml_action_kind;
 
 typedef struct ccxml_payload_row {
@@ -47,10 +51,14 @@ typedef struct ccxml_action_row {
     size_t name_size;
     const char *target_type;
     size_t target_type_size;
+    const char *condition;
+    size_t condition_size;
     const char *delay;
     size_t delay_size;
     uint64_t delay_ms;
     bool delay_is_dynamic;
+    size_t branch_next;
+    size_t block_end;
     size_t payload_first;
     size_t payload_count;
 } ccxml_action_row;
@@ -111,6 +119,11 @@ typedef struct ccxml_program_impl {
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;
 
+typedef struct ccxml_conditional_frame {
+    size_t block_end;
+    bool branch_taken;
+} ccxml_conditional_frame;
+
 typedef struct ccxml_session_impl {
     const ccxml_program_impl *program;
     ccxml_telephony_adapter_v1 telephony;
@@ -124,10 +137,13 @@ typedef struct ccxml_session_impl {
     cflow_statechart_guard_binding *guard_bindings;
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
+    ccxml_condition *action_conditions;
+    ccxml_conditional_frame *conditional_frames;
     cflow_statechart_effect_ticket *tickets;
     scxml_payload_entry *payload_scratch;
     size_t ticket_capacity;
     size_t payload_scratch_capacity;
+    size_t conditional_frame_capacity;
     size_t prepared_ticket_count;
     char send_namespace[SALTS_UUID_STRING_SIZE];
     uint64_t next_send_token;
