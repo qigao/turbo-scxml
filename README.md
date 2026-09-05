@@ -132,7 +132,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 字符串字面量或 typed CMeta 字符串 `dest` 表达式的 `<createcall/>`/`<redirect/>`
 和默认目标的 `<disconnect/>`/`<reject/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
-`<createconference/>`/`<destroyconference/>` conference 生命周期和
+`<createconference/>`（可选字面量或 typed CMeta `confname`）/
+`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 `<dialogterminate/>` VoiceXML provider 生命周期，以及受限 `<send/>`（字面量
 `target`/`name`、可选字面量 `targettype` 与 CSS 时间 `delay`、可选点分
@@ -164,7 +165,7 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
   <merge connectionid1="'call-a'" connectionid2="'call-b'"/>
 </transition>
 <transition event="conference.request">
-  <createconference conferenceid="conference.id" confname="'support'"/>
+  <createconference conferenceid="conference.id" confname="conference.name"/>
 </transition>
 <transition event="conference.release">
   <destroyconference conferenceid="conference.id"/>
@@ -354,8 +355,10 @@ adapter 前缀继续有效。
 unjoin-era adapter 前缀继续有效。
 
 `<createconference/>` 要求 `conferenceid` 是点分 NCName 左值；它不会作为普通
-ID 传给电话 provider。可选 `confname` 当前只接受非空字符串字面量。provider
-的 `prepare_create_conference` 在预留电话资源的同时返回生成的 conference ID，
+ID 传给电话 provider。可选 `confname` 接受非空字符串字面量或 typed CMeta
+字符串表达式；动态值在 session admission 编译，并在 provider prepare 前求值，
+`<foreach>` 内可读取当前 staged `item.member`。provider 的
+`prepare_create_conference` 在预留电话资源的同时返回生成的 conference ID，
 核心随即通过独立 `ccxml_datamodel_adapter_v1` 准备左值写回；成功时先提交写回、
 再发布 provider operation，避免结果事件观察到旧值；任一 prepare 失败则逆序
 discard。内置
@@ -442,7 +445,7 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 `duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<unjoin>` 的 `hints`
 属性或非字面量 ID、`<merge>` 的 `hints` 属性或非字面量 connection ID、
 `<createconference>` 的 `reservedtalkers`/`reservedlisteners`/`hints` 属性、
-非字面量 `confname` 或通用 ECMAScript 左值、
+通用 ECMAScript `conferenceid` 左值、
 `<destroyconference>` 的 `hints` 属性、escaped literal 或任意 ECMAScript
 expression、
 `<send>` 的动态 `delay`、任意 ECMAScript `sendid`、非点分位置 namelist、
@@ -477,6 +480,8 @@ merge 切片见
 [`docs/specs/ccxml-merge-design.md`](docs/specs/ccxml-merge-design.md)，conference
 创建与 CMeta 写回边界见
 [`docs/specs/ccxml-createconference-design.md`](docs/specs/ccxml-createconference-design.md)，conference
+动态名称增量见
+[`docs/specs/ccxml-dynamic-conference-name-design.md`](docs/specs/ccxml-dynamic-conference-name-design.md)，conference
 销毁与 CMeta 读取边界见
 [`docs/specs/ccxml-destroyconference-design.md`](docs/specs/ccxml-destroyconference-design.md)，
 直接 dialog 启动与 provider/ID 写回边界见

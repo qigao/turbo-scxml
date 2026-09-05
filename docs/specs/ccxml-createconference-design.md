@@ -10,17 +10,25 @@ creation and an explicit left-value writeback boundary:
 ```
 
 `conferenceid` is a required dotted NCName location, not an identifier value
-and not a telephony-provider argument. `confname` is optional; this slice
-admits only a nonempty quoted string literal. `reservedtalkers`,
+and not a telephony-provider argument. The original slice admits an optional
+nonempty quoted `confname` literal. The additive dynamic-name slice also admits
+an unquoted typed string expression without changing the provider or datamodel
+ABI; see `ccxml-dynamic-conference-name-design.md`. `reservedtalkers`,
 `reservedlisteners`, `hints`, escaped literals, and arbitrary ECMAScript
 expressions remain unsupported.
 
 ## Compiler contract
 
-The compiler copies the location and optional decoded conference name into
-bounded program storage. Each copied range includes one trailing NUL in
+The compiler copies the location and optional decoded conference name or
+expression source into bounded program storage. Each copied range includes one trailing NUL in
 `max_name_bytes` accounting. A create-conference action consumes two effect
 slots at runtime: one provider reservation and one datamodel writeback.
+
+A dynamic name is compiled once per session and evaluated immediately before
+provider prepare. Its borrowed result must be nonempty and contain no embedded
+NUL. During foreach, the built-in CMeta adapter resolves the current staged
+iteration scope. Quoted literal and omitted names retain the original adapter
+prefix compatibility.
 
 The retained `conferenceid` syntax is one or more NCName segments separated by
 dots. Empty segments, leading/trailing dots, quotes, brackets, and invalid

@@ -1986,11 +1986,24 @@ static ccxml_status execute_transition_actions(
         if (action->kind == CCXML_ACTION_CREATE_CONFERENCE) {
             cflow_statechart_effect_ticket provider_ticket = {0};
             cflow_statechart_effect_ticket datamodel_ticket = {0};
+            ccxml_string_view conference_name = {
+                .data = action->destination,
+                .size = action->destination_size};
             ccxml_string_view conference_id = {0};
             const char *error = NULL;
-            const ccxml_create_conference_request request = {
-                .conference_name = action->destination,
-                .conference_name_size = action->destination_size};
+            ccxml_create_conference_request request;
+            if (action->destination_is_dynamic) {
+                const ccxml_status expression_status =
+                    evaluate_action_string_expression(
+                        impl, action_index, event, &conference_name);
+                if (expression_status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return expression_status;
+                }
+            }
+            request = (ccxml_create_conference_request){
+                .conference_name = conference_name.data,
+                .conference_name_size = conference_name.size};
             scxml_adapter_status adapter_status =
                 impl->telephony.prepare_create_conference(
                     impl->telephony_user, &request, &conference_id,

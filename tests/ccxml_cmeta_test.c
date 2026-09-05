@@ -60,7 +60,8 @@ Struct(foreach_state,
 );
 
 Struct(foreach_record_state,
-    (TYPE(Vec, ccxml_foreach_record), values)
+    (TYPE(Vec, ccxml_foreach_record), values),
+    (test_text, conference_id)
 );
 
 Struct(foreach_managed_state,
@@ -437,7 +438,9 @@ static const cmeta_type_desc foreach_record_state_type = {
 
 static const cmeta_data_field_desc foreach_record_state_fields[] = {
     {"test.ccxml.foreach.records", "values",
-     offsetof(foreach_record_state, values), &cmeta_data_sequence}};
+     offsetof(foreach_record_state, values), &cmeta_data_sequence},
+    {"test.ccxml.foreach.conference-id", "conference_id",
+     offsetof(foreach_record_state, conference_id), &text_desc}};
 
 static const cmeta_data_struct_shape foreach_record_state_shape = {
     .layout = StructMeta(foreach_record_state),
@@ -564,6 +567,8 @@ struct foreach_provider_probe {
     size_t close_count;
     char destinations[4][TEST_TEXT_CAPACITY + 1u];
     size_t destination_sizes[4];
+    const char *conference_id_result;
+    size_t conference_id_result_size;
 };
 
 static void foreach_ticket_commit(void *user) {
@@ -647,6 +652,29 @@ static scxml_adapter_status foreach_prepare_redirect(
         user, &destination, out_ticket, out_error);
 }
 
+static scxml_adapter_status foreach_prepare_create_conference(
+    void *user, const ccxml_create_conference_request *request,
+    ccxml_string_view *out_conference_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_provider_probe *probe = (foreach_provider_probe *)user;
+    ccxml_create_call_request destination;
+    scxml_adapter_status status;
+    if (probe == NULL || request == NULL || out_conference_id == NULL ||
+        probe->conference_id_result == NULL ||
+        probe->conference_id_result_size == 0u)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    destination = (ccxml_create_call_request){
+        .destination = request->conference_name,
+        .destination_size = request->conference_name_size};
+    status = foreach_prepare_create_call(
+        user, &destination, out_ticket, out_error);
+    if (status != SCXML_ADAPTER_ACCEPTED) return status;
+    *out_conference_id = (ccxml_string_view){
+        .data = probe->conference_id_result,
+        .size = probe->conference_id_result_size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static void foreach_provider_close(void *user) {
     ++((foreach_provider_probe *)user)->close_count;
 }
@@ -663,7 +691,8 @@ static const ccxml_telephony_adapter_v1 foreach_provider_adapter = {
     .close = foreach_provider_close,
     .is_quiescent = foreach_provider_quiescent,
     .prepare_create_call = foreach_prepare_create_call,
-    .prepare_redirect = foreach_prepare_redirect};
+    .prepare_redirect = foreach_prepare_redirect,
+    .prepare_create_conference = foreach_prepare_create_conference};
 
 typedef struct conference_provider_probe {
     bool live;
@@ -1417,6 +1446,82 @@ spec("CCXML CMeta datamodel") {
             ((const ccxml_foreach_record *)state.values.data)[1]
                 .destination.data,
             "tel:222");
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+        vec_destroy(&state.values);
+    }
+
+    it("evaluates conference names from staged foreach items and writes the ID") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item'>"
+            "<createconference conferenceid='conference_id' "
+            "confname='item.destination'/>"
+            "</foreach>"
+            "</transition></eventprocessor></ccxml>";
+        static const ccxml_foreach_record elements[] = {
+            {.destination = {.size = 9u, .data = "support-a"}, .code = 11},
+            {.destination = {.size = 9u, .data = "support-b"}, .code = 22}};
+        const cmeta_data_desc *semantic_data[] = {
+            &foreach_record_alias_data};
+        ccxml_limits limits = ccxml_default_limits();
+        foreach_record_state state = {
+            .values = VecOf(ccxml_foreach_record)};
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        foreach_provider_probe provider = {
+            .conference_id_result = "conf-42",
+            .conference_id_result_size = 7u};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+        size_t index;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &foreach_record_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY,
+            .semantic_data = semantic_data,
+            .semantic_data_count = sizeof(semantic_data) /
+                sizeof(semantic_data[0])};
+
+        limits.max_foreach_iterations = 4u;
+        limits.max_foreach_storage_bytes = 4096u;
+        check_equal(vec_init(&state.values, 4u), STL_OK);
+        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+             ++index)
+            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &foreach_provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.prepare_count, (size_t)2u);
+        check_equal(provider.destinations[0], "support-a");
+        check_equal(provider.destinations[1], "support-b");
+        check_equal(provider.commit_count, (size_t)2u);
+        check_equal(provider.discard_count, (size_t)0u);
+        check_equal(state.conference_id.size, (size_t)7u);
+        check_equal(state.conference_id.data, "conf-42");
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
         ccxml_cmeta_datamodel_destroy(&datamodel);

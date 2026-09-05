@@ -3042,6 +3042,203 @@ spec("CCXML session") {
     }
 
     group("createconference") {
+        it("requires the expression tail for a dynamic conference name") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-40",
+                .conference_id_result_size = sizeof("conf-40") - 1u};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 truncated = datamodel_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1, compile_string_expression);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &truncated,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(datamodel.string_expression_compile_count, (size_t)0);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("compiles and destroys a dynamic conference name exactly once") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-41",
+                .conference_id_result_size = sizeof("conf-41") - 1u};
+            datamodel_probe datamodel = {0};
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(datamodel.string_expression_compile_count, (size_t)1);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+            ccxml_program_destroy(&program);
+        }
+
+        it("evaluates a dynamic name before preparing the conference") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-42",
+                .conference_id_result_size = sizeof("conf-42") - 1u};
+            datamodel_probe datamodel = {
+                .string_expression_result = "support",
+                .string_expression_result_size = sizeof("support") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.conference_name, "support");
+            check_equal(
+                provider.conference_name_size, sizeof("support") - 1u);
+            check_equal(datamodel.value, "conf-42");
+            check_true(
+                datamodel.commit_sequence <
+                provider.create_conference_commit_sequence);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an empty evaluated conference name") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-43",
+                .conference_id_result_size = sizeof("conf-43") - 1u};
+            datamodel_probe datamodel = {0};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(datamodel.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an embedded NUL in an evaluated conference name") {
+            static const char malformed[] = {'s', 'u', 'p', '\0', 'p'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-44",
+                .conference_id_result_size = sizeof("conf-44") - 1u};
+            datamodel_probe datamodel = {
+                .string_expression_result = malformed,
+                .string_expression_result_size = sizeof(malformed)};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(datamodel.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards an earlier effect when name evaluation fails") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .quiescent = true,
+                .conference_id_result = "conf-45",
+                .conference_id_result_size = sizeof("conf-45") - 1u};
+            datamodel_probe datamodel = {
+                .reject_string_expression_evaluate = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/>"
+                    "<createconference conferenceid='conference_id' "
+                    "confname='conference.name'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+            check_equal(provider.discard_order[0], (size_t)1);
+            check_equal(datamodel.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("passes only the name to telephony and writes its returned ID") {
             char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
