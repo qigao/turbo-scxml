@@ -129,7 +129,7 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond` 和可嵌套的
 `<if cond="...">` / `<elseif cond="..."/>` / `<else/>` executable content，以及空
 `<accept/>`/`<exit/>` 和带有
-单个字符串字面量 `dest` 表达式的 `<createcall/>` 和默认目标的
+字符串字面量或 typed CMeta 字符串 `dest` 表达式的 `<createcall/>` 和默认目标的
 `<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
@@ -141,6 +141,9 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
 ```xml
 <transition event="ccxml.loaded">
   <createcall dest="'tel:+12025550123'"/>
+</transition>
+<transition event="dial.next">
+  <createcall dest="call.destination"/>
 </transition>
 <transition event="connection.connected">
   <disconnect/>
@@ -272,7 +275,13 @@ adapter 一次。
 
 `<createcall/>` commit 后由 provider 异步发起呼叫，并通过已有 event dispatch
 边界回送 `connection.progressing`、`connection.connected` 或
-`connection.failed`。核心不包含 SIP/RTP backend，也不会伪造平台结果。
+`connection.failed`。非字面量 `dest` 通过 size-versioned datamodel expression
+tail 在 session admission 编译，并在 provider prepare 前求值；内置 CMeta adapter
+支持 root 字符串路径以及 `<foreach>` 中当前 staged `item.member` 字符串路径。
+求值结果是只在紧随其后的 provider prepare callback 内有效的 borrowed view，
+provider 若需保留必须复制。字面量 program 不要求该 tail，旧 adapter prefix 继续
+可用。此 profile 不使用 XPath；QuickJS 若要支持同一边界，需要先抽取当前
+SCXML-session-specific runtime。核心不包含 SIP/RTP backend，也不会伪造平台结果。
 
 `<send/>` 复用 `scxml_event_io_adapter` 的 move-only prepare/commit/discard
 边界；`scxml_send_request.type` 承载 CCXML `targettype`，具体 `ccxml`、`dialog`
@@ -423,7 +432,7 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 显式 MIME、fetch/hints 等形式）、
 通用 ECMAScript、非 CMeta datamodel 的条件表达式、多 root 变量、非字符串变量以及
 非字面量 `<var>`/`<assign>` 表达式，
-`<createcall>` 的可选属性或非字面量表达式、`<disconnect>` 的
+`<createcall>` 的可选属性、非字符串 typed 表达式或通用 ECMAScript、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
 `connectionid`/`reason`/`hints` 属性、`<redirect>` 的
 `connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的
@@ -449,6 +458,8 @@ send namelist 与结构化 payload 增量见
 [`docs/specs/ccxml-send-namelist-design.md`](docs/specs/ccxml-send-namelist-design.md)，
 外呼切片的所有权与 ABI 语义见
 [`docs/specs/ccxml-createcall-design.md`](docs/specs/ccxml-createcall-design.md)，
+动态外呼字符串表达式见
+[`docs/specs/ccxml-dynamic-string-expression-design.md`](docs/specs/ccxml-dynamic-string-expression-design.md)，
 断开连接切片见
 [`docs/specs/ccxml-disconnect-design.md`](docs/specs/ccxml-disconnect-design.md)，
 拒接切片见

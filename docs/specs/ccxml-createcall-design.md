@@ -15,6 +15,13 @@ This is an incubation profile, not complete CCXML 1.0 expression or
 `timeout`, `joinid`, and `joindirection` remain unsupported. Arbitrary
 ECMAScript expressions and escaped string literals remain unsupported.
 
+The later
+[dynamic string expression slice](ccxml-dynamic-string-expression-design.md)
+also accepts unquoted typed CMeta string paths, including staged foreach
+`item.member` paths. That additive design controls wherever it extends the
+literal-only compiler and datamodel contracts below; XPath and general
+ECMAScript remain outside the profile.
+
 The profile follows CCXML 1.0 section 10.5.4 in treating call placement as an
 asynchronous platform operation. Committing the provider ticket starts the
 attempt. The provider subsequently injects `connection.progressing`,
@@ -75,8 +82,9 @@ rejection maps to `CCXML_ADAPTER_ERROR`; an incomplete accepted ticket maps to
 The slice is complete when tests prove:
 
 1. a standard quoted `tel:` destination compiles and survives source overwrite;
-2. missing, empty, nonliteral, escaped, extra-attribute, and nested-content
-   forms fail deterministically;
+2. missing, empty, escaped, extra-attribute, and nested-content forms fail
+   deterministically, while dynamic sources defer typed validation to session
+   admission;
 3. dispatch prepares and commits the exact copied destination;
 4. mixed accept/create-call actions preserve document-order commit and
    reverse-order rollback;
