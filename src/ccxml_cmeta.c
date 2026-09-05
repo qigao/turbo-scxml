@@ -778,6 +778,8 @@ scxml_adapter_status ccxml_cmeta_compile_string_expression_with_scope(
     const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
         ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
     ccxml_cmeta_string_expression *expression;
+    const scxml_expr_compile_policy policy = {
+        .allowed_system_operands = SCXML_EXPR_SYSTEM_EVENT_NAME};
     scxml_expr_limits limits;
     scxml_expr_diagnostic diagnostic = {0};
     scxml_expr_status status;
@@ -796,9 +798,9 @@ scxml_adapter_status ccxml_cmeta_compile_string_expression_with_scope(
     limits = scxml_expr_default_limits();
     limits.max_path_depth = impl->max_path_depth;
     limits.max_string_bytes = impl->max_string_bytes;
-    status = scxml_expr_compile_value_with_scope(
+    status = scxml_expr_compile_value_with_scope_and_policy(
         &expression->program, source, source_size, impl->root, scope,
-        reject_active_state, NULL, &limits, &diagnostic);
+        reject_active_state, NULL, &policy, &limits, &diagnostic);
     if (status != SCXML_EXPR_OK ||
         scxml_expr_program_value_kind(&expression->program) !=
             SCXML_EXPR_VALUE_STRING) {

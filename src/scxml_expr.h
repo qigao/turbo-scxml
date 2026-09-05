@@ -205,6 +205,17 @@ scxml_expr_status scxml_expr_compile_value_with_scope(
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic);
 
+scxml_expr_status scxml_expr_compile_value_with_scope_and_policy(
+    scxml_expr_program *out,
+    const char *source, size_t source_size,
+    const cmeta_data_desc *root,
+    const scxml_scope_schema *supplemental,
+    scxml_expr_resolve_state_fn resolve_state,
+    void *resolve_user,
+    const scxml_expr_compile_policy *policy,
+    const scxml_expr_limits *limits,
+    scxml_expr_diagnostic *diagnostic);
+
 scxml_expr_status scxml_expr_compile_value_with_scope_policy(
     scxml_expr_program *out,
     const char *source, size_t source_size,

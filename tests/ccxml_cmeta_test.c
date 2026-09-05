@@ -1074,6 +1074,57 @@ spec("CCXML CMeta datamodel") {
         ccxml_cmeta_datamodel_destroy(&datamodel);
     }
 
+    it("evaluates the admitted CCXML event name operand") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        ccxml_string_view value = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u};
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_event.name", 11u, &expression, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(
+            adapter->evaluate_string_expression(
+                &datamodel, &expression, &event, &value, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(value.data, "connection.alerting");
+        adapter->destroy_string_expression(&datamodel, &expression);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects unavailable SCXML system strings during admission") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_sessionid", 10u, &expression, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(expression.impl);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_event.type", 11u, &expression, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(expression.impl);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
     it("rejects foreach elements without a semantic data descriptor") {
         foreach_record_state state = {0};
         ccxml_cmeta_datamodel datamodel = {0};
