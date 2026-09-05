@@ -1183,9 +1183,14 @@ ccxml_status ccxml_session_init(
         ccxml_status status;
         if (!action->destination_is_dynamic) continue;
         expression = &impl->action_string_expressions[action_index];
-        adapter_status = impl->datamodel.compile_string_expression(
-            impl->datamodel_user, action->destination,
-            action->destination_size, expression, &error);
+        adapter_status = program->uses_foreach
+            ? ccxml_cmeta_compile_string_expression_with_scope(
+                  impl->datamodel_user, action->destination,
+                  action->destination_size, &impl->foreach_scope,
+                  expression, &error)
+            : impl->datamodel.compile_string_expression(
+                  impl->datamodel_user, action->destination,
+                  action->destination_size, expression, &error);
         (void)error;
         status = adapter_status == SCXML_ADAPTER_ACCEPTED
             ? CCXML_OK
@@ -1347,10 +1352,18 @@ static ccxml_status evaluate_action_string_expression(
         impl->action_string_expressions[action_index].impl == NULL)
         return CCXML_INVALID_CONTRACT;
     *out_value = (ccxml_string_view){0};
-    adapter_status = impl->datamodel.evaluate_string_expression(
-        impl->datamodel_user,
-        &impl->action_string_expressions[action_index], event,
-        out_value, &error);
+    adapter_status = impl->program->uses_foreach
+        ? ccxml_cmeta_evaluate_string_expression_with_scope(
+              impl->datamodel_user,
+              &impl->action_string_expressions[action_index], event,
+              impl->foreach_transaction_pending
+                  ? &impl->foreach_scope_staged
+                  : &impl->foreach_scope_committed,
+              out_value, &error)
+        : impl->datamodel.evaluate_string_expression(
+              impl->datamodel_user,
+              &impl->action_string_expressions[action_index], event,
+              out_value, &error);
     (void)error;
     if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
         return adapter_status == SCXML_ADAPTER_FULL

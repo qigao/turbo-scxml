@@ -215,6 +215,16 @@ scxml_adapter_status ccxml_cmeta_evaluate_condition_with_scope(
     const ccxml_event *event, scxml_scope_view *scope,
     bool *out_value, const char **out_error);
 
+scxml_adapter_status ccxml_cmeta_compile_string_expression_with_scope(
+    void *user, const char *source, size_t source_size,
+    const scxml_scope_schema *scope,
+    ccxml_string_expression *out_expression, const char **out_error);
+
+scxml_adapter_status ccxml_cmeta_evaluate_string_expression_with_scope(
+    void *user, const ccxml_string_expression *expression,
+    const ccxml_event *event, scxml_scope_view *scope,
+    ccxml_string_view *out_value, const char **out_error);
+
 bool ccxml_cmeta_datamodel_state(void *user, void **out_state);
 
 size_t ccxml_program_transition_count(const ccxml_program *program);
