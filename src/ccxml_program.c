@@ -1169,8 +1169,11 @@ static ccxml_status validate_create_conference_action(
     salts_xml_attribute id_attribute = {0};
     salts_xml_attribute name_attribute = {0};
     salts_xml_string_view location;
-    salts_xml_string_view name_expression = {0};
+    char *name_value = NULL;
+    size_t name_value_size = 0u;
+    bool name_is_dynamic = false;
     size_t index;
+    size_t name_retained_size = 0u;
     size_t retained_size;
     ccxml_status status;
     for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
@@ -1213,13 +1216,22 @@ static ccxml_status validate_create_conference_action(
             "createconference conferenceid must be a dotted NCName location");
     }
     if (name_attribute.impl != NULL) {
-        status = validate_string_literal(
-            name_attribute, &name_expression, diagnostic);
+        status = decode_destination_value(
+            name_attribute, true, &name_value, &name_value_size,
+            &name_is_dynamic, diagnostic);
         if (status != CCXML_OK) return status;
+        if (!checked_add(name_value_size, 1u, &name_retained_size)) {
+            free(name_value);
+            return fail(
+                diagnostic, CCXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(name_attribute),
+                "createconference conference name limit exceeded");
+        }
     }
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
+            free(name_value);
             return fail(
                 diagnostic, CCXML_UNSUPPORTED_FEATURE,
                 salts_xml_node_location(child),
@@ -1228,7 +1240,7 @@ static ccxml_status validate_create_conference_action(
     }
     if (!checked_add(location.size, 1u, &retained_size) ||
         (name_attribute.impl != NULL &&
-         (!checked_add(retained_size, name_expression.size - 1u,
+         (!checked_add(retained_size, name_retained_size,
                        &retained_size))) ||
         measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
@@ -1236,11 +1248,14 @@ static ccxml_status validate_create_conference_action(
         !checked_add(measurement->name_bytes, retained_size,
                      &measurement->name_bytes) ||
         measurement->name_bytes > limits->max_name_bytes) {
+        free(name_value);
         return fail(
             diagnostic, CCXML_LIMIT_EXCEEDED,
             salts_xml_node_location(action),
             "createconference action or retained-string limit exceeded");
     }
+    (void)name_is_dynamic;
+    free(name_value);
     return CCXML_OK;
 }
 
@@ -2853,6 +2868,9 @@ static ccxml_status copy_program(
                     salts_xml_attribute id_attribute = {0};
                     salts_xml_attribute name_attribute = {0};
                     salts_xml_string_view value;
+                    char *conference_name = NULL;
+                    size_t conference_name_size = 0u;
+                    bool conference_name_is_dynamic = false;
                     action_row->kind = CCXML_ACTION_CREATE_CONFERENCE;
                     impl->uses_create_conference = true;
                     for (conference_attribute_index = 0u;
@@ -2876,12 +2894,24 @@ static ccxml_status copy_program(
                     cursor[value.size] = '\0';
                     cursor += value.size + 1u;
                     if (name_attribute.impl != NULL) {
-                        value = salts_xml_attribute_value(name_attribute);
+                        status = decode_destination_value(
+                            name_attribute, true, &conference_name,
+                            &conference_name_size,
+                            &conference_name_is_dynamic, diagnostic);
+                        if (status != CCXML_OK) {
+                            free(items);
+                            return status;
+                        }
                         action_row->destination = cursor;
-                        action_row->destination_size = value.size - 2u;
+                        action_row->destination_size = conference_name_size;
+                        action_row->destination_is_dynamic =
+                            conference_name_is_dynamic;
+                        if (conference_name_is_dynamic)
+                            impl->uses_string_expression = true;
                         memcpy(
-                            cursor, value.data + 1u,
+                            cursor, conference_name,
                             action_row->destination_size);
+                        free(conference_name);
                         cursor[action_row->destination_size] = '\0';
                         cursor += action_row->destination_size + 1u;
                     }
