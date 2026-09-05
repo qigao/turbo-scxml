@@ -3,10 +3,11 @@
 ## Scope
 
 This facility provides typed dynamic string evaluation to
-`<createcall dest="...">` and `<redirect dest="...">`. Quoted, nonempty
-destination literals keep their existing behavior. An unquoted destination is
-compiled by the configured CCXML datamodel adapter when a session is admitted
-and evaluated immediately before the telephony prepare callback.
+`<createcall dest="...">`, `<redirect dest="...">`, and optional
+`<createconference confname="...">`. Quoted, nonempty literals keep their
+existing behavior. An unquoted value is compiled by the configured CCXML
+datamodel adapter when a session is admitted and evaluated immediately before
+the telephony prepare callback.
 
 XPath is not part of this design. The built-in implementation uses the
 existing CMeta expression compiler. QuickJS can implement the same adapter
@@ -35,7 +36,7 @@ void (*destroy_string_expression)(
 
 These fields are an additive, size-versioned tail. Existing adapter prefixes
 remain valid for programs that use literals only. A program containing a
-dynamic destination requires the complete tail at session admission.
+dynamic string action requires the complete tail at session admission.
 
 The returned string is borrowed through the immediately following telephony
 prepare callback. Neither the CCXML core nor the provider may retain it.
@@ -74,27 +75,32 @@ must be `SCXML_EXPR_VALUE_STRING` and satisfy all of these runtime rules:
   `max_string_bytes`.
 
 Internal scoped compile/evaluate entry points mirror the existing condition
-entry points. When a program uses foreach, all destination expressions compile
+entry points. When a program uses foreach, all dynamic string expressions compile
 against the global foreach scope. During a foreach transaction evaluation
 uses staged scope; otherwise it uses committed scope. Thus
 `<createcall dest="item.destination"/>` and
-`<redirect dest="item.destination"/>` observe the current typed iteration.
+`<redirect dest="item.destination"/>`, as well as
+`<createconference conferenceid="conference_id"
+confname="item.destination"/>`, observe the current typed iteration.
 
 ## Session lifecycle and transaction behavior
 
 Session initialization allocates a zeroed expression-handle array only when
-the program uses dynamic string expressions. Every dynamic createcall or
-redirect action is compiled before the session is published. Any failure
+the program uses dynamic string expressions. Every dynamic createcall,
+redirect, or createconference action is compiled before the session is
+published. Any failure
 destroys all handles that compiled successfully, then follows normal session
 rollback.
 
-Dispatch evaluates the destination immediately before calling the matching
-`prepare_create_call` or `prepare_redirect` operation. Redirect first validates
-its mandatory current Event connection. Evaluation failure, an invalid returned
-view, or provider rejection discards all tickets already prepared by the
-transition and rolls back staged foreach scope. A successful provider prepare
-is retained in the existing effect journal, so commit ordering and exact-once
-discard remain unchanged.
+Dispatch evaluates the value immediately before calling the matching
+`prepare_create_call`, `prepare_redirect`, or `prepare_create_conference`
+operation. Redirect first validates its mandatory current Event connection.
+Evaluation failure, an invalid returned view, or provider rejection discards
+all tickets already prepared by the transition and rolls back staged foreach
+scope. Createconference retains its separate returned-ID writeback ticket and
+commits that write before publishing the provider operation. A successful
+provider prepare is retained in the existing effect journal, so commit ordering
+and exact-once discard remain unchanged.
 
 Session destruction destroys every live expression handle exactly once before
 releasing the datamodel owner relationship.
@@ -105,8 +111,8 @@ releasing the datamodel owner relationship.
   appended callbacks.
 - Literal-only programs accept legacy adapter prefixes and do not compile or
   evaluate expressions.
-- Dialog source, conference name, IDs, assignment values, send targets, and
-  delay expressions are not migrated in this facility.
+- Dialog source, conference IDs, assignment values, send targets, and delay
+  expressions are not migrated in this facility.
 - General string concatenation and coercion are not added to the CMeta
   expression language.
 - QuickJS support is a separate adapter/runtime extraction task because the
