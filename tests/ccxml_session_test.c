@@ -1337,6 +1337,116 @@ spec("CCXML session") {
             ccxml_program_destroy(&program);
         }
 
+        it("evaluates a dynamic destination before preparing the call") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:+12025550123",
+                .string_expression_result_size =
+                    sizeof("tel:+12025550123") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.destination, "tel:+12025550123");
+            check_equal(provider.commit_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an empty evaluated destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "",
+                .string_expression_result_size = 0u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an embedded NUL in an evaluated destination") {
+            static const char malformed[] = {'t', 'e', 'l', '\0', 'x'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = malformed,
+                .string_expression_result_size = sizeof(malformed)};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back an earlier effect when the dynamic call is rejected") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:123",
+                .string_expression_result_size = sizeof("tel:123") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.destination, "tel:123");
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("commits the copied destination") {
             char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

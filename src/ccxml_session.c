@@ -1336,6 +1336,34 @@ static ccxml_status evaluate_action_condition(
         ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
 }
 
+static ccxml_status evaluate_action_string_expression(
+    ccxml_session_impl *impl, size_t action_index, const ccxml_event *event,
+    ccxml_string_view *out_value) {
+    const char *error = NULL;
+    scxml_adapter_status adapter_status;
+    if (impl == NULL || event == NULL || out_value == NULL ||
+        action_index >= impl->program->action_count ||
+        impl->action_string_expressions == NULL ||
+        impl->action_string_expressions[action_index].impl == NULL)
+        return CCXML_INVALID_CONTRACT;
+    *out_value = (ccxml_string_view){0};
+    adapter_status = impl->datamodel.evaluate_string_expression(
+        impl->datamodel_user,
+        &impl->action_string_expressions[action_index], event,
+        out_value, &error);
+    (void)error;
+    if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
+        return adapter_status == SCXML_ADAPTER_FULL
+            ? CCXML_ALLOCATION_FAILED
+            : adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+    }
+    if (out_value->data == NULL || out_value->size == 0u ||
+        memchr(out_value->data, '\0', out_value->size) != NULL)
+        return CCXML_INVALID_CONTRACT;
+    return CCXML_OK;
+}
+
 static void swap_scope_storage(
     scxml_scope_view *left, scxml_scope_view *right) {
     unsigned char *storage = left->storage;
@@ -1795,9 +1823,22 @@ static ccxml_status execute_transition_actions(
         if (action->kind == CCXML_ACTION_CREATE_CALL) {
             cflow_statechart_effect_ticket ticket = {0};
             const char *error = NULL;
-            const ccxml_create_call_request request = {
-                .destination = action->destination,
-                .destination_size = action->destination_size};
+            ccxml_string_view destination = {
+                .data = action->destination,
+                .size = action->destination_size};
+            ccxml_create_call_request request;
+            if (action->destination_is_dynamic) {
+                const ccxml_status expression_status =
+                    evaluate_action_string_expression(
+                        impl, action_index, event, &destination);
+                if (expression_status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return expression_status;
+                }
+            }
+            request = (ccxml_create_call_request){
+                .destination = destination.data,
+                .destination_size = destination.size};
             const scxml_adapter_status adapter_status =
                 impl->telephony.prepare_create_call(
                     impl->telephony_user, &request, &ticket, &error);
