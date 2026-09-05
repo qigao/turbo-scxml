@@ -100,7 +100,8 @@ turboscxml_add_test(
 turboscxml_add_test(
   ccxml_cmeta_test
   ccxml_cmeta_test.c
-  LIBS TurboSCXML::CCXML)
+  LIBS TurboSCXML::CCXML Salts::CSTL
+  INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
   scxml_quickjs_test

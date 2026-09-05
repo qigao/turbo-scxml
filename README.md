@@ -227,6 +227,28 @@ marker，必须直接位于 `<if>` 内；`<else>` 至多一次且之后不能再
 false branch 跳至下一个 marker，任何 condition 错误都会回滚该 transition 已准备的
 effects。XPath 与通用 ECMAScript 仍不在此 profile 内。
 
+受限 `<foreach array="..." item="...">` profile 复用 SCXML 的 CMeta sequence
+与 scope 运行时。`array` 必须是点分 CMeta sequence location，`item` 是由 session
+拥有的强类型 supplemental value；应用 root 不会因绑定 loop item 而被修改。
+session 为该 scope 预分配 committed/staged/checkpoint 三个 view，并在整个
+transition 的 provider tickets 都成功后才提交最后一个 item。任一 sequence
+snapshot、iteration 或 action prepare 失败都会释放 snapshot、逆序 discard 已准备
+tickets，并丢弃 staged scope。`max_foreach_iterations` 限制单个循环的展开次数，
+`max_foreach_storage_bytes` 限制三个 view、最大 snapshot 与 scratch 的总存储。
+循环 body 可包含同一套有界 `<if>`/`<elseif>`/`<else>` 控制流；条件编译时绑定
+typed supplemental schema，运行时读取当前 staged item，因此失败仍随整个 transition
+回滚。可选 `index` 是不与 item 或 application-root location 重名的 NCName，也是
+session-owned staged supplemental value，类型固定为 `size_t`；每次迭代与 item
+一起更新并参与同一提交/回滚。当前 CCXML profile 只接纳具有
+trivial-copy/trivial-destroy traits 的 element，且 element 必须有内置、可从 root
+schema 到达、或通过 `ccxml_cmeta_datamodel_config_v1.semantic_data` 显式注册的
+semantic `cmeta_data_desc`。显式 registry 按 CMeta semantic type identity 匹配，
+因此 `Vec<Struct>` 无需为了 `item.member` 条件而在 application root 中添加虚假字段。
+datamodel owner 会复制 descriptor 指针数组，但 descriptor 对象本身仍是 borrowed，
+必须存活到所有关联 session 销毁。managed copy 的内部堆分配无法由 byte limit 计量，
+因此在 admission 阶段拒绝。嵌套 foreach 尚不支持，而且 foreach 要求直接使用内置
+`ccxml_cmeta_datamodel_adapter()`。
+
 ```cmake
 find_package(TurboSCXML CONFIG REQUIRED COMPONENTS SCXML CCXML
   PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
@@ -372,13 +394,18 @@ normal cleanup/返回值、媒体 bridge teardown、`conference.unjoined` 和唯
 
 ```c
 ccxml_cmeta_datamodel model = {0};
+const cmeta_data_desc *const semantic_data[] = {
+    &application_item_schema};
 ccxml_cmeta_datamodel_config_v1 model_config = {
     .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
     .struct_size = sizeof(model_config),
     .root = &application_state_schema,
     .state = &application_state,
     .max_path_depth = 8u,
-    .max_string_bytes = 256u};
+    .max_string_bytes = 256u,
+    .semantic_data = semantic_data,
+    .semantic_data_count = sizeof(semantic_data) /
+        sizeof(semantic_data[0])};
 ccxml_cmeta_datamodel_init(&model, &model_config);
 
 ccxml_session_config session_config = {
@@ -408,6 +435,7 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 expression、
 `<send>` 的动态 `delay`、任意 ECMAScript `sendid`、非点分位置 namelist、
 inline content 或其他非字面量表达式、
+嵌套 `<foreach>`、managed/opaque foreach element、
 文档切换和内置 VoiceXML interpreter；编译器会拒绝这些 construct，
 而不是近似执行。核心边界见
 [`docs/specs/ccxml-core-mvp-design.md`](docs/specs/ccxml-core-mvp-design.md)，

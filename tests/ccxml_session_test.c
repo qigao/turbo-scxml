@@ -667,6 +667,29 @@ static ccxml_event loaded_event(void) {
 }
 
 spec("CCXML session") {
+    it("requires the built-in typed CMeta profile for foreach") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='connection.alerting'>"
+            "<foreach array='targets' item='target'><accept/></foreach>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        provider_probe probe = {.quiescent = true};
+        datamodel_probe datamodel = {0};
+        ccxml_session_config config = {
+            .program = &program,
+            .telephony = &provider_adapter,
+            .telephony_user = &probe,
+            .datamodel = &datamodel_adapter,
+            .datamodel_user = &datamodel};
+
+        check_equal(compile_document(&program, source), CCXML_OK);
+        check_equal(ccxml_session_init(&session, &config),
+                    CCXML_INVALID_ARGUMENT);
+        ccxml_program_destroy(&program);
+    }
+
     it("commits an accepted telephony action") {
         ccxml_program program = {0};
         ccxml_session session = {0};

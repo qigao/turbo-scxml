@@ -191,6 +191,177 @@ static void destroy_conditions(ccxml_session_impl *impl) {
     }
 }
 
+static void destroy_foreach_scope(ccxml_session_impl *impl) {
+    if (impl == NULL) return;
+    if (impl->foreach_frame.live && impl->foreach_programs != NULL &&
+        impl->foreach_frame.action_index < impl->program->action_count) {
+        const scxml_foreach_program *program =
+            &impl->foreach_programs[impl->foreach_frame.action_index];
+        scxml_foreach_value_destroy(program, &impl->foreach_frame.value);
+        scxml_foreach_snapshot_destroy(program, &impl->foreach_frame.snapshot);
+    }
+    memset(&impl->foreach_frame, 0, sizeof(impl->foreach_frame));
+    scxml_scope_view_clear(&impl->foreach_scope_checkpoint);
+    scxml_scope_view_clear(&impl->foreach_scope_staged);
+    scxml_scope_view_clear(&impl->foreach_scope_committed);
+    free(impl->foreach_scope_checkpoint_allocation);
+    free(impl->foreach_scope_staged_allocation);
+    free(impl->foreach_scope_committed_allocation);
+    free(impl->foreach_programs);
+    scxml_scope_schema_destroy(&impl->foreach_scope);
+    impl->foreach_scope_checkpoint_allocation = NULL;
+    impl->foreach_scope_staged_allocation = NULL;
+    impl->foreach_scope_committed_allocation = NULL;
+    impl->foreach_programs = NULL;
+    impl->foreach_root = NULL;
+    impl->foreach_transaction_pending = false;
+    impl->foreach_checkpoint_live = false;
+}
+
+static bool allocate_scope_view(
+    const scxml_scope_schema *schema,
+    void **out_allocation, scxml_scope_view *out_view) {
+    size_t allocation_size;
+    uintptr_t address;
+    uintptr_t aligned;
+    if (schema == NULL || out_allocation == NULL || out_view == NULL ||
+        *out_allocation != NULL || out_view->schema != NULL ||
+        schema->slot_count == 0u || schema->storage_size == 0u ||
+        schema->storage_align == 0u ||
+        schema->storage_size > SIZE_MAX - (schema->storage_align - 1u) ||
+        schema->storage_size + schema->storage_align - 1u >
+            SIZE_MAX - schema->slot_count)
+        return false;
+    allocation_size = schema->storage_size + schema->storage_align - 1u +
+                      schema->slot_count;
+    *out_allocation = calloc(1u, allocation_size);
+    if (*out_allocation == NULL) return false;
+    address = (uintptr_t)*out_allocation;
+    if (address > UINTPTR_MAX - (schema->storage_align - 1u)) {
+        free(*out_allocation);
+        *out_allocation = NULL;
+        return false;
+    }
+    aligned = (address + schema->storage_align - 1u) &
+              ~((uintptr_t)schema->storage_align - 1u);
+    *out_view = (scxml_scope_view){
+        .schema = schema,
+        .storage = (unsigned char *)aligned,
+        .bound = (unsigned char *)aligned + schema->storage_size};
+    return true;
+}
+
+static ccxml_status retain_foreach_scope(ccxml_session_impl *impl) {
+    const ccxml_program_impl *program;
+    size_t foreach_slot_capacity = 0u;
+    size_t action_index;
+    size_t one_view_bytes;
+    size_t total_view_bytes;
+    size_t max_runtime_bytes = 0u;
+    if (impl == NULL || impl->program == NULL ||
+        impl->datamodel_user == NULL ||
+        !ccxml_cmeta_datamodel_state(
+            impl->datamodel_user, &impl->foreach_root))
+        return CCXML_INVALID_ARGUMENT;
+    program = impl->program;
+    for (action_index = 0u; action_index < program->action_count;
+         ++action_index) {
+        if (program->actions[action_index].kind == CCXML_ACTION_FOREACH) {
+            const size_t slots = program->actions[action_index].index != NULL
+                ? 2u : 1u;
+            if (foreach_slot_capacity > SIZE_MAX - slots)
+                return CCXML_LIMIT_EXCEEDED;
+            foreach_slot_capacity += slots;
+        }
+    }
+    if (foreach_slot_capacity == 0u ||
+        !scxml_scope_schema_init(
+            &impl->foreach_scope, foreach_slot_capacity) ||
+        program->action_count > SIZE_MAX / sizeof(*impl->foreach_programs))
+        return CCXML_ALLOCATION_FAILED;
+    impl->foreach_programs = (scxml_foreach_program *)calloc(
+        program->action_count, sizeof(*impl->foreach_programs));
+    if (impl->foreach_programs == NULL)
+        return CCXML_ALLOCATION_FAILED;
+    for (action_index = 0u; action_index < program->action_count;
+         ++action_index) {
+        const ccxml_action_row *action = &program->actions[action_index];
+        const char *error = NULL;
+        scxml_adapter_status status;
+        if (action->kind != CCXML_ACTION_FOREACH) continue;
+        status = ccxml_cmeta_compile_foreach_scope(
+            impl->datamodel_user, action->location, action->location_size,
+            action->name, action->name_size,
+            action->index, action->index_size,
+            program->max_foreach_iterations,
+            &impl->foreach_scope, &impl->foreach_programs[action_index],
+            &error);
+        (void)error;
+        if (status != SCXML_ADAPTER_ACCEPTED)
+            return status == SCXML_ADAPTER_FULL
+                ? CCXML_ALLOCATION_FAILED : CCXML_INVALID_ARGUMENT;
+        {
+            const scxml_foreach_program *foreach_program =
+                &impl->foreach_programs[action_index];
+            const cmeta_type_desc *type =
+                foreach_program->sequence.element_type;
+            size_t stride;
+            size_t snapshot_bytes;
+            size_t scratch_bytes = 0u;
+            size_t runtime_bytes;
+            if (type == NULL || type->size == 0u || type->align == 0u ||
+                (type->align & (type->align - 1u)) != 0u ||
+                type->size > SIZE_MAX - (type->align - 1u))
+                return CCXML_INVALID_CONTRACT;
+            stride = (type->size + type->align - 1u) &
+                     ~(type->align - 1u);
+            if (stride == 0u ||
+                program->max_foreach_iterations > SIZE_MAX / stride)
+                return CCXML_LIMIT_EXCEEDED;
+            snapshot_bytes = program->max_foreach_iterations * stride;
+            if (snapshot_bytes > SIZE_MAX - (type->align - 1u))
+                return CCXML_LIMIT_EXCEEDED;
+            snapshot_bytes += type->align - 1u;
+            if (foreach_program->managed_item)
+                scratch_bytes = type->size + type->align - 1u;
+            if (snapshot_bytes > SIZE_MAX - scratch_bytes)
+                return CCXML_LIMIT_EXCEEDED;
+            runtime_bytes = snapshot_bytes + scratch_bytes;
+            if (runtime_bytes > max_runtime_bytes)
+                max_runtime_bytes = runtime_bytes;
+        }
+    }
+    if (impl->foreach_scope.storage_size >
+            SIZE_MAX - (impl->foreach_scope.storage_align - 1u) ||
+        impl->foreach_scope.storage_size +
+                impl->foreach_scope.storage_align - 1u >
+            SIZE_MAX - impl->foreach_scope.slot_count)
+        return CCXML_LIMIT_EXCEEDED;
+    one_view_bytes = impl->foreach_scope.storage_size +
+        impl->foreach_scope.storage_align - 1u +
+        impl->foreach_scope.slot_count;
+    if (one_view_bytes > SIZE_MAX / 3u) return CCXML_LIMIT_EXCEEDED;
+    total_view_bytes = one_view_bytes * 3u;
+    if (total_view_bytes > SIZE_MAX - max_runtime_bytes ||
+        total_view_bytes + max_runtime_bytes >
+            program->max_foreach_storage_bytes)
+        return CCXML_LIMIT_EXCEEDED;
+    if (!allocate_scope_view(
+            &impl->foreach_scope,
+            &impl->foreach_scope_committed_allocation,
+            &impl->foreach_scope_committed) ||
+        !allocate_scope_view(
+            &impl->foreach_scope,
+            &impl->foreach_scope_staged_allocation,
+            &impl->foreach_scope_staged) ||
+        !allocate_scope_view(
+            &impl->foreach_scope,
+            &impl->foreach_scope_checkpoint_allocation,
+            &impl->foreach_scope_checkpoint))
+        return CCXML_ALLOCATION_FAILED;
+    return CCXML_OK;
+}
+
 static void close_adapter(ccxml_session_impl *impl) {
     if (impl == NULL || impl->closed) return;
     impl->closed = true;
@@ -339,9 +510,14 @@ static bool transition_guard(
     if (binding->transition->condition != NULL) {
         bool condition_value = false;
         error = NULL;
-        adapter_status = impl->datamodel.evaluate_condition(
-            impl->datamodel_user, &binding->condition,
-            ccxml_event_view, &condition_value, &error);
+        adapter_status = impl->program->uses_foreach
+            ? ccxml_cmeta_evaluate_condition_with_scope(
+                  impl->datamodel_user, &binding->condition,
+                  ccxml_event_view, &impl->foreach_scope_committed,
+                  &condition_value, &error)
+            : impl->datamodel.evaluate_condition(
+                  impl->datamodel_user, &binding->condition,
+                  ccxml_event_view, &condition_value, &error);
         (void)error;
         if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
             impl->dispatch_status = adapter_status ==
@@ -475,6 +651,12 @@ ccxml_status ccxml_session_init(
     }
     if (program->uses_condition) {
         if (!datamodel_condition_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+    }
+    if (program->uses_foreach) {
+        if (config->datamodel != ccxml_cmeta_datamodel_adapter() ||
+            config->datamodel_user == NULL)
             return CCXML_INVALID_ARGUMENT;
         datamodel = copy_datamodel_adapter(config->datamodel);
     }
@@ -783,6 +965,19 @@ ccxml_status ccxml_session_init(
     impl->ticket_capacity = program->max_transition_effects;
     impl->payload_scratch_capacity = program->max_send_payload_entries;
     impl->conditional_frame_capacity = program->max_transition_actions;
+    if (program->uses_foreach) {
+        const ccxml_status foreach_status = retain_foreach_scope(impl);
+        if (foreach_status != CCXML_OK) {
+            destroy_foreach_scope(impl);
+            close_adapter(impl);
+            free(impl->payload_scratch);
+            free(impl->action_conditions);
+            free(impl->conditional_frames);
+            free(impl->tickets);
+            free(impl);
+            return foreach_status;
+        }
+    }
     guard_count = cflow_statechart_guard_count(&program->statechart);
     executable_count =
         cflow_statechart_executable_count(&program->statechart);
@@ -790,6 +985,7 @@ ccxml_status ccxml_session_init(
         guard_count > SIZE_MAX / sizeof(*impl->transition_bindings) ||
         executable_count > SIZE_MAX / sizeof(*impl->executable_bindings)) {
         close_adapter(impl);
+        destroy_foreach_scope(impl);
         free(impl->payload_scratch);
         free(impl->action_conditions);
         free(impl->conditional_frames);
@@ -811,6 +1007,7 @@ ccxml_status ccxml_session_init(
           impl->transition_bindings == NULL)) ||
         (executable_count != 0u && impl->executable_bindings == NULL)) {
         close_adapter(impl);
+        destroy_foreach_scope(impl);
         free(impl->payload_scratch);
         free(impl->action_conditions);
         free(impl->conditional_frames);
@@ -831,12 +1028,17 @@ ccxml_status ccxml_session_init(
         if (binding->transition != NULL &&
             binding->transition->condition != NULL) {
             const char *error = NULL;
-            const scxml_adapter_status adapter_status =
-                impl->datamodel.compile_condition(
-                    impl->datamodel_user,
-                    binding->transition->condition,
-                    binding->transition->condition_size,
-                    &binding->condition, &error);
+            const scxml_adapter_status adapter_status = program->uses_foreach
+                ? ccxml_cmeta_compile_condition_with_scope(
+                      impl->datamodel_user,
+                      binding->transition->condition,
+                      binding->transition->condition_size,
+                      &impl->foreach_scope, &binding->condition, &error)
+                : impl->datamodel.compile_condition(
+                      impl->datamodel_user,
+                      binding->transition->condition,
+                      binding->transition->condition_size,
+                      &binding->condition, &error);
             ccxml_status status = CCXML_OK;
             (void)error;
             if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
@@ -850,6 +1052,7 @@ ccxml_status ccxml_session_init(
             if (status != CCXML_OK) {
                 close_adapter(impl);
                 destroy_conditions(impl);
+                destroy_foreach_scope(impl);
                 free(impl->payload_scratch);
                 free(impl->action_conditions);
                 free(impl->conditional_frames);
@@ -885,9 +1088,14 @@ ccxml_status ccxml_session_init(
         if (action->kind != CCXML_ACTION_IF &&
             action->kind != CCXML_ACTION_ELSEIF)
             continue;
-        adapter_status = impl->datamodel.compile_condition(
-            impl->datamodel_user, action->condition, action->condition_size,
-            condition, &error);
+        adapter_status = program->uses_foreach
+            ? ccxml_cmeta_compile_condition_with_scope(
+                  impl->datamodel_user, action->condition,
+                  action->condition_size, &impl->foreach_scope,
+                  condition, &error)
+            : impl->datamodel.compile_condition(
+                  impl->datamodel_user, action->condition,
+                  action->condition_size, condition, &error);
         (void)error;
         if (adapter_status != SCXML_ADAPTER_ACCEPTED) {
             status = adapter_status == SCXML_ADAPTER_FULL
@@ -900,6 +1108,7 @@ ccxml_status ccxml_session_init(
         if (status != CCXML_OK) {
             close_adapter(impl);
             destroy_conditions(impl);
+            destroy_foreach_scope(impl);
             free(impl->payload_scratch);
             free(impl->action_conditions);
             free(impl->conditional_frames);
@@ -914,6 +1123,7 @@ ccxml_status ccxml_session_init(
     if (!cflow_executor_serial_init(&impl->executor)) {
         close_adapter(impl);
         destroy_conditions(impl);
+        destroy_foreach_scope(impl);
         free(impl->payload_scratch);
         free(impl->action_conditions);
         free(impl->conditional_frames);
@@ -936,13 +1146,16 @@ ccxml_status ccxml_session_init(
         .completion_capacity = 1u,
         .microstep_limit = 1u,
         .executor = &impl->executor,
-        .effect_capacity = program->max_transition_effects != 0u ? 1u : 0u};
+        .effect_capacity =
+            program->max_transition_effects != 0u || program->uses_foreach
+                ? 1u : 0u};
     native_status =
         cflow_statechart_instance_init(&impl->instance, &native_config);
     if (native_status != CFLOW_STATECHART_INSTANCE_OK) {
         cflow_executor_destroy(&impl->executor);
         close_adapter(impl);
         destroy_conditions(impl);
+        destroy_foreach_scope(impl);
         free(impl->payload_scratch);
         free(impl->action_conditions);
         free(impl->conditional_frames);
@@ -981,6 +1194,7 @@ ccxml_status ccxml_session_init(
             cflow_executor_destroy(&impl->executor);
             close_adapter(impl);
             destroy_conditions(impl);
+            destroy_foreach_scope(impl);
             free(impl->payload_scratch);
             free(impl->action_conditions);
             free(impl->conditional_frames);
@@ -1006,13 +1220,107 @@ static ccxml_status evaluate_action_condition(
         impl->action_conditions == NULL ||
         impl->action_conditions[action_index].impl == NULL)
         return CCXML_INVALID_CONTRACT;
-    adapter_status = impl->datamodel.evaluate_condition(
-        impl->datamodel_user, &impl->action_conditions[action_index], event,
-        out_value, &error);
+    adapter_status = impl->program->uses_foreach
+        ? ccxml_cmeta_evaluate_condition_with_scope(
+              impl->datamodel_user, &impl->action_conditions[action_index],
+              event,
+              impl->foreach_transaction_pending
+                  ? &impl->foreach_scope_staged
+                  : &impl->foreach_scope_committed,
+              out_value, &error)
+        : impl->datamodel.evaluate_condition(
+              impl->datamodel_user,
+              &impl->action_conditions[action_index], event,
+              out_value, &error);
     (void)error;
     if (adapter_status == SCXML_ADAPTER_ACCEPTED) return CCXML_OK;
     return adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
         ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+}
+
+static void swap_scope_storage(
+    scxml_scope_view *left, scxml_scope_view *right) {
+    unsigned char *storage = left->storage;
+    unsigned char *bound = left->bound;
+    left->storage = right->storage;
+    left->bound = right->bound;
+    right->storage = storage;
+    right->bound = bound;
+}
+
+static void commit_foreach_scope(ccxml_session_impl *impl) {
+    if (impl == NULL || !impl->foreach_transaction_pending) return;
+    swap_scope_storage(
+        &impl->foreach_scope_committed, &impl->foreach_scope_staged);
+    scxml_scope_view_clear(&impl->foreach_scope_staged);
+    impl->foreach_transaction_pending = false;
+}
+
+static void discard_foreach_scope(ccxml_session_impl *impl) {
+    if (impl == NULL || !impl->foreach_transaction_pending) return;
+    scxml_scope_view_clear(&impl->foreach_scope_checkpoint);
+    scxml_scope_view_clear(&impl->foreach_scope_staged);
+    impl->foreach_checkpoint_live = false;
+    impl->foreach_transaction_pending = false;
+}
+
+static bool begin_foreach_block(ccxml_session_impl *impl) {
+    if (impl == NULL || impl->foreach_checkpoint_live ||
+        !scxml_scope_view_valid(&impl->foreach_scope_committed) ||
+        !scxml_scope_view_valid(&impl->foreach_scope_staged) ||
+        !scxml_scope_view_valid(&impl->foreach_scope_checkpoint))
+        return false;
+    if (!impl->foreach_transaction_pending) {
+        if (!scxml_scope_view_copy(
+                &impl->foreach_scope_staged,
+                &impl->foreach_scope_committed))
+            return false;
+        impl->foreach_transaction_pending = true;
+    }
+    if (!scxml_scope_view_copy(
+            &impl->foreach_scope_checkpoint,
+            &impl->foreach_scope_staged))
+        return false;
+    impl->foreach_checkpoint_live = true;
+    return true;
+}
+
+static void settle_foreach_block(
+    ccxml_session_impl *impl, bool succeeded) {
+    if (impl == NULL || !impl->foreach_checkpoint_live) return;
+    if (succeeded) {
+        scxml_scope_view_clear(&impl->foreach_scope_checkpoint);
+    } else {
+        scxml_scope_view_clear(&impl->foreach_scope_staged);
+        swap_scope_storage(
+            &impl->foreach_scope_staged,
+            &impl->foreach_scope_checkpoint);
+    }
+    impl->foreach_checkpoint_live = false;
+}
+
+static void close_foreach_frame(ccxml_session_impl *impl) {
+    ccxml_foreach_frame *frame;
+    const scxml_foreach_program *program;
+    if (impl == NULL || !impl->foreach_frame.live ||
+        impl->foreach_programs == NULL || impl->program == NULL ||
+        impl->foreach_frame.action_index >= impl->program->action_count)
+        return;
+    frame = &impl->foreach_frame;
+    program = &impl->foreach_programs[frame->action_index];
+    scxml_foreach_value_destroy(program, &frame->value);
+    scxml_foreach_snapshot_destroy(program, &frame->snapshot);
+    memset(frame, 0, sizeof(*frame));
+}
+
+static ccxml_status foreach_expression_status(scxml_expr_status status) {
+    if (status == SCXML_EXPR_LIMIT_EXCEEDED)
+        return CCXML_LIMIT_EXCEEDED;
+    if (status == SCXML_EXPR_INVALID_ARGUMENT ||
+        status == SCXML_EXPR_UNKNOWN_LOCATION ||
+        status == SCXML_EXPR_TYPE_MISMATCH)
+        return CCXML_INVALID_CONTRACT;
+    return CCXML_ADAPTER_ERROR;
 }
 
 static ccxml_status execute_transition_actions(
@@ -1027,6 +1335,99 @@ static ccxml_status execute_transition_actions(
         const size_t action_index = transition->first_action + index;
         const ccxml_action_row *action =
             &impl->program->actions[action_index];
+        if (action->kind == CCXML_ACTION_FOREACH) {
+            ccxml_foreach_frame *frame = &impl->foreach_frame;
+            const scxml_foreach_program *foreach_program;
+            scxml_expr_diagnostic diagnostic = {0};
+            scxml_expr_system_values system_values = {
+                .event_name = {event->name, event->name_size},
+                .supplemental = &impl->foreach_scope_staged};
+            scxml_expr_status expression_status;
+            if (frame->live || impl->foreach_programs == NULL ||
+                impl->foreach_root == NULL ||
+                action->branch_next != action_index + 1u ||
+                action->block_end <= action->branch_next ||
+                action->block_end > transition->first_action +
+                    transition->action_count ||
+                !begin_foreach_block(impl)) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            foreach_program = &impl->foreach_programs[action_index];
+            expression_status = scxml_foreach_open_with_system(
+                foreach_program, impl->foreach_root, &system_values,
+                &frame->snapshot, &diagnostic);
+            if (expression_status != SCXML_EXPR_OK) {
+                settle_foreach_block(impl, false);
+                discard_tickets(impl->tickets, prepared);
+                return foreach_expression_status(expression_status);
+            }
+            expression_status = scxml_foreach_value_init(
+                foreach_program, &frame->value, &diagnostic);
+            if (expression_status != SCXML_EXPR_OK) {
+                scxml_foreach_snapshot_destroy(
+                    foreach_program, &frame->snapshot);
+                settle_foreach_block(impl, false);
+                discard_tickets(impl->tickets, prepared);
+                return foreach_expression_status(expression_status);
+            }
+            frame->action_index = action_index;
+            frame->length = frame->snapshot.length;
+            frame->live = true;
+            if (frame->length == 0u) {
+                close_foreach_frame(impl);
+                settle_foreach_block(impl, true);
+                index = action->block_end - transition->first_action;
+                continue;
+            }
+            expression_status = scxml_foreach_next_with_system(
+                foreach_program, impl->foreach_root, &frame->snapshot,
+                &frame->value, 0u, &system_values, &diagnostic);
+            if (expression_status != SCXML_EXPR_OK) {
+                close_foreach_frame(impl);
+                settle_foreach_block(impl, false);
+                discard_tickets(impl->tickets, prepared);
+                return foreach_expression_status(expression_status);
+            }
+            ++index;
+            continue;
+        }
+        if (action->kind == CCXML_ACTION_ENDFOREACH) {
+            ccxml_foreach_frame *frame = &impl->foreach_frame;
+            const ccxml_action_row *opening;
+            const scxml_foreach_program *foreach_program;
+            scxml_expr_diagnostic diagnostic = {0};
+            scxml_expr_system_values system_values = {
+                .event_name = {event->name, event->name_size},
+                .supplemental = &impl->foreach_scope_staged};
+            scxml_expr_status expression_status;
+            if (!frame->live || action->branch_next != frame->action_index ||
+                frame->action_index >= impl->program->action_count) {
+                discard_tickets(impl->tickets, prepared);
+                return CCXML_INVALID_CONTRACT;
+            }
+            opening = &impl->program->actions[frame->action_index];
+            foreach_program = &impl->foreach_programs[frame->action_index];
+            ++frame->iteration;
+            if (frame->iteration < frame->length) {
+                expression_status = scxml_foreach_next_with_system(
+                    foreach_program, impl->foreach_root, &frame->snapshot,
+                    &frame->value, frame->iteration, &system_values,
+                    &diagnostic);
+                if (expression_status != SCXML_EXPR_OK) {
+                    close_foreach_frame(impl);
+                    settle_foreach_block(impl, false);
+                    discard_tickets(impl->tickets, prepared);
+                    return foreach_expression_status(expression_status);
+                }
+                index = opening->branch_next - transition->first_action;
+            } else {
+                close_foreach_frame(impl);
+                settle_foreach_block(impl, true);
+                ++index;
+            }
+            continue;
+        }
         if (action->kind == CCXML_ACTION_IF ||
             action->kind == CCXML_ACTION_ELSEIF) {
             ccxml_conditional_frame *frame;
@@ -1681,6 +2082,7 @@ static void commit_prepared_tickets(void *user) {
         ticket->commit(ticket->user);
         *ticket = (cflow_statechart_effect_ticket){0};
     }
+    commit_foreach_scope(impl);
 }
 
 static void discard_prepared_tickets(void *user) {
@@ -1689,6 +2091,7 @@ static void discard_prepared_tickets(void *user) {
     if (impl == NULL) return;
     impl->prepared_ticket_count = 0u;
     discard_tickets(impl->tickets, count);
+    discard_foreach_scope(impl);
 }
 
 static bool execute_transition_binding(
@@ -1719,9 +2122,18 @@ static bool execute_transition_binding(
     staged_state = *(const bool *)context->state;
     status = execute_transition_actions(
         impl, binding->transition, event, &prepared, &exit_requested);
+    if (status != CCXML_OK) {
+        close_foreach_frame(impl);
+        settle_foreach_block(impl, false);
+        discard_foreach_scope(impl);
+    } else if (impl->foreach_frame.live) {
+        close_foreach_frame(impl);
+        settle_foreach_block(impl, true);
+    }
     impl->dispatch_status = status;
     impl->exit_requested = exit_requested;
-    if (status == CCXML_OK && prepared != 0u) {
+    if (status == CCXML_OK &&
+        (prepared != 0u || impl->foreach_transaction_pending)) {
         const cflow_statechart_effect_ticket aggregate = {
             .commit = commit_prepared_tickets,
             .discard = discard_prepared_tickets,
@@ -1730,6 +2142,7 @@ static bool execute_transition_binding(
         if (impl->prepared_ticket_count != 0u ||
             context->stage_effect == NULL) {
             discard_tickets(impl->tickets, prepared);
+            discard_foreach_scope(impl);
             impl->dispatch_status = CCXML_INVALID_CONTRACT;
             if (out_error != NULL)
                 *out_error = "CCXML effect journal is unavailable";
@@ -1849,6 +2262,7 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
         return CCXML_BUSY;
     cflow_executor_destroy(&impl->executor);
     destroy_conditions(impl);
+    destroy_foreach_scope(impl);
     free(impl->transition_bindings);
     free(impl->action_conditions);
     free(impl->conditional_frames);
