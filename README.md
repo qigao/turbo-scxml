@@ -129,8 +129,8 @@ CCXML conformance。当前垂直切片支持一个 `<eventprocessor>`、按文�
 `<assign>`、由 datamodel adapter 编译的 CMeta 布尔 `transition@cond` 和可嵌套的
 `<if cond="...">` / `<elseif cond="..."/>` / `<else/>` executable content，以及空
 `<accept/>`/`<exit/>` 和带有
-字符串字面量或 typed CMeta 字符串 `dest` 表达式的 `<createcall/>` 和默认目标的
-`<disconnect/>`/`<reject/>`/`<redirect/>`，以及两个字面量资源 ID 的默认
+字符串字面量或 typed CMeta 字符串 `dest` 表达式的 `<createcall/>`/`<redirect/>`
+和默认目标的 `<disconnect/>`/`<reject/>`，以及两个字面量资源 ID 的默认
 全双工 `<join/>`、双资源 `<unjoin/>`、两个连接的 `<merge/>`，以及受限
 `<createconference/>`/`<destroyconference/>` conference 生命周期和
 detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
@@ -152,7 +152,7 @@ detached `<dialogprepare/>`、prepared/direct `<dialogstart/>` 和 normal
   <reject/>
 </transition>
 <transition event="connection.connected">
-  <redirect dest="'tel:+12025550124'"/>
+  <redirect dest="call.redirectDestination"/>
 </transition>
 <transition event="conference.request">
   <join id1="'call-a'" id2="'conference-b'"/>
@@ -322,8 +322,11 @@ capability，不使用该 action 的旧 provider 仍保持兼容。connection re
 `connection.reject.failed` 或 `connection.failed`。提交 reject 不会终止
 CCXML session；缺失或非法 identifier 仍按事务规则回滚。
 
-`<redirect/>` 接收一个非空字符串字面量 `dest`，默认重定向当前 Event 的
-connection identifier。核心通过追加的 `prepare_redirect` capability 提交请求，
+`<redirect/>` 接收非空字符串字面量或 typed CMeta 字符串 `dest`，默认重定向当前
+Event 的 connection identifier。动态目标复用 createcall 的 size-versioned
+datamodel expression tail，在确认当前 connection 合法后、紧邻 provider prepare
+之前求值；`<foreach>` body 中读取当前 staged `item.member`。核心通过追加的
+`prepare_redirect` capability 提交请求，
 不终止 CCXML session；provider 负责校验 `ALERTING`/`CONNECTED` 状态、解除已有
 bridge，并异步回送 `connection.redirected`、`connection.redirect.failed`、
 `connection.failed` 及需要的 `conference.unjoined`。连接或目标字节若需在
@@ -435,7 +438,7 @@ connection/conference、parameters、media direction、显式 MIME、fetch/hints
 `<createcall>` 的可选属性、非字符串 typed 表达式或通用 ECMAScript、`<disconnect>` 的
 `connectionid`/`reason`/`hints` 属性、`<reject>` 的
 `connectionid`/`reason`/`hints` 属性、`<redirect>` 的
-`connectionid`/`reason`/`hints` 属性或非字面量 `dest`、`<join>` 的
+`connectionid`/`reason`/`hints` 属性、`<join>` 的
 `duplex`/`hints`/tone/gain/clamp 属性或非字面量 ID、`<unjoin>` 的 `hints`
 属性或非字面量 ID、`<merge>` 的 `hints` 属性或非字面量 connection ID、
 `<createconference>` 的 `reservedtalkers`/`reservedlisteners`/`hints` 属性、

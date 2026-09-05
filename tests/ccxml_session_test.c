@@ -447,6 +447,7 @@ struct datamodel_probe {
     size_t string_expression_evaluate_count;
     size_t string_expression_destroy_count;
     size_t reject_string_expression_compile_at;
+    bool reject_string_expression_evaluate;
     const char *string_expression_result;
     size_t string_expression_result_size;
     char location[64];
@@ -626,6 +627,11 @@ static scxml_adapter_status evaluate_string_expression(
     datamodel_probe *probe = (datamodel_probe *)user;
     ++probe->string_expression_evaluate_count;
     if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_string_expression_evaluate) {
+        if (out_error != NULL)
+            *out_error = "test string expression evaluation refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
     if (expression == NULL || expression->impl != probe || event == NULL ||
         out_value == NULL)
         return SCXML_ADAPTER_INVALID_CONTRACT;
@@ -2044,6 +2050,197 @@ spec("CCXML session") {
     }
 
     group("redirect") {
+        it("requires the datamodel expression tail for a dynamic destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 truncated = datamodel_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1, compile_string_expression);
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &truncated,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(datamodel.string_expression_compile_count, (size_t)0);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("compiles and destroys a dynamic destination exactly once") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(datamodel.string_expression_compile_count, (size_t)1);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+            ccxml_program_destroy(&program);
+        }
+
+        it("evaluates a dynamic destination before preparing redirect") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:+12025550124",
+                .string_expression_result_size =
+                    sizeof("tel:+12025550124") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.redirected_destination, "tel:+12025550124");
+            check_equal(
+                provider.redirected_destination_size,
+                sizeof("tel:+12025550124") - 1u);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("validates the current connection before evaluating destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:123",
+                .string_expression_result_size = sizeof("tel:123") - 1u};
+            ccxml_event event = alerting_event();
+            event.connection_id = NULL;
+            event.connection_id_size = 0u;
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)0);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an empty evaluated destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an embedded NUL in an evaluated destination") {
+            static const char malformed[] = {'t', 'e', 'l', ':', '\0', '1'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = malformed,
+                .string_expression_result_size = sizeof(malformed)};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program, "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards an earlier effect when destination evaluation fails") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .reject_string_expression_evaluate = true};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest=\"'tel:123'\"/>"
+                    "<redirect dest='route.destination'/>") ,
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.prepare_count, (size_t)1);
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+            check_equal(provider.discard_order[0], (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("commits the current connection and retained destination") {
             char actions[] = "<redirect dest=\"'tel:+12025550123'\"/>";
             ccxml_program program = {0};

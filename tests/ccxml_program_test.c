@@ -644,19 +644,54 @@ spec("CCXML program") {
             check_null(program.impl);
         }
 
-        it("rejects a nonliteral destination expression") {
+        it("retains a nonliteral destination expression") {
             const char *source =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='connection.alerting'>"
-                "<redirect dest='destination'/></transition>"
+                "<redirect dest='route.destination'/></transition>"
                 "</eventprocessor></ccxml>";
             ccxml_program program = {0};
             ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
 
             check_equal(
-                compile_source(&program, source, &diagnostic),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_null(program.impl);
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(
+                impl->actions[0].destination, "route.destination");
+            check_equal(
+                impl->actions[0].destination_size,
+                sizeof("route.destination") - 1u);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_true(impl->uses_string_expression);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("decodes a dynamic destination before retaining it") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='connection.alerting'>"
+                "<redirect dest='route&#46;destination'/></transition>"
+                "</eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(
+                impl->actions[0].destination, "route.destination");
+            check_equal(
+                impl->actions[0].destination_size,
+                sizeof("route.destination") - 1u);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_true(impl->uses_string_expression);
+
+            ccxml_program_destroy(&program);
         }
 
         it("rejects an escaped destination literal") {

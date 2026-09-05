@@ -1777,7 +1777,7 @@ static ccxml_status validate_leaf_action(
     }
     if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
         status = validate_destination_action(
-            action, measurement, limits, view_equal(name, "createcall"),
+            action, measurement, limits, true,
             diagnostic);
     } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
         status = validate_two_identifier_action(
@@ -2226,7 +2226,7 @@ static ccxml_status validate_transition(
         }
         if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
             status = validate_destination_action(
-                action, measurement, limits, view_equal(name, "createcall"),
+                action, measurement, limits, true,
                 diagnostic);
         } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
             status = validate_two_identifier_action(
@@ -2824,7 +2824,7 @@ static ccxml_status copy_program(
                     }
                     status = decode_destination_value(
                         destination_attribute,
-                        view_equal(action_name, "createcall"),
+                        true,
                         &destination_value, &destination_size,
                         &destination_is_dynamic, diagnostic);
                     if (status != CCXML_OK) {

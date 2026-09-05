@@ -1904,15 +1904,28 @@ static ccxml_status execute_transition_actions(
             cflow_statechart_effect_ticket ticket = {0};
             const char *error = NULL;
             scxml_adapter_status adapter_status;
-            const ccxml_redirect_request request = {
-                .connection_id = event->connection_id,
-                .connection_id_size = event->connection_id_size,
-                .destination = action->destination,
-                .destination_size = action->destination_size};
+            ccxml_string_view destination = {
+                .data = action->destination,
+                .size = action->destination_size};
+            ccxml_redirect_request request;
             if (!connection_id_valid(event)) {
                 discard_tickets(impl->tickets, prepared);
                 return CCXML_INVALID_EVENT;
             }
+            if (action->destination_is_dynamic) {
+                const ccxml_status expression_status =
+                    evaluate_action_string_expression(
+                        impl, action_index, event, &destination);
+                if (expression_status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return expression_status;
+                }
+            }
+            request = (ccxml_redirect_request){
+                .connection_id = event->connection_id,
+                .connection_id_size = event->connection_id_size,
+                .destination = destination.data,
+                .destination_size = destination.size};
             adapter_status = impl->telephony.prepare_redirect(
                 impl->telephony_user, &request, &ticket, &error);
             (void)error;

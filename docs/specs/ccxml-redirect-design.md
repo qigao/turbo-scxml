@@ -13,6 +13,12 @@ The target connection is the nonempty `connection_id` carried by the event
 currently being dispatched. The standard's optional `connectionid`, `reason`,
 and `hints` attributes remain unsupported, as does nested content. Arbitrary
 ECMAScript expressions and escaped destination literals remain unsupported.
+The later
+[dynamic redirect destination slice](ccxml-dynamic-redirect-design.md) also
+accepts unquoted typed CMeta string paths, including staged foreach
+`item.member` paths. That additive design controls wherever it extends the
+literal-only compiler and datamodel contracts below; XPath and general
+ECMAScript remain outside the profile.
 
 Redirect is an asynchronous platform operation. Committing the provider ticket
 asks the telephony platform to redirect the call; it does not terminate the
@@ -87,7 +93,8 @@ events. A successful commit leaves the session active.
 The slice is complete when tests prove:
 
 1. a quoted destination compiles and survives source overwrite;
-2. missing, empty, nonliteral, escaped, extra-attribute, and nested forms fail;
+2. missing, empty, escaped, extra-attribute, and nested forms fail, while
+   dynamic sources defer typed validation to session admission;
 3. dispatch passes exact connection and destination bytes and commits once;
 4. missing or malformed event connection IDs roll back earlier tickets;
 5. mixed actions retain document-order commit and reverse-order rollback;
