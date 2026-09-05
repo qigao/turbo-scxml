@@ -34,6 +34,10 @@ typedef struct ccxml_limits {
     size_t max_transitions;
     size_t max_actions;
     size_t max_name_bytes;
+    /** Maximum body iterations permitted by one foreach dispatch. */
+    size_t max_foreach_iterations;
+    /** Maximum typed scope, snapshot, and scratch bytes for one foreach. */
+    size_t max_foreach_storage_bytes;
 } ccxml_limits;
 
 typedef struct ccxml_diagnostic {
@@ -247,9 +251,16 @@ typedef struct ccxml_cmeta_datamodel {
 } ccxml_cmeta_datamodel;
 
 /**
- * Borrowed CMeta state configuration. Root schema and mutable state must
- * outlive this owner and every session that uses it. Both limits are positive
- * hard bounds. The root must describe the supplied state as a struct.
+ * Borrowed CMeta state configuration. Root schema, optional semantic data
+ * descriptors, and mutable state must outlive this owner and every session
+ * that uses it. The semantic_data pointer array is copied during init; the
+ * descriptors themselves remain borrowed. Each registered descriptor must
+ * have a distinct semantic storage type. Both limits are positive hard
+ * bounds. The root must describe the supplied state as a struct.
+ *
+ * semantic_data and semantic_data_count form an optional size-versioned tail.
+ * A caller using the original v1 prefix may set struct_size to
+ * offsetof(ccxml_cmeta_datamodel_config_v1, semantic_data).
  */
 typedef struct ccxml_cmeta_datamodel_config_v1 {
     uint32_t abi_version;
@@ -258,6 +269,8 @@ typedef struct ccxml_cmeta_datamodel_config_v1 {
     void *state;
     size_t max_path_depth;
     size_t max_string_bytes;
+    const cmeta_data_desc *const *semantic_data;
+    size_t semantic_data_count;
 } ccxml_cmeta_datamodel_config_v1;
 
 ccxml_status ccxml_cmeta_datamodel_init(

@@ -1,9 +1,29 @@
-#include <ccxml/ccxml.h>
-
-#include "tinytest.h"
-
+#include <stdbool.h>
+#include <limits.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+
+typedef struct ccxml_foreach_record {
+    int code;
+} ccxml_foreach_record;
+
+typedef struct ccxml_foreach_managed {
+    int *resource;
+} ccxml_foreach_managed;
+
+#define CMETA_USER_TYPE_LIST                                                \
+    , (O, ccxml_foreach_record, cmeta_type_ccxml_foreach_record,             \
+       CMETA_T_OBJECT, cmeta_traits_ccxml_foreach_record)                    \
+    , (O, ccxml_foreach_managed, cmeta_type_ccxml_foreach_managed,           \
+       CMETA_T_OBJECT, cmeta_traits_ccxml_foreach_managed)
+#define CMETA_CALLABLE_TYPE_LIST CMETA_BUILTIN_TYPE_LIST
+
+#include <ccxml/ccxml.h>
+#include <cstl/typed.h>
+
+#include "ccxml_internal.h"
+#include "tinytest.h"
 
 enum { TEST_TEXT_CAPACITY = 95u };
 
@@ -31,6 +51,121 @@ Struct(test_state,
 Struct(malformed_payload_state,
     (unsigned char, bad)
 );
+
+Struct(foreach_state,
+    (TYPE(Vec, int), values),
+    (int, existing),
+    (size_t, root_index)
+);
+
+Struct(foreach_record_state,
+    (TYPE(Vec, ccxml_foreach_record), values)
+);
+
+Struct(foreach_managed_state,
+    (TYPE(Vec, ccxml_foreach_managed), values)
+);
+
+static bool foreach_record_copy(void *destination_, const void *source_) {
+    ccxml_foreach_record *destination =
+        (ccxml_foreach_record *)destination_;
+    const ccxml_foreach_record *source =
+        (const ccxml_foreach_record *)source_;
+    if (destination == NULL || source == NULL) return false;
+    *destination = *source;
+    return true;
+}
+
+static void foreach_record_move(void *destination_, void *source_) {
+    ccxml_foreach_record *destination =
+        (ccxml_foreach_record *)destination_;
+    ccxml_foreach_record *source = (ccxml_foreach_record *)source_;
+    if (destination == NULL || source == NULL) return;
+    *destination = *source;
+}
+
+static void foreach_record_destroy(void *object_) {
+    (void)object_;
+}
+
+const cmeta_type_traits cmeta_traits_ccxml_foreach_record = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY |
+        CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY,
+    .copy_construct = foreach_record_copy,
+    .move_construct = foreach_record_move,
+    .destroy = foreach_record_destroy};
+
+static bool foreach_managed_copy(void *destination_, const void *source_) {
+    ccxml_foreach_managed *destination =
+        (ccxml_foreach_managed *)destination_;
+    const ccxml_foreach_managed *source =
+        (const ccxml_foreach_managed *)source_;
+    if (destination == NULL || source == NULL) return false;
+    destination->resource = NULL;
+    if (source->resource == NULL) return true;
+    destination->resource = (int *)malloc(sizeof(*destination->resource));
+    if (destination->resource == NULL) return false;
+    *destination->resource = *source->resource;
+    return true;
+}
+
+static void foreach_managed_move(void *destination_, void *source_) {
+    ccxml_foreach_managed *destination =
+        (ccxml_foreach_managed *)destination_;
+    ccxml_foreach_managed *source = (ccxml_foreach_managed *)source_;
+    if (destination == NULL || source == NULL) return;
+    *destination = *source;
+    source->resource = NULL;
+}
+
+static void foreach_managed_destroy(void *object_) {
+    ccxml_foreach_managed *object = (ccxml_foreach_managed *)object_;
+    if (object == NULL) return;
+    free(object->resource);
+    object->resource = NULL;
+}
+
+const cmeta_type_traits cmeta_traits_ccxml_foreach_managed = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = foreach_managed_copy,
+    .move_construct = foreach_managed_move,
+    .destroy = foreach_managed_destroy};
+
+static const cmeta_type_identity foreach_record_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.ccxml.foreach.record.type");
+
+const cmeta_type_desc cmeta_type_ccxml_foreach_record = {
+    .name = "ccxml_foreach_record",
+    .size = sizeof(ccxml_foreach_record),
+    .align = _Alignof(ccxml_foreach_record),
+    .kind = CMETA_T_OBJECT,
+    .traits = &cmeta_traits_ccxml_foreach_record,
+    .identity = &foreach_record_identity};
+
+const cmeta_type_desc cmeta_type_ccxml_foreach_record_ptr = {
+    .name = "ccxml_foreach_record *",
+    .size = sizeof(ccxml_foreach_record *),
+    .align = _Alignof(ccxml_foreach_record *),
+    .kind = CMETA_T_POINTER,
+    .pointee = &cmeta_type_ccxml_foreach_record};
+
+static const cmeta_type_identity foreach_managed_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.ccxml.foreach.managed.type");
+
+const cmeta_type_desc cmeta_type_ccxml_foreach_managed = {
+    .name = "ccxml_foreach_managed",
+    .size = sizeof(ccxml_foreach_managed),
+    .align = _Alignof(ccxml_foreach_managed),
+    .kind = CMETA_T_OBJECT,
+    .traits = &cmeta_traits_ccxml_foreach_managed,
+    .identity = &foreach_managed_identity};
+
+const cmeta_type_desc cmeta_type_ccxml_foreach_managed_ptr = {
+    .name = "ccxml_foreach_managed *",
+    .size = sizeof(ccxml_foreach_managed *),
+    .align = _Alignof(ccxml_foreach_managed *),
+    .kind = CMETA_T_POINTER,
+    .pointee = &cmeta_type_ccxml_foreach_managed};
 
 static void text_move(void *destination, void *source) {
     memcpy(destination, source, sizeof(test_text));
@@ -261,6 +396,220 @@ static const cmeta_data_desc malformed_state_desc = {
     .kind = CMETA_DATA_STRUCT,
     .storage_type = &malformed_state_type,
     .shape = &malformed_state_shape};
+
+static const cmeta_type_desc foreach_state_type = {
+    .name = "ccxml_foreach_state",
+    .size = sizeof(foreach_state),
+    .align = _Alignof(foreach_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc foreach_state_fields[] = {
+    {"test.ccxml.foreach.values", "values",
+     offsetof(foreach_state, values), &cmeta_data_sequence},
+    {"test.ccxml.foreach.existing", "existing",
+     offsetof(foreach_state, existing), &cmeta_data_int},
+    {"test.ccxml.foreach.root-index", "root_index",
+     offsetof(foreach_state, root_index), &cmeta_data_size}};
+
+static const cmeta_data_struct_shape foreach_state_shape = {
+    .layout = StructMeta(foreach_state),
+    .fields = foreach_state_fields,
+    .field_count = sizeof(foreach_state_fields) /
+        sizeof(foreach_state_fields[0])};
+
+static const cmeta_data_desc foreach_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.state",
+    .display_name = "CCXML foreach state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &foreach_state_type,
+    .shape = &foreach_state_shape};
+
+static const cmeta_type_desc foreach_record_state_type = {
+    .name = "ccxml_foreach_record_state",
+    .size = sizeof(foreach_record_state),
+    .align = _Alignof(foreach_record_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc foreach_record_state_fields[] = {
+    {"test.ccxml.foreach.records", "values",
+     offsetof(foreach_record_state, values), &cmeta_data_sequence}};
+
+static const cmeta_data_struct_shape foreach_record_state_shape = {
+    .layout = StructMeta(foreach_record_state),
+    .fields = foreach_record_state_fields,
+    .field_count = sizeof(foreach_record_state_fields) /
+        sizeof(foreach_record_state_fields[0])};
+
+static const cmeta_data_desc foreach_record_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.record-state",
+    .display_name = "CCXML foreach record state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &foreach_record_state_type,
+    .shape = &foreach_record_state_shape};
+
+static const cmeta_field_desc foreach_record_layout_fields[] = {
+    {"code", "int", offsetof(ccxml_foreach_record, code), sizeof(int),
+     _Alignof(int), &cmeta_type_int, NULL}};
+
+static const cmeta_struct_desc foreach_record_layout = {
+    .name = "ccxml_foreach_record",
+    .size = sizeof(ccxml_foreach_record),
+    .align = _Alignof(ccxml_foreach_record),
+    .fields = foreach_record_layout_fields,
+    .field_count = sizeof(foreach_record_layout_fields) /
+        sizeof(foreach_record_layout_fields[0])};
+
+static const cmeta_data_field_desc foreach_record_data_fields[] = {
+    {"test.ccxml.foreach.record.code", "code",
+     offsetof(ccxml_foreach_record, code), &cmeta_data_int}};
+
+static const cmeta_data_struct_shape foreach_record_data_shape = {
+    .layout = &foreach_record_layout,
+    .fields = foreach_record_data_fields,
+    .field_count = sizeof(foreach_record_data_fields) /
+        sizeof(foreach_record_data_fields[0])};
+
+static const cmeta_data_desc foreach_record_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.record",
+    .display_name = "CCXML foreach record",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &cmeta_type_ccxml_foreach_record,
+    .shape = &foreach_record_data_shape};
+
+static const cmeta_type_identity foreach_record_peer_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.ccxml.foreach.record.type");
+
+static const cmeta_type_desc foreach_record_peer_type = {
+    .name = "ccxml_foreach_record_peer",
+    .size = sizeof(ccxml_foreach_record),
+    .align = _Alignof(ccxml_foreach_record),
+    .kind = CMETA_T_OBJECT,
+    .traits = &cmeta_traits_ccxml_foreach_record,
+    .identity = &foreach_record_peer_identity};
+
+static const cmeta_data_desc foreach_record_alias_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.record-alias",
+    .display_name = "CCXML foreach record alias",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &foreach_record_peer_type,
+    .shape = &foreach_record_data_shape};
+
+static const cmeta_data_integer_shape foreach_int_override_shape = {
+    .bits = (uint8_t)(sizeof(int) * CHAR_BIT)};
+
+static const cmeta_data_desc foreach_int_override_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.int-override",
+    .display_name = "CCXML foreach int override",
+    .kind = CMETA_DATA_SINT,
+    .storage_type = &cmeta_type_int,
+    .shape = &foreach_int_override_shape};
+
+static const cmeta_type_desc foreach_managed_state_type = {
+    .name = "ccxml_foreach_managed_state",
+    .size = sizeof(foreach_managed_state),
+    .align = _Alignof(foreach_managed_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &aggregate_traits};
+
+static const cmeta_data_field_desc foreach_managed_state_fields[] = {
+    {"test.ccxml.foreach.managed-values", "values",
+     offsetof(foreach_managed_state, values), &cmeta_data_sequence}};
+
+static const cmeta_data_struct_shape foreach_managed_state_shape = {
+    .layout = StructMeta(foreach_managed_state),
+    .fields = foreach_managed_state_fields,
+    .field_count = sizeof(foreach_managed_state_fields) /
+        sizeof(foreach_managed_state_fields[0])};
+
+static const cmeta_data_desc foreach_managed_state_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.ccxml.foreach.managed-state",
+    .display_name = "CCXML foreach managed state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &foreach_managed_state_type,
+    .shape = &foreach_managed_state_shape};
+
+typedef struct foreach_provider_probe foreach_provider_probe;
+
+typedef struct foreach_provider_ticket {
+    foreach_provider_probe *owner;
+    bool live;
+} foreach_provider_ticket;
+
+struct foreach_provider_probe {
+    foreach_provider_ticket tickets[4];
+    size_t prepare_count;
+    size_t commit_count;
+    size_t discard_count;
+    size_t reject_on_prepare;
+    size_t close_count;
+};
+
+static void foreach_ticket_commit(void *user) {
+    foreach_provider_ticket *ticket = (foreach_provider_ticket *)user;
+    if (ticket == NULL || !ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->commit_count;
+}
+
+static void foreach_ticket_discard(void *user) {
+    foreach_provider_ticket *ticket = (foreach_provider_ticket *)user;
+    if (ticket == NULL || !ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->discard_count;
+}
+
+static scxml_adapter_status foreach_prepare_accept(
+    void *user, const ccxml_accept_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_provider_probe *probe = (foreach_provider_probe *)user;
+    foreach_provider_ticket *ticket;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->connection_id == NULL || request->connection_id_size == 0u ||
+        probe->prepare_count >= sizeof(probe->tickets) /
+            sizeof(probe->tickets[0]))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    ++probe->prepare_count;
+    if (probe->reject_on_prepare == probe->prepare_count)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    ticket = &probe->tickets[probe->prepare_count - 1u];
+    *ticket = (foreach_provider_ticket){.owner = probe, .live = true};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = foreach_ticket_commit,
+        .discard = foreach_ticket_discard,
+        .user = ticket};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void foreach_provider_close(void *user) {
+    ++((foreach_provider_probe *)user)->close_count;
+}
+
+static bool foreach_provider_quiescent(void *user) {
+    (void)user;
+    return true;
+}
+
+static const ccxml_telephony_adapter_v1 foreach_provider_adapter = {
+    .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1,
+    .struct_size = sizeof(ccxml_telephony_adapter_v1),
+    .prepare_accept = foreach_prepare_accept,
+    .close = foreach_provider_close,
+    .is_quiescent = foreach_provider_quiescent};
 
 typedef struct conference_provider_probe {
     bool live;
@@ -598,6 +947,424 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
+    it("rejects foreach elements without a semantic data descriptor") {
+        foreach_record_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        scxml_scope_schema scope = {0};
+        scxml_foreach_program program = {0};
+        const char *error = NULL;
+        const ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(config),
+            .root = &foreach_record_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_true(scxml_scope_schema_init(&scope, 1u));
+        check_equal(
+            ccxml_cmeta_compile_foreach_scope(
+                &datamodel, "values", 6u, "item", 4u, NULL, 0u, 4u,
+                &scope, &program, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(program.sequence.root);
+
+        scxml_scope_schema_destroy(&scope);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("uses a registered structured foreach item in conditions") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item'>"
+            "<if cond='item.code == 22'><accept/></if>"
+            "</foreach>"
+            "</transition></eventprocessor></ccxml>";
+        static const ccxml_foreach_record elements[] = {
+            {11}, {22}, {33}};
+        const cmeta_data_desc *semantic_data[] = {
+            &foreach_record_alias_data};
+        ccxml_limits limits = ccxml_default_limits();
+        foreach_record_state state = {
+            .values = VecOf(ccxml_foreach_record)};
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        foreach_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+        size_t index;
+        size_t item_slot = SIZE_MAX;
+        const cmeta_data_desc *item_data = NULL;
+        const void *item_object = NULL;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &foreach_record_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY,
+            .semantic_data = semantic_data,
+            .semantic_data_count = sizeof(semantic_data) /
+                sizeof(semantic_data[0])};
+
+        limits.max_foreach_iterations = 4u;
+        check_equal(vec_init(&state.values, 4u), STL_OK);
+        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+             ++index)
+            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        semantic_data[0] = NULL;
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &foreach_provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.prepare_count, (size_t)1u);
+        check_equal(provider.commit_count, (size_t)1u);
+        check_equal(provider.discard_count, (size_t)0u);
+        {
+            const ccxml_session_impl *impl =
+                (const ccxml_session_impl *)session.impl;
+            check_not_null(scxml_scope_find(
+                &impl->foreach_scope, "item", 4u, &item_slot));
+            check_true(scxml_scope_view_read(
+                &impl->foreach_scope_committed, item_slot,
+                &item_data, &item_object));
+            check_true(cmeta_type_equal(
+                item_data->storage_type,
+                &cmeta_type_ccxml_foreach_record));
+            check_true(item_data == &foreach_record_alias_data);
+            check_equal(
+                ((const ccxml_foreach_record *)item_object)->code, 33);
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_staged, item_slot,
+                &item_data, &item_object));
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(provider.close_count, (size_t)1u);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+        vec_destroy(&state.values);
+    }
+
+    it("prefers a registered descriptor to the root fallback") {
+        foreach_state state = {.values = VecOf(int)};
+        ccxml_cmeta_datamodel datamodel = {0};
+        scxml_scope_schema scope = {0};
+        scxml_foreach_program program = {0};
+        const cmeta_data_desc *semantic_data[] = {
+            &foreach_int_override_data};
+        const scxml_scope_slot *item_slot;
+        const char *error = NULL;
+        const ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(config),
+            .root = &foreach_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY,
+            .semantic_data = semantic_data,
+            .semantic_data_count = sizeof(semantic_data) /
+                sizeof(semantic_data[0])};
+
+        check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_true(scxml_scope_schema_init(&scope, 1u));
+        check_equal(
+            ccxml_cmeta_compile_foreach_scope(
+                &datamodel, "values", 6u, "item", 4u, NULL, 0u, 4u,
+                &scope, &program, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        item_slot = scxml_scope_find(&scope, "item", 4u, NULL);
+        check_not_null(item_slot);
+        check_true(item_slot->value == &foreach_int_override_data);
+
+        scxml_scope_schema_destroy(&scope);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects managed foreach elements without bounded copy storage") {
+        foreach_managed_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        scxml_scope_schema scope = {0};
+        scxml_foreach_program program = {0};
+        const char *error = NULL;
+        const ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(config),
+            .root = &foreach_managed_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_true(scxml_scope_schema_init(&scope, 1u));
+        check_equal(
+            ccxml_cmeta_compile_foreach_scope(
+                &datamodel, "values", 6u, "item", 4u, NULL, 0u, 4u,
+                &scope, &program, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(program.sequence.root);
+
+        scxml_scope_schema_destroy(&scope);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects a foreach item that would alias application state") {
+        foreach_state state = {.values = VecOf(int)};
+        ccxml_cmeta_datamodel datamodel = {0};
+        scxml_scope_schema scope = {0};
+        scxml_foreach_program program = {0};
+        const char *error = NULL;
+        const ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(config),
+            .root = &foreach_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_true(scxml_scope_schema_init(&scope, 1u));
+        check_equal(
+            ccxml_cmeta_compile_foreach_scope(
+                &datamodel, "values", 6u, "existing", 8u, NULL, 0u, 4u,
+                &scope, &program, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(program.sequence.root);
+
+        scxml_scope_schema_destroy(&scope);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects a foreach index that would alias application state") {
+        foreach_state state = {.values = VecOf(int), .root_index = 91u};
+        ccxml_cmeta_datamodel datamodel = {0};
+        scxml_scope_schema scope = {0};
+        scxml_foreach_program program = {0};
+        const char *error = NULL;
+        const ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(config),
+            .root = &foreach_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_true(scxml_scope_schema_init(&scope, 2u));
+        check_equal(
+            ccxml_cmeta_compile_foreach_scope(
+                &datamodel, "values", 6u, "item", 4u,
+                "root_index", 10u, 4u, &scope, &program, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(program.sequence.root);
+        check_equal(state.root_index, (size_t)91u);
+
+        scxml_scope_schema_destroy(&scope);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("uses the staged typed item to select foreach actions") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item' index='index'><accept/>"
+            "<if cond='item == 22 &amp;&amp; index == 1'><accept/></if>"
+            "</foreach>"
+            "</transition></eventprocessor></ccxml>";
+        static const int elements[] = {11, 22, 33};
+        ccxml_limits limits = ccxml_default_limits();
+        foreach_state state = {.values = VecOf(int)};
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        foreach_provider_probe provider = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+        size_t index;
+        size_t item_slot = SIZE_MAX;
+        size_t index_slot = SIZE_MAX;
+        const cmeta_data_desc *item_data = NULL;
+        const void *item_object = NULL;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &foreach_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        limits.max_foreach_iterations = 4u;
+        limits.max_foreach_storage_bytes = 94u;
+        check_equal(vec_init(&state.values, 5u), STL_OK);
+        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+             ++index)
+            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &foreach_provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(provider.prepare_count, (size_t)4u);
+        check_equal(provider.commit_count, (size_t)4u);
+        check_equal(provider.discard_count, (size_t)0u);
+        {
+            const ccxml_session_impl *impl =
+                (const ccxml_session_impl *)session.impl;
+            check_not_null(scxml_scope_find(
+                &impl->foreach_scope, "item", 4u, &item_slot));
+            check_true(scxml_scope_view_read(
+                &impl->foreach_scope_committed, item_slot,
+                &item_data, &item_object));
+            check_true(cmeta_type_equal(
+                item_data->storage_type, &cmeta_type_int));
+            check_equal(*(const int *)item_object, 33);
+            check_not_null(scxml_scope_find(
+                &impl->foreach_scope, "index", 5u, &index_slot));
+            check_true(scxml_scope_view_read(
+                &impl->foreach_scope_committed, index_slot,
+                &item_data, &item_object));
+            check_true(cmeta_type_equal(
+                item_data->storage_type, &cmeta_type_size));
+            check_equal(*(const size_t *)item_object, (size_t)2u);
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_staged, item_slot,
+                &item_data, &item_object));
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_staged, index_slot,
+                &item_data, &item_object));
+        }
+
+        {
+            const int fourth = 44;
+            const int fifth = 55;
+            const ccxml_session_impl *impl =
+                (const ccxml_session_impl *)session.impl;
+            check_equal(vec_push(&state.values, &fourth), STL_OK);
+            check_equal(vec_push(&state.values, &fifth), STL_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_LIMIT_EXCEEDED);
+            check_equal(provider.prepare_count, (size_t)4u);
+            check_equal(provider.commit_count, (size_t)4u);
+            check_true(scxml_scope_view_read(
+                &impl->foreach_scope_committed, item_slot,
+                &item_data, &item_object));
+            check_equal(*(const int *)item_object, 33);
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        check_equal(provider.close_count, (size_t)1u);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+        vec_destroy(&state.values);
+    }
+
+    it("rolls back typed foreach effects after a later iteration fails") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item'><accept/></foreach>"
+            "</transition></eventprocessor></ccxml>";
+        static const int elements[] = {1, 2, 3};
+        ccxml_limits limits = ccxml_default_limits();
+        foreach_state state = {.values = VecOf(int)};
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        foreach_provider_probe provider = {.reject_on_prepare = 2u};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+        size_t index;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &foreach_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY};
+
+        limits.max_foreach_iterations = 4u;
+        check_equal(vec_init(&state.values, 4u), STL_OK);
+        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+             ++index)
+            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &foreach_provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+
+        check_equal(
+            ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+        check_equal(provider.prepare_count, (size_t)2u);
+        check_equal(provider.commit_count, (size_t)0u);
+        check_equal(provider.discard_count, (size_t)1u);
+        {
+            const ccxml_session_impl *impl =
+                (const ccxml_session_impl *)session.impl;
+            size_t item_slot = SIZE_MAX;
+            const cmeta_data_desc *item_data = NULL;
+            const void *item_object = NULL;
+            check_not_null(scxml_scope_find(
+                &impl->foreach_scope, "item", 4u, &item_slot));
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_committed, item_slot,
+                &item_data, &item_object));
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_staged, item_slot,
+                &item_data, &item_object));
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+        vec_destroy(&state.values);
+    }
+
     it("rejects payload scalars whose storage is narrower than reflection") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
@@ -1443,6 +2210,92 @@ spec("CCXML CMeta datamodel") {
             ccxml_cmeta_datamodel_init(&datamodel, &config),
             CCXML_INVALID_ARGUMENT);
         check_null(datamodel.impl);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("size-gates the optional CMeta config tail") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = offsetof(
+                ccxml_cmeta_datamodel_config_v1, semantic_data),
+            .root = &state_desc,
+            .state = &state,
+            .max_path_depth = 4u,
+            .max_string_bytes = 16u};
+        struct {
+            ccxml_cmeta_datamodel_config_v1 config;
+            unsigned char future_tail;
+        } future_config = {.config = config};
+
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_not_null(datamodel.impl);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+
+        --config.struct_size;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.struct_size = offsetof(
+            ccxml_cmeta_datamodel_config_v1, semantic_data) + 1u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        future_config.config.struct_size = sizeof(future_config);
+        check_equal(
+            ccxml_cmeta_datamodel_init(
+                &datamodel, &future_config.config),
+            CCXML_OK);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("validates the optional semantic descriptor registry") {
+        ccxml_cmeta_datamodel datamodel = {0};
+        test_state state = {0};
+        const cmeta_data_desc *valid[] = {&foreach_record_data};
+        const cmeta_data_desc *duplicates[] = {
+            &foreach_record_data, &foreach_record_alias_data};
+        const cmeta_data_desc *invalid[] = {&cmeta_data_sequence};
+        ccxml_cmeta_datamodel_config_v1 config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &state_desc,
+            .state = &state,
+            .max_path_depth = 4u,
+            .max_string_bytes = 16u,
+            .semantic_data = valid,
+            .semantic_data_count = 0u};
+
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.semantic_data = NULL;
+        config.semantic_data_count = 1u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.semantic_data = invalid;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.semantic_data = valid;
+        config.semantic_data_count = SIZE_MAX;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.semantic_data = duplicates;
+        config.semantic_data_count = 2u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config),
+            CCXML_INVALID_ARGUMENT);
+        config.semantic_data = valid;
+        config.semantic_data_count = 1u;
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+        check_not_null(datamodel.impl);
+
         ccxml_cmeta_datamodel_destroy(&datamodel);
     }
 }

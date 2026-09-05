@@ -167,6 +167,106 @@ spec("CCXML program") {
         ccxml_program_destroy(&program);
     }
 
+    it("lowers conditional foreach content into bounded control rows") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='targets' item='target' index='position'><accept/>"
+            "<if cond='target == 2'><accept/></if>"
+            "</foreach></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_program_impl *impl;
+
+        check_equal(compile_source(&program, source, &diagnostic), CCXML_OK);
+        check_equal(ccxml_program_action_count(&program), (size_t)6u);
+        impl = (ccxml_program_impl *)program.impl;
+        check_equal(impl->actions[0].kind, CCXML_ACTION_FOREACH);
+        check_equal(impl->actions[1].kind, CCXML_ACTION_ACCEPT);
+        check_equal(impl->actions[2].kind, CCXML_ACTION_IF);
+        check_equal(impl->actions[3].kind, CCXML_ACTION_ACCEPT);
+        check_equal(impl->actions[4].kind, CCXML_ACTION_ENDIF);
+        check_equal(impl->actions[5].kind, CCXML_ACTION_ENDFOREACH);
+        check_equal(impl->actions[0].branch_next, (size_t)1u);
+        check_equal(impl->actions[0].block_end, (size_t)6u);
+        check_equal(impl->actions[0].index, "position");
+        check_equal(impl->actions[0].index_size, (size_t)8u);
+        check_equal(impl->actions[2].branch_next, (size_t)4u);
+        check_equal(impl->actions[2].block_end, (size_t)4u);
+        check_equal(impl->actions[5].branch_next, (size_t)0u);
+        check_equal(impl->max_transition_effects, (size_t)512u);
+        check_equal(impl->max_foreach_iterations, (size_t)256u);
+
+        ccxml_program_destroy(&program);
+    }
+
+    it("uses the configured foreach bound for effect admission") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition><foreach array='a' item='x'>"
+            "<accept/></foreach></transition></eventprocessor></ccxml>";
+        ccxml_limits limits = ccxml_default_limits();
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_program_impl *impl;
+
+        limits.max_foreach_iterations = 3u;
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        impl = (ccxml_program_impl *)program.impl;
+        check_equal(impl->max_transition_effects, (size_t)3u);
+        check_equal(impl->max_foreach_iterations, (size_t)3u);
+
+        ccxml_program_destroy(&program);
+    }
+
+    it("rejects a nested foreach") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition><foreach array='a' item='x'>"
+            "<if cond='x == 1'><foreach array='b' item='y'>"
+            "<accept/></foreach></if></foreach>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
+    it("rejects a dotted foreach item name") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition><foreach array='a' item='scope.x'>"
+            "<accept/></foreach></transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
+    it("rejects a dotted foreach index name") {
+        const char *source =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition><foreach array='a' item='x' "
+            "index='scope.i'><accept/></foreach>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_program program = {0};
+        ccxml_diagnostic diagnostic = {0};
+
+        check_equal(
+            compile_source(&program, source, &diagnostic),
+            CCXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
     it("rejects nonliteral string assignment expressions") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

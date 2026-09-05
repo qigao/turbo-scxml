@@ -10,6 +10,8 @@
 #define CCXML_DEFAULT_MAX_TRANSITIONS 1024u
 #define CCXML_DEFAULT_MAX_ACTIONS 4096u
 #define CCXML_DEFAULT_MAX_NAME_BYTES (256u * 1024u)
+#define CCXML_DEFAULT_MAX_FOREACH_ITERATIONS 256u
+#define CCXML_DEFAULT_MAX_FOREACH_STORAGE_BYTES (1024u * 1024u)
 
 typedef struct ccxml_measurement {
     size_t transition_count;
@@ -26,7 +28,9 @@ typedef enum ccxml_copy_item_kind {
     CCXML_COPY_ITEM_IF,
     CCXML_COPY_ITEM_ELSEIF,
     CCXML_COPY_ITEM_ELSE,
-    CCXML_COPY_ITEM_ENDIF
+    CCXML_COPY_ITEM_ENDIF,
+    CCXML_COPY_ITEM_FOREACH,
+    CCXML_COPY_ITEM_ENDFOREACH
 } ccxml_copy_item_kind;
 
 typedef struct ccxml_copy_item {
@@ -52,6 +56,13 @@ const cmeta_type_desc ccxml_event_cmeta_type = {
 static bool checked_add(size_t left, size_t right, size_t *out) {
     if (out == NULL || left > SIZE_MAX - right) return false;
     *out = left + right;
+    return true;
+}
+
+static bool checked_multiply(size_t left, size_t right, size_t *out) {
+    if (out == NULL || (right != 0u && left > SIZE_MAX / right))
+        return false;
+    *out = left * right;
     return true;
 }
 
@@ -1745,6 +1756,128 @@ static ccxml_status validate_executable_action(
     size_t *local_action_count, size_t *local_effect_count,
     ccxml_diagnostic *diagnostic);
 
+static bool contains_ccxml_foreach(salts_xml_node node) {
+    size_t index;
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(node, index);
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT &&
+            view_equal(salts_xml_node_namespace_uri(child), CCXML_NAMESPACE) &&
+            view_equal(salts_xml_node_local_name(child), "foreach"))
+            return true;
+        if (contains_ccxml_foreach(child)) return true;
+    }
+    return false;
+}
+
+static ccxml_status validate_foreach_action(
+    salts_xml_node action, ccxml_measurement *measurement,
+    const ccxml_limits *limits, salts_xml_string_view declared_variable,
+    size_t *local_action_count, size_t *local_effect_count,
+    ccxml_diagnostic *diagnostic) {
+    salts_xml_attribute array_attribute = {0};
+    salts_xml_attribute item_attribute = {0};
+    salts_xml_attribute index_attribute = {0};
+    salts_xml_string_view array;
+    salts_xml_string_view item;
+    salts_xml_string_view index_name = {0};
+    size_t index;
+    size_t item_retained_size;
+    size_t index_retained_size = 0u;
+    size_t retained_size;
+    size_t body_action_count = 0u;
+    size_t body_effect_count = 0u;
+    size_t expanded_effect_count = 0u;
+    ccxml_status status;
+    for (index = 0u; index < salts_xml_node_attribute_count(action); ++index) {
+        const salts_xml_attribute attribute = salts_xml_node_attribute_at(action, index);
+        const salts_xml_string_view name = salts_xml_attribute_local_name(attribute);
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u ||
+            (view_equal(name, "array") && array_attribute.impl != NULL) ||
+            (view_equal(name, "item") && item_attribute.impl != NULL) ||
+            (view_equal(name, "index") && index_attribute.impl != NULL) ||
+            (!view_equal(name, "array") && !view_equal(name, "item") &&
+             !view_equal(name, "index")))
+            return fail(diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                        salts_xml_attribute_location(attribute),
+                        "unsupported or duplicate foreach attribute");
+        if (view_equal(name, "array")) array_attribute = attribute;
+        else if (view_equal(name, "item")) item_attribute = attribute;
+        else index_attribute = attribute;
+    }
+    if (array_attribute.impl == NULL || item_attribute.impl == NULL)
+        return fail(diagnostic, CCXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(action),
+                    "foreach requires array and item attributes");
+    array = salts_xml_attribute_value(array_attribute);
+    item = salts_xml_attribute_value(item_attribute);
+    if (index_attribute.impl != NULL)
+        index_name = salts_xml_attribute_value(index_attribute);
+    if (!dotted_location_valid(array) || !dotted_location_valid(item) ||
+        memchr(item.data, '.', item.size) != NULL || view_has_space(item))
+        return fail(diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(action),
+                    "foreach array must be a dotted location and item a NCName");
+    if (index_attribute.impl != NULL &&
+        (!dotted_location_valid(index_name) ||
+         memchr(index_name.data, '.', index_name.size) != NULL ||
+         view_has_space(index_name) ||
+         (index_name.size == item.size &&
+          memcmp(index_name.data, item.data, item.size) == 0)))
+        return fail(diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(index_attribute),
+                    "foreach index must be a distinct NCName");
+    if (index_attribute.impl != NULL &&
+        !checked_add(index_name.size, 1u, &index_retained_size))
+        return fail(diagnostic, CCXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(index_attribute),
+                    "foreach index storage overflowed");
+    if (!checked_add(item.size, 1u, &item_retained_size) ||
+        !checked_add(array.size, 1u, &retained_size) ||
+        !checked_add(retained_size, item_retained_size, &retained_size) ||
+        !checked_add(retained_size, index_retained_size, &retained_size) ||
+        limits->max_actions < 2u ||
+        measurement->action_count > limits->max_actions - 2u ||
+        !checked_add(measurement->action_count, 2u, &measurement->action_count) ||
+        !checked_add(measurement->name_bytes, retained_size, &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes)
+        return fail(diagnostic, CCXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(action),
+                    "foreach control or retained-string limit exceeded");
+    if (!checked_add(*local_action_count, 2u, local_action_count))
+        return fail(diagnostic, CCXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(action),
+                    "foreach action count overflowed");
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
+        const salts_xml_string_view name = salts_xml_node_local_name(child);
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT ||
+            !view_equal(salts_xml_node_namespace_uri(child), CCXML_NAMESPACE))
+            return fail(diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                        salts_xml_node_location(child),
+                        "unsupported foreach executable content");
+        if (view_equal(name, "foreach") || contains_ccxml_foreach(child))
+            return fail(diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                        salts_xml_node_location(child),
+                        "nested foreach content is unsupported");
+        status = validate_executable_action(
+            child, measurement, limits, declared_variable,
+            &body_action_count, &body_effect_count, diagnostic);
+        if (status != CCXML_OK) return status;
+    }
+    if (!checked_add(*local_action_count, body_action_count,
+                     local_action_count) ||
+        !checked_multiply(body_effect_count, limits->max_foreach_iterations,
+                          &expanded_effect_count) ||
+        !checked_add(*local_effect_count, expanded_effect_count,
+                     local_effect_count))
+        return fail(diagnostic, CCXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(action),
+                    "foreach action or effect limit exceeded");
+    return CCXML_OK;
+}
+
 static ccxml_status validate_if_action(
     salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, salts_xml_string_view declared_variable,
@@ -1814,6 +1947,11 @@ static ccxml_status validate_executable_action(
     ccxml_status status;
     if (view_equal(name, "if")) {
         return validate_if_action(
+            action, measurement, limits, declared_variable, local_action_count,
+            local_effect_count, diagnostic);
+    }
+    if (view_equal(name, "foreach")) {
+        return validate_foreach_action(
             action, measurement, limits, declared_variable, local_action_count,
             local_effect_count, diagnostic);
     }
@@ -1972,6 +2110,13 @@ static ccxml_status validate_transition(
         name = salts_xml_node_local_name(action);
         if (view_equal(name, "if")) {
             status = validate_if_action(
+                action, measurement, limits, declared_variable,
+                &local_action_count, &local_effect_count, diagnostic);
+            if (status != CCXML_OK) return status;
+            continue;
+        }
+        if (view_equal(name, "foreach")) {
+            status = validate_foreach_action(
                 action, measurement, limits, declared_variable,
                 &local_action_count, &local_effect_count, diagnostic);
             if (status != CCXML_OK) return status;
@@ -2253,6 +2398,32 @@ static ccxml_status append_executable_copy_items(
     salts_xml_node action, ccxml_copy_item *items, size_t capacity,
     size_t *count, ccxml_diagnostic *diagnostic);
 
+static ccxml_status append_foreach_copy_items(
+    salts_xml_node action, ccxml_copy_item *items, size_t capacity,
+    size_t *count, ccxml_diagnostic *diagnostic) {
+    size_t foreach_index;
+    size_t index;
+    size_t end_index;
+    ccxml_status status = append_copy_item(
+        items, capacity, count, action, CCXML_COPY_ITEM_FOREACH, 0u,
+        &foreach_index, diagnostic);
+    if (status != CCXML_OK) return status;
+    for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(action, index);
+        if (node_is_ignorable(child)) continue;
+        status = append_executable_copy_items(
+            child, items, capacity, count, diagnostic);
+        if (status != CCXML_OK) return status;
+    }
+    status = append_copy_item(items, capacity, count, (salts_xml_node){0},
+                              CCXML_COPY_ITEM_ENDFOREACH, foreach_index,
+                              &end_index, diagnostic);
+    if (status != CCXML_OK) return status;
+    items[foreach_index].branch_next = foreach_index + 1u;
+    items[foreach_index].block_end = end_index + 1u;
+    return CCXML_OK;
+}
+
 static ccxml_status append_if_copy_items(
     salts_xml_node action, ccxml_copy_item *items, size_t capacity,
     size_t *count, ccxml_diagnostic *diagnostic) {
@@ -2309,6 +2480,10 @@ static ccxml_status append_executable_copy_items(
     const salts_xml_string_view name = salts_xml_node_local_name(action);
     if (view_equal(name, "if")) {
         return append_if_copy_items(action, items, capacity, count, diagnostic);
+    }
+    if (view_equal(name, "foreach")) {
+        return append_foreach_copy_items(action, items, capacity, count,
+                                         diagnostic);
     }
     return append_copy_item(
         items, capacity, count, action, CCXML_COPY_ITEM_LEAF, SIZE_MAX, NULL,
@@ -2495,6 +2670,46 @@ static ccxml_status copy_program(
                     action_row->block_end = row->first_action + item->block_end;
                 } else if (item->kind == CCXML_COPY_ITEM_ENDIF) {
                     action_row->kind = CCXML_ACTION_ENDIF;
+                } else if (item->kind == CCXML_COPY_ITEM_FOREACH) {
+                    const salts_xml_attribute array_attribute =
+                        node_unqualified_attribute(action, "array");
+                    const salts_xml_attribute item_attribute =
+                        node_unqualified_attribute(action, "item");
+                    const salts_xml_attribute index_attribute =
+                        node_unqualified_attribute(action, "index");
+                    const salts_xml_string_view array =
+                        salts_xml_attribute_value(array_attribute);
+                    const salts_xml_string_view item_name =
+                        salts_xml_attribute_value(item_attribute);
+                    const salts_xml_string_view index_name =
+                        index_attribute.impl != NULL
+                            ? salts_xml_attribute_value(index_attribute)
+                            : (salts_xml_string_view){0};
+                    action_row->kind = CCXML_ACTION_FOREACH;
+                    action_row->location = cursor;
+                    action_row->location_size = array.size;
+                    memcpy(cursor, array.data, array.size);
+                    cursor[array.size] = '\0';
+                    cursor += array.size + 1u;
+                    action_row->name = cursor;
+                    action_row->name_size = item_name.size;
+                    memcpy(cursor, item_name.data, item_name.size);
+                    cursor[item_name.size] = '\0';
+                    cursor += item_name.size + 1u;
+                    if (index_attribute.impl != NULL) {
+                        action_row->index = cursor;
+                        action_row->index_size = index_name.size;
+                        memcpy(cursor, index_name.data, index_name.size);
+                        cursor[index_name.size] = '\0';
+                        cursor += index_name.size + 1u;
+                    }
+                    action_row->branch_next = row->first_action + item->branch_next;
+                    action_row->block_end = row->first_action + item->block_end;
+                    impl->uses_foreach = true;
+                } else if (item->kind == CCXML_COPY_ITEM_ENDFOREACH) {
+                    action_row->kind = CCXML_ACTION_ENDFOREACH;
+                    action_row->branch_next =
+                        row->first_action + item->branch_owner;
                 } else if (view_equal(action_name, "accept")) {
                     action_row->kind = CCXML_ACTION_ACCEPT;
                 } else if (view_equal(action_name, "exit")) {
@@ -2951,7 +3166,9 @@ ccxml_limits ccxml_default_limits(void) {
         salts_xml_default_limits(),
         CCXML_DEFAULT_MAX_TRANSITIONS,
         CCXML_DEFAULT_MAX_ACTIONS,
-        CCXML_DEFAULT_MAX_NAME_BYTES};
+        CCXML_DEFAULT_MAX_NAME_BYTES,
+        CCXML_DEFAULT_MAX_FOREACH_ITERATIONS,
+        CCXML_DEFAULT_MAX_FOREACH_STORAGE_BYTES};
     return limits;
 }
 
@@ -2973,7 +3190,8 @@ ccxml_status ccxml_compile(
         limits.xml.max_attributes == 0u || limits.xml.max_depth == 0u ||
         limits.xml.max_retained_string_bytes == 0u ||
         limits.max_transitions == 0u || limits.max_actions == 0u ||
-        limits.max_name_bytes == 0u) {
+        limits.max_name_bytes == 0u || limits.max_foreach_iterations == 0u ||
+        limits.max_foreach_storage_bytes == 0u) {
         return fail(
             diagnostic, CCXML_INVALID_ARGUMENT,
             (salts_xml_location){0u, 0u, 0u},
@@ -3046,6 +3264,8 @@ ccxml_status ccxml_compile(
     impl->max_send_payload_entries = measurement.max_send_payload_entries;
     impl->max_transition_actions = measurement.max_transition_actions;
     impl->max_transition_effects = measurement.max_transition_effects;
+    impl->max_foreach_iterations = limits.max_foreach_iterations;
+    impl->max_foreach_storage_bytes = limits.max_foreach_storage_bytes;
     status = copy_program(
         impl, salts_xml_document_root(&document), diagnostic);
     if (status != CCXML_OK) goto cleanup;

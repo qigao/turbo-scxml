@@ -1,6 +1,8 @@
 #include <ccxml/ccxml.h>
 
 #include "scxml_expr.h"
+#include "scxml_foreach.h"
+#include "scxml_scope.h"
 
 #include <limits.h>
 #include <stddef.h>
@@ -10,7 +12,9 @@
 
 typedef struct ccxml_cmeta_datamodel_impl {
     const cmeta_data_desc *root;
+    const cmeta_data_desc **semantic_data;
     void *state;
+    size_t semantic_data_count;
     size_t max_path_depth;
     size_t max_string_bytes;
 } ccxml_cmeta_datamodel_impl;
@@ -546,8 +550,9 @@ static scxml_adapter_status map_expression_status(
     return SCXML_ADAPTER_ERROR_EXECUTION;
 }
 
-static scxml_adapter_status cmeta_compile_condition(
+scxml_adapter_status ccxml_cmeta_compile_condition_with_scope(
     void *user, const char *source, size_t source_size,
+    const scxml_scope_schema *scope,
     ccxml_condition *out_condition, const char **out_error) {
     const ccxml_cmeta_datamodel *datamodel =
         (const ccxml_cmeta_datamodel *)user;
@@ -573,8 +578,8 @@ static scxml_adapter_status cmeta_compile_condition(
     limits = scxml_expr_default_limits();
     limits.max_path_depth = impl->max_path_depth;
     limits.max_string_bytes = impl->max_string_bytes;
-    status = scxml_expr_compile_with_policy(
-        &condition->program, source, source_size, impl->root,
+    status = scxml_expr_compile_with_scope_policy(
+        &condition->program, source, source_size, impl->root, scope,
         reject_active_state, NULL, &policy, &limits, &diagnostic);
     if (status != SCXML_EXPR_OK) {
         scxml_expr_program_destroy(&condition->program);
@@ -586,9 +591,133 @@ static scxml_adapter_status cmeta_compile_condition(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
-static scxml_adapter_status cmeta_evaluate_condition(
+static scxml_adapter_status cmeta_compile_condition(
+    void *user, const char *source, size_t source_size,
+    ccxml_condition *out_condition, const char **out_error) {
+    return ccxml_cmeta_compile_condition_with_scope(
+        user, source, source_size, NULL, out_condition, out_error);
+}
+
+static const cmeta_data_desc *find_semantic_data_for_type(
+    const ccxml_cmeta_datamodel_impl *impl,
+    const cmeta_type_desc *type) {
+    size_t index;
+    if (impl == NULL || type == NULL) return NULL;
+    for (index = 0u; index < impl->semantic_data_count; ++index)
+        if (cmeta_type_equal(
+                impl->semantic_data[index]->storage_type, type))
+            return impl->semantic_data[index];
+    return scxml_scope_find_data_for_type(
+        impl->root, type, impl->max_path_depth);
+}
+
+scxml_adapter_status ccxml_cmeta_compile_foreach_scope(
+    void *user, const char *array, size_t array_size,
+    const char *item, size_t item_size,
+    const char *index_or_null, size_t index_size,
+    size_t max_iterations,
+    scxml_scope_schema *scope, scxml_foreach_program *out_program,
+    const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    scxml_sequence_program sequence = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    const cmeta_data_desc *item_data;
+    size_t item_slot = SIZE_MAX;
+    bool conflict = false;
+    scxml_expr_status status;
+    set_error(out_error, NULL);
+    if (impl == NULL || scope == NULL || out_program == NULL ||
+        out_program->sequence.root != NULL || array == NULL ||
+        array_size == 0u || item == NULL || item_size == 0u ||
+        (index_or_null == NULL) != (index_size == 0u) ||
+        max_iterations == 0u) {
+        set_error(out_error, "invalid CCXML CMeta foreach scope request");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    status = scxml_sequence_compile(
+        &sequence, array, array_size, impl->root, impl->max_path_depth,
+        &diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        set_error(out_error, "CCXML foreach array is not a CMeta sequence");
+        return map_expression_status(status);
+    }
+    if (cmeta_type_require_traits(
+            sequence.element_type,
+            CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY) !=
+        CMETA_OK) {
+        set_error(
+            out_error,
+            "CCXML foreach requires a bounded trivial-storage element");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    item_data = find_semantic_data_for_type(impl, sequence.element_type);
+    if (item_data == NULL) {
+        set_error(
+            out_error,
+            "CCXML foreach element has no semantic CMeta data descriptor");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    if (item_data == NULL || !scxml_scope_register(
+            scope, item, item_size, item_data, &item_slot, &conflict)) {
+        set_error(out_error, conflict
+            ? "CCXML foreach item conflicts with the typed scope"
+            : "CCXML foreach item type has no CMeta data descriptor");
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    if (index_or_null != NULL && !scxml_scope_register(
+            scope, index_or_null, index_size, &cmeta_data_size,
+            &item_slot, &conflict)) {
+        set_error(out_error, conflict
+            ? "CCXML foreach index conflicts with the typed scope"
+            : "CCXML foreach index could not be registered");
+        return conflict
+            ? SCXML_ADAPTER_INVALID_CONTRACT
+            : SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    status = scxml_foreach_compile_with_scope(
+        out_program, array, array_size, item, item_size,
+        index_or_null, index_size,
+        impl->root, scope, impl->max_path_depth, max_iterations, &diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        set_error(out_error, "CCXML CMeta foreach compilation failed");
+        return map_expression_status(status);
+    }
+    if (out_program->item.kind != SCXML_LOCATION_SUPPLEMENTAL) {
+        memset(out_program, 0, sizeof(*out_program));
+        set_error(
+            out_error,
+            "CCXML foreach item conflicts with an application root location");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    if (index_or_null != NULL &&
+        out_program->index.kind != SCXML_LOCATION_SUPPLEMENTAL) {
+        memset(out_program, 0, sizeof(*out_program));
+        set_error(
+            out_error,
+            "CCXML foreach index conflicts with an application root location");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+bool ccxml_cmeta_datamodel_state(void *user, void **out_state) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    if (out_state != NULL) *out_state = NULL;
+    if (impl == NULL || out_state == NULL || impl->state == NULL)
+        return false;
+    *out_state = impl->state;
+    return true;
+}
+
+scxml_adapter_status ccxml_cmeta_evaluate_condition_with_scope(
     void *user, const ccxml_condition *condition,
-    const ccxml_event *event, bool *out_value,
+    const ccxml_event *event, scxml_scope_view *scope, bool *out_value,
     const char **out_error) {
     const ccxml_cmeta_datamodel *datamodel =
         (const ccxml_cmeta_datamodel *)user;
@@ -607,6 +736,7 @@ static scxml_adapter_status cmeta_evaluate_condition(
     }
     system_values.event_name = (scxml_expr_string_view){
         .data = event->name, .size = event->name_size};
+    system_values.supplemental = scope;
     status = scxml_expr_evaluate_with_system(
         &compiled->program, impl->state, no_active_state, NULL,
         &system_values, out_value, &diagnostic);
@@ -614,6 +744,14 @@ static scxml_adapter_status cmeta_evaluate_condition(
         set_error(out_error, "CCXML CMeta condition failed");
     }
     return map_expression_status(status);
+}
+
+static scxml_adapter_status cmeta_evaluate_condition(
+    void *user, const ccxml_condition *condition,
+    const ccxml_event *event, bool *out_value,
+    const char **out_error) {
+    return ccxml_cmeta_evaluate_condition_with_scope(
+        user, condition, event, NULL, out_value, out_error);
 }
 
 static void cmeta_destroy_condition(
@@ -641,13 +779,41 @@ static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .validate_payload_location = cmeta_validate_payload_location,
     .read_payload = cmeta_read_payload};
 
+static bool semantic_data_registry_valid(
+    const cmeta_data_desc *const *semantic_data,
+    size_t semantic_data_count) {
+    size_t index;
+    size_t other;
+    if ((semantic_data == NULL) != (semantic_data_count == 0u) ||
+        semantic_data_count > SIZE_MAX / sizeof(*semantic_data))
+        return false;
+    for (index = 0u; index < semantic_data_count; ++index) {
+        const cmeta_data_desc *descriptor = semantic_data[index];
+        if (!cmeta_data_desc_valid(descriptor) ||
+            descriptor->storage_type == NULL)
+            return false;
+        for (other = 0u; other < index; ++other)
+            if (cmeta_type_equal(
+                    descriptor->storage_type,
+                    semantic_data[other]->storage_type))
+                return false;
+    }
+    return true;
+}
+
 ccxml_status ccxml_cmeta_datamodel_init(
     ccxml_cmeta_datamodel *datamodel,
     const ccxml_cmeta_datamodel_config_v1 *config) {
+    const size_t legacy_struct_size = offsetof(
+        ccxml_cmeta_datamodel_config_v1, semantic_data);
+    const cmeta_data_desc *const *semantic_data = NULL;
+    size_t semantic_data_count = 0u;
     ccxml_cmeta_datamodel_impl *impl;
     if (datamodel == NULL || datamodel->impl != NULL || config == NULL ||
         config->abi_version != CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1 ||
-        config->struct_size < sizeof(*config) || config->root == NULL ||
+        (config->struct_size != legacy_struct_size &&
+         config->struct_size < sizeof(*config)) ||
+        config->root == NULL ||
         config->state == NULL || config->max_path_depth == 0u ||
         config->max_string_bytes == 0u ||
         !cmeta_data_desc_valid(config->root) ||
@@ -656,13 +822,32 @@ ccxml_status ccxml_cmeta_datamodel_init(
         config->root->storage_type->align == 0u ||
         (uintptr_t)config->state % config->root->storage_type->align != 0u)
         return CCXML_INVALID_ARGUMENT;
+    if (config->struct_size >= sizeof(*config)) {
+        semantic_data = config->semantic_data;
+        semantic_data_count = config->semantic_data_count;
+    }
+    if (!semantic_data_registry_valid(
+            semantic_data, semantic_data_count))
+        return CCXML_INVALID_ARGUMENT;
     impl = (ccxml_cmeta_datamodel_impl *)malloc(sizeof(*impl));
     if (impl == NULL) return CCXML_ALLOCATION_FAILED;
     *impl = (ccxml_cmeta_datamodel_impl){
         .root = config->root,
         .state = config->state,
+        .semantic_data_count = semantic_data_count,
         .max_path_depth = config->max_path_depth,
         .max_string_bytes = config->max_string_bytes};
+    if (semantic_data_count != 0u) {
+        impl->semantic_data = (const cmeta_data_desc **)malloc(
+            semantic_data_count * sizeof(*impl->semantic_data));
+        if (impl->semantic_data == NULL) {
+            free(impl);
+            return CCXML_ALLOCATION_FAILED;
+        }
+        memcpy(
+            impl->semantic_data, semantic_data,
+            semantic_data_count * sizeof(*impl->semantic_data));
+    }
     datamodel->impl = impl;
     return CCXML_OK;
 }
@@ -672,7 +857,11 @@ const ccxml_datamodel_adapter_v1 *ccxml_cmeta_datamodel_adapter(void) {
 }
 
 void ccxml_cmeta_datamodel_destroy(ccxml_cmeta_datamodel *datamodel) {
+    ccxml_cmeta_datamodel_impl *impl;
     if (datamodel == NULL) return;
-    free(datamodel->impl);
+    impl = (ccxml_cmeta_datamodel_impl *)datamodel->impl;
+    if (impl == NULL) return;
+    free(impl->semantic_data);
+    free(impl);
     datamodel->impl = NULL;
 }

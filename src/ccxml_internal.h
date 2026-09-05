@@ -4,6 +4,9 @@
 #include <ccxml/ccxml.h>
 #include <salts_uuid.h>
 
+#include "scxml_foreach.h"
+#include "scxml_scope.h"
+
 #define CCXML_SEND_ID_MAX_SIZE \
     ((sizeof("send.") - 1u) + SALTS_UUID_STRING_LENGTH + 1u + 20u)
 
@@ -29,7 +32,9 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_IF,
     CCXML_ACTION_ELSEIF,
     CCXML_ACTION_ELSE,
-    CCXML_ACTION_ENDIF
+    CCXML_ACTION_ENDIF,
+    CCXML_ACTION_FOREACH,
+    CCXML_ACTION_ENDFOREACH
 } ccxml_action_kind;
 
 typedef struct ccxml_payload_row {
@@ -49,6 +54,8 @@ typedef struct ccxml_action_row {
     size_t location_size;
     const char *name;
     size_t name_size;
+    const char *index;
+    size_t index_size;
     const char *target_type;
     size_t target_type_size;
     const char *condition;
@@ -92,6 +99,8 @@ typedef struct ccxml_program_impl {
     size_t max_send_payload_entries;
     size_t max_transition_actions;
     size_t max_transition_effects;
+    size_t max_foreach_iterations;
+    size_t max_foreach_storage_bytes;
     bool uses_create_call;
     bool uses_disconnect;
     bool uses_reject;
@@ -115,6 +124,7 @@ typedef struct ccxml_program_impl {
     bool uses_send_id;
     bool uses_delayed_send;
     bool uses_cancel;
+    bool uses_foreach;
 } ccxml_program_impl;
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;
@@ -123,6 +133,15 @@ typedef struct ccxml_conditional_frame {
     size_t block_end;
     bool branch_taken;
 } ccxml_conditional_frame;
+
+typedef struct ccxml_foreach_frame {
+    size_t action_index;
+    size_t iteration;
+    size_t length;
+    bool live;
+    scxml_foreach_snapshot snapshot;
+    scxml_foreach_value value;
+} ccxml_foreach_frame;
 
 typedef struct ccxml_session_impl {
     const ccxml_program_impl *program;
@@ -139,6 +158,16 @@ typedef struct ccxml_session_impl {
     ccxml_transition_binding *transition_bindings;
     ccxml_condition *action_conditions;
     ccxml_conditional_frame *conditional_frames;
+    scxml_scope_schema foreach_scope;
+    scxml_scope_view foreach_scope_committed;
+    scxml_scope_view foreach_scope_staged;
+    scxml_scope_view foreach_scope_checkpoint;
+    void *foreach_scope_committed_allocation;
+    void *foreach_scope_staged_allocation;
+    void *foreach_scope_checkpoint_allocation;
+    scxml_foreach_program *foreach_programs;
+    void *foreach_root;
+    ccxml_foreach_frame foreach_frame;
     cflow_statechart_effect_ticket *tickets;
     scxml_payload_entry *payload_scratch;
     size_t ticket_capacity;
@@ -153,6 +182,8 @@ typedef struct ccxml_session_impl {
     bool transition_selected;
     bool exit_requested;
     bool dispatching;
+    bool foreach_transaction_pending;
+    bool foreach_checkpoint_live;
 } ccxml_session_impl;
 
 struct ccxml_transition_binding {
@@ -162,6 +193,26 @@ struct ccxml_transition_binding {
 };
 
 extern const cmeta_type_desc ccxml_event_cmeta_type;
+
+scxml_adapter_status ccxml_cmeta_compile_foreach_scope(
+    void *user, const char *array, size_t array_size,
+    const char *item, size_t item_size,
+    const char *index_or_null, size_t index_size,
+    size_t max_iterations,
+    scxml_scope_schema *scope, scxml_foreach_program *out_program,
+    const char **out_error);
+
+scxml_adapter_status ccxml_cmeta_compile_condition_with_scope(
+    void *user, const char *source, size_t source_size,
+    const scxml_scope_schema *scope,
+    ccxml_condition *out_condition, const char **out_error);
+
+scxml_adapter_status ccxml_cmeta_evaluate_condition_with_scope(
+    void *user, const ccxml_condition *condition,
+    const ccxml_event *event, scxml_scope_view *scope,
+    bool *out_value, const char **out_error);
+
+bool ccxml_cmeta_datamodel_state(void *user, void **out_state);
 
 size_t ccxml_program_transition_count(const ccxml_program *program);
 const char *ccxml_program_transition_event(
