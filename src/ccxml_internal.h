@@ -159,6 +159,7 @@ typedef struct ccxml_session_impl {
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
     ccxml_condition *action_conditions;
+    ccxml_string_expression *action_string_expressions;
     ccxml_conditional_frame *conditional_frames;
     scxml_scope_schema foreach_scope;
     scxml_scope_view foreach_scope_committed;

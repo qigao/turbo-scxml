@@ -92,6 +92,19 @@ static bool datamodel_payload_adapter_valid(
            adapter->read_payload != NULL;
 }
 
+static bool datamodel_string_expression_adapter_valid(
+    const ccxml_datamodel_adapter_v1 *adapter) {
+    const size_t expression_size =
+        offsetof(ccxml_datamodel_adapter_v1, destroy_string_expression) +
+        sizeof(adapter->destroy_string_expression);
+    return adapter != NULL &&
+           adapter->abi_version == CCXML_DATAMODEL_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= expression_size &&
+           adapter->compile_string_expression != NULL &&
+           adapter->evaluate_string_expression != NULL &&
+           adapter->destroy_string_expression != NULL;
+}
+
 static bool payload_content_valid(const scxml_content_view *content) {
     if (content == NULL) return false;
     if (content->kind == SCXML_CONTENT_SCALAR) {
@@ -188,6 +201,21 @@ static void destroy_conditions(ccxml_session_impl *impl) {
                 condition->impl = NULL;
             }
         }
+    }
+}
+
+static void destroy_string_expressions(ccxml_session_impl *impl) {
+    size_t index;
+    if (impl == NULL || impl->datamodel.destroy_string_expression == NULL ||
+        impl->action_string_expressions == NULL)
+        return;
+    for (index = 0u; index < impl->program->action_count; ++index) {
+        ccxml_string_expression *expression =
+            &impl->action_string_expressions[index];
+        if (expression->impl == NULL) continue;
+        impl->datamodel.destroy_string_expression(
+            impl->datamodel_user, expression);
+        expression->impl = NULL;
     }
 }
 
@@ -654,6 +682,11 @@ ccxml_status ccxml_session_init(
             return CCXML_INVALID_ARGUMENT;
         datamodel = copy_datamodel_adapter(config->datamodel);
     }
+    if (program->uses_string_expression) {
+        if (!datamodel_string_expression_adapter_valid(config->datamodel))
+            return CCXML_INVALID_ARGUMENT;
+        datamodel = copy_datamodel_adapter(config->datamodel);
+    }
     if (program->uses_foreach) {
         if (config->datamodel != ccxml_cmeta_datamodel_adapter() ||
             config->datamodel_user == NULL)
@@ -893,6 +926,8 @@ ccxml_status ccxml_session_init(
     }
     if (program->action_count > SIZE_MAX / sizeof(ccxml_condition))
         return CCXML_LIMIT_EXCEEDED;
+    if (program->action_count > SIZE_MAX / sizeof(ccxml_string_expression))
+        return CCXML_LIMIT_EXCEEDED;
     if (program->max_transition_actions >
         SIZE_MAX / sizeof(ccxml_conditional_frame))
         return CCXML_LIMIT_EXCEEDED;
@@ -943,11 +978,25 @@ ccxml_status ccxml_session_init(
             return CCXML_ALLOCATION_FAILED;
         }
     }
+    if (program->uses_string_expression && program->action_count != 0u) {
+        impl->action_string_expressions =
+            (ccxml_string_expression *)calloc(
+                program->action_count,
+                sizeof(*impl->action_string_expressions));
+        if (impl->action_string_expressions == NULL) {
+            free(impl->action_conditions);
+            free(impl->payload_scratch);
+            free(impl->tickets);
+            free(impl);
+            return CCXML_ALLOCATION_FAILED;
+        }
+    }
     if (program->max_transition_actions != 0u) {
         impl->conditional_frames = (ccxml_conditional_frame *)calloc(
             program->max_transition_actions,
             sizeof(*impl->conditional_frames));
         if (impl->conditional_frames == NULL) {
+            free(impl->action_string_expressions);
             free(impl->action_conditions);
             free(impl->payload_scratch);
             free(impl->tickets);
@@ -971,6 +1020,7 @@ ccxml_status ccxml_session_init(
             destroy_foreach_scope(impl);
             close_adapter(impl);
             free(impl->payload_scratch);
+            free(impl->action_string_expressions);
             free(impl->action_conditions);
             free(impl->conditional_frames);
             free(impl->tickets);
@@ -987,6 +1037,7 @@ ccxml_status ccxml_session_init(
         close_adapter(impl);
         destroy_foreach_scope(impl);
         free(impl->payload_scratch);
+        free(impl->action_string_expressions);
         free(impl->action_conditions);
         free(impl->conditional_frames);
         free(impl->tickets);
@@ -1009,6 +1060,7 @@ ccxml_status ccxml_session_init(
         close_adapter(impl);
         destroy_foreach_scope(impl);
         free(impl->payload_scratch);
+        free(impl->action_string_expressions);
         free(impl->action_conditions);
         free(impl->conditional_frames);
         free(impl->transition_bindings);
@@ -1054,6 +1106,7 @@ ccxml_status ccxml_session_init(
                 destroy_conditions(impl);
                 destroy_foreach_scope(impl);
                 free(impl->payload_scratch);
+                free(impl->action_string_expressions);
                 free(impl->action_conditions);
                 free(impl->conditional_frames);
                 free(impl->transition_bindings);
@@ -1110,6 +1163,45 @@ ccxml_status ccxml_session_init(
             destroy_conditions(impl);
             destroy_foreach_scope(impl);
             free(impl->payload_scratch);
+            free(impl->action_string_expressions);
+            free(impl->action_conditions);
+            free(impl->conditional_frames);
+            free(impl->transition_bindings);
+            free(impl->executable_bindings);
+            free(impl->guard_bindings);
+            free(impl->tickets);
+            free(impl);
+            return status;
+        }
+    }
+    for (action_index = 0u; action_index < program->action_count;
+         ++action_index) {
+        const ccxml_action_row *action = &program->actions[action_index];
+        ccxml_string_expression *expression;
+        const char *error = NULL;
+        scxml_adapter_status adapter_status;
+        ccxml_status status;
+        if (!action->destination_is_dynamic) continue;
+        expression = &impl->action_string_expressions[action_index];
+        adapter_status = impl->datamodel.compile_string_expression(
+            impl->datamodel_user, action->destination,
+            action->destination_size, expression, &error);
+        (void)error;
+        status = adapter_status == SCXML_ADAPTER_ACCEPTED
+            ? CCXML_OK
+            : adapter_status == SCXML_ADAPTER_FULL
+                ? CCXML_ALLOCATION_FAILED
+                : adapter_status == SCXML_ADAPTER_INVALID_CONTRACT
+                    ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR;
+        if (status == CCXML_OK && expression->impl == NULL)
+            status = CCXML_INVALID_CONTRACT;
+        if (status != CCXML_OK) {
+            close_adapter(impl);
+            destroy_string_expressions(impl);
+            destroy_conditions(impl);
+            destroy_foreach_scope(impl);
+            free(impl->payload_scratch);
+            free(impl->action_string_expressions);
             free(impl->action_conditions);
             free(impl->conditional_frames);
             free(impl->transition_bindings);
@@ -1122,9 +1214,11 @@ ccxml_status ccxml_session_init(
     }
     if (!cflow_executor_serial_init(&impl->executor)) {
         close_adapter(impl);
+        destroy_string_expressions(impl);
         destroy_conditions(impl);
         destroy_foreach_scope(impl);
         free(impl->payload_scratch);
+        free(impl->action_string_expressions);
         free(impl->action_conditions);
         free(impl->conditional_frames);
         free(impl->transition_bindings);
@@ -1154,9 +1248,11 @@ ccxml_status ccxml_session_init(
     if (native_status != CFLOW_STATECHART_INSTANCE_OK) {
         cflow_executor_destroy(&impl->executor);
         close_adapter(impl);
+        destroy_string_expressions(impl);
         destroy_conditions(impl);
         destroy_foreach_scope(impl);
         free(impl->payload_scratch);
+        free(impl->action_string_expressions);
         free(impl->action_conditions);
         free(impl->conditional_frames);
         free(impl->transition_bindings);
@@ -1193,9 +1289,11 @@ ccxml_status ccxml_session_init(
             (void)cflow_statechart_instance_destroy(&impl->instance);
             cflow_executor_destroy(&impl->executor);
             close_adapter(impl);
+            destroy_string_expressions(impl);
             destroy_conditions(impl);
             destroy_foreach_scope(impl);
             free(impl->payload_scratch);
+            free(impl->action_string_expressions);
             free(impl->action_conditions);
             free(impl->conditional_frames);
             free(impl->transition_bindings);
@@ -2261,10 +2359,12 @@ ccxml_status ccxml_session_destroy(ccxml_session *session) {
         CFLOW_STATECHART_INSTANCE_OK)
         return CCXML_BUSY;
     cflow_executor_destroy(&impl->executor);
+    destroy_string_expressions(impl);
     destroy_conditions(impl);
     destroy_foreach_scope(impl);
     free(impl->transition_bindings);
     free(impl->action_conditions);
+    free(impl->action_string_expressions);
     free(impl->conditional_frames);
     free(impl->executable_bindings);
     free(impl->guard_bindings);
