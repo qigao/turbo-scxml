@@ -31,6 +31,10 @@ typedef struct ccxml_cmeta_condition {
     scxml_expr_program program;
 } ccxml_cmeta_condition;
 
+typedef struct ccxml_cmeta_string_expression {
+    scxml_expr_program program;
+} ccxml_cmeta_string_expression;
+
 static void set_error(const char **out_error, const char *message) {
     if (out_error != NULL) *out_error = message;
 }
@@ -765,6 +769,125 @@ static void cmeta_destroy_condition(
     condition->impl = NULL;
 }
 
+scxml_adapter_status ccxml_cmeta_compile_string_expression_with_scope(
+    void *user, const char *source, size_t source_size,
+    const scxml_scope_schema *scope,
+    ccxml_string_expression *out_expression, const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    ccxml_cmeta_string_expression *expression;
+    const scxml_expr_compile_policy policy = {
+        .allowed_system_operands = SCXML_EXPR_SYSTEM_EVENT_NAME};
+    scxml_expr_limits limits;
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_status status;
+    set_error(out_error, NULL);
+    if (impl == NULL || source == NULL || source_size == 0u ||
+        out_expression == NULL || out_expression->impl != NULL) {
+        set_error(out_error, "invalid CCXML CMeta string expression compile");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    expression = (ccxml_cmeta_string_expression *)calloc(
+        1u, sizeof(*expression));
+    if (expression == NULL) {
+        set_error(out_error, "CCXML CMeta string expression allocation failed");
+        return SCXML_ADAPTER_FULL;
+    }
+    limits = scxml_expr_default_limits();
+    limits.max_path_depth = impl->max_path_depth;
+    limits.max_string_bytes = impl->max_string_bytes;
+    status = scxml_expr_compile_value_with_scope_and_policy(
+        &expression->program, source, source_size, impl->root, scope,
+        reject_active_state, NULL, &policy, &limits, &diagnostic);
+    if (status != SCXML_EXPR_OK ||
+        scxml_expr_program_value_kind(&expression->program) !=
+            SCXML_EXPR_VALUE_STRING) {
+        scxml_expr_program_destroy(&expression->program);
+        free(expression);
+        set_error(out_error, status == SCXML_EXPR_OK
+            ? "CCXML CMeta expression must produce a string"
+            : "CCXML CMeta string expression is invalid");
+        return status == SCXML_EXPR_OK
+            ? SCXML_ADAPTER_INVALID_CONTRACT
+            : map_expression_status(status);
+    }
+    out_expression->impl = expression;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status cmeta_compile_string_expression(
+    void *user, const char *source, size_t source_size,
+    ccxml_string_expression *out_expression, const char **out_error) {
+    return ccxml_cmeta_compile_string_expression_with_scope(
+        user, source, source_size, NULL, out_expression, out_error);
+}
+
+scxml_adapter_status ccxml_cmeta_evaluate_string_expression_with_scope(
+    void *user, const ccxml_string_expression *expression,
+    const ccxml_event *event, scxml_scope_view *scope,
+    ccxml_string_view *out_value, const char **out_error) {
+    const ccxml_cmeta_datamodel *datamodel =
+        (const ccxml_cmeta_datamodel *)user;
+    const ccxml_cmeta_datamodel_impl *impl = datamodel != NULL
+        ? (const ccxml_cmeta_datamodel_impl *)datamodel->impl : NULL;
+    const ccxml_cmeta_string_expression *compiled = expression != NULL
+        ? (const ccxml_cmeta_string_expression *)expression->impl : NULL;
+    scxml_expr_diagnostic diagnostic = {0};
+    scxml_expr_system_values system_values = {0};
+    scxml_expr_value value = {0};
+    scxml_expr_status status;
+    set_error(out_error, NULL);
+    if (out_value != NULL) *out_value = (ccxml_string_view){0};
+    if (impl == NULL || compiled == NULL || event == NULL ||
+        event->name == NULL || event->name_size == 0u || out_value == NULL) {
+        set_error(out_error, "invalid CCXML CMeta string expression evaluation");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    system_values.event_name = (scxml_expr_string_view){
+        .data = event->name, .size = event->name_size};
+    system_values.supplemental = scope;
+    status = scxml_expr_evaluate_value_with_system(
+        &compiled->program, impl->state, no_active_state, NULL,
+        &system_values, &value, &diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        set_error(out_error, "CCXML CMeta string expression failed");
+        return map_expression_status(status);
+    }
+    if (value.kind != SCXML_EXPR_VALUE_STRING ||
+        value.data.string.data == NULL || value.data.string.size == 0u ||
+        value.data.string.size > impl->max_string_bytes ||
+        memchr(
+            value.data.string.data, '\0', value.data.string.size) != NULL) {
+        set_error(out_error, "CCXML CMeta string expression result is invalid");
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    }
+    *out_value = (ccxml_string_view){
+        .data = value.data.string.data,
+        .size = value.data.string.size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status cmeta_evaluate_string_expression(
+    void *user, const ccxml_string_expression *expression,
+    const ccxml_event *event, ccxml_string_view *out_value,
+    const char **out_error) {
+    return ccxml_cmeta_evaluate_string_expression_with_scope(
+        user, expression, event, NULL, out_value, out_error);
+}
+
+static void cmeta_destroy_string_expression(
+    void *user, ccxml_string_expression *expression) {
+    ccxml_cmeta_string_expression *compiled = expression != NULL
+        ? (ccxml_cmeta_string_expression *)expression->impl : NULL;
+    (void)user;
+    if (compiled == NULL) return;
+    scxml_expr_program_destroy(&compiled->program);
+    free(compiled);
+    expression->impl = NULL;
+}
+
 static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
@@ -777,7 +900,10 @@ static const ccxml_datamodel_adapter_v1 cmeta_adapter = {
     .evaluate_condition = cmeta_evaluate_condition,
     .destroy_condition = cmeta_destroy_condition,
     .validate_payload_location = cmeta_validate_payload_location,
-    .read_payload = cmeta_read_payload};
+    .read_payload = cmeta_read_payload,
+    .compile_string_expression = cmeta_compile_string_expression,
+    .evaluate_string_expression = cmeta_evaluate_string_expression,
+    .destroy_string_expression = cmeta_destroy_string_expression};
 
 static bool semantic_data_registry_valid(
     const cmeta_data_desc *const *semantic_data,

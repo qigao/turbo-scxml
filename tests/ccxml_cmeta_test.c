@@ -4,7 +4,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { TEST_TEXT_CAPACITY = 95u };
+
+typedef struct test_text {
+    size_t size;
+    char data[TEST_TEXT_CAPACITY + 1u];
+} test_text;
+
 typedef struct ccxml_foreach_record {
+    test_text destination;
     int code;
 } ccxml_foreach_record;
 
@@ -24,13 +32,6 @@ typedef struct ccxml_foreach_managed {
 
 #include "ccxml_internal.h"
 #include "tinytest.h"
-
-enum { TEST_TEXT_CAPACITY = 95u };
-
-typedef struct test_text {
-    size_t size;
-    char data[TEST_TEXT_CAPACITY + 1u];
-} test_text;
 
 Struct(test_conference,
     (test_text, id)
@@ -454,6 +455,9 @@ static const cmeta_data_desc foreach_record_state_desc = {
     .shape = &foreach_record_state_shape};
 
 static const cmeta_field_desc foreach_record_layout_fields[] = {
+    {"destination", "test_text",
+     offsetof(ccxml_foreach_record, destination), sizeof(test_text),
+     _Alignof(test_text), &text_type, NULL},
     {"code", "int", offsetof(ccxml_foreach_record, code), sizeof(int),
      _Alignof(int), &cmeta_type_int, NULL}};
 
@@ -466,6 +470,8 @@ static const cmeta_struct_desc foreach_record_layout = {
         sizeof(foreach_record_layout_fields[0])};
 
 static const cmeta_data_field_desc foreach_record_data_fields[] = {
+    {"test.ccxml.foreach.record.destination", "destination",
+     offsetof(ccxml_foreach_record, destination), &text_desc},
     {"test.ccxml.foreach.record.code", "code",
      offsetof(ccxml_foreach_record, code), &cmeta_data_int}};
 
@@ -556,6 +562,8 @@ struct foreach_provider_probe {
     size_t discard_count;
     size_t reject_on_prepare;
     size_t close_count;
+    char destinations[4][TEST_TEXT_CAPACITY + 1u];
+    size_t destination_sizes[4];
 };
 
 static void foreach_ticket_commit(void *user) {
@@ -595,6 +603,36 @@ static scxml_adapter_status foreach_prepare_accept(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static scxml_adapter_status foreach_prepare_create_call(
+    void *user, const ccxml_create_call_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_provider_probe *probe = (foreach_provider_probe *)user;
+    foreach_provider_ticket *ticket;
+    size_t index;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->destination == NULL || request->destination_size == 0u ||
+        request->destination_size > TEST_TEXT_CAPACITY ||
+        probe->prepare_count >= sizeof(probe->tickets) /
+            sizeof(probe->tickets[0]))
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    index = probe->prepare_count++;
+    probe->destination_sizes[index] = request->destination_size;
+    memcpy(
+        probe->destinations[index], request->destination,
+        request->destination_size);
+    probe->destinations[index][request->destination_size] = '\0';
+    if (probe->reject_on_prepare == probe->prepare_count)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    ticket = &probe->tickets[index];
+    *ticket = (foreach_provider_ticket){.owner = probe, .live = true};
+    *out_ticket = (cflow_statechart_effect_ticket){
+        .commit = foreach_ticket_commit,
+        .discard = foreach_ticket_discard,
+        .user = ticket};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
 static void foreach_provider_close(void *user) {
     ++((foreach_provider_probe *)user)->close_count;
 }
@@ -609,7 +647,8 @@ static const ccxml_telephony_adapter_v1 foreach_provider_adapter = {
     .struct_size = sizeof(ccxml_telephony_adapter_v1),
     .prepare_accept = foreach_prepare_accept,
     .close = foreach_provider_close,
-    .is_quiescent = foreach_provider_quiescent};
+    .is_quiescent = foreach_provider_quiescent,
+    .prepare_create_call = foreach_prepare_create_call};
 
 typedef struct conference_provider_probe {
     bool live;
@@ -947,6 +986,145 @@ static ccxml_status initialize(
 }
 
 spec("CCXML CMeta datamodel") {
+    it("evaluates a typed root string expression") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        ccxml_string_view value = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const ccxml_event event = {.name = "go", .name_size = 2u};
+        const char *error = NULL;
+
+        memcpy(state.mode.data, "tel:root", sizeof("tel:root") - 1u);
+        state.mode.size = sizeof("tel:root") - 1u;
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_not_null(adapter->compile_string_expression);
+        check_not_null(adapter->evaluate_string_expression);
+        check_not_null(adapter->destroy_string_expression);
+        if (adapter->compile_string_expression == NULL ||
+            adapter->evaluate_string_expression == NULL ||
+            adapter->destroy_string_expression == NULL) {
+            ccxml_cmeta_datamodel_destroy(&datamodel);
+            return;
+        }
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "mode", 4u, &expression, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_not_null(expression.impl);
+        check_equal(
+            adapter->evaluate_string_expression(
+                &datamodel, &expression, &event, &value, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(value.size, sizeof("tel:root") - 1u);
+        check_equal(value.data, "tel:root");
+
+        adapter->destroy_string_expression(&datamodel, &expression);
+        check_null(expression.impl);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects a non-string typed expression") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_not_null(adapter->compile_string_expression);
+        if (adapter->compile_string_expression == NULL) {
+            ccxml_cmeta_datamodel_destroy(&datamodel);
+            return;
+        }
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "count", 5u, &expression, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(expression.impl);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects an unknown typed string location") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_not_null(adapter->compile_string_expression);
+        if (adapter->compile_string_expression == NULL) {
+            ccxml_cmeta_datamodel_destroy(&datamodel);
+            return;
+        }
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "missing", 7u, &expression, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(expression.impl);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("evaluates the admitted CCXML event name operand") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        ccxml_string_view value = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const ccxml_event event = {
+            .name = "connection.alerting",
+            .name_size = sizeof("connection.alerting") - 1u};
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_event.name", 11u, &expression, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(
+            adapter->evaluate_string_expression(
+                &datamodel, &expression, &event, &value, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_equal(value.data, "connection.alerting");
+        adapter->destroy_string_expression(&datamodel, &expression);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
+    it("rejects unavailable SCXML system strings during admission") {
+        test_state state = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        ccxml_string_expression expression = {0};
+        const ccxml_datamodel_adapter_v1 *adapter =
+            ccxml_cmeta_datamodel_adapter();
+        const char *error = NULL;
+
+        check_equal(
+            initialize(&datamodel, &state, TEST_TEXT_CAPACITY), CCXML_OK);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_sessionid", 10u, &expression, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(expression.impl);
+        check_equal(
+            adapter->compile_string_expression(
+                &datamodel, "_event.type", 11u, &expression, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(expression.impl);
+
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+    }
+
     it("rejects foreach elements without a semantic data descriptor") {
         foreach_record_state state = {0};
         ccxml_cmeta_datamodel datamodel = {0};
@@ -983,7 +1161,7 @@ spec("CCXML CMeta datamodel") {
             "</foreach>"
             "</transition></eventprocessor></ccxml>";
         static const ccxml_foreach_record elements[] = {
-            {11}, {22}, {33}};
+            {.code = 11}, {.code = 22}, {.code = 33}};
         const cmeta_data_desc *semantic_data[] = {
             &foreach_record_alias_data};
         ccxml_limits limits = ccxml_default_limits();
@@ -1059,6 +1237,94 @@ spec("CCXML CMeta datamodel") {
 
         check_equal(ccxml_session_destroy(&session), CCXML_OK);
         check_equal(provider.close_count, (size_t)1u);
+        ccxml_cmeta_datamodel_destroy(&datamodel);
+        ccxml_program_destroy(&program);
+        vec_destroy(&state.values);
+    }
+
+    it("evaluates createcall destinations from the staged foreach item") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item'>"
+            "<createcall dest='item.destination'/>"
+            "</foreach>"
+            "</transition></eventprocessor></ccxml>";
+        static const ccxml_foreach_record elements[] = {
+            {.destination = {.size = 7u, .data = "tel:111"}, .code = 11},
+            {.destination = {.size = 7u, .data = "tel:222"}, .code = 22},
+            {.destination = {.size = 7u, .data = "tel:333"}, .code = 33}};
+        const cmeta_data_desc *semantic_data[] = {
+            &foreach_record_alias_data};
+        ccxml_limits limits = ccxml_default_limits();
+        foreach_record_state state = {
+            .values = VecOf(ccxml_foreach_record)};
+        ccxml_program program = {0};
+        ccxml_session session = {0};
+        ccxml_cmeta_datamodel datamodel = {0};
+        foreach_provider_probe provider = {.reject_on_prepare = 2u};
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_session_config session_config;
+        const ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+        size_t index;
+        size_t item_slot = SIZE_MAX;
+        const cmeta_data_desc *item_data = NULL;
+        const void *item_object = NULL;
+        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+            .root = &foreach_record_state_desc,
+            .state = &state,
+            .max_path_depth = 3u,
+            .max_string_bytes = TEST_TEXT_CAPACITY,
+            .semantic_data = semantic_data,
+            .semantic_data_count = sizeof(semantic_data) /
+                sizeof(semantic_data[0])};
+
+        limits.max_foreach_iterations = 4u;
+        limits.max_foreach_storage_bytes = 4096u;
+        check_equal(vec_init(&state.values, 4u), STL_OK);
+        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+             ++index)
+            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+        check_equal(
+            ccxml_compile(
+                &program, source, strlen(source), &limits, &diagnostic),
+            CCXML_OK);
+        check_equal(
+            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+            CCXML_OK);
+        session_config = (ccxml_session_config){
+            .program = &program,
+            .telephony = &foreach_provider_adapter,
+            .telephony_user = &provider,
+            .datamodel = ccxml_cmeta_datamodel_adapter(),
+            .datamodel_user = &datamodel};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+
+        check_equal(
+            ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+        check_equal(provider.prepare_count, (size_t)2u);
+        check_equal(provider.destinations[0], "tel:111");
+        check_equal(provider.destinations[1], "tel:222");
+        check_equal(provider.commit_count, (size_t)0u);
+        check_equal(provider.discard_count, (size_t)1u);
+        {
+            const ccxml_session_impl *impl =
+                (const ccxml_session_impl *)session.impl;
+            check_not_null(scxml_scope_find(
+                &impl->foreach_scope, "item", 4u, &item_slot));
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_committed, item_slot,
+                &item_data, &item_object));
+            check_false(scxml_scope_view_read(
+                &impl->foreach_scope_staged, item_slot,
+                &item_data, &item_object));
+        }
+
+        check_equal(ccxml_session_destroy(&session), CCXML_OK);
         ccxml_cmeta_datamodel_destroy(&datamodel);
         ccxml_program_destroy(&program);
         vec_destroy(&state.values);

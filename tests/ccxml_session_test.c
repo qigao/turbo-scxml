@@ -443,6 +443,12 @@ struct datamodel_probe {
     size_t condition_compile_count;
     size_t condition_evaluate_count;
     size_t condition_destroy_count;
+    size_t string_expression_compile_count;
+    size_t string_expression_evaluate_count;
+    size_t string_expression_destroy_count;
+    size_t reject_string_expression_compile_at;
+    const char *string_expression_result;
+    size_t string_expression_result_size;
     char location[64];
     size_t location_size;
     char value[64];
@@ -593,6 +599,50 @@ static void destroy_condition(
     condition->impl = NULL;
 }
 
+static scxml_adapter_status compile_string_expression(
+    void *user, const char *source, size_t source_size,
+    ccxml_string_expression *out_expression, const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->string_expression_compile_count;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe->reject_string_expression_compile_at != 0u &&
+        probe->string_expression_compile_count ==
+            probe->reject_string_expression_compile_at) {
+        if (out_error != NULL)
+            *out_error = "test string expression compile refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+    if (source == NULL || source_size == 0u || out_expression == NULL ||
+        out_expression->impl != NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    out_expression->impl = probe;
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static scxml_adapter_status evaluate_string_expression(
+    void *user, const ccxml_string_expression *expression,
+    const ccxml_event *event, ccxml_string_view *out_value,
+    const char **out_error) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    ++probe->string_expression_evaluate_count;
+    if (out_error != NULL) *out_error = NULL;
+    if (expression == NULL || expression->impl != probe || event == NULL ||
+        out_value == NULL)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    *out_value = (ccxml_string_view){
+        .data = probe->string_expression_result,
+        .size = probe->string_expression_result_size};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+
+static void destroy_string_expression(
+    void *user, ccxml_string_expression *expression) {
+    datamodel_probe *probe = (datamodel_probe *)user;
+    if (expression == NULL || expression->impl == NULL) return;
+    ++probe->string_expression_destroy_count;
+    expression->impl = NULL;
+}
+
 static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .abi_version = CCXML_DATAMODEL_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_datamodel_adapter_v1),
@@ -603,7 +653,10 @@ static const ccxml_datamodel_adapter_v1 datamodel_adapter = {
     .read_string = read_string,
     .compile_condition = compile_condition,
     .evaluate_condition = evaluate_condition,
-    .destroy_condition = destroy_condition};
+    .destroy_condition = destroy_condition,
+    .compile_string_expression = compile_string_expression,
+    .evaluate_string_expression = evaluate_string_expression,
+    .destroy_string_expression = destroy_string_expression};
 
 static ccxml_status compile_program(
     ccxml_program *program, const char *actions) {
@@ -1186,6 +1239,214 @@ spec("CCXML session") {
     }
 
     group("createcall") {
+        it("keeps a literal destination compatible with an older datamodel") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 truncated = datamodel_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1, compile_string_expression);
+
+            check_equal(
+                compile_program(
+                    &program, "<createcall dest=\"'tel:123'\"/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &truncated,
+                .datamodel_user = &datamodel};
+            check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+            check_equal(datamodel.string_expression_compile_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the datamodel expression tail for a dynamic destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            ccxml_datamodel_adapter_v1 truncated = datamodel_adapter;
+            ccxml_session_config config;
+            truncated.struct_size = offsetof(
+                ccxml_datamodel_adapter_v1, compile_string_expression);
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = &truncated,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &config),
+                CCXML_INVALID_ARGUMENT);
+            check_equal(datamodel.string_expression_compile_count, (size_t)0);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("compiles and destroys a dynamic destination exactly once") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(datamodel.string_expression_compile_count, (size_t)1);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+            ccxml_program_destroy(&program);
+        }
+
+        it("destroys earlier expressions when later compilation fails") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .reject_string_expression_compile_at = 2u};
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<createcall dest='first'/><createcall dest='second'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_ADAPTER_ERROR);
+            check_null(session.impl);
+            check_equal(datamodel.string_expression_compile_count, (size_t)2);
+            check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("evaluates a dynamic destination before preparing the call") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:+12025550123",
+                .string_expression_result_size =
+                    sizeof("tel:+12025550123") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.destination, "tel:+12025550123");
+            check_equal(provider.commit_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an empty evaluated destination") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "",
+                .string_expression_result_size = 0u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an embedded NUL in an evaluated destination") {
+            static const char malformed[] = {'t', 'e', 'l', '\0', 'x'};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {.quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = malformed,
+                .string_expression_result_size = sizeof(malformed)};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(&program, "<createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_INVALID_CONTRACT);
+            check_equal(provider.prepare_count, (size_t)0);
+            check_equal(provider.commit_count, (size_t)0);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("rolls back an earlier effect when the dynamic call is rejected") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe provider = {
+                .reject_on_prepare = 2u,
+                .quiescent = true};
+            datamodel_probe datamodel = {
+                .string_expression_result = "tel:123",
+                .string_expression_result_size = sizeof("tel:123") - 1u};
+            ccxml_event event = alerting_event();
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<accept/><createcall dest='destination'/>"),
+                CCXML_OK);
+            check_equal(
+                init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel),
+                CCXML_OK);
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(datamodel.string_expression_evaluate_count, (size_t)1);
+            check_equal(provider.destination, "tel:123");
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)1);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("commits the copied destination") {
             char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"

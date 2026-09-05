@@ -321,11 +321,17 @@ spec("CCXML program") {
                 "</transition></eventprocessor></ccxml>";
             ccxml_program program = {0};
             ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
 
             check_equal(
                 compile_source(&program, source, &diagnostic), CCXML_OK);
             check_not_null(program.impl);
             check_equal(ccxml_program_action_count(&program), (size_t)1);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_equal(impl->actions[0].destination, "tel:+12025550123");
+            check_equal(impl->actions[0].destination_size, (size_t)16);
+            check_false(impl->actions[0].destination_is_dynamic);
+            check_false(impl->uses_string_expression);
 
             ccxml_program_destroy(&program);
         }
@@ -359,7 +365,7 @@ spec("CCXML program") {
             check_null(program.impl);
         }
 
-        it("rejects a nonliteral destination expression") {
+        it("retains a nonliteral destination expression") {
             const char *source =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='ccxml.loaded'>"
@@ -367,10 +373,54 @@ spec("CCXML program") {
                 "</eventprocessor></ccxml>";
             ccxml_program program = {0};
             ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(impl->actions[0].destination, "destination");
+            check_equal(impl->actions[0].destination_size, (size_t)11);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_true(impl->uses_string_expression);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("classifies entity-encoded quotes as a literal destination") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='ccxml.loaded'>"
+                "<createcall dest='&apos;tel:123&apos;'/></transition>"
+                "</eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_program_impl *impl;
+
+            check_equal(
+                compile_source(&program, source, &diagnostic), CCXML_OK);
+            impl = (const ccxml_program_impl *)program.impl;
+            check_not_null(impl);
+            check_equal(impl->actions[0].destination, "tel:123");
+            check_equal(impl->actions[0].destination_size, (size_t)7);
+            check_false(impl->actions[0].destination_is_dynamic);
+            check_false(impl->uses_string_expression);
+
+            ccxml_program_destroy(&program);
+        }
+
+        it("rejects an invalid entity in a dynamic destination") {
+            const char *source =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='ccxml.loaded'>"
+                "<createcall dest='destination&bogus;'/></transition>"
+                "</eventprocessor></ccxml>";
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
 
             check_equal(
                 compile_source(&program, source, &diagnostic),
-                CCXML_UNSUPPORTED_FEATURE);
+                CCXML_INVALID_STRUCTURE);
             check_null(program.impl);
         }
 

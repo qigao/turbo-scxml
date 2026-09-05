@@ -477,19 +477,37 @@ static ccxml_status validate_string_literal(
     return CCXML_OK;
 }
 
+static ccxml_status decode_destination_value(
+    salts_xml_attribute attribute, bool allow_dynamic,
+    char **out_value, size_t *out_size, bool *out_dynamic,
+    ccxml_diagnostic *diagnostic);
+
 static ccxml_status validate_destination_action(
     salts_xml_node action, ccxml_measurement *measurement,
-    const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
+    const ccxml_limits *limits, bool allow_dynamic,
+    ccxml_diagnostic *diagnostic) {
     salts_xml_attribute destination_attribute = {0};
-    salts_xml_string_view expression;
+    char *value = NULL;
+    size_t value_size = 0u;
+    bool dynamic = false;
     size_t index;
     size_t retained_size;
     ccxml_status status = validate_attributes(
         action, "dest", true, &destination_attribute, diagnostic);
     if (status != CCXML_OK) return status;
-    status = validate_string_literal(
-        destination_attribute, &expression, diagnostic);
+    status = decode_destination_value(
+        destination_attribute, allow_dynamic, &value, &value_size,
+        &dynamic, diagnostic);
+    (void)dynamic;
     if (status != CCXML_OK) return status;
+    if (!checked_add(value_size, 1u, &retained_size)) {
+        free(value);
+        return fail(
+            diagnostic, CCXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(destination_attribute),
+            "CCXML destination expression storage overflow");
+    }
+    free(value);
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
@@ -499,8 +517,7 @@ static ccxml_status validate_destination_action(
                 "CCXML destination action must be empty");
         }
     }
-    if (!checked_add(expression.size - 2u, 1u, &retained_size) ||
-        measurement->action_count >= limits->max_actions ||
+    if (measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
                      &measurement->action_count) ||
         !checked_add(measurement->name_bytes, retained_size,
@@ -554,6 +571,66 @@ static ccxml_status decode_attribute_value(
     }
     *out_value = value;
     *out_size = decoded_size;
+    return CCXML_OK;
+}
+
+static ccxml_status decode_destination_value(
+    salts_xml_attribute attribute, bool allow_dynamic,
+    char **out_value, size_t *out_size, bool *out_dynamic,
+    ccxml_diagnostic *diagnostic) {
+    char *value = NULL;
+    size_t value_size = 0u;
+    size_t index;
+    char quote;
+    ccxml_status status;
+    if (out_value == NULL || out_size == NULL || out_dynamic == NULL)
+        return CCXML_INVALID_ARGUMENT;
+    *out_value = NULL;
+    *out_size = 0u;
+    *out_dynamic = false;
+    status = decode_attribute_value(
+        attribute, &value, &value_size, diagnostic);
+    if (status != CCXML_OK) return status;
+    if (value_size >= 2u && (value[0] == '\'' || value[0] == '"') &&
+        value[value_size - 1u] == value[0]) {
+        if (value_size == 2u) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML string literal must be nonempty");
+        }
+        quote = value[0];
+        for (index = 1u; index + 1u < value_size; ++index) {
+            if (value[index] == '\\' || value[index] == quote) {
+                free(value);
+                return fail(
+                    diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "CCXML string literal escapes are not supported");
+            }
+        }
+        value_size -= 2u;
+        memmove(value, value + 1u, value_size);
+    } else {
+        if (!allow_dynamic) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML value must be a quoted string literal");
+        }
+        if (value_size == 0u) {
+            free(value);
+            return fail(
+                diagnostic, CCXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "CCXML destination expression must be nonempty");
+        }
+        *out_dynamic = true;
+    }
+    *out_value = value;
+    *out_size = value_size;
     return CCXML_OK;
 }
 
@@ -1699,7 +1776,9 @@ static ccxml_status validate_leaf_action(
             salts_xml_node_location(action), "unsupported CCXML executable content");
     }
     if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
-        status = validate_destination_action(action, measurement, limits, diagnostic);
+        status = validate_destination_action(
+            action, measurement, limits, view_equal(name, "createcall"),
+            diagnostic);
     } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
         status = validate_two_identifier_action(
             action, "id1", "id2", measurement, limits, diagnostic);
@@ -2147,7 +2226,8 @@ static ccxml_status validate_transition(
         }
         if (view_equal(name, "createcall") || view_equal(name, "redirect")) {
             status = validate_destination_action(
-                action, measurement, limits, diagnostic);
+                action, measurement, limits, view_equal(name, "createcall"),
+                diagnostic);
         } else if (view_equal(name, "join") || view_equal(name, "unjoin")) {
             status = validate_two_identifier_action(
                 action, "id1", "id2", measurement, limits, diagnostic);
@@ -2718,7 +2798,9 @@ static ccxml_status copy_program(
                            view_equal(action_name, "redirect")) {
                     size_t destination_attribute_index;
                     salts_xml_attribute destination_attribute = {0};
-                    salts_xml_string_view expression;
+                    char *destination_value = NULL;
+                    size_t destination_size = 0u;
+                    bool destination_is_dynamic = false;
                     if (view_equal(action_name, "createcall")) {
                         action_row->kind = CCXML_ACTION_CREATE_CALL;
                         impl->uses_create_call = true;
@@ -2740,13 +2822,24 @@ static ccxml_status copy_program(
                             break;
                         }
                     }
-                    expression =
-                        salts_xml_attribute_value(destination_attribute);
+                    status = decode_destination_value(
+                        destination_attribute,
+                        view_equal(action_name, "createcall"),
+                        &destination_value, &destination_size,
+                        &destination_is_dynamic, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
                     action_row->destination = cursor;
-                    action_row->destination_size = expression.size - 2u;
-                    memcpy(
-                        cursor, expression.data + 1u,
-                        action_row->destination_size);
+                    action_row->destination_is_dynamic =
+                        destination_is_dynamic;
+                    if (action_row->destination_is_dynamic) {
+                        impl->uses_string_expression = true;
+                    }
+                    action_row->destination_size = destination_size;
+                    memcpy(cursor, destination_value, destination_size);
+                    free(destination_value);
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
                 } else if (view_equal(action_name, "disconnect")) {

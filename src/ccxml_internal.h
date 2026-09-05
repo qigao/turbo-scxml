@@ -63,6 +63,7 @@ typedef struct ccxml_action_row {
     const char *delay;
     size_t delay_size;
     uint64_t delay_ms;
+    bool destination_is_dynamic;
     bool delay_is_dynamic;
     size_t branch_next;
     size_t block_end;
@@ -102,6 +103,7 @@ typedef struct ccxml_program_impl {
     size_t max_foreach_iterations;
     size_t max_foreach_storage_bytes;
     bool uses_create_call;
+    bool uses_string_expression;
     bool uses_disconnect;
     bool uses_reject;
     bool uses_redirect;
@@ -157,6 +159,7 @@ typedef struct ccxml_session_impl {
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
     ccxml_condition *action_conditions;
+    ccxml_string_expression *action_string_expressions;
     ccxml_conditional_frame *conditional_frames;
     scxml_scope_schema foreach_scope;
     scxml_scope_view foreach_scope_committed;
@@ -211,6 +214,16 @@ scxml_adapter_status ccxml_cmeta_evaluate_condition_with_scope(
     void *user, const ccxml_condition *condition,
     const ccxml_event *event, scxml_scope_view *scope,
     bool *out_value, const char **out_error);
+
+scxml_adapter_status ccxml_cmeta_compile_string_expression_with_scope(
+    void *user, const char *source, size_t source_size,
+    const scxml_scope_schema *scope,
+    ccxml_string_expression *out_expression, const char **out_error);
+
+scxml_adapter_status ccxml_cmeta_evaluate_string_expression_with_scope(
+    void *user, const ccxml_string_expression *expression,
+    const ccxml_event *event, scxml_scope_view *scope,
+    ccxml_string_view *out_value, const char **out_error);
 
 bool ccxml_cmeta_datamodel_state(void *user, void **out_state);
 
