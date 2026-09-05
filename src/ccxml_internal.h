@@ -63,6 +63,7 @@ typedef struct ccxml_action_row {
     const char *delay;
     size_t delay_size;
     uint64_t delay_ms;
+    bool destination_is_dynamic;
     bool delay_is_dynamic;
     size_t branch_next;
     size_t block_end;
@@ -102,6 +103,7 @@ typedef struct ccxml_program_impl {
     size_t max_foreach_iterations;
     size_t max_foreach_storage_bytes;
     bool uses_create_call;
+    bool uses_string_expression;
     bool uses_disconnect;
     bool uses_reject;
     bool uses_redirect;
