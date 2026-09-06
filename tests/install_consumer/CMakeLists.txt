@@ -8,6 +8,16 @@ option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO
   "Require and exercise the installed CHttpEventIO component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
   "Require the installed quickjs-sandbox profile" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY
+  "Require and exercise only the installed VoiceXML component" OFF)
+
+if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY AND
+   (TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE OR
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO OR
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS))
+  message(FATAL_ERROR
+    "The VoiceXML-only install consumer cannot enable another profile")
+endif()
 
 if((TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO) AND
@@ -28,7 +38,11 @@ endif()
 
 unset(TurboSCXML_DIR CACHE)
 unset(TurboSCXML_DIR)
-set(TURBOSCXML_INSTALL_COMPONENTS SCXML CCXML)
+if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY)
+  set(TURBOSCXML_INSTALL_COMPONENTS VoiceXML)
+else()
+  set(TURBOSCXML_INSTALL_COMPONENTS SCXML CCXML)
+endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CHttpResource)
 endif()
@@ -43,29 +57,56 @@ find_package(TurboSCXML CONFIG REQUIRED
   PATHS "${TURBOSCXML_ROOT_PATH}"
   NO_DEFAULT_PATH)
 
-add_executable(turboscxml_install_consumer main.c)
-target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
-target_link_libraries(
-  turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY)
+  if(NOT TARGET TurboSCXML::VoiceXML)
+    message(FATAL_ERROR "Expected installed TurboSCXML::VoiceXML")
+  endif()
+  get_target_property(
+    TURBOSCXML_VOICEXML_LINKS
+    TurboSCXML::VoiceXML INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_VOICEXML_LINKS STREQUAL "Salts::XmlParser")
+    message(FATAL_ERROR
+      "TurboSCXML::VoiceXML must expose only Salts::XmlParser; got: "
+      "${TURBOSCXML_VOICEXML_LINKS}")
+  endif()
 
-if(NOT TARGET TurboSCXML::CCXML)
-  message(FATAL_ERROR "Expected installed TurboSCXML::CCXML")
-endif()
-add_executable(turboscxml_ccxml_install_consumer ccxml_main.c)
-target_compile_features(
-  turboscxml_ccxml_install_consumer PRIVATE c_std_11)
-target_link_libraries(
-  turboscxml_ccxml_install_consumer PRIVATE TurboSCXML::CCXML)
+  add_executable(turboscxml_voicexml_install_consumer voicexml_main.c)
+  target_compile_features(
+    turboscxml_voicexml_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_voicexml_install_consumer PRIVATE TurboSCXML::VoiceXML)
 
-add_executable(turboscxml_ccxml_install_consumer_cpp ccxml_main.cpp)
-target_compile_features(
-  turboscxml_ccxml_install_consumer_cpp PRIVATE cxx_std_17)
-target_link_libraries(
-  turboscxml_ccxml_install_consumer_cpp PRIVATE TurboSCXML::CCXML)
-if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
-  target_compile_definitions(
-    turboscxml_install_consumer PRIVATE
-    TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)
+  add_executable(
+    turboscxml_voicexml_install_consumer_cpp voicexml_main.cpp)
+  target_compile_features(
+    turboscxml_voicexml_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_voicexml_install_consumer_cpp PRIVATE TurboSCXML::VoiceXML)
+else()
+  add_executable(turboscxml_install_consumer main.c)
+  target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+
+  if(NOT TARGET TurboSCXML::CCXML)
+    message(FATAL_ERROR "Expected installed TurboSCXML::CCXML")
+  endif()
+  add_executable(turboscxml_ccxml_install_consumer ccxml_main.c)
+  target_compile_features(
+    turboscxml_ccxml_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_ccxml_install_consumer PRIVATE TurboSCXML::CCXML)
+
+  add_executable(turboscxml_ccxml_install_consumer_cpp ccxml_main.cpp)
+  target_compile_features(
+    turboscxml_ccxml_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_ccxml_install_consumer_cpp PRIVATE TurboSCXML::CCXML)
+  if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
+    target_compile_definitions(
+      turboscxml_install_consumer PRIVATE
+      TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)
+  endif()
 endif()
 
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)

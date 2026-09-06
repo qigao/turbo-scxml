@@ -66,6 +66,62 @@ target_link_libraries(app PRIVATE TurboSCXML::SCXML)
 
 `TurboSCXMLConfig.cmake` 会从 `SALTS_ROOT` 精确解析 Salts；缺少变量、目录或 package config 时直接失败，不回退到系统路径。
 
+## VoiceXML 非媒体 Core MVP
+
+安装包导出 `<voicexml/voicexml.h>` 和 `TurboSCXML::VoiceXML`。这是
+VoiceXML 2.0/2.1 的孵化、非媒体 profile，不表示完整 VoiceXML conformance：
+
+```cmake
+find_package(TurboSCXML CONFIG REQUIRED COMPONENTS VoiceXML
+  PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
+target_link_libraries(app PRIVATE TurboSCXML::VoiceXML)
+```
+
+该 target 的唯一公开依赖是 `Salts::XmlParser`；VoiceXML core 不依赖 CFlow、
+CCXML、CMeta、QuickJS、CHTTP 或 XPath。精确接纳的文档语法为：
+
+```text
+document := <vxml xmlns="http://www.w3.org/2001/vxml"
+                  version=("2.0" | "2.1")> form+ </vxml>
+form     := <form [id=XML-NCName]> block+ </form>
+block    := <block/> | <block></block> | <block><exit/></block>
+```
+
+`form@id` 若存在，必须非空且在整个文档中唯一。除 `form@id` 外，`vxml`、
+`form`、`block` 和 `exit` 不接受其他属性；元素之间仅允许空白文本、XML comment
+和 processing instruction，后两者会被忽略。元素按 namespace URI 与 local name
+匹配，namespace prefix 不影响接纳。foreign-namespace 元素、无效 UTF-8、重复 ID、
+非空 `exit` 内容以及任何不在语法中的结构都会在编译期被拒绝，不会被近似执行。
+编译器保存全部 form，但 session 只从第一个 form 开始；当前没有 `goto`。
+
+`vxml_compile` 仅在调用期间读取 source bytes，成功后 program 拥有一份不可变、
+与 source 独立的表示；调用方最终用 `vxml_program_destroy` 释放它。session 拥有
+自己的运行时存储，但只借用 program，因此 program 必须存活到
+`vxml_session_destroy` 之后。session 由调用方串行驱动且不创建线程：成功初始化
+进入 `READY`，唯一合法的 `start` 从 `READY` 经 `RUNNING` 同步到 `EXITED`（显式
+`exit` 或第一个 form 耗尽）或 `FAILED`。重复 start 确定性失败；`close` 可从任意
+非销毁状态调用、可重复调用并进入 `CLOSED`。销毁 session 不会销毁 program。
+
+默认 XML 限制来自 `salts_xml_default_limits()`；此外 `max_forms = 64`、
+`max_blocks = 1024`、`max_actions = 4096`、`max_name_bytes = 256 * 1024`。
+每个限制都必须大于零；编译失败时输出 program 保持为空。
+
+| VoiceXML surface | 当前状态 |
+|---|---|
+| `form` / `block` / `exit` 与同步 `EXITED` 生命周期 | 支持（仅限上述语法） |
+| `prompt`、`audio`、SSML | 延后且不支持 |
+| recognition、grammar、collect | 延后且不支持 |
+| `record`、`transfer` | 延后且不支持 |
+| 所有 media API/function、callback、ticket、token、wait state | 不存在；延后且不支持 |
+
+不支持的元素或属性返回明确的编译错误。core 没有隐藏的媒体对象、媒体函数、
+callback、effect ticket、completion token 或等待状态。总体 roadmap 见
+[#41](https://github.com/qigao/turbo-scxml/issues/41)，本非媒体 core 范围见
+[#42](https://github.com/qigao/turbo-scxml/issues/42)，prompt/audio/SSML 与媒体
+provider 工作见 [#47](https://github.com/qigao/turbo-scxml/issues/47)。架构、
+所有权与未来 adapter 隔离详见
+[`docs/specs/voicexml-architecture-design.md`](docs/specs/voicexml-architecture-design.md)。
+
 ## 可选 CHTTP 资源适配器
 
 启用 `TURBOSCXML_ENABLE_CHTTP_RESOURCE` 后会额外安装

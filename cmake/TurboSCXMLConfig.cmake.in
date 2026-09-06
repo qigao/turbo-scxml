@@ -27,6 +27,7 @@ endif()
 
 set(TurboSCXML_SCXML_FOUND TRUE)
 set(TurboSCXML_CCXML_FOUND TRUE)
+set(TurboSCXML_VoiceXML_FOUND TRUE)
 set(TurboSCXML_QuickJS_FOUND @TURBOSCXML_PACKAGE_HAS_QUICKJS@)
 set(TurboSCXML_CHttpResource_FOUND
   @TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@)
@@ -38,6 +39,13 @@ if((TurboSCXML_CHttpResource_FOUND OR TurboSCXML_CHttpEventIO_FOUND) AND
   set(TurboSCXML_NOT_FOUND_MESSAGE
     "This TurboSCXML package includes a CHTTP component, but the selected "
     "Salts SDK does not provide Salts::CHTTP")
+  return()
+endif()
+if(TurboSCXML_VoiceXML_FOUND AND NOT TARGET Salts::XmlParser)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "The VoiceXML component requires Salts::XmlParser, but the selected "
+    "Salts SDK does not provide it")
   return()
 endif()
 
