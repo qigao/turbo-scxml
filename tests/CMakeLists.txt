@@ -41,6 +41,19 @@ target_link_libraries(voicexml_cmeta_api_test PRIVATE
   TurboSCXML::VoiceXMLCMeta Salts::TinyTest)
 add_test(NAME voicexml_cmeta_api_test COMMAND voicexml_cmeta_api_test)
 
+add_executable(
+  voicexml_cmeta_scope_test voicexml/test_voicexml_cmeta_scope.c)
+target_compile_features(voicexml_cmeta_scope_test PRIVATE c_std_11)
+set_target_properties(voicexml_cmeta_scope_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_include_directories(voicexml_cmeta_scope_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(voicexml_cmeta_scope_test PRIVATE
+  TurboSCXML::_CMetaRuntime Salts::TinyTest)
+add_test(NAME voicexml_cmeta_scope_test COMMAND voicexml_cmeta_scope_test)
+
 add_executable(voicexml_program_test voicexml/test_voicexml_program.c)
 target_compile_features(voicexml_program_test PRIVATE c_std_11)
 set_target_properties(voicexml_program_test PROPERTIES

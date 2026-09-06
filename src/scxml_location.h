@@ -1,21 +1,13 @@
 #ifndef SCXML_LOCATION_H
 #define SCXML_LOCATION_H
 
+#include "cmeta_location.h"
 #include "scxml_expr.h"
 
-typedef enum scxml_location_kind {
-    SCXML_LOCATION_CMETA = 0,
-    SCXML_LOCATION_SUPPLEMENTAL
-} scxml_location_kind;
-
-typedef struct scxml_location {
-    const cmeta_data_desc *root;
-    const cmeta_data_desc *value;
-    size_t offset;
-    size_t storage_size;
-    size_t slot;
-    scxml_location_kind kind;
-} scxml_location;
+typedef cmeta_location_kind scxml_location_kind;
+#define SCXML_LOCATION_CMETA CMETA_LOCATION_ROOT
+#define SCXML_LOCATION_SUPPLEMENTAL CMETA_LOCATION_SCOPE
+typedef cmeta_location scxml_location;
 
 bool scxml_location_is_read_only_system(
     const char *path, size_t path_size, size_t max_depth);

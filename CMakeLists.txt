@@ -59,6 +59,22 @@ foreach(required_target IN ITEMS
   endif()
 endforeach()
 
+add_library(turbo_scxml_cmeta_runtime STATIC
+  src/cmeta_scope.c
+  src/cmeta_location.c)
+add_library(TurboSCXML::_CMetaRuntime ALIAS turbo_scxml_cmeta_runtime)
+set_target_properties(turbo_scxml_cmeta_runtime PROPERTIES
+  EXPORT_NAME _CMetaRuntime
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_scxml_cmeta_runtime PRIVATE c_std_11)
+target_compile_options(turbo_scxml_cmeta_runtime
+  PRIVATE
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_scxml_cmeta_runtime
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_scxml_cmeta_runtime PRIVATE Salts::CMeta)
+
 add_library(turbo_scxml STATIC
   src/scxml_ast.c
   src/scxml_analyze.c
@@ -97,7 +113,8 @@ target_link_libraries(turbo_scxml
   PRIVATE
     Salts::Core
     Salts::CBind
-    Salts::QueryVM)
+    Salts::QueryVM
+    TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
   PUBLIC TURBOSCXML_HAS_QUICKJS=$<BOOL:${TURBOSCXML_ENABLE_QUICKJS}>)
 if(TURBOSCXML_ENABLE_QUICKJS)
@@ -169,7 +186,7 @@ target_include_directories(turbo_voicexml_cmeta
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_voicexml_cmeta
   PUBLIC TurboSCXML::VoiceXML Salts::CMeta
-  PRIVATE Salts::QueryVM)
+  PRIVATE Salts::QueryVM TurboSCXML::_CMetaRuntime)
 
 if(BUILD_TESTING)
   include(CheckCXXSourceCompiles)
@@ -255,7 +272,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::CBind>;$<LINK_ONLY:Salts::QueryVM>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::CBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
@@ -284,9 +301,18 @@ if(BUILD_TESTING)
     TURBOVOICEXML_CMETA_PUBLIC_LINKS
     turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>")
+     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
     message(FATAL_ERROR
       "TurboSCXML::VoiceXMLCMeta dependency contract changed")
+  endif()
+
+  get_target_property(
+    TURBOSCXML_CMETA_RUNTIME_PUBLIC_LINKS
+    turbo_scxml_cmeta_runtime INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_CMETA_RUNTIME_PUBLIC_LINKS STREQUAL
+     "$<LINK_ONLY:Salts::CMeta>")
+    message(FATAL_ERROR
+      "TurboSCXML::_CMetaRuntime dependency contract changed")
   endif()
 
   if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
@@ -322,6 +348,11 @@ if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 
+install(TARGETS turbo_scxml_cmeta_runtime
+  EXPORT TurboSCXMLTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS turbo_scxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

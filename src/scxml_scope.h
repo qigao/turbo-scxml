@@ -1,32 +1,11 @@
 #ifndef TURBO_SCXML_SCOPE_H
 #define TURBO_SCXML_SCOPE_H
 
-#include <cmeta/data.h>
+#include "cmeta_scope.h"
 
-#include <stdbool.h>
-#include <stddef.h>
-
-typedef struct scxml_scope_slot {
-    char *name;
-    size_t name_size;
-    const cmeta_data_desc *value;
-    size_t offset;
-    bool managed;
-} scxml_scope_slot;
-
-typedef struct scxml_scope_schema {
-    scxml_scope_slot *slots;
-    size_t slot_count;
-    size_t slot_capacity;
-    size_t storage_size;
-    size_t storage_align;
-} scxml_scope_schema;
-
-typedef struct scxml_scope_view {
-    const scxml_scope_schema *schema;
-    unsigned char *storage;
-    unsigned char *bound;
-} scxml_scope_view;
+typedef cmeta_scope_slot scxml_scope_slot;
+typedef cmeta_scope_schema scxml_scope_schema;
+typedef cmeta_scope_view scxml_scope_view;
 
 bool scxml_scope_schema_init(
     scxml_scope_schema *schema, size_t slot_capacity);
