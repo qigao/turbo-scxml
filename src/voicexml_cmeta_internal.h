@@ -1,6 +1,7 @@
 #ifndef TURBO_VOICEXML_CMETA_INTERNAL_H
 #define TURBO_VOICEXML_CMETA_INTERNAL_H
 
+#include "voicexml_cmeta_expr.h"
 #include "voicexml_internal.h"
 
 typedef struct vxml_cmeta_program_data {
