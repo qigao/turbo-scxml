@@ -30,6 +30,15 @@ typedef struct vxml_cmeta_expr_program {
     void *impl;
 } vxml_cmeta_expr_program;
 
+/* Caller-owned bounded storage used by one evaluation. The evaluator resets
+ * used to zero and never allocates from the heap. bytes may be NULL only when
+ * capacity is zero. */
+typedef struct vxml_cmeta_expr_scratch {
+    unsigned char *bytes;
+    size_t capacity;
+    size_t used;
+} vxml_cmeta_expr_scratch;
+
 /* Entries are ordered from the innermost lexical scope to the outermost.
  * Each schema, its slots, and every reachable descriptor remain borrowed,
  * immutable, and alive until the compiled expression is destroyed. SIZE_MAX
@@ -86,9 +95,21 @@ vxml_status vxml_cmeta_expr_compile_value(
 vxml_cmeta_value_kind vxml_cmeta_expr_program_value_kind(
     const vxml_cmeta_expr_program *program);
 
+/* Returns the capacity required to evaluate every runtime path of program,
+ * or zero for an empty program. */
+size_t vxml_cmeta_expr_program_scratch_bytes(
+    const vxml_cmeta_expr_program *program);
+
+/* scratch must have at least vxml_cmeta_expr_program_scratch_bytes(program)
+ * bytes of capacity. Runtime CMeta strings are copied into scratch before
+ * entering QueryVM registers, so concurrently live values never retain a
+ * provider-owned read span. A returned string view remains valid until the
+ * earlier of program destruction, scratch byte mutation, or another
+ * evaluation using the same scratch. All other result kinds are by value. */
 vxml_status vxml_cmeta_expr_evaluate(
     const vxml_cmeta_expr_program *program,
     const vxml_cmeta_expr_runtime *runtime,
+    vxml_cmeta_expr_scratch *scratch,
     vxml_cmeta_value_view *out_value,
     vxml_cmeta_expr_diagnostic *diagnostic);
 

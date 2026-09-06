@@ -36,6 +36,11 @@ typedef struct expression_root {
     bool _ioprocessors;
 } expression_root;
 
+typedef struct scratch_string_root {
+    expression_text left;
+    expression_text right;
+} scratch_string_root;
+
 enum expression_root_field {
     ROOT_ENABLED = 0,
     ROOT_NUMBER,
@@ -51,6 +56,8 @@ enum expression_root_field {
 };
 
 static size_t text_read_calls;
+static unsigned char provider_read_scratch[32];
+static size_t provider_read_calls;
 
 static bool text_is_zero(const void *object) {
     const expression_text *text = (const expression_text *)object;
@@ -88,6 +95,21 @@ static cmeta_status text_read(
     return CMETA_OK;
 }
 
+static cmeta_status scratch_reusing_text_read(
+    const void *object, const unsigned char **out_data, size_t *out_size) {
+    const expression_text *text = (const expression_text *)object;
+    ++provider_read_calls;
+    if (text == NULL || out_data == NULL || out_size == NULL ||
+        text->size > sizeof(provider_read_scratch) ||
+        (text->size != 0u && text->data == NULL))
+        return CMETA_CALLBACK_ERROR;
+    if (text->size != 0u)
+        memcpy(provider_read_scratch, text->data, text->size);
+    *out_data = provider_read_scratch;
+    *out_size = text->size;
+    return CMETA_OK;
+}
+
 static const cmeta_type_traits trivial_traits = {
     .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY};
 static const cmeta_type_identity text_identity =
@@ -96,6 +118,8 @@ static const cmeta_type_identity nested_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.expression.nested");
 static const cmeta_type_identity root_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.expression.root");
+static const cmeta_type_identity scratch_string_root_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.expression.scratch-root");
 static const cmeta_type_desc text_type = {
     .name = "expression_text",
     .size = sizeof(expression_text),
@@ -117,6 +141,13 @@ static const cmeta_type_desc root_type = {
     .kind = CMETA_T_OBJECT,
     .traits = &trivial_traits,
     .identity = &root_identity};
+static const cmeta_type_desc scratch_string_root_type = {
+    .name = "scratch_string_root",
+    .size = sizeof(scratch_string_root),
+    .align = _Alignof(scratch_string_root),
+    .kind = CMETA_T_OBJECT,
+    .traits = &trivial_traits,
+    .identity = &scratch_string_root_identity};
 
 static const cmeta_data_buffer_shape text_shape = {
     .ownership = CMETA_DATA_BUFFER_BORROWED};
@@ -138,6 +169,75 @@ static const cmeta_data_desc text_data = {
     .storage_type = &text_type,
     .shape = &text_shape,
     .buffer_ops = &text_ops};
+
+static const cmeta_data_buffer_shape owned_text_shape = {
+    .ownership = CMETA_DATA_BUFFER_OWNED};
+static const cmeta_data_buffer_ops owned_text_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &text_type,
+    .ownership = CMETA_DATA_BUFFER_OWNED,
+    .is_zero = text_is_zero,
+    .assign = text_assign,
+    .restore_zero = text_restore_zero,
+    .read = text_read};
+static const cmeta_data_desc owned_text_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.expression.owned-text.data",
+    .display_name = "owned expression text",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &text_type,
+    .shape = &owned_text_shape,
+    .buffer_ops = &owned_text_ops};
+
+static const cmeta_data_buffer_ops scratch_reusing_text_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &text_type,
+    .ownership = CMETA_DATA_BUFFER_BORROWED,
+    .is_zero = text_is_zero,
+    .assign = text_assign,
+    .restore_zero = text_restore_zero,
+    .read = scratch_reusing_text_read};
+static const cmeta_data_desc scratch_reusing_text_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.expression.scratch-text.data",
+    .display_name = "scratch-reusing expression text",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &text_type,
+    .shape = &text_shape,
+    .buffer_ops = &scratch_reusing_text_ops};
+
+static const cmeta_field_desc scratch_root_layout_fields[] = {
+    {"left", "expression_text", offsetof(scratch_string_root, left),
+     sizeof(expression_text), _Alignof(expression_text), &text_type, NULL},
+    {"right", "expression_text", offsetof(scratch_string_root, right),
+     sizeof(expression_text), _Alignof(expression_text), &text_type, NULL}};
+static const cmeta_struct_desc scratch_root_layout = {
+    .name = "scratch_string_root",
+    .size = sizeof(scratch_string_root),
+    .align = _Alignof(scratch_string_root),
+    .fields = scratch_root_layout_fields,
+    .field_count = 2u};
+static const cmeta_data_field_desc scratch_root_fields[] = {
+    {"test.voicexml.cmeta.expression.scratch-root.left", "left",
+     offsetof(scratch_string_root, left), &scratch_reusing_text_data},
+    {"test.voicexml.cmeta.expression.scratch-root.right", "right",
+     offsetof(scratch_string_root, right), &scratch_reusing_text_data}};
+static const cmeta_data_struct_shape scratch_root_shape = {
+    .layout = &scratch_root_layout,
+    .fields = scratch_root_fields,
+    .field_count = 2u};
+static const cmeta_data_desc scratch_root_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.expression.scratch-root.data",
+    .display_name = "scratch string root",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &scratch_string_root_type,
+    .shape = &scratch_root_shape};
 
 static const cmeta_field_desc nested_layout_fields[] = {
     {"number", "int", offsetof(expression_nested, number), sizeof(int),
@@ -272,6 +372,8 @@ typedef struct expression_fixture {
     expression_root root;
     unsigned char root_bound[ROOT_FIELD_COUNT];
     vxml_cmeta_expr_runtime runtime;
+    unsigned char scratch_bytes[4096];
+    vxml_cmeta_expr_scratch scratch;
 } expression_fixture;
 
 static bool register_fixture_slots(
@@ -358,6 +460,8 @@ static bool expression_fixture_init(expression_fixture *fixture) {
         .root_bound_count = ROOT_FIELD_COUNT,
         .scopes = fixture->runtime_scopes,
         .scope_count = 2u};
+    fixture->scratch = (vxml_cmeta_expr_scratch){
+        fixture->scratch_bytes, sizeof(fixture->scratch_bytes), 0u};
     return true;
 }
 
@@ -400,6 +504,7 @@ spec("restricted VoiceXML CMeta scalar expressions") {
             .root = &root,
             .root_bound = root_bound,
             .root_bound_count = ROOT_FIELD_COUNT};
+        vxml_cmeta_expr_scratch scratch = {0};
         vxml_cmeta_expr_program program = {0};
         vxml_cmeta_value_view value = {0};
         vxml_cmeta_expr_diagnostic diagnostic;
@@ -409,7 +514,7 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         NULL, 0u, &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &runtime, &value, &diagnostic),
+                        &program, &runtime, &scratch, &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_BOOL);
         check_true(value.data.boolean);
@@ -432,7 +537,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, source, &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_BOOL);
         check_true(value.data.boolean);
@@ -454,7 +560,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
         check_equal(vxml_cmeta_expr_program_value_kind(&program),
                     VXML_CMETA_VALUE_UINT);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_UINT);
         check_equal(value.data.uint_value, UINT64_C(5));
@@ -474,7 +581,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "1.5 + 2", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_FLOAT);
         check_equal(value.data.number, 3.5);
@@ -494,7 +602,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "-5 + +2", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_SINT);
         check_equal(value.data.sint, INT64_C(-3));
@@ -503,7 +612,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "-1.5", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_FLOAT);
         check_equal(value.data.number, -1.5);
@@ -540,7 +650,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_SINT);
         check_equal(value.data.sint, INT64_C(6));
@@ -562,7 +673,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.data.sint, INT64_C(42));
         vxml_cmeta_expr_program_destroy(&program);
@@ -581,18 +693,21 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "number", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.data.sint, INT64_C(11));
         fixture.inner_declared[SLOT_NUMBER] = 1u;
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.data.sint, INT64_C(22));
         fixture.inner_declared[SLOT_NUMBER] = 0u;
         fixture.outer_declared[SLOT_NUMBER] = 0u;
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.data.sint, INT64_C(7));
         vxml_cmeta_expr_program_destroy(&program);
@@ -615,7 +730,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
         check_equal(vxml_cmeta_expr_program_value_kind(&program),
                     VXML_CMETA_VALUE_SINT);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_UNDEFINED);
         vxml_cmeta_expr_program_destroy(&program);
@@ -637,7 +753,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "number", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_UNDEFINED);
         vxml_cmeta_expr_program_destroy(&program);
@@ -659,7 +776,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
         vxml_cmeta_expr_program_destroy(&program);
         expression_fixture_destroy(&fixture);
@@ -679,8 +797,77 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "enabled", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
+        vxml_cmeta_expr_program_destroy(&program);
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("short-circuits an undefined Boolean right operand") {
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        check_true(expression_fixture_init(&fixture));
+        fixture.inner_declared[SLOT_ENABLED] = 1u;
+        cmeta_scope_view_clear_slot(&fixture.inner_storage.view, SLOT_ENABLED);
+        check_equal(compile_fixture_condition(
+                        &fixture, &program, "false && enabled",
+                        &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_BOOL);
+        check_false(value.data.boolean);
+        vxml_cmeta_expr_program_destroy(&program);
+
+        check_equal(compile_fixture_condition(
+                        &fixture, &program, "true || enabled",
+                        &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_BOOL);
+        check_true(value.data.boolean);
+        vxml_cmeta_expr_program_destroy(&program);
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("short-circuits a failing Boolean right operand") {
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        check_true(expression_fixture_init(&fixture));
+        check_equal(compile_fixture_condition(
+                        &fixture, &program, "false && (1 / 0 == 0)",
+                        &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_OK);
+        check_false(value.data.boolean);
+        vxml_cmeta_expr_program_destroy(&program);
+
+        check_equal(compile_fixture_condition(
+                        &fixture, &program, "true || (1 / 0 == 0)",
+                        &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_OK);
+        check_true(value.data.boolean);
         vxml_cmeta_expr_program_destroy(&program);
         expression_fixture_destroy(&fixture);
     }
@@ -699,7 +886,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "late", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
         vxml_cmeta_expr_program_destroy(&program);
         expression_fixture_destroy(&fixture);
@@ -721,6 +909,58 @@ spec("restricted VoiceXML CMeta scalar expressions") {
         expression_fixture_destroy(&fixture);
     }
 
+    it("parses a numeric token at its configured byte boundary") {
+        char source[161];
+        expression_fixture fixture;
+        vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        memset(source, '0', sizeof(source) - 1u);
+        source[sizeof(source) - 2u] = '1';
+        source[sizeof(source) - 1u] = '\0';
+        limits.max_source_bytes = sizeof(source) - 1u;
+        limits.max_literal_bytes = sizeof(source) - 1u;
+        check_true(expression_fixture_init(&fixture));
+        check_equal(compile_fixture_value(
+                        &fixture, &program, source, &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(1));
+        vxml_cmeta_expr_program_destroy(&program);
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("reports long numeric overflow as a semantic error") {
+        static const char overflow_digits[] = "9223372036854775808";
+        char source[161];
+        const size_t prefix_size =
+            sizeof(source) - 1u - (sizeof(overflow_digits) - 1u);
+        expression_fixture fixture;
+        vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        memset(source, '0', prefix_size);
+        memcpy(source + prefix_size, overflow_digits,
+               sizeof(overflow_digits) - 1u);
+        source[sizeof(source) - 1u] = '\0';
+        limits.max_source_bytes = sizeof(source) - 1u;
+        limits.max_literal_bytes = sizeof(source) - 1u;
+        check_true(expression_fixture_init(&fixture));
+        check_equal(compile_fixture_value(
+                        &fixture, &program, source, &limits, &diagnostic),
+                    VXML_SEMANTIC_ERROR);
+        check_equal(diagnostic.byte_offset, (size_t)0u);
+        check_null(program.impl);
+        expression_fixture_destroy(&fixture);
+    }
+
     it("reports a semantic error on checked arithmetic overflow") {
         expression_fixture fixture;
         const vxml_cmeta_expr_limits limits = test_limits();
@@ -734,7 +974,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         "9223372036854775807 + 1", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
         vxml_cmeta_expr_program_destroy(&program);
         check_equal(compile_fixture_value(
@@ -742,7 +983,98 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         "18446744073709551615u + 1u", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_SEMANTIC_ERROR);
+        vxml_cmeta_expr_program_destroy(&program);
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("reports division and modulo by zero") {
+        static const char *const sources[] = {"9 / 0", "9 % 0"};
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        size_t index;
+
+        check_true(expression_fixture_init(&fixture));
+        for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+            vxml_cmeta_expr_program program = {0};
+            vxml_cmeta_value_view value = {0};
+            vxml_cmeta_expr_diagnostic diagnostic;
+            check_equal(compile_fixture_value(
+                            &fixture, &program, sources[index],
+                            &limits, &diagnostic),
+                        VXML_OK);
+            check_equal(vxml_cmeta_expr_evaluate(
+                            &program, &fixture.runtime, &fixture.scratch,
+                            &value, &diagnostic),
+                        VXML_SEMANTIC_ERROR);
+            vxml_cmeta_expr_program_destroy(&program);
+        }
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("reports signed multiplication and subtraction overflow") {
+        static const char *const sources[] = {
+            "3037000500 * 3037000500",
+            "-9223372036854775807 - 2"};
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        size_t index;
+
+        check_true(expression_fixture_init(&fixture));
+        for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+            vxml_cmeta_expr_program program = {0};
+            vxml_cmeta_value_view value = {0};
+            vxml_cmeta_expr_diagnostic diagnostic;
+            check_equal(compile_fixture_value(
+                            &fixture, &program, sources[index],
+                            &limits, &diagnostic),
+                        VXML_OK);
+            check_equal(vxml_cmeta_expr_evaluate(
+                            &program, &fixture.runtime, &fixture.scratch,
+                            &value, &diagnostic),
+                        VXML_SEMANTIC_ERROR);
+            vxml_cmeta_expr_program_destroy(&program);
+        }
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("reports signed minimum divided by negative one") {
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        check_true(expression_fixture_init(&fixture));
+        check_equal(compile_fixture_value(
+                        &fixture, &program,
+                        "-9223372036854775808 / -1", &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
+                    VXML_SEMANTIC_ERROR);
+        vxml_cmeta_expr_program_destroy(&program);
+        expression_fixture_destroy(&fixture);
+    }
+
+    it("reports a non-finite floating-point result") {
+        expression_fixture fixture;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        check_true(expression_fixture_init(&fixture));
+        check_equal(compile_fixture_value(
+                        &fixture, &program, "1e308 * 1e308",
+                        &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
         vxml_cmeta_expr_program_destroy(&program);
         expression_fixture_destroy(&fixture);
@@ -763,13 +1095,117 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                     VXML_OK);
         memset(source, 'x', sizeof(source) - 1u);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.kind, VXML_CMETA_VALUE_STRING);
         check_equal(value.data.string.size, (size_t)5u);
         check_equal(memcmp(value.data.string.data, "hello", 5u), 0);
         vxml_cmeta_expr_program_destroy(&program);
         expression_fixture_destroy(&fixture);
+    }
+
+    it("keeps simultaneously live runtime string operands stable") {
+        const vxml_cmeta_expr_limits limits = test_limits();
+        const scratch_string_root root = {
+            {(const unsigned char *)"alpha", 5u},
+            {(const unsigned char *)"bravo", 5u}};
+        const unsigned char root_bound[] = {1u, 1u};
+        const vxml_cmeta_expr_runtime runtime = {
+            .root = &root,
+            .root_bound = root_bound,
+            .root_bound_count = 2u};
+        unsigned char scratch_bytes[2048];
+        vxml_cmeta_expr_scratch scratch = {
+            scratch_bytes, sizeof(scratch_bytes), 0u};
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        provider_read_calls = 0u;
+        check_equal(vxml_cmeta_expr_compile_condition(
+                        &program, "left != right", 13u, &scratch_root_data,
+                        NULL, 0u, &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_program_scratch_bytes(&program),
+                    sizeof(scratch_bytes));
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &runtime, &scratch, &value, &diagnostic),
+                    VXML_OK);
+        check_equal(provider_read_calls, (size_t)2u);
+        check_equal(scratch.used, root.left.size + root.right.size);
+        check_true(value.data.boolean);
+        vxml_cmeta_expr_program_destroy(&program);
+    }
+
+    it("returns a runtime string independently of provider scratch reuse") {
+        const vxml_cmeta_expr_limits limits = test_limits();
+        const scratch_string_root root = {
+            {(const unsigned char *)"alpha", 5u},
+            {(const unsigned char *)"bravo", 5u}};
+        const unsigned char root_bound[] = {1u, 1u};
+        const vxml_cmeta_expr_runtime runtime = {
+            .root = &root,
+            .root_bound = root_bound,
+            .root_bound_count = 2u};
+        unsigned char scratch_bytes[1024];
+        vxml_cmeta_expr_scratch scratch = {
+            scratch_bytes, sizeof(scratch_bytes) - 1u, 99u};
+        const unsigned char *ignored_data = NULL;
+        size_t ignored_size = 0u;
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+
+        provider_read_calls = 0u;
+        check_equal(vxml_cmeta_expr_compile_value(
+                        &program, "left", 4u, &scratch_root_data,
+                        NULL, 0u, &limits, &diagnostic),
+                    VXML_OK);
+        check_equal(vxml_cmeta_expr_program_scratch_bytes(&program),
+                    sizeof(scratch_bytes));
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &runtime, &scratch, &value, &diagnostic),
+                    VXML_LIMIT_EXCEEDED);
+        check_equal(scratch.used, (size_t)0u);
+        scratch.capacity = sizeof(scratch_bytes);
+        check_equal(vxml_cmeta_expr_evaluate(
+                        &program, &runtime, &scratch, &value, &diagnostic),
+                    VXML_OK);
+        check_equal(scratch.used, root.left.size);
+        check_equal(value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value.data.string.size, (size_t)5u);
+        check_true((const void *)value.data.string.data ==
+                   (const void *)scratch_bytes);
+        check_equal(scratch_reusing_text_read(
+                        &root.right, &ignored_data, &ignored_size),
+                    CMETA_OK);
+        check_equal(memcmp(value.data.string.data, "alpha", 5u), 0);
+        vxml_cmeta_expr_program_destroy(&program);
+    }
+
+    it("rejects same-name string candidates with different ownership") {
+        cmeta_scope_schema schema = {0};
+        vxml_cmeta_expr_compile_scope compile_scope;
+        const vxml_cmeta_expr_limits limits = test_limits();
+        vxml_cmeta_expr_program program = {0};
+        vxml_cmeta_expr_diagnostic diagnostic;
+        size_t slot = SIZE_MAX;
+        bool conflict = false;
+        vxml_status status;
+
+        check_true(cmeta_scope_schema_init(&schema, 1u, 64u, NULL));
+        check_true(cmeta_scope_register(
+            &schema, "label", 5u, &owned_text_data, &slot, &conflict));
+        check_false(conflict);
+        compile_scope = (vxml_cmeta_expr_compile_scope){33u, &schema};
+        status = vxml_cmeta_expr_compile_value(
+            &program, "label", 5u, &root_data,
+            &compile_scope, 1u, &limits, &diagnostic);
+        check_equal(status, VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
+        vxml_cmeta_expr_program_destroy(&program);
+        cmeta_scope_schema_destroy(&schema);
     }
 
     it("uses bounded CMeta buffer reads for typed strings") {
@@ -786,7 +1222,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "label", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_SEMANTIC_ERROR);
         check_equal(text_read_calls, (size_t)1u);
         vxml_cmeta_expr_program_destroy(&program);
@@ -811,7 +1248,8 @@ spec("restricted VoiceXML CMeta scalar expressions") {
                         &fixture, &program, "number", &limits, &diagnostic),
                     VXML_OK);
         check_equal(vxml_cmeta_expr_evaluate(
-                        &program, &fixture.runtime, &value, &diagnostic),
+                        &program, &fixture.runtime, &fixture.scratch,
+                        &value, &diagnostic),
                     VXML_OK);
         check_equal(value.data.sint, INT64_C(22));
         vxml_cmeta_expr_program_destroy(&program);

@@ -91,6 +91,7 @@ typedef struct vxml_cmeta_expr_program_impl {
     size_t candidate_count;
     size_t root_field_count;
     size_t max_string_bytes;
+    size_t scratch_bytes;
     vxml_cmeta_value_kind result_kind;
     qvm_limits_t qvm_limits;
     bool condition;
@@ -132,6 +133,8 @@ typedef struct expr_parser {
 typedef struct expr_eval_context {
     const vxml_cmeta_expr_program_impl *program;
     const vxml_cmeta_expr_runtime *runtime;
+    vxml_cmeta_expr_scratch *scratch;
+    vxml_status failure_status;
     bool failed;
 } expr_eval_context;
 
@@ -422,6 +425,26 @@ static bool scalar_descriptors_compatible(const cmeta_data_desc *left,
     if (left->kind == CMETA_DATA_FLOAT)
         return ((const cmeta_data_float_shape *)left->shape)->bits ==
                ((const cmeta_data_float_shape *)right->shape)->bits;
+    if (left->kind == CMETA_DATA_STRING) {
+        const cmeta_data_buffer_shape *left_shape =
+            (const cmeta_data_buffer_shape *)left->shape;
+        const cmeta_data_buffer_shape *right_shape =
+            (const cmeta_data_buffer_shape *)right->shape;
+        const cmeta_data_buffer_ops *left_ops =
+            cmeta_data_buffer_ops_of(left);
+        const cmeta_data_buffer_ops *right_ops =
+            cmeta_data_buffer_ops_of(right);
+        return left_shape != NULL && right_shape != NULL &&
+            left_ops != NULL && right_ops != NULL &&
+            left_shape->ownership == right_shape->ownership &&
+            left_ops->ownership == right_ops->ownership &&
+            left_ops->abi_version == right_ops->abi_version &&
+            cmeta_type_equal(left_ops->storage_type,
+                             right_ops->storage_type) &&
+            left_ops->storage_type->kind == right_ops->storage_type->kind &&
+            left_ops->storage_type->size == right_ops->storage_type->size &&
+            left_ops->storage_type->align == right_ops->storage_type->align;
+    }
     return true;
 }
 
@@ -635,18 +658,24 @@ static bool value_is_numeric(vxml_cmeta_value_kind kind) {
 }
 
 static bool parse_number_operand(expr_parser *parser, expr_operand *operand) {
-    char text[128];
+    char *text;
     const char *begin = parser->source + parser->token.offset;
     size_t size = parser->token.size;
     bool unsigned_suffix = false;
     bool floating = false;
+    bool invalid;
     char *end = NULL;
     size_t index;
     if (!parser_add_literal_bytes(parser, size)) return false;
-    if (size == 0u || size >= sizeof(text))
+    if (size == 0u || size == SIZE_MAX)
         return parser_fail(parser, VXML_LIMIT_EXCEEDED,
                            parser->token.offset,
                            "CMeta numeric literal is too long");
+    text = (char *)vxml_malloc(size + 1u);
+    if (text == NULL)
+        return parser_fail(parser, VXML_ALLOCATION_FAILED,
+                           parser->token.offset,
+                           "CMeta numeric literal allocation failed");
     memcpy(text, begin, size);
     text[size] = '\0';
     if (text[size - 1u] == 'u' || text[size - 1u] == 'U') {
@@ -658,10 +687,12 @@ static bool parse_number_operand(expr_parser *parser, expr_operand *operand) {
             floating = true;
     errno = 0;
     if (floating) {
-        if (unsigned_suffix)
+        if (unsigned_suffix) {
+            vxml_free(text);
             return parser_fail(parser, VXML_SEMANTIC_ERROR,
                                parser->token.offset,
                                "floating literal cannot be unsigned");
+        }
         operand->kind = EXPR_OPERAND_FLOAT;
         operand->value_kind = VXML_CMETA_VALUE_FLOAT;
         operand->value.number = strtod(text, &end);
@@ -675,7 +706,9 @@ static bool parse_number_operand(expr_parser *parser, expr_operand *operand) {
         operand->value_kind = VXML_CMETA_VALUE_SINT;
         operand->value.sint = strtoll(text, &end, 10);
     }
-    if (errno == ERANGE || end == text || *end != '\0')
+    invalid = errno == ERANGE || end == text || *end != '\0';
+    vxml_free(text);
+    if (invalid)
         return parser_fail(parser, VXML_SEMANTIC_ERROR,
                            parser->token.offset,
                            "numeric literal is invalid or out of range");
@@ -1095,6 +1128,22 @@ static bool compile_inputs_valid(
     return true;
 }
 
+static bool expr_program_measure_scratch(
+    const vxml_cmeta_expr_program_impl *impl, size_t *out_bytes) {
+    size_t bytes = 0u;
+    size_t index;
+    for (index = 0u; index < impl->operand_count; ++index) {
+        const expr_operand *operand = &impl->operands[index];
+        if (operand->kind != EXPR_OPERAND_LOCATION ||
+            operand->value_kind != VXML_CMETA_VALUE_STRING)
+            continue;
+        if (bytes > SIZE_MAX - impl->max_string_bytes) return false;
+        bytes += impl->max_string_bytes;
+    }
+    *out_bytes = bytes;
+    return true;
+}
+
 static vxml_status expr_compile(
     vxml_cmeta_expr_program *out,
     const char *source, size_t source_size,
@@ -1200,6 +1249,11 @@ static vxml_status expr_compile(
     impl->candidate_count = parser.candidate_count;
     impl->root_field_count = root_shape->field_count;
     impl->max_string_bytes = limits->max_string_bytes;
+    if (!expr_program_measure_scratch(impl, &impl->scratch_bytes)) {
+        expr_program_impl_destroy(impl);
+        return expr_report(diagnostic, VXML_LIMIT_EXCEEDED, 0u,
+                           "CMeta expression scratch size overflow");
+    }
     impl->result_kind = emitted.kind;
     impl->condition = require_boolean;
     impl->direct_location = emitted.direct_location;
@@ -1249,6 +1303,13 @@ vxml_cmeta_value_kind vxml_cmeta_expr_program_value_kind(
     const vxml_cmeta_expr_program_impl *impl = program != NULL
         ? (const vxml_cmeta_expr_program_impl *)program->impl : NULL;
     return impl != NULL ? impl->result_kind : VXML_CMETA_VALUE_UNDEFINED;
+}
+
+size_t vxml_cmeta_expr_program_scratch_bytes(
+    const vxml_cmeta_expr_program *program) {
+    const vxml_cmeta_expr_program_impl *impl = program != NULL
+        ? (const vxml_cmeta_expr_program_impl *)program->impl : NULL;
+    return impl != NULL ? impl->scratch_bytes : 0u;
 }
 
 static void make_qvm_value(qvm_value_t *out,
@@ -1315,7 +1376,29 @@ static bool read_integer(const cmeta_data_desc *data, const void *object,
     return false;
 }
 
-static bool read_scalar(const expr_eval_context *context,
+static bool copy_runtime_string(expr_eval_context *context,
+                                const unsigned char *bytes, size_t size,
+                                qvm_value_t *out) {
+    unsigned char *destination = NULL;
+    if (context->scratch->used > context->scratch->capacity ||
+        size > context->scratch->capacity - context->scratch->used) {
+        context->failure_status = VXML_LIMIT_EXCEEDED;
+        return false;
+    }
+    if (size != 0u && (bytes == NULL || context->scratch->bytes == NULL))
+        return false;
+    if (size != 0u) {
+        destination = context->scratch->bytes + context->scratch->used;
+        memmove(destination, bytes, size);
+    }
+    context->scratch->used += size;
+    make_qvm_value(out, VXML_CMETA_VALUE_STRING);
+    out->str = (const char *)destination;
+    out->length = size;
+    return true;
+}
+
+static bool read_scalar(expr_eval_context *context,
                         const cmeta_data_desc *data,
                         const void *object, qvm_value_t *out) {
     vxml_cmeta_value_kind kind;
@@ -1354,10 +1437,7 @@ static bool read_scalar(const expr_eval_context *context,
                     data, object, context->program->max_string_bytes,
                     &bytes, &size) != CMETA_OK)
                 return false;
-            make_qvm_value(out, VXML_CMETA_VALUE_STRING);
-            out->str = (const char *)bytes;
-            out->length = size;
-            return true;
+            return copy_runtime_string(context, bytes, size, out);
         }
         default:
             return false;
@@ -1885,6 +1965,7 @@ static void expr_make_string(void *user, const char *value, size_t size,
 vxml_status vxml_cmeta_expr_evaluate(
     const vxml_cmeta_expr_program *program,
     const vxml_cmeta_expr_runtime *runtime,
+    vxml_cmeta_expr_scratch *scratch,
     vxml_cmeta_value_view *out_value,
     vxml_cmeta_expr_diagnostic *diagnostic) {
     const vxml_cmeta_expr_program_impl *impl = program != NULL
@@ -1895,11 +1976,19 @@ vxml_status vxml_cmeta_expr_evaluate(
     qvm_diagnostic_t qvm_diagnostic = {0};
     int status;
     if (out_value != NULL) memset(out_value, 0, sizeof(*out_value));
-    if (impl == NULL || out_value == NULL || !runtime_valid(impl, runtime))
+    if (scratch != NULL) scratch->used = 0u;
+    if (impl == NULL || out_value == NULL || scratch == NULL ||
+        (scratch->capacity != 0u && scratch->bytes == NULL) ||
+        !runtime_valid(impl, runtime))
         return expr_report(diagnostic, VXML_INVALID_ARGUMENT, 0u,
                            "invalid VoiceXML CMeta evaluation arguments");
+    if (scratch->capacity < impl->scratch_bytes)
+        return expr_report(diagnostic, VXML_LIMIT_EXCEEDED, 0u,
+                           "VoiceXML CMeta evaluation scratch is too small");
     context.program = impl;
     context.runtime = runtime;
+    context.scratch = scratch;
+    context.failure_status = VXML_SEMANTIC_ERROR;
     context.failed = false;
     ops.resolve = expr_resolve;
     ops.truthy = expr_truthy;
@@ -1915,7 +2004,8 @@ vxml_status vxml_cmeta_expr_evaluate(
         &impl->qvm_limits, &qvm_diagnostic);
     if (context.failed || status != QVM_STATUS_OK)
         return expr_report(
-            diagnostic, VXML_SEMANTIC_ERROR,
+            diagnostic, context.failed
+                ? context.failure_status : VXML_SEMANTIC_ERROR,
             qvm_diagnostic.instruction == QVM_NO_INSTRUCTION
                 ? 0u : qvm_diagnostic.instruction,
             context.failed
