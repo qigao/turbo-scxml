@@ -88,6 +88,17 @@ static bool node_is_ignorable(salts_xml_node node) {
             text_is_whitespace(salts_xml_node_value(node)));
 }
 
+static bool node_is_known_profile_element(salts_xml_node node) {
+    const salts_xml_string_view local_name =
+        salts_xml_node_local_name(node);
+    return salts_xml_node_type(node) == SALTS_XML_ELEMENT &&
+           view_equal(salts_xml_node_namespace_uri(node), VXML_NAMESPACE) &&
+           (view_equal(local_name, "vxml") ||
+            view_equal(local_name, "form") ||
+            view_equal(local_name, "block") ||
+            view_equal(local_name, "exit"));
+}
+
 static bool decode_utf8(
     const char *data, size_t size, size_t *cursor, uint32_t *out_codepoint) {
     const size_t start = *cursor;
@@ -425,6 +436,18 @@ static vxml_status reject_non_element(
             : "unsupported VoiceXML content");
 }
 
+static vxml_status reject_unexpected_element(
+    salts_xml_node node, vxml_diagnostic *diagnostic,
+    const char *unsupported_message) {
+    const bool known = node_is_known_profile_element(node);
+    return fail(
+        diagnostic,
+        known ? VXML_INVALID_STRUCTURE : VXML_UNSUPPORTED_FEATURE,
+        salts_xml_node_location(node),
+        known ? "VoiceXML profile element is in an invalid position"
+              : unsupported_message);
+}
+
 static vxml_status measure_exit(
     salts_xml_node node, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
@@ -435,10 +458,8 @@ static vxml_status measure_exit(
         const salts_xml_node child = salts_xml_node_child_at(node, index);
         if (node_is_ignorable(child)) continue;
         if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
-            return fail(
-                diagnostic, VXML_UNSUPPORTED_FEATURE,
-                salts_xml_node_location(child),
-                "VoiceXML exit must be empty");
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML exit child element");
         return reject_non_element(child, diagnostic);
     }
     if (measurement->action_count >= limits->max_actions ||
@@ -474,10 +495,8 @@ static vxml_status measure_block(
             return reject_non_element(child, diagnostic);
         if (!view_equal(salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
             !view_equal(salts_xml_node_local_name(child), "exit")) {
-            return fail(
-                diagnostic, VXML_UNSUPPORTED_FEATURE,
-                salts_xml_node_location(child),
-                "unsupported VoiceXML block child element");
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML block child element");
         }
         if (exits != 0u) {
             return fail(
@@ -518,10 +537,8 @@ static vxml_status measure_form(
             return reject_non_element(child, diagnostic);
         if (!view_equal(salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
             !view_equal(salts_xml_node_local_name(child), "block")) {
-            return fail(
-                diagnostic, VXML_UNSUPPORTED_FEATURE,
-                salts_xml_node_location(child),
-                "unsupported VoiceXML form child element");
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML form child element");
         }
         status = measure_block(child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
@@ -568,10 +585,8 @@ static vxml_status measure_document(
             return reject_non_element(child, diagnostic);
         if (!view_equal(salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
             !view_equal(salts_xml_node_local_name(child), "form")) {
-            return fail(
-                diagnostic, VXML_UNSUPPORTED_FEATURE,
-                salts_xml_node_location(child),
-                "unsupported VoiceXML root child element");
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML root child element");
         }
         status = measure_form(child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;

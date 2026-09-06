@@ -29,6 +29,22 @@ static void check_empty_failure(
         check_equal(diagnostic.location.line, expected_line);
 }
 
+static void check_empty_failure_at(
+    const char *source, vxml_status expected,
+    salts_xml_location expected_location) {
+    vxml_program program = {(void *)(uintptr_t)1u};
+    vxml_diagnostic diagnostic = {0};
+
+    check_equal(
+        compile_text(source, NULL, &program, &diagnostic), expected);
+    check_null(program.impl);
+    check_equal(diagnostic.status, expected);
+    check_equal(
+        diagnostic.location.byte_offset, expected_location.byte_offset);
+    check_equal(diagnostic.location.line, expected_location.line);
+    check_equal(diagnostic.location.column, expected_location.column);
+}
+
 spec("VoiceXML program compiler") {
     group("accepted bounded documents") {
         it("compiles explicit exit and empty blocks into ordered rows") {
@@ -79,39 +95,40 @@ spec("VoiceXML program compiler") {
             check_equal(
                 compile_text(source, NULL, &program, &diagnostic), VXML_OK);
             check_not_null(program.impl);
-            if (program.impl == NULL) return;
-            memset(source, 'x', sizeof(source) - 1u);
-            impl = (vxml_program_impl *)program.impl;
-            check_equal(impl->form_count, (size_t)2u);
-            check_equal(impl->block_count, (size_t)3u);
-            check_equal(impl->action_count, (size_t)1u);
-            check_equal(impl->storage_size, (size_t)17u);
-            check_true((const char *)impl->forms >= (const char *)impl);
-            check_true(
-                (const char *)(impl->forms + impl->form_count) <=
-                (const char *)impl + impl->allocation_size);
-            check_true(
-                (const char *)(impl->blocks + impl->block_count) <=
-                (const char *)impl + impl->allocation_size);
-            check_true(
-                (const char *)(impl->actions + impl->action_count) <=
-                (const char *)impl + impl->allocation_size);
-            check_true(
-                impl->storage + impl->storage_size <=
-                (const char *)impl + impl->allocation_size);
-            check_equal(impl->forms[0].id, "main.one");
-            check_equal(impl->forms[0].id_size, (size_t)8u);
-            check_equal(impl->forms[0].first_block, (size_t)0u);
-            check_equal(impl->forms[0].block_count, (size_t)1u);
-            check_equal(impl->forms[1].id, "_second");
-            check_true(
-                impl->forms[1].id ==
-                impl->forms[0].id + impl->forms[0].id_size + 1u);
-            check_equal(impl->forms[1].first_block, (size_t)1u);
-            check_equal(impl->forms[1].block_count, (size_t)2u);
-            check_equal(impl->blocks[2].first_action, (size_t)0u);
-            check_equal(impl->blocks[2].action_count, (size_t)1u);
-            vxml_program_destroy(&program);
+            if (program.impl != NULL) {
+                memset(source, 'x', sizeof(source) - 1u);
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->form_count, (size_t)2u);
+                check_equal(impl->block_count, (size_t)3u);
+                check_equal(impl->action_count, (size_t)1u);
+                check_equal(impl->storage_size, (size_t)17u);
+                check_true((const char *)impl->forms >= (const char *)impl);
+                check_true(
+                    (const char *)(impl->forms + impl->form_count) <=
+                    (const char *)impl + impl->allocation_size);
+                check_true(
+                    (const char *)(impl->blocks + impl->block_count) <=
+                    (const char *)impl + impl->allocation_size);
+                check_true(
+                    (const char *)(impl->actions + impl->action_count) <=
+                    (const char *)impl + impl->allocation_size);
+                check_true(
+                    impl->storage + impl->storage_size <=
+                    (const char *)impl + impl->allocation_size);
+                check_equal(impl->forms[0].id, "main.one");
+                check_equal(impl->forms[0].id_size, (size_t)8u);
+                check_equal(impl->forms[0].first_block, (size_t)0u);
+                check_equal(impl->forms[0].block_count, (size_t)1u);
+                check_equal(impl->forms[1].id, "_second");
+                check_true(
+                    impl->forms[1].id ==
+                    impl->forms[0].id + impl->forms[0].id_size + 1u);
+                check_equal(impl->forms[1].first_block, (size_t)1u);
+                check_equal(impl->forms[1].block_count, (size_t)2u);
+                check_equal(impl->blocks[2].first_action, (size_t)0u);
+                check_equal(impl->blocks[2].action_count, (size_t)1u);
+                vxml_program_destroy(&program);
+            }
         }
     }
 
@@ -194,6 +211,22 @@ spec("VoiceXML program compiler") {
                     sources[index], VXML_UNSUPPORTED_FEATURE, NULL, 1u);
         }
 
+        it("rejects foreign namespaces at every nested grammar level") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form xmlns='urn:foreign'>"
+                "<block xmlns='http://www.w3.org/2001/vxml'/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block xmlns='urn:foreign'/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><exit xmlns='urn:foreign'/></block></form>"
+                "</vxml>"};
+            size_t index;
+            for (index = 0u; index < 3u; ++index)
+                check_empty_failure(
+                    sources[index], VXML_UNSUPPORTED_FEATURE, NULL, 1u);
+        }
+
         it("rejects unsupported attributes on every admitted element") {
             const char *sources[] = {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' foo='x'>"
@@ -206,6 +239,20 @@ spec("VoiceXML program compiler") {
                 "<form><block><exit expr='x'/></block></form></vxml>"};
             size_t index;
             for (index = 0u; index < 4u; ++index)
+                check_empty_failure(
+                    sources[index], VXML_UNSUPPORTED_FEATURE, NULL, 1u);
+        }
+
+        it("rejects same-local-name attributes in a foreign namespace") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' "
+                "xmlns:x='urn:foreign' x:version='2.1'>"
+                "<form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form xmlns:x='urn:foreign' x:id='other'>"
+                "<block/></form></vxml>"};
+            size_t index;
+            for (index = 0u; index < 2u; ++index)
                 check_empty_failure(
                     sources[index], VXML_UNSUPPORTED_FEATURE, NULL, 1u);
         }
@@ -231,6 +278,43 @@ spec("VoiceXML program compiler") {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form><block><exit/><exit/></block></form></vxml>";
             check_empty_failure(source, VXML_INVALID_STRUCTURE, NULL, 1u);
+        }
+
+        it("rejects known profile elements used in illegal positions") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<block/><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><exit/><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><form><block/></form></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><exit><exit/></exit></block></form></vxml>"};
+            size_t index;
+            for (index = 0u; index < 4u; ++index)
+                check_empty_failure(
+                    sources[index], VXML_INVALID_STRUCTURE, NULL, 1u);
+        }
+
+        it("preserves exact element attribute and text failure locations") {
+            check_empty_failure_at(
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>\n"
+                "  <form xmlns='urn:foreign'><block/></form>\n"
+                "</vxml>",
+                VXML_UNSUPPORTED_FEATURE,
+                (salts_xml_location){59u, 2u, 3u});
+            check_empty_failure_at(
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>\n"
+                "  <form x:id='main' xmlns:x='urn:f'><block/></form>\n"
+                "</vxml>",
+                VXML_UNSUPPORTED_FEATURE,
+                (salts_xml_location){65u, 2u, 9u});
+            check_empty_failure_at(
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>\n"
+                "  <form><block>text</block></form>\n"
+                "</vxml>",
+                VXML_INVALID_STRUCTURE,
+                (salts_xml_location){72u, 2u, 16u});
         }
     }
 
