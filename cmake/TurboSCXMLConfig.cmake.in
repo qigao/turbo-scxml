@@ -111,4 +111,9 @@ if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/TurboSCXMLTargets.cmake")
+if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
+   TurboSCXML_VoiceXMLCMeta_FOUND)
+  include(
+    "${CMAKE_CURRENT_LIST_DIR}/TurboSCXMLVoiceXMLCMetaTargets.cmake")
+endif()
 check_required_components(TurboSCXML)

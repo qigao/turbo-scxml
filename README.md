@@ -122,11 +122,15 @@ find_package(TurboSCXML CONFIG REQUIRED COMPONENTS VoiceXMLCMeta
 target_link_libraries(app PRIVATE TurboSCXML::VoiceXMLCMeta)
 ```
 
-该组件的外部闭包仅增加 `Salts::CMeta` 与 private `Salts::QueryVM`；它仍通过
-`TurboSCXML::VoiceXML` 使用 `Salts::XmlParser`，不发现或链接 SCXML、CFlow、
-CSerde、CBind、QuickJS、网络或媒体 package。关闭该选项的 base-only 安装中，
-required `VoiceXMLCMeta` 请求会明确失败，`OPTIONAL_COMPONENTS VoiceXMLCMeta`
-则令 `TurboSCXML_VoiceXMLCMeta_FOUND` 为 false 且不创建该 target。
+显式 `COMPONENTS VoiceXMLCMeta` 的外部闭包仅增加 `Salts::CMeta` 与 private
+`Salts::QueryVM`；它仍通过 `TurboSCXML::VoiceXML` 使用 `Salts::XmlParser`，不会
+链接 `TurboSCXML::SCXML`，也不要求 Salts CFlow/CSerde/CBind、QuickJS、网络或
+媒体 target/package。无 component 的 `find_package(TurboSCXML)` 则刻意采用
+package-wide 语义，会解析该
+安装中全部基础与 enabled optional product 的 SCXML/CHTTP/QuickJS 依赖，不能用作
+CMeta isolation 请求。关闭该选项的 base-only 安装中，required `VoiceXMLCMeta`
+请求会明确失败，`OPTIONAL_COMPONENTS VoiceXMLCMeta` 则令
+`TurboSCXML_VoiceXMLCMeta_FOUND` 为 false 且不创建该 target。
 
 只有 `vxml_compile_cmeta` 接纳显式 `datamodel="cmeta"`；普通
 `vxml_compile` 会拒绝它。接纳的 data/executable 语法为：

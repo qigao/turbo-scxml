@@ -117,6 +117,16 @@ function Test-CMetaIsolation {
         SALTS_CMETA_REAL_ROOT = $null
         CMAKE_PREFIX_PATH = $XmlOnlyFixture
     } {
+        $optionalBuild = Join-Path $ArtifactRoot 'cmeta-optional-missing-salts'
+        Configure-Consumer 'CMeta optional missing Salts targets' `
+            $optionalBuild @(
+                '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING=ON',
+                '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
+                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture")
+        Run-Consumers 'CMeta optional missing Salts targets' $optionalBuild @(
+            'turboscxml_voicexml_install_consumer',
+            'turboscxml_voicexml_install_consumer_cpp')
+
         Invoke-ExpectedFailure 'CMeta missing Salts targets' @(
             '--fresh',
             '-S', (Join-Path $SourceDir 'tests/install_consumer'),
@@ -376,5 +386,5 @@ try {
 }
 
 Write-Host '[package-isolation] PASS: 4 isolated install profiles,' `
-    '8 VoiceXML consumer runs, 1 optional CMeta probe,' `
+    '10 VoiceXML consumer runs, 2 optional CMeta probes,' `
     '6 required-dependency failures, and 16 optional/package-wide consumer runs'

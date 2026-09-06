@@ -91,12 +91,16 @@ by `TURBOSCXML_ENABLE_VOICEXML_CMETA`:
 - private static closure: `Salts::QueryVM` and the installed
   `TurboSCXML::_CMetaRuntime` implementation target.
 
-An explicit or package-wide CMeta request validates only `Salts::XmlParser`,
-`Salts::CMeta`, and `Salts::QueryVM`. It does not discover SCXML, CFlow, CSerde,
-CBind, QuickJS, networking, or media packages. A base-only install reports a
-required `VoiceXMLCMeta` component as unavailable; an optional request leaves
-`TurboSCXML_VoiceXMLCMeta_FOUND` false and does not create the target. The base
-`TurboSCXML::VoiceXML` target remains exactly XmlParser-only in either build.
+An explicit `COMPONENTS VoiceXMLCMeta` request validates only
+`Salts::XmlParser`, `Salts::CMeta`, and `Salts::QueryVM`. Its link closure does
+not add `TurboSCXML::SCXML` or require Salts CFlow/CSerde/CBind, QuickJS,
+networking, or media packages. A no-component `find_package(TurboSCXML)` is
+deliberately package-wide instead: it follows the broader existing SCXML
+closure and every enabled optional product, including QuickJS or CHTTP when
+present. A base-only install reports a required `VoiceXMLCMeta` component as
+unavailable; an optional request leaves `TurboSCXML_VoiceXMLCMeta_FOUND` false
+and does not create the target. The base `TurboSCXML::VoiceXML` target remains
+exactly XmlParser-only in either build.
 
 Optional products are introduced only by their owning roadmap slices:
 
