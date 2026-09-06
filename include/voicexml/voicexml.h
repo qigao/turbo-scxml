@@ -78,6 +78,12 @@ vxml_status vxml_compile(const void *bytes, size_t size,
 
 void vxml_program_destroy(vxml_program *program);
 
+/**
+ * Initializes a caller-allocated session to borrow `program`. `program` must
+ * outlive the session. `session` may contain indeterminate storage; this
+ * function clears it before validation. Destroy a previously initialized
+ * session before reusing its handle.
+ */
 vxml_status vxml_session_init(vxml_session *session,
                               const vxml_program *program);
 vxml_status vxml_session_start(vxml_session *session);

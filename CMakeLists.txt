@@ -128,7 +128,8 @@ target_link_libraries(turbo_ccxml
   PRIVATE Salts::XmlParser)
 
 add_library(turbo_voicexml STATIC
-  src/voicexml_program.c)
+  src/voicexml_program.c
+  src/voicexml_session.c)
 add_library(TurboSCXML::VoiceXML ALIAS turbo_voicexml)
 set_target_properties(turbo_voicexml PROPERTIES
   EXPORT_NAME VoiceXML
