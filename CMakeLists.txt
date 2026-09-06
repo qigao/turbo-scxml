@@ -151,6 +151,45 @@ if(BUILD_TESTING)
     TURBOSCXML_VOICEXML_TESTING=1)
 endif()
 
+add_library(turbo_voicexml_cmeta STATIC
+  src/voicexml_cmeta_program.c)
+add_library(TurboSCXML::VoiceXMLCMeta ALIAS turbo_voicexml_cmeta)
+set_target_properties(turbo_voicexml_cmeta PROPERTIES
+  EXPORT_NAME VoiceXMLCMeta
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_voicexml_cmeta PUBLIC c_std_11)
+target_compile_options(turbo_voicexml_cmeta
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_voicexml_cmeta
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_voicexml_cmeta
+  PUBLIC TurboSCXML::VoiceXML Salts::CMeta
+  PRIVATE Salts::QueryVM)
+
+if(BUILD_TESTING)
+  include(CheckCXXSourceCompiles)
+  set(_TURBOSCXML_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
+  set(_TURBOSCXML_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
+  set(CMAKE_REQUIRED_INCLUDES
+    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_ROOT_PATH}/include/query_vm")
+  unset(CMAKE_REQUIRED_LIBRARIES)
+  check_cxx_source_compiles(
+    "#include <voicexml/cmeta.h>\nint main() { vxml_program p{}; return p.impl == nullptr ? 0 : 1; }"
+    TURBOSCXML_VOICEXML_CMETA_CXX_HEADER_OK)
+  set(CMAKE_REQUIRED_INCLUDES ${_TURBOSCXML_REQUIRED_INCLUDES})
+  set(CMAKE_REQUIRED_LIBRARIES ${_TURBOSCXML_REQUIRED_LIBRARIES})
+  unset(_TURBOSCXML_REQUIRED_INCLUDES)
+  unset(_TURBOSCXML_REQUIRED_LIBRARIES)
+  if(NOT TURBOSCXML_VOICEXML_CMETA_CXX_HEADER_OK)
+    message(FATAL_ERROR "VoiceXML CMeta header must compile as C++")
+  endif()
+endif()
+
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   if(NOT TARGET Salts::CHTTP)
     message(FATAL_ERROR
@@ -241,6 +280,15 @@ if(BUILD_TESTING)
       "TurboSCXML::VoiceXML dependency contract changed")
   endif()
 
+  get_target_property(
+    TURBOVOICEXML_CMETA_PUBLIC_LINKS
+    turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
+     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>")
+    message(FATAL_ERROR
+      "TurboSCXML::VoiceXMLCMeta dependency contract changed")
+  endif()
+
   if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     get_target_property(
       TURBOSCXML_CHTTP_PUBLIC_LINKS
@@ -292,6 +340,12 @@ install(TARGETS turbo_voicexml
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(TARGETS turbo_voicexml_cmeta
+  EXPORT TurboSCXMLTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(TARGETS turbo_scxml_chttp_resource
     EXPORT TurboSCXMLTargets
@@ -316,6 +370,9 @@ install(
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
 install(
   FILES include/voicexml/voicexml.h
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
+install(
+  FILES include/voicexml/cmeta.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(

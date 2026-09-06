@@ -3,12 +3,6 @@
 
 #include <stdbool.h>
 
-struct vxml_session_impl {
-    const vxml_program_impl *program;
-    vxml_session_state state;
-    vxml_status error;
-};
-
 static bool range_is_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
@@ -19,7 +13,7 @@ static vxml_status fail_structure(vxml_session_impl *impl) {
     return impl->error;
 }
 
-static vxml_status execute_entry_form(vxml_session_impl *impl) {
+vxml_status vxml_session_start_literal(vxml_session_impl *impl) {
     const vxml_program_impl *program = impl->program;
     const vxml_form_row *form;
     size_t block_index;
@@ -54,15 +48,39 @@ static vxml_status execute_entry_form(vxml_session_impl *impl) {
 
 vxml_status vxml_session_init(vxml_session *session,
                               const vxml_program *program) {
-    vxml_session_impl *impl;
     if (session == NULL) return VXML_INVALID_ARGUMENT;
     session->impl = NULL;
     if (program == NULL || program->impl == NULL) return VXML_INVALID_ARGUMENT;
+    if (((const vxml_program_impl *)program->impl)->profile_kind !=
+        VXML_PROFILE_LITERAL)
+        return VXML_INVALID_CONTRACT;
+    return vxml_session_init_profile(session, program, NULL);
+}
+
+vxml_status vxml_session_init_profile(
+    vxml_session *session, const vxml_program *program, const void *options) {
+    vxml_session_impl *impl;
+    const vxml_program_impl *program_impl;
+    vxml_status status;
+    if (session == NULL) return VXML_INVALID_ARGUMENT;
+    session->impl = NULL;
+    if (program == NULL || program->impl == NULL) return VXML_INVALID_ARGUMENT;
+    program_impl = (const vxml_program_impl *)program->impl;
+    if (program_impl->profile_kind == VXML_PROFILE_CMETA &&
+        program_impl->profile_session_init == NULL)
+        return VXML_INVALID_CONTRACT;
     impl = (vxml_session_impl *)vxml_malloc(sizeof(*impl));
     if (impl == NULL) return VXML_ALLOCATION_FAILED;
-    impl->program = (const vxml_program_impl *)program->impl;
+    impl->program = program_impl;
     impl->state = VXML_SESSION_READY;
     impl->error = VXML_OK;
+    if (program_impl->profile_session_init != NULL) {
+        status = program_impl->profile_session_init(impl, options);
+        if (status != VXML_OK) {
+            vxml_free(impl);
+            return status;
+        }
+    }
     session->impl = impl;
     return VXML_OK;
 }
@@ -76,7 +94,9 @@ vxml_status vxml_session_start(vxml_session *session) {
     if (impl->state != VXML_SESSION_READY) return VXML_INVALID_STATE;
     impl->state = VXML_SESSION_RUNNING;
     impl->error = VXML_OK;
-    return execute_entry_form(impl);
+    return impl->program->profile_session_start != NULL
+        ? impl->program->profile_session_start(impl)
+        : vxml_session_start_literal(impl);
 }
 
 vxml_session_state vxml_session_get_state(const vxml_session *session) {
@@ -106,6 +126,11 @@ vxml_status vxml_session_close(vxml_session *session) {
 
 void vxml_session_destroy(vxml_session *session) {
     if (session == NULL || session->impl == NULL) return;
+    {
+        vxml_session_impl *impl = (vxml_session_impl *)session->impl;
+        if (impl->program != NULL && impl->program->profile_session_destroy != NULL)
+            impl->program->profile_session_destroy(impl);
+    }
     vxml_free(session->impl);
     session->impl = NULL;
 }

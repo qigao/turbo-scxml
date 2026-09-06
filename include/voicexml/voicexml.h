@@ -23,7 +23,9 @@ typedef enum vxml_status {
     VXML_INVALID_STRUCTURE,
     VXML_UNSUPPORTED_FEATURE,
     VXML_INVALID_STATE,
-    VXML_CLOSED
+    VXML_CLOSED,
+    VXML_INVALID_CONTRACT,
+    VXML_SEMANTIC_ERROR
 } vxml_status;
 
 typedef struct vxml_limits {

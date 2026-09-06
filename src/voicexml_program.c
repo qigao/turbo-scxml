@@ -905,6 +905,11 @@ cleanup:
 
 void vxml_program_destroy(vxml_program *program) {
     if (program == NULL || program->impl == NULL) return;
+    {
+        vxml_program_impl *impl = (vxml_program_impl *)program->impl;
+        if (impl->profile_program_destroy != NULL)
+            impl->profile_program_destroy(impl);
+    }
     vxml_free(program->impl);
     program->impl = NULL;
 }
