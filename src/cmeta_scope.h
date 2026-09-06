@@ -29,6 +29,7 @@ typedef struct cmeta_scope_schema {
     size_t storage_align;
     size_t max_storage_bytes;
     cmeta_scope_allocator allocator;
+    bool frozen;
 } cmeta_scope_schema;
 
 typedef struct cmeta_scope_view {
@@ -66,9 +67,10 @@ const cmeta_data_desc *cmeta_scope_find_data_for_type(
     size_t max_depth);
 
 bool cmeta_scope_storage_init(
-    cmeta_scope_storage *storage, const cmeta_scope_schema *schema,
+    cmeta_scope_storage *storage, cmeta_scope_schema *schema,
     const cmeta_scope_allocator *allocator);
-/* The schema and every borrowed descriptor must outlive this storage owner. */
+/* A successful initialization permanently freezes schema registration. The
+ * schema and every borrowed descriptor must outlive this storage owner. */
 void cmeta_scope_storage_destroy(cmeta_scope_storage *storage);
 
 bool cmeta_scope_view_valid(const cmeta_scope_view *view);

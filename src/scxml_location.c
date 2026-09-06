@@ -19,8 +19,38 @@ static scxml_expr_status location_report(
 }
 
 static scxml_expr_status location_map_status(
-    cmeta_location_status status, size_t byte_offset,
+    cmeta_location_status status,
+    const cmeta_location_diagnostic *detail,
     scxml_expr_diagnostic *diagnostic) {
+    const size_t byte_offset =
+        detail == NULL ? 0u : detail->byte_offset;
+    if (detail != NULL) {
+        switch (detail->failure) {
+            case CMETA_LOCATION_FAILURE_NON_STRUCT:
+                return location_report(
+                    diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, byte_offset,
+                    "SCXML location traverses a non-struct value");
+            case CMETA_LOCATION_FAILURE_UNADDRESSABLE:
+                return location_report(
+                    diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, byte_offset,
+                    "SCXML location does not expose addressable storage");
+            case CMETA_LOCATION_FAILURE_ROOT_BOUNDS:
+                return location_report(
+                    diagnostic, SCXML_EXPR_INVALID_ARGUMENT, byte_offset,
+                    "CMeta location schema exceeds root storage");
+            case CMETA_LOCATION_FAILURE_SCOPE_BOUNDS:
+                return location_report(
+                    diagnostic, SCXML_EXPR_INVALID_ARGUMENT, byte_offset,
+                    "supplemental location exceeds slot storage");
+            case CMETA_LOCATION_FAILURE_NONE:
+            case CMETA_LOCATION_FAILURE_INVALID_ARGUMENT:
+            case CMETA_LOCATION_FAILURE_SYNTAX:
+            case CMETA_LOCATION_FAILURE_DEPTH:
+            case CMETA_LOCATION_FAILURE_INVALID_SCHEMA:
+            case CMETA_LOCATION_FAILURE_UNRESOLVED:
+                break;
+        }
+    }
     switch (status) {
         case CMETA_LOCATION_OK:
             return location_report(
@@ -94,7 +124,7 @@ scxml_expr_status scxml_location_compile(
     bool writable,
     scxml_expr_diagnostic *diagnostic) {
     cmeta_location_status status;
-    size_t byte_offset = 0u;
+    cmeta_location_diagnostic detail = {0};
     if (!location_compile_arguments_valid(
             out, path, path_size, root, max_depth))
         return location_report(
@@ -104,9 +134,9 @@ scxml_expr_status scxml_location_compile(
         return location_report(
             diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
             "CMeta system locations are read-only");
-    status = cmeta_location_compile(
-        out, path, path_size, root, max_depth, &byte_offset);
-    return location_map_status(status, byte_offset, diagnostic);
+    status = cmeta_location_compile_detailed(
+        out, path, path_size, root, max_depth, &detail);
+    return location_map_status(status, &detail, diagnostic);
 }
 
 scxml_expr_status scxml_location_compile_with_scope(
@@ -117,7 +147,7 @@ scxml_expr_status scxml_location_compile_with_scope(
     size_t max_depth, bool writable,
     scxml_expr_diagnostic *diagnostic) {
     cmeta_location_status status;
-    size_t byte_offset = 0u;
+    cmeta_location_diagnostic detail = {0};
     if (!location_compile_arguments_valid(
             out, path, path_size, root, max_depth))
         return location_report(
@@ -127,10 +157,10 @@ scxml_expr_status scxml_location_compile_with_scope(
         return location_report(
             diagnostic, SCXML_EXPR_UNKNOWN_LOCATION, 0u,
             "CMeta system locations are read-only");
-    status = cmeta_location_compile_with_scope(
+    status = cmeta_location_compile_with_scope_detailed(
         out, path, path_size, root, supplemental,
-        max_depth, &byte_offset);
-    return location_map_status(status, byte_offset, diagnostic);
+        max_depth, &detail);
+    return location_map_status(status, &detail, diagnostic);
 }
 
 scxml_expr_status scxml_location_assign_owned_string(
@@ -144,5 +174,5 @@ scxml_expr_status scxml_location_assign_owned_string(
         return location_report(
             diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
             "invalid CMeta owned-string location assignment arguments");
-    return location_map_status(status, 0u, diagnostic);
+    return location_map_status(status, NULL, diagnostic);
 }

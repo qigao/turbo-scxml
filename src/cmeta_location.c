@@ -5,8 +5,12 @@
 
 static cmeta_location_status location_result(
     cmeta_location_status status, size_t byte_offset,
-    size_t *out_error_offset) {
-    if (out_error_offset != NULL) *out_error_offset = byte_offset;
+    cmeta_location_failure failure,
+    cmeta_location_diagnostic *diagnostic) {
+    if (diagnostic != NULL) {
+        diagnostic->byte_offset = byte_offset;
+        diagnostic->failure = failure;
+    }
     return status;
 }
 
@@ -131,11 +135,11 @@ static const cmeta_data_field_desc *location_find_field(
     return NULL;
 }
 
-cmeta_location_status cmeta_location_compile(
+cmeta_location_status cmeta_location_compile_detailed(
     cmeta_location *out,
     const char *path, size_t path_size,
     const cmeta_data_desc *root, size_t max_depth,
-    size_t *out_error_offset) {
+    cmeta_location_diagnostic *diagnostic) {
     const cmeta_data_desc *current = root;
     size_t absolute_offset = 0u;
     size_t segment_start = 0u;
@@ -148,10 +152,12 @@ cmeta_location_status cmeta_location_compile(
         !cmeta_data_desc_valid(root) || root->kind != CMETA_DATA_STRUCT ||
         root->storage_type == NULL)
         return location_result(
-            CMETA_LOCATION_INVALID_ARGUMENT, 0u, out_error_offset);
+            CMETA_LOCATION_INVALID_ARGUMENT, 0u,
+            CMETA_LOCATION_FAILURE_INVALID_ARGUMENT, diagnostic);
     if (!location_path_valid_detailed(path, path_size, &lexical_error))
         return location_result(
-            CMETA_LOCATION_SYNTAX_ERROR, lexical_error, out_error_offset);
+            CMETA_LOCATION_SYNTAX_ERROR, lexical_error,
+            CMETA_LOCATION_FAILURE_SYNTAX, diagnostic);
     for (index = 0u; index <= path_size; ++index) {
         const bool at_end = index == path_size;
         const cmeta_data_struct_shape *shape;
@@ -159,24 +165,29 @@ cmeta_location_status cmeta_location_compile(
         if (!at_end && path[index] != '.') continue;
         if (++depth > max_depth)
             return location_result(
-                CMETA_LOCATION_LIMIT_EXCEEDED, index, out_error_offset);
+                CMETA_LOCATION_LIMIT_EXCEEDED, index,
+                CMETA_LOCATION_FAILURE_DEPTH, diagnostic);
         if (!cmeta_data_desc_valid(current))
             return location_result(
                 CMETA_LOCATION_INVALID_ARGUMENT,
-                segment_start, out_error_offset);
+                segment_start, CMETA_LOCATION_FAILURE_INVALID_SCHEMA,
+                diagnostic);
         if (current->kind != CMETA_DATA_STRUCT)
             return location_result(
-                CMETA_LOCATION_UNKNOWN, segment_start, out_error_offset);
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_NON_STRUCT, diagnostic);
         if (current->shape == NULL || current->storage_type == NULL)
             return location_result(
                 CMETA_LOCATION_INVALID_ARGUMENT,
-                segment_start, out_error_offset);
+                segment_start, CMETA_LOCATION_FAILURE_INVALID_SCHEMA,
+                diagnostic);
         shape = (const cmeta_data_struct_shape *)current->shape;
         field = location_find_field(
             shape, path + segment_start, index - segment_start);
         if (field == NULL)
             return location_result(
-                CMETA_LOCATION_UNKNOWN, segment_start, out_error_offset);
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_UNRESOLVED, diagnostic);
         if (!cmeta_data_desc_valid(field->value) ||
             field->offset > current->storage_type->size ||
             (field->value->storage_type != NULL &&
@@ -185,10 +196,12 @@ cmeta_location_status cmeta_location_compile(
             absolute_offset > SIZE_MAX - field->offset)
             return location_result(
                 CMETA_LOCATION_INVALID_ARGUMENT,
-                segment_start, out_error_offset);
+                segment_start, CMETA_LOCATION_FAILURE_INVALID_SCHEMA,
+                diagnostic);
         if (field->value->storage_type == NULL)
             return location_result(
-                CMETA_LOCATION_UNKNOWN, segment_start, out_error_offset);
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_UNADDRESSABLE, diagnostic);
         absolute_offset += field->offset;
         current = field->value;
         if (at_end) break;
@@ -198,7 +211,8 @@ cmeta_location_status cmeta_location_compile(
         current->storage_type->size >
             root->storage_type->size - absolute_offset)
         return location_result(
-            CMETA_LOCATION_INVALID_ARGUMENT, 0u, out_error_offset);
+            CMETA_LOCATION_INVALID_ARGUMENT, 0u,
+            CMETA_LOCATION_FAILURE_ROOT_BOUNDS, diagnostic);
     compiled.root = root;
     compiled.value = current;
     compiled.offset = absolute_offset;
@@ -206,15 +220,29 @@ cmeta_location_status cmeta_location_compile(
     compiled.slot = SIZE_MAX;
     compiled.kind = CMETA_LOCATION_ROOT;
     *out = compiled;
-    return location_result(CMETA_LOCATION_OK, 0u, out_error_offset);
+    return location_result(
+        CMETA_LOCATION_OK, 0u, CMETA_LOCATION_FAILURE_NONE, diagnostic);
 }
 
-cmeta_location_status cmeta_location_compile_with_scope(
+cmeta_location_status cmeta_location_compile(
+    cmeta_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root, size_t max_depth,
+    size_t *out_error_offset) {
+    cmeta_location_diagnostic diagnostic = {0};
+    const cmeta_location_status status = cmeta_location_compile_detailed(
+        out, path, path_size, root, max_depth, &diagnostic);
+    if (out_error_offset != NULL)
+        *out_error_offset = diagnostic.byte_offset;
+    return status;
+}
+
+cmeta_location_status cmeta_location_compile_with_scope_detailed(
     cmeta_location *out,
     const char *path, size_t path_size,
     const cmeta_data_desc *root,
     const cmeta_scope_schema *scope,
-    size_t max_depth, size_t *out_error_offset) {
+    size_t max_depth, cmeta_location_diagnostic *diagnostic) {
     cmeta_location_status status;
     const cmeta_scope_slot *slot;
     const cmeta_data_desc *current;
@@ -226,16 +254,19 @@ cmeta_location_status cmeta_location_compile_with_scope(
     size_t index;
     size_t lexical_error = 0u;
     cmeta_location compiled = {0};
-    status = cmeta_location_compile(
-        out, path, path_size, root, max_depth, out_error_offset);
+    status = cmeta_location_compile_detailed(
+        out, path, path_size, root, max_depth, diagnostic);
     if (status != CMETA_LOCATION_UNKNOWN || scope == NULL) return status;
     if (!location_path_valid_detailed(path, path_size, &lexical_error))
         return location_result(
-            CMETA_LOCATION_SYNTAX_ERROR, lexical_error, out_error_offset);
+            CMETA_LOCATION_SYNTAX_ERROR, lexical_error,
+            CMETA_LOCATION_FAILURE_SYNTAX, diagnostic);
     while (first_end < path_size && path[first_end] != '.') ++first_end;
     slot = cmeta_scope_find(scope, path, first_end, &slot_index);
     if (slot == NULL)
-        return location_result(CMETA_LOCATION_UNKNOWN, 0u, out_error_offset);
+        return location_result(
+            CMETA_LOCATION_UNKNOWN, 0u,
+            CMETA_LOCATION_FAILURE_UNRESOLVED, diagnostic);
     current = slot->value;
     segment_start = first_end + (first_end < path_size ? 1u : 0u);
     for (index = segment_start; index <= path_size && first_end < path_size;
@@ -246,12 +277,14 @@ cmeta_location_status cmeta_location_compile_with_scope(
         if (!at_end && path[index] != '.') continue;
         if (++depth > max_depth)
             return location_result(
-                CMETA_LOCATION_LIMIT_EXCEEDED, index, out_error_offset);
+                CMETA_LOCATION_LIMIT_EXCEEDED, index,
+                CMETA_LOCATION_FAILURE_DEPTH, diagnostic);
         if (!cmeta_data_desc_valid(current) ||
             current->kind != CMETA_DATA_STRUCT || current->shape == NULL ||
             current->storage_type == NULL)
             return location_result(
-                CMETA_LOCATION_UNKNOWN, segment_start, out_error_offset);
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_NON_STRUCT, diagnostic);
         shape = (const cmeta_data_struct_shape *)current->shape;
         field = location_find_field(
             shape, path + segment_start, index - segment_start);
@@ -262,14 +295,16 @@ cmeta_location_status cmeta_location_compile_with_scope(
                 current->storage_type->size - field->offset ||
             absolute_offset > SIZE_MAX - field->offset)
             return location_result(
-                CMETA_LOCATION_UNKNOWN, segment_start, out_error_offset);
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_UNRESOLVED, diagnostic);
         absolute_offset += field->offset;
         if (absolute_offset > slot->value->storage_type->size ||
             field->value->storage_type->size >
                 slot->value->storage_type->size - absolute_offset)
             return location_result(
                 CMETA_LOCATION_INVALID_ARGUMENT,
-                segment_start, out_error_offset);
+                segment_start, CMETA_LOCATION_FAILURE_SCOPE_BOUNDS,
+                diagnostic);
         current = field->value;
         segment_start = index + 1u;
     }
@@ -280,7 +315,23 @@ cmeta_location_status cmeta_location_compile_with_scope(
     compiled.slot = slot_index;
     compiled.kind = CMETA_LOCATION_SCOPE;
     *out = compiled;
-    return location_result(CMETA_LOCATION_OK, 0u, out_error_offset);
+    return location_result(
+        CMETA_LOCATION_OK, 0u, CMETA_LOCATION_FAILURE_NONE, diagnostic);
+}
+
+cmeta_location_status cmeta_location_compile_with_scope(
+    cmeta_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root,
+    const cmeta_scope_schema *scope,
+    size_t max_depth, size_t *out_error_offset) {
+    cmeta_location_diagnostic diagnostic = {0};
+    const cmeta_location_status status =
+        cmeta_location_compile_with_scope_detailed(
+            out, path, path_size, root, scope, max_depth, &diagnostic);
+    if (out_error_offset != NULL)
+        *out_error_offset = diagnostic.byte_offset;
+    return status;
 }
 
 cmeta_location_status cmeta_location_assign_owned_string(

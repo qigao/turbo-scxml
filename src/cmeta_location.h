@@ -18,6 +18,24 @@ typedef enum cmeta_location_kind {
     CMETA_LOCATION_SCOPE
 } cmeta_location_kind;
 
+typedef enum cmeta_location_failure {
+    CMETA_LOCATION_FAILURE_NONE = 0,
+    CMETA_LOCATION_FAILURE_INVALID_ARGUMENT,
+    CMETA_LOCATION_FAILURE_SYNTAX,
+    CMETA_LOCATION_FAILURE_DEPTH,
+    CMETA_LOCATION_FAILURE_INVALID_SCHEMA,
+    CMETA_LOCATION_FAILURE_NON_STRUCT,
+    CMETA_LOCATION_FAILURE_UNRESOLVED,
+    CMETA_LOCATION_FAILURE_UNADDRESSABLE,
+    CMETA_LOCATION_FAILURE_ROOT_BOUNDS,
+    CMETA_LOCATION_FAILURE_SCOPE_BOUNDS
+} cmeta_location_failure;
+
+typedef struct cmeta_location_diagnostic {
+    size_t byte_offset;
+    cmeta_location_failure failure;
+} cmeta_location_diagnostic;
+
 typedef struct cmeta_location {
     const cmeta_data_desc *root;
     const cmeta_data_desc *value;
@@ -36,12 +54,25 @@ cmeta_location_status cmeta_location_compile(
     const cmeta_data_desc *root, size_t max_depth,
     size_t *out_error_offset);
 
+cmeta_location_status cmeta_location_compile_detailed(
+    cmeta_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root, size_t max_depth,
+    cmeta_location_diagnostic *diagnostic);
+
 cmeta_location_status cmeta_location_compile_with_scope(
     cmeta_location *out,
     const char *path, size_t path_size,
     const cmeta_data_desc *root,
     const cmeta_scope_schema *scope,
     size_t max_depth, size_t *out_error_offset);
+
+cmeta_location_status cmeta_location_compile_with_scope_detailed(
+    cmeta_location *out,
+    const char *path, size_t path_size,
+    const cmeta_data_desc *root,
+    const cmeta_scope_schema *scope,
+    size_t max_depth, cmeta_location_diagnostic *diagnostic);
 
 cmeta_location_status cmeta_location_assign_owned_string(
     const cmeta_location *location, void *root,

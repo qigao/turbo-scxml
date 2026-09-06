@@ -67,6 +67,7 @@ bool cmeta_scope_schema_init(
         schema->slot_count != 0u || schema->slot_capacity != 0u ||
         schema->storage_size != 0u || schema->storage_align != 0u ||
         schema->max_storage_bytes != 0u ||
+        schema->frozen ||
         schema->allocator.user != NULL ||
         schema->allocator.allocate != NULL ||
         schema->allocator.allocate_zero != NULL ||
@@ -131,6 +132,7 @@ bool cmeta_scope_register(
     if (out_conflict != NULL) *out_conflict = false;
     if (schema == NULL || name == NULL || name_size == 0u ||
         out_slot == NULL || out_conflict == NULL ||
+        schema->frozen ||
         !scope_allocator_valid(&schema->allocator) ||
         !cmeta_data_desc_valid(value) || value->storage_type == NULL)
         return false;
@@ -209,7 +211,7 @@ const cmeta_data_desc *cmeta_scope_find_data_for_type(
         ? builtin : scope_find_data_recursive(root, type, 0u, max_depth);
 }
 
-bool cmeta_scope_storage_init(
+static bool scope_storage_init(
     cmeta_scope_storage *storage, const cmeta_scope_schema *schema,
     const cmeta_scope_allocator *allocator) {
     const cmeta_scope_allocator *selected =
@@ -257,6 +259,14 @@ bool cmeta_scope_storage_init(
     return true;
 }
 
+bool cmeta_scope_storage_init(
+    cmeta_scope_storage *storage, cmeta_scope_schema *schema,
+    const cmeta_scope_allocator *allocator) {
+    if (!scope_storage_init(storage, schema, allocator)) return false;
+    schema->frozen = true;
+    return true;
+}
+
 void cmeta_scope_storage_destroy(cmeta_scope_storage *storage) {
     if (storage == NULL) return;
     cmeta_scope_view_clear(&storage->view);
@@ -272,18 +282,9 @@ bool cmeta_scope_view_valid(const cmeta_scope_view *view) {
             (view->storage != NULL && view->bound != NULL));
 }
 
-bool cmeta_scope_view_copy(
+static bool scope_view_copy_into_empty(
     cmeta_scope_view *destination, const cmeta_scope_view *source) {
     size_t index;
-    if (!cmeta_scope_view_valid(destination) ||
-        !cmeta_scope_view_valid(source) ||
-        destination->schema != source->schema)
-        return false;
-    if (source->schema->slot_count == 0u) return true;
-    if (destination->storage == source->storage ||
-        destination->bound == source->bound)
-        return false;
-    cmeta_scope_view_clear(destination);
     for (index = 0u; index < source->schema->slot_count; ++index) {
         const cmeta_scope_slot *slot = &source->schema->slots[index];
         if (source->bound[index] == 0u) continue;
@@ -302,6 +303,29 @@ bool cmeta_scope_view_copy(
         destination->bound[index] = 1u;
     }
     return true;
+}
+
+bool cmeta_scope_view_copy(
+    cmeta_scope_view *destination, const cmeta_scope_view *source) {
+    cmeta_scope_storage staging = {0};
+    bool copied;
+    if (!cmeta_scope_view_valid(destination) ||
+        !cmeta_scope_view_valid(source) ||
+        destination->schema != source->schema)
+        return false;
+    if (source->schema->slot_count == 0u) return true;
+    if (destination->storage == source->storage ||
+        destination->bound == source->bound)
+        return false;
+    if (!scope_storage_init(
+            &staging, source->schema, &source->schema->allocator))
+        return false;
+    copied = scope_view_copy_into_empty(&staging.view, source);
+    if (copied)
+        copied = cmeta_scope_view_move_replace(
+            destination, &staging.view);
+    cmeta_scope_storage_destroy(&staging);
+    return copied;
 }
 
 bool cmeta_scope_view_move_replace(
@@ -374,16 +398,39 @@ bool cmeta_scope_view_assign(
     entry = &view->schema->slots[slot];
     destination = view->storage + entry->offset;
     if (entry->managed) {
-        if (view->bound[slot] != 0u)
-            entry->value->storage_type->traits->destroy(destination);
-        if (!entry->value->storage_type->traits->copy_construct(
-                destination, source)) {
-            memset(destination, 0, entry->value->storage_type->size);
-            view->bound[slot] = 0u;
+        const cmeta_type_desc *type = entry->value->storage_type;
+        void *allocation;
+        void *temporary;
+        uintptr_t address;
+        uintptr_t aligned;
+        size_t allocation_size;
+        if (type->size > SIZE_MAX - (type->align - 1u)) return false;
+        allocation_size = type->size + type->align - 1u;
+        allocation = view->schema->allocator.allocate(
+            view->schema->allocator.user, allocation_size);
+        if (allocation == NULL) return false;
+        address = (uintptr_t)allocation;
+        if (address > UINTPTR_MAX - (type->align - 1u)) {
+            view->schema->allocator.deallocate(
+                view->schema->allocator.user, allocation);
             return false;
         }
+        aligned = (address + type->align - 1u) &
+                  ~((uintptr_t)type->align - 1u);
+        temporary = (void *)aligned;
+        if (!entry->value->storage_type->traits->copy_construct(
+                temporary, source)) {
+            view->schema->allocator.deallocate(
+                view->schema->allocator.user, allocation);
+            return false;
+        }
+        if (view->bound[slot] != 0u)
+            type->traits->destroy(destination);
+        type->traits->move_construct(destination, temporary);
+        view->schema->allocator.deallocate(
+            view->schema->allocator.user, allocation);
     } else {
-        memcpy(destination, source, entry->value->storage_type->size);
+        memmove(destination, source, entry->value->storage_type->size);
     }
     view->bound[slot] = 1u;
     return true;

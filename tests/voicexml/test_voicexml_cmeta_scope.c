@@ -296,6 +296,31 @@ spec("neutral VoiceXML CMeta scope storage") {
         cmeta_scope_schema_destroy(&schema);
     }
 
+    it("freezes a schema after publishing owned storage") {
+        cmeta_scope_schema schema = {0};
+        cmeta_scope_storage storage = {0};
+        size_t first_slot = SIZE_MAX;
+        size_t second_slot = SIZE_MAX;
+        const size_t first_storage_size = sizeof(int);
+        bool conflict = false;
+
+        check_true(cmeta_scope_schema_init(&schema, 2u, 64u, NULL));
+        check_true(cmeta_scope_register(
+            &schema, "first", 5u, &cmeta_data_int,
+            &first_slot, &conflict));
+        check_true(cmeta_scope_storage_init(&storage, &schema, NULL));
+        check_false(cmeta_scope_register(
+            &schema, "second", 6u, &cmeta_data_int,
+            &second_slot, &conflict));
+        check_equal(second_slot, SIZE_MAX);
+        check_false(conflict);
+        check_equal(schema.slot_count, (size_t)1u);
+        check_equal(schema.storage_size, first_storage_size);
+
+        cmeta_scope_storage_destroy(&storage);
+        cmeta_scope_schema_destroy(&schema);
+    }
+
     it("destroys managed slots exactly when clearing or destroying storage") {
         cmeta_scope_schema schema = {0};
         cmeta_scope_storage storage = {0};
@@ -367,6 +392,114 @@ spec("neutral VoiceXML CMeta scope storage") {
         cmeta_scope_storage_destroy(&destination);
         cmeta_scope_storage_destroy(&source);
         check_equal(managed_destroy_count, (size_t)5u);
+        cmeta_scope_schema_destroy(&schema);
+    }
+
+    it("preserves a bound managed slot when replacement copying fails") {
+        cmeta_scope_schema schema = {0};
+        cmeta_scope_storage storage = {0};
+        const cmeta_data_desc *value = NULL;
+        const void *object = NULL;
+        size_t slot = SIZE_MAX;
+        bool conflict = false;
+        int original = 7;
+        int replacement = 9;
+        managed_value original_value = {&original};
+        managed_value replacement_value = {&replacement};
+
+        check_true(cmeta_scope_schema_init(&schema, 1u, 64u, NULL));
+        check_true(cmeta_scope_register(
+            &schema, "item", 4u, &managed_data, &slot, &conflict));
+        check_true(cmeta_scope_storage_init(&storage, &schema, NULL));
+        check_true(cmeta_scope_view_assign(
+            &storage.view, slot, &original_value));
+
+        managed_fail_copy_call = managed_copy_calls + 1u;
+        check_false(cmeta_scope_view_assign(
+            &storage.view, slot, &replacement_value));
+        check_true(cmeta_scope_view_read(
+            &storage.view, slot, &value, &object));
+        check_equal(*((const managed_value *)object)->value, original);
+
+        cmeta_scope_storage_destroy(&storage);
+        cmeta_scope_schema_destroy(&schema);
+    }
+
+    it("supports managed slot self-assignment") {
+        cmeta_scope_schema schema = {0};
+        cmeta_scope_storage storage = {0};
+        const cmeta_data_desc *value = NULL;
+        const void *object = NULL;
+        size_t slot = SIZE_MAX;
+        bool conflict = false;
+        int original = 7;
+        managed_value original_value = {&original};
+
+        check_true(cmeta_scope_schema_init(&schema, 1u, 64u, NULL));
+        check_true(cmeta_scope_register(
+            &schema, "item", 4u, &managed_data, &slot, &conflict));
+        check_true(cmeta_scope_storage_init(&storage, &schema, NULL));
+        check_true(cmeta_scope_view_assign(
+            &storage.view, slot, &original_value));
+        check_true(cmeta_scope_view_read(
+            &storage.view, slot, &value, &object));
+        check_true(cmeta_scope_view_assign(&storage.view, slot, object));
+        check_true(cmeta_scope_view_read(
+            &storage.view, slot, &value, &object));
+        check_equal(*((const managed_value *)object)->value, original);
+
+        cmeta_scope_storage_destroy(&storage);
+        cmeta_scope_schema_destroy(&schema);
+    }
+
+    it("preserves a bound destination view when managed copying fails") {
+        cmeta_scope_schema schema = {0};
+        cmeta_scope_storage source = {0};
+        cmeta_scope_storage destination = {0};
+        const cmeta_data_desc *value = NULL;
+        const void *object = NULL;
+        size_t first_slot = SIZE_MAX;
+        size_t second_slot = SIZE_MAX;
+        bool conflict = false;
+        int source_first = 11;
+        int source_second = 22;
+        int destination_first = 101;
+        int destination_second = 202;
+        managed_value source_first_value = {&source_first};
+        managed_value source_second_value = {&source_second};
+        managed_value destination_first_value = {&destination_first};
+        managed_value destination_second_value = {&destination_second};
+
+        check_true(cmeta_scope_schema_init(&schema, 2u, 64u, NULL));
+        check_true(cmeta_scope_register(
+            &schema, "first", 5u, &managed_data, &first_slot, &conflict));
+        check_true(cmeta_scope_register(
+            &schema, "second", 6u, &managed_data, &second_slot, &conflict));
+        check_true(cmeta_scope_storage_init(&source, &schema, NULL));
+        check_true(cmeta_scope_storage_init(&destination, &schema, NULL));
+        check_true(cmeta_scope_view_assign(
+            &source.view, first_slot, &source_first_value));
+        check_true(cmeta_scope_view_assign(
+            &source.view, second_slot, &source_second_value));
+        check_true(cmeta_scope_view_assign(
+            &destination.view, first_slot, &destination_first_value));
+        check_true(cmeta_scope_view_assign(
+            &destination.view, second_slot, &destination_second_value));
+
+        managed_copy_calls = 0u;
+        managed_fail_copy_call = 2u;
+        check_false(cmeta_scope_view_copy(&destination.view, &source.view));
+        check_true(cmeta_scope_view_read(
+            &destination.view, first_slot, &value, &object));
+        check_equal(*((const managed_value *)object)->value,
+                    destination_first);
+        check_true(cmeta_scope_view_read(
+            &destination.view, second_slot, &value, &object));
+        check_equal(*((const managed_value *)object)->value,
+                    destination_second);
+
+        cmeta_scope_storage_destroy(&destination);
+        cmeta_scope_storage_destroy(&source);
         cmeta_scope_schema_destroy(&schema);
     }
 

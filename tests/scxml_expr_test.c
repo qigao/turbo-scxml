@@ -1,5 +1,6 @@
 #include "scxml_expr.h"
 #include "scxml_assign.h"
+#include "scxml_location.h"
 
 #include <cmeta/data.h>
 #include "tinytest.h"
@@ -418,6 +419,39 @@ spec("TurboSCXML private SCXML expressions") {
     check_true(evaluate_expression(
         "18446744073709551615u == 18446744073709551615u", &root));
     check_true(evaluate_expression("enabled == true", &root));
+  }
+
+  it("reports traversal through a non-struct SCXML location") {
+    static const char path[] = "order.count.value";
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    check_equal(scxml_location_compile(
+                    &location, path, sizeof(path) - 1u, &root_data,
+                    3u, false, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(diagnostic.message,
+                "SCXML location traverses a non-struct value");
+  }
+
+  it("reports an SCXML location without addressable storage") {
+    static const char path[] = "label";
+    cmeta_data_field_desc field = root_fields[2];
+    cmeta_data_struct_shape shape = root_shape;
+    cmeta_data_desc schema = root_data;
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    field.value = &cmeta_data_sequence;
+    shape.fields = &field;
+    shape.field_count = 1u;
+    schema.shape = &shape;
+    check_equal(scxml_location_compile(
+                    &location, path, sizeof(path) - 1u, &schema,
+                    1u, false, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(diagnostic.message,
+                "SCXML location does not expose addressable storage");
   }
 
   it("returns typed scalar values without weakening condition admission") {
