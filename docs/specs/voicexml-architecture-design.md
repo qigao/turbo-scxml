@@ -37,8 +37,8 @@ VoiceXML XML bytes
     -> VoiceXML compiler (Salts::XmlParser)
     -> immutable bounded vxml_program
     -> single-owner synchronous FIA core
-       -> transactional prompt/collect/resource adapters
        -> typed datamodel adapter
+       -> future prompt/collect/resource adapters
        -> terminal result
     -> optional serial dialog manager
        -> asynchronous media/fetch completions
@@ -49,8 +49,8 @@ VoiceXML XML bytes
 The FIA is a specialized deterministic interpreter. VoiceXML documents are not
 translated into SCXML documents: doing so would obscure prompt counters,
 form-item guards, collect/process phases, and VoiceXML event-handler scope.
-The implementation may reuse CFlow effect tickets and executor conventions,
-but VoiceXML semantics remain owned by the VoiceXML module.
+Future asynchronous adapters may reuse CFlow effect tickets and executor
+conventions, but VoiceXML semantics remain owned by the VoiceXML module.
 
 The initial core is deliberately single-owner and synchronous. It runs until
 it reaches a platform wait or a terminal state. An asynchronous host must
@@ -70,9 +70,9 @@ The first product is a static library:
 - private representation: `src/voicexml_internal.h`
 
 Its public header exposes C11 opaque program and session handles. It uses
-`cflow_statechart_effect_ticket` for transactional adapter admission and
 `salts_xml_limits`/`salts_xml_location` for bounded compiler configuration and
-diagnostics, so `Salts::CFlow` and `Salts::XmlParser` are public dependencies.
+diagnostics, so `Salts::XmlParser` is its only public dependency. CFlow becomes
+a dependency only when an asynchronous adapter slice needs effect tickets.
 `TurboSCXML::VoiceXML` does not link CCXML; the later bridge depends one-way on
 both `TurboSCXML::CCXML` and `TurboSCXML::VoiceXML`.
 
@@ -92,7 +92,6 @@ The first executable slice accepts:
 <vxml xmlns="http://www.w3.org/2001/vxml" version="2.1">
   <form id="main">
     <block>
-      <prompt>Hello</prompt>
       <exit/>
     </block>
   </form>
@@ -100,15 +99,15 @@ The first executable slice accepts:
 ```
 
 The root contains one or more `form` elements. A form has an optional unique
-XML NCName `id` and contains one or more `block` control items. A block contains
-explicit `prompt` and `exit` actions in document order. A prompt contains only
-XML character data or CDATA; nested SSML, `audio`, `value`, `foreach`, and all
-prompt attributes are rejected in this slice. Leading and trailing XML
-whitespace is trimmed after entity decoding, while interior UTF-8 bytes are
-retained exactly. The resulting prompt must be nonempty and contain no NUL.
+XML NCName `id` and contains one or more `block` control items. A block is empty
+or contains one explicit `exit` action. This deliberately small slice proves
+document admission, ordered control-item traversal, and terminal lifecycle
+without defining any media API. `prompt`, `audio`, grammar, recognition,
+recording, transfer, and their callbacks remain unsupported until explicitly
+requested.
 
-An empty action sequence is invalid. Root, form, block, prompt, and exit
-attributes outside the profile are rejected, except `form@id`. Duplicate form
+Root, form, block, and exit attributes outside the profile are rejected,
+except `form@id`. Duplicate form
 IDs, foreign namespace elements, invalid UTF-8, and non-whitespace content in
 `exit` are rejected with source-located diagnostics. The first form is the
 entry dialog. Multiple forms are compiled now so later `goto` support does not
@@ -126,47 +125,37 @@ The configurable defaults are:
 - `max_forms = 64`;
 - `max_blocks = 1024`;
 - `max_actions = 4096`;
-- `max_text_bytes = 1024 * 1024`.
+- `max_name_bytes = 256 * 1024`.
 
 Every limit must be positive. Compile failure leaves the output program empty
 and destroys the XML document and every temporary allocation exactly once.
 
 ## Core MVP runtime protocol
 
-The public session states are `READY`, `RUNNING`, `WAITING_PROMPT`, `EXITED`,
-`FAILED`, and `CLOSED`. A successful initialization borrows the immutable
-program, copies the prompt adapter operations, and borrows its user pointer.
-The program and adapter user outlive successful session destruction.
+The public session states are `READY`, `RUNNING`, `EXITED`, `FAILED`, and
+`CLOSED`. A successful initialization borrows the immutable program, which
+must outlive the session.
 
 `vxml_session_start` is legal only in `READY`. The interpreter selects the
-first form and executes block actions in document order until it prepares one
-prompt or reaches exit. At a prompt it allocates no unbounded storage, assigns
-a nonzero monotonically increasing token, and calls `prepare_prompt` with a
-borrowed request. An accepted callback transfers one complete move-only effect
-ticket. The core commits that ticket immediately, changes to
-`WAITING_PROMPT`, and returns. Commit is nonblocking and infallible; the
-adapter copies any request bytes it retains.
-
-The single serial owner later calls `vxml_session_complete_prompt` with the
-matching token. `COMPLETED` advances to the next action and runs until the next
-wait or terminal state. `FAILED` changes the MVP session to `FAILED` with
-`VXML_ADAPTER_ERROR`; VoiceXML event conversion is added with the event-handling
-slice rather than inventing partial catch behavior. Zero, stale, duplicate, or
-wrong-state completions are rejected without advancing the program.
+first form and visits its blocks in document order. An explicit `exit`, an
+empty block followed by exhaustion, or exhaustion of the entry form changes
+the session to `EXITED`. Repeated start and all operations after close are
+rejected deterministically. There is no callback, ticket, token, wait state,
+thread, executor, or media object in this slice.
 
 An explicit `exit` or exhaustion of the entry form changes the session to
 `EXITED`. The MVP result contains no data. Later `exit@namelist` and `exit@expr`
 support extends the terminal result through size-versioned fields and maps it
 to CCXML `dialog.exit` values.
 
-`vxml_session_close` stops admission and calls adapter `close` exactly once.
-It is legal from every non-destroyed state and idempotent. Destruction returns
-`VXML_BUSY` while the attached adapter is not quiescent. Once quiescent, it
-releases session storage without touching the borrowed program or adapter user.
+`vxml_session_close` is legal from every non-destroyed state and idempotent.
+Destruction releases session storage without touching the borrowed program.
 
-## Adapter and memory protocol
+## Future adapter and memory protocol
 
-One prompt is in flight per core session. There is one producer and one
+This protocol is deferred with the media roadmap slice and is not present in
+the core ABI. When that slice is requested, one prompt will be in flight per
+core session. There is one producer and one
 consumer at the core boundary because the caller serializes operations. The
 request contains a token and a borrowed program-owned text view valid only for
 the prepare callback. Accepted prepare moves exactly one effect ticket to the
@@ -254,7 +243,7 @@ must end in a runnable test boundary:
 Umbrella: [GitHub issue #41](https://github.com/qigao/turbo-scxml/issues/41).
 
 1. [#42](https://github.com/qigao/turbo-scxml/issues/42): core MVP compiler
-   and `form/block/prompt/exit` runtime.
+   and non-media `form/block/exit` runtime.
 2. [#43](https://github.com/qigao/turbo-scxml/issues/43): serial dialog manager
    and CCXML prepare/start/terminate bridge.
 3. [#44](https://github.com/qigao/turbo-scxml/issues/44): typed CMeta datamodel,
@@ -290,10 +279,10 @@ Umbrella: [GitHub issue #41](https://github.com/qigao/turbo-scxml/issues/41).
 
 Every slice starts with focused TinyTest RED/GREEN coverage and then runs the
 Release preset. Parser tests cover namespace/version/structure diagnostics,
-entity decoding, UTF-8, duplicate IDs, source independence, checked limits,
-and failure cleanup. Runtime tests cover document order, exact provider bytes,
-ticket transfer, stale completions, adapter refusal, close/quiescence, and
-allocation-failure cleanup. Manager tests add registry full, late completion,
+UTF-8, duplicate IDs, source independence, checked limits, and failure cleanup.
+Core runtime tests cover document order, explicit and implied exit, invalid
+state transitions, close, and allocation-failure cleanup. Future adapter and
+manager tests add registry full, late completion,
 generation reuse, Event sink backpressure, prepared/direct start parity, and
 normal termination.
 
