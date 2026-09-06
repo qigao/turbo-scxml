@@ -225,6 +225,22 @@ static const vxml_test_allocator program_test_allocator = {
     program_test_free
 };
 
+static void check_program_rejected(
+    const char *source, vxml_status expected) {
+    const vxml_cmeta_compile_options_v1 options = compile_options();
+    vxml_program program = {0};
+    vxml_diagnostic diagnostic = {0};
+    const vxml_status actual = vxml_compile_cmeta(
+        source, strlen(source), NULL, &options, &program, &diagnostic);
+    const bool produced_program = program.impl != NULL;
+    const vxml_status diagnostic_status = diagnostic.status;
+    vxml_program_destroy(&program);
+
+    check_equal(actual, expected);
+    check_false(produced_program);
+    check_equal(diagnostic_status, expected);
+}
+
 spec("VoiceXML CMeta program compiler") {
     it("admits an entity-decoded CMeta datamodel") {
         static const char source[] =
@@ -495,6 +511,79 @@ spec("VoiceXML CMeta program compiler") {
             check_null(program.impl);
             check_equal(diagnostic.status, cases[index].expected);
             vxml_program_destroy(&program);
+        }
+    }
+
+    group("document declaration leaf validation") {
+        it("rejects an unknown attribute") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><var name='value' bogus='x'/>"
+                "<form><block/></form></vxml>";
+            check_program_rejected(source, VXML_UNSUPPORTED_FEATURE);
+        }
+
+        it("rejects a child executable element") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><var name='value'><exit/></var>"
+                "<form><block/></form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
+        }
+
+        it("rejects a prompt child element") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><var name='value'>"
+                "<prompt>spoken</prompt></var>"
+                "<form><block/></form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
+        }
+
+        it("rejects non-whitespace PCDATA") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><var name='value'>spoken text</var>"
+                "<form><block/></form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
+        }
+    }
+
+    group("form declaration leaf validation") {
+        it("rejects an unknown attribute") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<var name='value' bogus='x'/><block/>"
+                "</form></vxml>";
+            check_program_rejected(source, VXML_UNSUPPORTED_FEATURE);
+        }
+
+        it("rejects a child executable element") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<var name='value'><exit/></var><block/>"
+                "</form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
+        }
+
+        it("rejects a prompt child element") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<var name='value'><prompt>spoken</prompt></var><block/>"
+                "</form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
+        }
+
+        it("rejects non-whitespace PCDATA") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<var name='value'>spoken text</var><block/>"
+                "</form></vxml>";
+            check_program_rejected(source, VXML_INVALID_STRUCTURE);
         }
     }
 

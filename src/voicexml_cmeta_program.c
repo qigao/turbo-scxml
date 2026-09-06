@@ -467,6 +467,15 @@ static vxml_status cmeta_validate_empty_element(
     return VXML_OK;
 }
 
+static vxml_status cmeta_validate_variable_element(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "expr"};
+    const vxml_status status = cmeta_validate_attributes(
+        node, allowed, 2u, diagnostic);
+    if (status != VXML_OK) return status;
+    return cmeta_validate_empty_element(node, diagnostic);
+}
+
 static bool cmeta_node_named(salts_xml_node node, const char *name) {
     const salts_xml_string_view uri = salts_xml_node_namespace_uri(node);
     return salts_xml_node_type(node) == SALTS_XML_ELEMENT &&
@@ -762,7 +771,9 @@ static vxml_status cmeta_measure_executable(
             cmeta_known_profile_element(node)
                 ? "VoiceXML element is invalid in executable content"
                 : "unsupported VoiceXML executable element");
-    if (cmeta_node_named(node, "var") || cmeta_node_named(node, "assign")) {
+    if (cmeta_node_named(node, "var")) {
+        status = cmeta_validate_variable_element(node, diagnostic);
+    } else if (cmeta_node_named(node, "assign")) {
         static const char *const allowed[] = {"name", "expr"};
         status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
     } else if (cmeta_node_named(node, "clear")) {
@@ -781,7 +792,8 @@ static vxml_status cmeta_measure_executable(
             cmeta_attribute(node, "name"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
-    if (!cmeta_node_named(node, "if")) {
+    if (!cmeta_node_named(node, "if") &&
+        !cmeta_node_named(node, "var")) {
         status = cmeta_validate_empty_element(node, diagnostic);
         if (status != VXML_OK) return status;
     }
@@ -904,10 +916,13 @@ static vxml_status cmeta_measure_form(
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
-            const vxml_status name_status = cmeta_measure_name(
+            vxml_status declaration_status =
+                cmeta_validate_variable_element(child, diagnostic);
+            if (declaration_status != VXML_OK) return declaration_status;
+            declaration_status = cmeta_measure_name(
                 cmeta_attribute(child, "name"), measurement,
                 limits, diagnostic);
-            if (name_status != VXML_OK) return name_status;
+            if (declaration_status != VXML_OK) return declaration_status;
             if (saw_block)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
@@ -998,13 +1013,12 @@ static vxml_status cmeta_measure_program(
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
-            const vxml_status name_status = cmeta_measure_name(
+            status = cmeta_validate_variable_element(child, diagnostic);
+            if (status != VXML_OK) break;
+            status = cmeta_measure_name(
                 cmeta_attribute(child, "name"), measurement,
                 limits, diagnostic);
-            if (name_status != VXML_OK) {
-                status = name_status;
-                break;
-            }
+            if (status != VXML_OK) break;
             if (saw_form) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
@@ -1340,6 +1354,8 @@ static vxml_status cmeta_register_variable(
     vxml_status status = VXML_OK;
     if (out_slot != NULL) *out_slot = VXML_CMETA_NO_INDEX;
     if (out_repeated != NULL) *out_repeated = false;
+    status = cmeta_validate_variable_element(node, builder->diagnostic);
+    if (status != VXML_OK) return status;
     if (name_attribute.impl == NULL)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
