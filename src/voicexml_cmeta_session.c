@@ -1657,6 +1657,7 @@ vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
     transaction_commit(profile, program);
     for (;;) {
         const vxml_cmeta_block_row *selected = NULL;
+        profile->active_block = VXML_CMETA_NO_INDEX;
         for (block_offset = 0u; block_offset < form->block_count;
              ++block_offset) {
             const vxml_cmeta_block_row *block =
@@ -2026,8 +2027,42 @@ vxml_status vxml_session_cmeta_read(
     return status;
 }
 
+static bool terminal_span_valid(
+    const char *base, size_t used, const char *data, size_t size) {
+    uintptr_t base_address;
+    uintptr_t data_address;
+    size_t offset;
+    if (base == NULL || data == NULL) return false;
+    base_address = (uintptr_t)(const void *)base;
+    data_address = (uintptr_t)(const void *)data;
+    if (data_address < base_address) return false;
+    offset = (size_t)(data_address - base_address);
+    return offset <= used && size <= used - offset;
+}
+
+static bool terminal_value_valid(
+    const vxml_cmeta_exit_snapshot *snapshot,
+    const vxml_cmeta_value_view *value) {
+    if (value == NULL) return false;
+    switch (value->kind) {
+        case VXML_CMETA_VALUE_UNDEFINED:
+        case VXML_CMETA_VALUE_BOOL:
+        case VXML_CMETA_VALUE_SINT:
+        case VXML_CMETA_VALUE_UINT:
+        case VXML_CMETA_VALUE_FLOAT:
+            return true;
+        case VXML_CMETA_VALUE_STRING:
+            return terminal_span_valid(
+                snapshot->strings, snapshot->string_size,
+                value->data.string.data, value->data.string.size);
+        default:
+            return false;
+    }
+}
+
 static bool terminal_exit_valid(
     const vxml_cmeta_exit_snapshot *snapshot) {
+    size_t index;
     if (snapshot == NULL || snapshot->count > snapshot->entry_capacity ||
         snapshot->name_size > snapshot->name_capacity ||
         snapshot->string_size > snapshot->string_capacity ||
@@ -2036,12 +2071,30 @@ static bool terminal_exit_valid(
         (snapshot->string_capacity != 0u && snapshot->strings == NULL))
         return false;
     if (snapshot->kind == VXML_CMETA_EXIT_EMPTY)
-        return snapshot->count == 0u;
-    if (snapshot->kind == VXML_CMETA_EXIT_EXPRESSION)
-        return snapshot->count == 1u;
-    if (snapshot->kind == VXML_CMETA_EXIT_NAMELIST)
-        return snapshot->count != 0u;
-    return false;
+        return snapshot->count == 0u && snapshot->name_size == 0u &&
+            snapshot->string_size == 0u;
+    if (snapshot->kind == VXML_CMETA_EXIT_EXPRESSION) {
+        if (snapshot->count != 1u || snapshot->name_size != 0u ||
+            snapshot->entries[0].name.data != NULL ||
+            snapshot->entries[0].name.size != 0u)
+            return false;
+    } else if (snapshot->kind == VXML_CMETA_EXIT_NAMELIST) {
+        if (snapshot->count == 0u || snapshot->name_size == 0u)
+            return false;
+        for (index = 0u; index < snapshot->count; ++index)
+            if (snapshot->entries[index].name.size == 0u ||
+                !terminal_span_valid(
+                    snapshot->names, snapshot->name_size,
+                    snapshot->entries[index].name.data,
+                    snapshot->entries[index].name.size))
+                return false;
+    } else {
+        return false;
+    }
+    for (index = 0u; index < snapshot->count; ++index)
+        if (!terminal_value_valid(snapshot, &snapshot->entries[index].value))
+            return false;
+    return true;
 }
 
 vxml_status vxml_session_cmeta_exit_kind(

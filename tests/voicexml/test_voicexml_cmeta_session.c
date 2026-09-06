@@ -632,10 +632,12 @@ spec("VoiceXML CMeta session execution") {
         vxml_status ready_kind;
         vxml_status ready_at;
         vxml_status range_at;
+        vxml_status named_expression_at;
         vxml_status corrupt_kind;
         vxml_status corrupt_at;
         bool ready_outputs_clear;
         bool range_outputs_clear;
+        bool named_expression_outputs_clear;
         bool corrupt_outputs_clear;
 
         check_equal(vxml_compile_cmeta(
@@ -660,6 +662,22 @@ spec("VoiceXML CMeta session execution") {
         range_outputs_clear = name.data == NULL && name.size == 0u &&
             value_view_is_clear(value);
 
+        session_data(&session)->terminal_exit.entries[0].name =
+            (vxml_cmeta_name_view){
+                (const char *)(uintptr_t)1u, 1u};
+        name = (vxml_cmeta_name_view){
+            (const char *)(uintptr_t)1u, 99u};
+        value.kind = VXML_CMETA_VALUE_STRING;
+        value.data.string.data = (const char *)(uintptr_t)1u;
+        value.data.string.size = 99u;
+        named_expression_at = vxml_session_cmeta_exit_at(
+            &session, 0u, &name, &value);
+        named_expression_outputs_clear =
+            name.data == NULL && name.size == 0u &&
+            value_view_is_clear(value);
+        session_data(&session)->terminal_exit.entries[0].name =
+            (vxml_cmeta_name_view){0};
+
         session_data(&session)->terminal_exit.kind =
             (vxml_cmeta_exit_kind)99;
         kind = VXML_CMETA_EXIT_NAMELIST;
@@ -683,6 +701,8 @@ spec("VoiceXML CMeta session execution") {
         check_true(ready_outputs_clear);
         check_equal(range_at, VXML_INVALID_ARGUMENT);
         check_true(range_outputs_clear);
+        check_equal(named_expression_at, VXML_INVALID_STRUCTURE);
+        check_true(named_expression_outputs_clear);
         check_equal(corrupt_kind, VXML_INVALID_STRUCTURE);
         check_equal(corrupt_at, VXML_INVALID_STRUCTURE);
         check_true(corrupt_outputs_clear);
@@ -919,6 +939,40 @@ spec("VoiceXML CMeta session execution") {
         check_equal(values[5].data.string.size, (size_t)0u);
     }
 
+    it("drops the anonymous scope after normal FIA exhaustion") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><var name='value' expr='4'/>"
+            "<block><var name='value' expr='5'/></block>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_status read_status;
+        vxml_session_state state;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        state = vxml_session_get_state(&session);
+        read_status = vxml_session_cmeta_read(
+            &session, "value", sizeof("value") - 1u, &value);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        check_equal(state, VXML_SESSION_EXITED);
+        check_equal(read_status, VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(4));
+    }
+
     it("publishes one unnamed scalar for an exit expression") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -1073,6 +1127,112 @@ spec("VoiceXML CMeta session execution") {
         check_true(terminal_and_read_are_distinct);
         check_equal(repeated_status, VXML_OK);
         check_true(terminal_text_survives_reads_and_storage_mutation);
+    }
+
+    it("rejects corrupted namelist entry views before publishing them") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<exit namelist='value text'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        vxml_cmeta_session_root root = {.value = 7};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_exit_entry saved_value;
+        vxml_cmeta_exit_entry saved_text;
+        vxml_status statuses[7];
+        bool cleared[7];
+        vxml_cmeta_exit_kind kind = VXML_CMETA_EXIT_NAMELIST;
+        vxml_status kind_status;
+        size_t invalid_count;
+        size_t index;
+        memcpy(root.text.bytes, "abc", 3u);
+        root.text.size = 3u;
+        reset_session_text_probe();
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        saved_value = runtime->terminal_exit.entries[0];
+        saved_text = runtime->terminal_exit.entries[1];
+
+#define CAPTURE_CORRUPT_AT(case_index, query_index) \
+        do { \
+            vxml_cmeta_name_view name = { \
+                (const char *)(uintptr_t)1u, 99u}; \
+            vxml_cmeta_value_view value = { \
+                .kind = VXML_CMETA_VALUE_STRING, \
+                .data.string = {(const char *)(uintptr_t)1u, 99u}}; \
+            statuses[(case_index)] = vxml_session_cmeta_exit_at( \
+                &session, (query_index), &name, &value); \
+            cleared[(case_index)] = name.data == NULL && name.size == 0u && \
+                value_view_is_clear(value); \
+        } while (0)
+
+        runtime->terminal_exit.entries[0].value.kind =
+            (vxml_cmeta_value_kind)99;
+        kind_status = vxml_session_cmeta_exit_kind(&session, &kind);
+        invalid_count = vxml_session_cmeta_exit_count(&session);
+        CAPTURE_CORRUPT_AT(0u, SIZE_MAX);
+        runtime->terminal_exit.entries[0] = saved_value;
+
+        runtime->terminal_exit.entries[0].name =
+            (vxml_cmeta_name_view){0};
+        CAPTURE_CORRUPT_AT(1u, 0u);
+        runtime->terminal_exit.entries[0] = saved_value;
+
+        runtime->terminal_exit.entries[0].name =
+            (vxml_cmeta_name_view){
+                (const char *)(uintptr_t)1u, 1u};
+        CAPTURE_CORRUPT_AT(2u, 0u);
+        runtime->terminal_exit.entries[0] = saved_value;
+
+        runtime->terminal_exit.entries[0].name =
+            (vxml_cmeta_name_view){
+                runtime->terminal_exit.names +
+                    runtime->terminal_exit.name_size - 1u,
+                2u};
+        CAPTURE_CORRUPT_AT(3u, 0u);
+        runtime->terminal_exit.entries[0] = saved_value;
+
+        runtime->terminal_exit.entries[1].value.data.string.data =
+            (const char *)(uintptr_t)1u;
+        runtime->terminal_exit.entries[1].value.data.string.size = 1u;
+        CAPTURE_CORRUPT_AT(4u, 1u);
+        runtime->terminal_exit.entries[1] = saved_text;
+
+        runtime->terminal_exit.entries[1].value.data.string.data =
+            runtime->terminal_exit.strings +
+                runtime->terminal_exit.string_size - 1u;
+        runtime->terminal_exit.entries[1].value.data.string.size = 2u;
+        CAPTURE_CORRUPT_AT(5u, 1u);
+        runtime->terminal_exit.entries[1] = saved_text;
+
+        runtime->terminal_exit.entries[1].value.data.string.data = NULL;
+        runtime->terminal_exit.entries[1].value.data.string.size = 1u;
+        CAPTURE_CORRUPT_AT(6u, 1u);
+        runtime->terminal_exit.entries[1] = saved_text;
+#undef CAPTURE_CORRUPT_AT
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        check_equal(kind_status, VXML_INVALID_STRUCTURE);
+        check_equal(kind, VXML_CMETA_EXIT_EMPTY);
+        check_equal(invalid_count, (size_t)0u);
+        for (index = 0u; index < 7u; ++index) {
+            check_equal(statuses[index], VXML_INVALID_STRUCTURE);
+            check_true(cleared[index]);
+        }
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
     }
 
     it("reports empty exhaustion and explicit empty exit identically") {
