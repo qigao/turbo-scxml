@@ -55,6 +55,50 @@ target_link_libraries(voicexml_session_test PRIVATE
   TurboSCXML::VoiceXML Salts::TinyTest)
 add_test(NAME voicexml_session_test COMMAND voicexml_session_test)
 
+add_executable(
+  voicexml_allocator_test voicexml/test_voicexml_allocator.c)
+target_compile_features(voicexml_allocator_test PRIVATE c_std_11)
+set_target_properties(voicexml_allocator_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_compile_definitions(voicexml_allocator_test PRIVATE
+  TURBOSCXML_VOICEXML_TESTING=1)
+target_include_directories(voicexml_allocator_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(voicexml_allocator_test PRIVATE
+  TurboSCXML::VoiceXML Salts::TinyTest)
+add_test(NAME voicexml_allocator_test COMMAND voicexml_allocator_test)
+
+if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release" AND
+   NOT TURBOSCXML_ENABLE_QUICKJS AND
+   NOT TURBOSCXML_ENABLE_CHTTP_RESOURCE AND
+   NOT TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  find_program(TURBOSCXML_POWERSHELL_EXECUTABLE
+    NAMES pwsh powershell REQUIRED)
+  add_test(NAME voicexml_package_isolation_test
+    COMMAND "${TURBOSCXML_POWERSHELL_EXECUTABLE}"
+      -NoProfile
+      -ExecutionPolicy Bypass
+      -File
+        "${CMAKE_CURRENT_SOURCE_DIR}/package/test_voicexml_package_isolation.ps1"
+      -SourceDir "${PROJECT_SOURCE_DIR}"
+      -ArtifactRoot
+        "${CMAKE_BINARY_DIR}/voicexml-package-isolation"
+      -InstallRoot
+        "${PROJECT_SOURCE_DIR}/.superpowers/sdd/2026-09-06-voicexml-nonmedia-core-mvp/final-fix-package-installs"
+      -RealSaltsRoot "$ENV{SALTS_ROOT}"
+      -XmlOnlyFixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts"
+      -VcpkgPrefix
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
+      -CMakeCommand "${CMAKE_COMMAND}")
+  set_tests_properties(voicexml_package_isolation_test PROPERTIES
+    LABELS "package;voicexml"
+    RUN_SERIAL TRUE
+    TIMEOUT 1800)
+endif()
+
 turboscxml_add_test(scxml_test scxml_test.c
   LIBS Salts::Core
   DEFINITIONS

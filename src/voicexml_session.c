@@ -1,7 +1,7 @@
 #include "voicexml_internal.h"
+#include "voicexml_allocator.h"
 
 #include <stdbool.h>
-#include <stdlib.h>
 
 struct vxml_session_impl {
     const vxml_program_impl *program;
@@ -58,7 +58,7 @@ vxml_status vxml_session_init(vxml_session *session,
     if (session == NULL) return VXML_INVALID_ARGUMENT;
     session->impl = NULL;
     if (program == NULL || program->impl == NULL) return VXML_INVALID_ARGUMENT;
-    impl = (vxml_session_impl *)malloc(sizeof(*impl));
+    impl = (vxml_session_impl *)vxml_malloc(sizeof(*impl));
     if (impl == NULL) return VXML_ALLOCATION_FAILED;
     impl->program = (const vxml_program_impl *)program->impl;
     impl->state = VXML_SESSION_READY;
@@ -106,6 +106,6 @@ vxml_status vxml_session_close(vxml_session *session) {
 
 void vxml_session_destroy(vxml_session *session) {
     if (session == NULL || session->impl == NULL) return;
-    free(session->impl);
+    vxml_free(session->impl);
     session->impl = NULL;
 }

@@ -45,7 +45,13 @@ typedef enum vxml_program_state {
     VXML_PROGRAM_COMPILED
 } vxml_program_state;
 
-/** Caller-allocated handle owning one private immutable program. */
+/**
+ * Caller-allocated, single-owner handle for one private immutable program.
+ * An initialized handle is non-copyable: a plain struct copy would create two
+ * apparent owners and must never be destroyed twice. To move ownership, copy
+ * the complete handle into an empty destination and immediately zero the
+ * source handle. Destroy the current program before reusing its handle.
+ */
 typedef struct vxml_program {
     void *impl;
 } vxml_program;
@@ -58,7 +64,11 @@ typedef enum vxml_session_state {
     VXML_SESSION_CLOSED
 } vxml_session_state;
 
-/** Caller-allocated handle owning one private single-owner session. */
+/**
+ * Caller-allocated, single-owner, non-copyable session handle. Move only by
+ * copying the complete handle into an empty destination and immediately
+ * zeroing the source. Destroy the current session before reusing its handle.
+ */
 typedef struct vxml_session {
     void *impl;
 } vxml_session;

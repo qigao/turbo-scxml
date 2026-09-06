@@ -45,6 +45,22 @@ static void check_empty_failure_at(
     check_equal(diagnostic.location.column, expected_location.column);
 }
 
+static void check_byte_failure_at(
+    const char *source, size_t source_size, size_t expected_offset,
+    const char *expected_message) {
+    vxml_program program = {(void *)(uintptr_t)1u};
+    vxml_diagnostic diagnostic = {0};
+
+    check_equal(vxml_compile(source, source_size, NULL, &program, &diagnostic),
+                VXML_XML_ERROR);
+    check_null(program.impl);
+    check_equal(diagnostic.status, VXML_XML_ERROR);
+    check_equal(diagnostic.location.byte_offset, expected_offset);
+    check_equal(diagnostic.location.line, (uint32_t)1u);
+    check_equal(diagnostic.location.column, (uint32_t)(expected_offset + 1u));
+    check_not_null(strstr(diagnostic.message, expected_message));
+}
+
 spec("VoiceXML program compiler") {
     group("accepted bounded documents") {
         it("compiles explicit exit and empty blocks into ordered rows") {
@@ -130,6 +146,53 @@ spec("VoiceXML program compiler") {
                 vxml_program_destroy(&program);
             }
         }
+
+        it("accepts a character-reference-normalized version") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' "
+                "version='2&#46;1'><form><block/></form></vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+
+            check_equal(compile_text(source, NULL, &program, &diagnostic),
+                        VXML_OK);
+            check_not_null(program.impl);
+            vxml_program_destroy(&program);
+        }
+
+        it("accepts a character-reference-normalized namespace URI") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/v&#120;ml' version='2.1'>"
+                "<form><block/></form></vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+
+            check_equal(compile_text(source, NULL, &program, &diagnostic),
+                        VXML_OK);
+            check_not_null(program.impl);
+            vxml_program_destroy(&program);
+        }
+
+        it("accepts character-reference whitespace throughout the profile") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "&#x20;<form>&#9;<block>&#10;<exit>&#13;</exit>&#x20;</block>"
+                "&#10;</form>&#x9;</vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            vxml_program_impl *impl;
+
+            check_equal(compile_text(source, NULL, &program, &diagnostic),
+                        VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->form_count, (size_t)1u);
+                check_equal(impl->block_count, (size_t)1u);
+                check_equal(impl->action_count, (size_t)1u);
+            }
+            vxml_program_destroy(&program);
+        }
     }
 
     group("document validation") {
@@ -158,6 +221,89 @@ spec("VoiceXML program compiler") {
             for (index = 0u; index < 3u; ++index)
                 check_empty_failure(
                     sources[index], VXML_INVALID_VERSION, NULL, 1u);
+        }
+
+        it("normalizes lexical values exactly once") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' "
+                "version='2&amp;#46;1'><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/v&amp;#120;ml' "
+                "version='2.1'><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block>&amp;#x20;</block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='main&amp;#46;one'><block/></form></vxml>"};
+            const vxml_status statuses[] = {
+                VXML_INVALID_VERSION,
+                VXML_INVALID_NAMESPACE,
+                VXML_INVALID_STRUCTURE,
+                VXML_INVALID_STRUCTURE};
+            size_t index;
+
+            for (index = 0u; index < 4u; ++index)
+                check_empty_failure(sources[index], statuses[index], NULL, 1u);
+        }
+
+        it("rejects malformed UTF-8 in ignored comments and instructions") {
+            static const char comment_source[] =
+                "<!--bad " "\xC3" "(-->"
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/></form></vxml>";
+            static const char instruction_source[] =
+                "<?bad " "\xF0" "(" "\x8C" "(?>"
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/></form></vxml>";
+            static const char nested_comment_source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><!--bad " "\xC2" "x--><block/></form></vxml>";
+
+            check_byte_failure_at(
+                comment_source, sizeof(comment_source) - 1u,
+                sizeof("<!--bad ") - 1u, "UTF-8");
+            check_byte_failure_at(
+                instruction_source, sizeof(instruction_source) - 1u,
+                sizeof("<?bad ") - 1u, "UTF-8");
+            check_byte_failure_at(
+                nested_comment_source, sizeof(nested_comment_source) - 1u,
+                sizeof("<vxml xmlns='http://www.w3.org/2001/vxml' "
+                       "version='2.1'><form><!--bad ") - 1u,
+                "UTF-8");
+        }
+
+        it("rejects invalid XML characters in otherwise ignored input") {
+            static const char control_source[] =
+                "<!--bad " "\x01" "-->"
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/></form></vxml>";
+            static const char noncharacter_source[] =
+                "<?bad " "\xEF\xBF\xBE" "?>"
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/></form></vxml>";
+
+            check_byte_failure_at(
+                control_source, sizeof(control_source) - 1u,
+                sizeof("<!--bad ") - 1u, "XML character");
+            check_byte_failure_at(
+                noncharacter_source, sizeof(noncharacter_source) - 1u,
+                sizeof("<?bad ") - 1u, "XML character");
+        }
+
+        it("maps unsupported XML declarations to unsupported feature") {
+            static const char source[] =
+                "<!DOCTYPE vxml>"
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/></form></vxml>";
+            vxml_program program = {(void *)(uintptr_t)1u};
+            vxml_diagnostic diagnostic = {0};
+
+            check_equal(compile_text(source, NULL, &program, &diagnostic),
+                        VXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+            check_equal(diagnostic.status, VXML_UNSUPPORTED_FEATURE);
+            check_equal(diagnostic.location.byte_offset, (size_t)0u);
+            check_equal(diagnostic.location.line, (uint32_t)1u);
+            check_equal(diagnostic.location.column, (uint32_t)1u);
+            check_not_null(strstr(diagnostic.message, "DTD"));
         }
 
         it("rejects duplicate IDs after XML decoding at the second ID") {

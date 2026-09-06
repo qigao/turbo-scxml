@@ -102,6 +102,11 @@ block    := <block/> | <block></block> | <block><exit/></block>
 `exit` 或第一个 form 耗尽）或 `FAILED`。重复 start 确定性失败；`close` 可从任意
 非销毁状态调用、可重复调用并进入 `CLOSED`。销毁 session 不会销毁 program。
 
+`vxml_program` 与 `vxml_session` 都是 single-owner、non-copyable handle。不要复制
+一个已初始化 handle 后从两个副本销毁同一实现。若需移动所有权，应把完整 handle
+传给一个空目标并立即把源 handle 清零；任何 handle 被重新用于 compile/init 前，
+必须先销毁它当前拥有的对象。
+
 默认 XML 限制来自 `salts_xml_default_limits()`；此外 `max_forms = 64`、
 `max_blocks = 1024`、`max_actions = 4096`、`max_name_bytes = 256 * 1024`。
 每个限制都必须大于零；编译失败时输出 program 保持为空。

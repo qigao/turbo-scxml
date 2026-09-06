@@ -76,6 +76,11 @@ a dependency only when an asynchronous adapter slice needs effect tickets.
 `TurboSCXML::VoiceXML` does not link CCXML; the later bridge depends one-way on
 both `TurboSCXML::CCXML` and `TurboSCXML::VoiceXML`.
 
+Both fixed-size handles are single-owner and non-copyable despite their C struct
+representation. Reuse requires destruction first. Ownership may be moved only
+by copying the complete handle into an empty destination and immediately
+zeroing the source, so exactly one handle remains responsible for destruction.
+
 Optional products are introduced only by their owning roadmap slices:
 
 - `TurboSCXML::VoiceXMLDialogManager`: serial asynchronous session registry

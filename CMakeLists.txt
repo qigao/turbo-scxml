@@ -128,6 +128,7 @@ target_link_libraries(turbo_ccxml
   PRIVATE Salts::XmlParser)
 
 add_library(turbo_voicexml STATIC
+  src/voicexml_allocator.c
   src/voicexml_program.c
   src/voicexml_session.c)
 add_library(TurboSCXML::VoiceXML ALIAS turbo_voicexml)
@@ -145,6 +146,10 @@ target_include_directories(turbo_voicexml
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_voicexml PUBLIC Salts::XmlParser)
+if(BUILD_TESTING)
+  target_compile_definitions(turbo_voicexml PRIVATE
+    TURBOSCXML_VOICEXML_TESTING=1)
+endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   if(NOT TARGET Salts::CHTTP)
