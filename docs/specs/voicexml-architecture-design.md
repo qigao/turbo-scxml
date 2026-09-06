@@ -252,7 +252,8 @@ Umbrella: [GitHub issue #41](https://github.com/qigao/turbo-scxml/issues/41).
 2. [#43](https://github.com/qigao/turbo-scxml/issues/43): serial dialog manager
    and CCXML prepare/start/terminate bridge.
 3. [#44](https://github.com/qigao/turbo-scxml/issues/44): typed CMeta datamodel,
-   `var/assign/clear/if/value`, and transactional scopes.
+   `var/assign/clear/if`, block guards, exit data, and transactional scopes.
+   Prompt-only `value` and prompt counters remain with the media roadmap.
 4. [#45](https://github.com/qigao/turbo-scxml/issues/45): directed FIA fields,
    grammar/collect adapter, semantic results, and `filled`.
 5. [#46](https://github.com/qigao/turbo-scxml/issues/46): scoped event handling,
