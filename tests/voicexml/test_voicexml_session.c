@@ -4,6 +4,7 @@
 #include "tinytest.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 static vxml_status compile_program(const char *source, vxml_program *program) {
@@ -78,6 +79,112 @@ spec("VoiceXML session") {
             check_equal(vxml_session_init(&session, &program), VXML_OK);
             check_equal(vxml_session_start(&session), VXML_OK);
             check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("stops at exit before validating the next entry-form block") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><exit/></block><block><exit/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+            vxml_session session = {0};
+            const vxml_status status = compile_program(source, &program);
+
+            check_equal(status, VXML_OK);
+            if (status == VXML_OK) {
+                impl = (vxml_program_impl *)program.impl;
+                impl->blocks[1].first_action = impl->action_count;
+                check_equal(vxml_session_init(&session, &program), VXML_OK);
+                check_equal(vxml_session_start(&session), VXML_OK);
+                check_equal(vxml_session_get_state(&session),
+                            VXML_SESSION_EXITED);
+                check_equal(vxml_session_error(&session), VXML_OK);
+            }
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("fails when the entry form exceeds its declared block range") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block/><block><exit/></block></form></vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+            vxml_session session = {0};
+            const vxml_status status = compile_program(source, &program);
+
+            check_equal(status, VXML_OK);
+            if (status == VXML_OK) {
+                impl = (vxml_program_impl *)program.impl;
+                impl->block_count = 1u;
+                check_equal(vxml_session_init(&session, &program), VXML_OK);
+                check_equal(vxml_session_start(&session),
+                            VXML_INVALID_STRUCTURE);
+                check_equal(vxml_session_get_state(&session),
+                            VXML_SESSION_FAILED);
+                check_equal(vxml_session_error(&session),
+                            VXML_INVALID_STRUCTURE);
+            }
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("fails when a block action exceeds its declared action range") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><exit/></block><block><exit/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+            vxml_session session = {0};
+            const vxml_status status = compile_program(source, &program);
+
+            check_equal(status, VXML_OK);
+            if (status == VXML_OK) {
+                impl = (vxml_program_impl *)program.impl;
+                impl->actions[0].kind = (vxml_action_kind)99;
+                impl->blocks[0].first_action = 1u;
+                impl->action_count = 1u;
+                check_equal(vxml_session_init(&session, &program), VXML_OK);
+                check_equal(vxml_session_start(&session),
+                            VXML_INVALID_STRUCTURE);
+                check_equal(vxml_session_get_state(&session),
+                            VXML_SESSION_FAILED);
+                check_equal(vxml_session_error(&session),
+                            VXML_INVALID_STRUCTURE);
+            }
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("rejects an overflowing action start without dereferencing it") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><exit/></block></form></vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+            vxml_session session = {0};
+            const vxml_status status = compile_program(source, &program);
+
+            check_equal(status, VXML_OK);
+            if (status == VXML_OK) {
+                impl = (vxml_program_impl *)program.impl;
+                impl->blocks[0].first_action = SIZE_MAX;
+                check_equal(vxml_session_init(&session, &program), VXML_OK);
+                check_equal(vxml_session_start(&session),
+                            VXML_INVALID_STRUCTURE);
+                check_equal(vxml_session_get_state(&session),
+                            VXML_SESSION_FAILED);
+                check_equal(vxml_session_error(&session),
+                            VXML_INVALID_STRUCTURE);
+            }
 
             vxml_session_destroy(&session);
             vxml_program_destroy(&program);
