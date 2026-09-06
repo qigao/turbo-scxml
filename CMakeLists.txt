@@ -12,6 +12,8 @@ option(TURBOSCXML_ENABLE_CHTTP_RESOURCE
   "Enable the optional blocking CHTTP SCXML resource adapter" OFF)
 option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO
   "Build the optional CHTTP BasicHTTP Event I/O processor" OFF)
+option(TURBOSCXML_ENABLE_VOICEXML_CMETA
+  "Build and install the optional VoiceXML CMeta profile" ON)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 
 if(ENABLE_SANITIZER_ADDRESS)
@@ -168,29 +170,31 @@ if(BUILD_TESTING)
     TURBOSCXML_VOICEXML_TESTING=1)
 endif()
 
-add_library(turbo_voicexml_cmeta STATIC
-  src/voicexml_cmeta_expr.c
-  src/voicexml_cmeta_program.c
-  src/voicexml_cmeta_session.c)
-add_library(TurboSCXML::VoiceXMLCMeta ALIAS turbo_voicexml_cmeta)
-set_target_properties(turbo_voicexml_cmeta PROPERTIES
-  EXPORT_NAME VoiceXMLCMeta
-  VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR})
-target_compile_features(turbo_voicexml_cmeta PUBLIC c_std_11)
-target_compile_options(turbo_voicexml_cmeta
-  PUBLIC
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
-target_include_directories(turbo_voicexml_cmeta
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(turbo_voicexml_cmeta
-  PUBLIC TurboSCXML::VoiceXML Salts::CMeta
-  PRIVATE Salts::QueryVM TurboSCXML::_CMetaRuntime)
+if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+  add_library(turbo_voicexml_cmeta STATIC
+    src/voicexml_cmeta_expr.c
+    src/voicexml_cmeta_program.c
+    src/voicexml_cmeta_session.c)
+  add_library(TurboSCXML::VoiceXMLCMeta ALIAS turbo_voicexml_cmeta)
+  set_target_properties(turbo_voicexml_cmeta PROPERTIES
+    EXPORT_NAME VoiceXMLCMeta
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_voicexml_cmeta PUBLIC c_std_11)
+  target_compile_options(turbo_voicexml_cmeta
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_voicexml_cmeta
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbo_voicexml_cmeta
+    PUBLIC TurboSCXML::VoiceXML Salts::CMeta
+    PRIVATE Salts::QueryVM TurboSCXML::_CMetaRuntime)
+endif()
 
-if(BUILD_TESTING)
+if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
   include(CheckCXXSourceCompiles)
   set(_TURBOSCXML_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
   set(_TURBOSCXML_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
@@ -299,13 +303,15 @@ if(BUILD_TESTING)
       "TurboSCXML::VoiceXML dependency contract changed")
   endif()
 
-  get_target_property(
-    TURBOVOICEXML_CMETA_PUBLIC_LINKS
-    turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
-  if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
-    message(FATAL_ERROR
-      "TurboSCXML::VoiceXMLCMeta dependency contract changed")
+  if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+    get_target_property(
+      TURBOVOICEXML_CMETA_PUBLIC_LINKS
+      turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+      message(FATAL_ERROR
+        "TurboSCXML::VoiceXMLCMeta dependency contract changed")
+    endif()
   endif()
 
   get_target_property(
@@ -373,12 +379,14 @@ install(TARGETS turbo_voicexml
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
-install(TARGETS turbo_voicexml_cmeta
-  EXPORT TurboSCXMLTargets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+  install(TARGETS turbo_voicexml_cmeta
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(TARGETS turbo_scxml_chttp_resource
     EXPORT TurboSCXMLTargets
@@ -404,9 +412,11 @@ install(
 install(
   FILES include/voicexml/voicexml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
-install(
-  FILES include/voicexml/cmeta.h
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
+if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+  install(
+    FILES include/voicexml/cmeta.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
+endif()
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(
     FILES include/scxml/chttp_resource.h
@@ -424,6 +434,8 @@ set(TURBOSCXML_PACKAGE_HAS_QUICKJS
   ${TURBOSCXML_ENABLE_QUICKJS})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO
   ${TURBOSCXML_ENABLE_CHTTP_EVENT_IO})
+set(TURBOSCXML_PACKAGE_HAS_VOICEXML_CMETA
+  ${TURBOSCXML_ENABLE_VOICEXML_CMETA})
 configure_package_config_file(
   cmake/TurboSCXMLConfig.cmake.in
   ${CMAKE_CURRENT_BINARY_DIR}/TurboSCXMLConfig.cmake

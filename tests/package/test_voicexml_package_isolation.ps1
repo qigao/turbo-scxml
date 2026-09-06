@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$InstallRoot,
     [Parameter(Mandatory = $true)][string]$RealSaltsRoot,
     [Parameter(Mandatory = $true)][string]$XmlOnlyFixture,
+    [Parameter(Mandatory = $true)][string]$CMetaFixture,
     [Parameter(Mandatory = $true)][string]$VcpkgPrefix,
     [Parameter(Mandatory = $true)][string]$CMakeCommand
 )
@@ -69,16 +70,81 @@ function Install-OptionalProfile {
     param(
         [Parameter(Mandatory = $true)][string]$Preset,
         [Parameter(Mandatory = $true)][string]$InstallPreset,
-        [Parameter(Mandatory = $true)][string]$InstallDir
+        [Parameter(Mandatory = $true)][string]$InstallDir,
+        [string[]]$Options = @()
     )
-    Invoke-Checked "$Preset configure" @(
+    $configureArguments = @(
         '--fresh', '--preset', $Preset,
         '-DBUILD_TESTING=OFF',
-        "-DCMAKE_INSTALL_PREFIX:PATH=$InstallDir")
+        "-DCMAKE_INSTALL_PREFIX:PATH=$InstallDir") + $Options
+    Invoke-Checked "$Preset configure" $configureArguments
     Invoke-Checked "$Preset build" @(
         '--build', '--preset', $Preset, '--parallel')
     Invoke-Checked "$Preset temporary install" @(
         '--build', '--preset', $InstallPreset, '--parallel')
+}
+
+function Test-BaseCMetaMissing {
+    param([Parameter(Mandatory = $true)][string]$InstallDir)
+    Invoke-WithEnvironment @{
+        TURBOSCXML_ROOT = $InstallDir
+        SALTS_ROOT = $XmlOnlyFixture
+        SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
+        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+    } {
+        Invoke-ExpectedFailure 'base required VoiceXMLCMeta component' @(
+            '--fresh',
+            '-S', (Join-Path $SourceDir 'tests/install_consumer'),
+            '-B', (Join-Path $ArtifactRoot 'base-cmeta-required'),
+            '-G', 'Ninja',
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") `
+            'does not include the VoiceXMLCMeta component'
+        Configure-Consumer 'base optional VoiceXMLCMeta probe' `
+            (Join-Path $ArtifactRoot 'base-cmeta-missing') @(
+                '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING=ON',
+                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture")
+    }
+}
+
+function Test-CMetaIsolation {
+    param([Parameter(Mandatory = $true)][string]$InstallDir)
+    Invoke-WithEnvironment @{
+        TURBOSCXML_ROOT = $InstallDir
+        SALTS_ROOT = $XmlOnlyFixture
+        SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
+        SALTS_CMETA_REAL_ROOT = $null
+        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+    } {
+        Invoke-ExpectedFailure 'CMeta missing Salts targets' @(
+            '--fresh',
+            '-S', (Join-Path $SourceDir 'tests/install_consumer'),
+            '-B', (Join-Path $ArtifactRoot 'cmeta-missing-salts'),
+            '-G', 'Ninja',
+            '-DCMAKE_BUILD_TYPE=Release',
+            '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") `
+            'Salts::CMeta, Salts::QueryVM'
+    }
+
+    $consumerBuild = Join-Path $ArtifactRoot 'cmeta-enabled'
+    Invoke-WithEnvironment @{
+        TURBOSCXML_ROOT = $InstallDir
+        SALTS_ROOT = $CMetaFixture
+        SALTS_CMETA_REAL_ROOT = $RealSaltsRoot
+        SALTS_XML_ONLY_REAL_ROOT = $null
+        CMAKE_PREFIX_PATH = $CMetaFixture
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$env:PATH"
+    } {
+        Configure-Consumer 'CMeta-enabled VoiceXML' $consumerBuild @(
+            '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
+            '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
+            "-DCMAKE_PREFIX_PATH:PATH=$CMetaFixture")
+        Run-Consumers 'CMeta-enabled VoiceXML' $consumerBuild @(
+            'turboscxml_voicexml_cmeta_install_consumer',
+            'turboscxml_voicexml_cmeta_install_consumer_cpp')
+    }
 }
 
 function Configure-Consumer {
@@ -273,7 +339,8 @@ function Reset-WorktreeDirectory {
 }
 
 foreach ($requiredDirectory in @(
-    $SourceDir, $RealSaltsRoot, $XmlOnlyFixture, $VcpkgPrefix)) {
+    $SourceDir, $RealSaltsRoot, $XmlOnlyFixture, $CMetaFixture,
+    $VcpkgPrefix)) {
     if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
         throw "Required package-isolation directory is missing: $requiredDirectory"
     }
@@ -282,9 +349,20 @@ Reset-WorktreeDirectory $ArtifactRoot
 Reset-WorktreeDirectory $InstallRoot
 $quickJsInstall = Join-Path $InstallRoot 'quickjs'
 $chttpInstall = Join-Path $InstallRoot 'chttp'
+$baseInstall = Join-Path $InstallRoot 'base'
+$cmetaInstall = Join-Path $InstallRoot 'cmeta'
 
 Push-Location $SourceDir
 try {
+    Install-OptionalProfile 'win-release-user' `
+        'install-win-release-user' $baseInstall @(
+            '-DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF')
+    Test-VoiceOnlyIsolation 'base' $baseInstall
+    Test-BaseCMetaMissing $baseInstall
+    Install-OptionalProfile 'win-release-user' `
+        'install-win-release-user' $cmetaInstall @(
+            '-DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON')
+    Test-CMetaIsolation $cmetaInstall
     Install-OptionalProfile 'win-release-quickjs-user' `
         'install-win-release-quickjs-user' $quickJsInstall
     Test-VoiceOnlyIsolation 'quickjs' $quickJsInstall
@@ -297,5 +375,6 @@ try {
     Pop-Location
 }
 
-Write-Host '[package-isolation] PASS: 2 optional profiles, 4 VoiceXML consumers,' `
-    '4 negative dependency probes, and 16 optional/package-wide consumer runs'
+Write-Host '[package-isolation] PASS: 4 isolated install profiles,' `
+    '8 VoiceXML consumer runs, 1 optional CMeta probe,' `
+    '6 required-dependency failures, and 16 optional/package-wide consumer runs'

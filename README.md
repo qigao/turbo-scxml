@@ -111,12 +111,109 @@ block    := <block/> | <block></block> | <block><exit/></block>
 `max_blocks = 1024`、`max_actions = 4096`、`max_name_bytes = 256 * 1024`。
 每个限制都必须大于零；编译失败时输出 program 保持为空。
 
+### Typed CMeta datamodel profile
+
+默认启用的 `TURBOSCXML_ENABLE_VOICEXML_CMETA` 会额外安装
+`<voicexml/cmeta.h>` 与 `TurboSCXML::VoiceXMLCMeta`：
+
+```cmake
+find_package(TurboSCXML CONFIG REQUIRED COMPONENTS VoiceXMLCMeta
+  PATHS "${TURBOSCXML_ROOT_PATH}" NO_DEFAULT_PATH)
+target_link_libraries(app PRIVATE TurboSCXML::VoiceXMLCMeta)
+```
+
+该组件的外部闭包仅增加 `Salts::CMeta` 与 private `Salts::QueryVM`；它仍通过
+`TurboSCXML::VoiceXML` 使用 `Salts::XmlParser`，不发现或链接 SCXML、CFlow、
+CSerde、CBind、QuickJS、网络或媒体 package。关闭该选项的 base-only 安装中，
+required `VoiceXMLCMeta` 请求会明确失败，`OPTIONAL_COMPONENTS VoiceXMLCMeta`
+则令 `TurboSCXML_VoiceXMLCMeta_FOUND` 为 false 且不创建该 target。
+
+只有 `vxml_compile_cmeta` 接纳显式 `datamodel="cmeta"`；普通
+`vxml_compile` 会拒绝它。接纳的 data/executable 语法为：
+
+```xml
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1"
+      datamodel="cmeta">
+  <var name="documentValue" expr="1"/>
+  <form id="main">
+    <var name="formValue"/>
+    <block name="alreadyVisited" expr="false"/>
+    <block name="guard" cond="documentValue > 0">
+      <var name="localValue" expr="documentValue"/>
+      <assign name="formValue" expr="localValue + 1"/>
+      <if cond="formValue == 2">
+        <clear namelist="formValue"/>
+        <elseif cond="false"/>
+        <clear/>
+        <else/>
+        <exit namelist="formValue localValue"/>
+      </if>
+    </block>
+  </form>
+</vxml>
+```
+
+根级 `var` 必须位于 `form` 前，form 级 `var` 必须位于 `block` 前；`var`
+可省略 `expr`，`assign` 必须同时具有 `name` 与 `expr`。`clear` 可为空，或用
+非空、空白分隔的 `namelist`；`if` 必须有 Boolean `cond`，其中零个或多个
+带 Boolean `cond` 的空 `elseif` marker 后可有至多一个空 `else` marker。
+`block` 可用 `name`、Boolean `expr` 初值及 Boolean `cond` guard；任何 defined
+`block@expr` 值（包括 false）都会令该 form item 初始为 ineligible。`exit` 可为空，
+或在互斥的 `expr` 与空白分隔 `namelist` 中选择一个。所有未列出的属性、放置、
+内容与非空 executable text 都会被拒绝。
+
+宿主提供的 CMeta root struct 同时是 application scope 初值和类型目录：每个
+source `var@name` 必须匹配一个 top-level root field，并继承其 semantic type。
+root `var` 创建 document scope，form `var` 创建 form/dialog scope，block body
+中的 `var` 创建 anonymous block scope；查找顺序为 anonymous、form、document、
+application。descriptor 和 `semantic_data` 中的 metadata 以
+`cmeta_type_equal` 判断语义相等，不使用指针地址。每个 slot 区分 undeclared、
+declared-but-undefined 与 defined（零、false、空字符串仍是 defined）三种状态。
+anonymous scope 在同一 dialog 的 `clear` revisit 之间持续存在，到 dialog 执行
+结束才释放。
+
+非媒体 FIA 先复制 application fields，按源码顺序初始化 document variables，
+进入第一个 form，再按源码顺序初始化 form variables 与 `block@expr`。随后每轮按
+文档顺序选择第一个 form-item 为 undefined 且 `cond` 为 true 的 block，先把它
+标为已访问，再执行 actions；`if` 只执行第一个匹配 branch，`clear` 可令 block
+再次 eligible。`max_execution_steps` 同时计 selection 与 action step，因此自清除
+循环会以 `VXML_LIMIT_EXCEEDED` 结束，而不会无限运行。
+
+一次完整 block 执行是一个 transaction：application、document、form、form-item
+及 active anonymous frame 全部先进入 staging，成功后统一 commit；表达式、转换、
+分配或 limit 失败会销毁 staging、保留全部 committed bytes/bound bits 并进入
+`FAILED`。这种 whole-block rollback 是刻意的非标准安全偏差；标准 VoiceXML 的
+imperative executable content 不会因后续 element 抛错而撤销先前写入。加入 scoped
+catch handler 前不得把本行为描述成标准兼容语义。
+
+所有 options struct 都按 ABI version 与 `struct_size` 验证；v1 会忽略完整 v1
+prefix 后的 forward tail。除 core 的 XML/form/block/action/name 限制外，compile
+必须提供正数 `max_expression_bytes`、`max_expression_instructions`、
+`max_expression_operands`、`max_expression_depth`、`max_path_depth`、
+`max_literal_bytes`、`max_string_bytes`、`max_scope_slots`、
+`max_scope_storage_bytes`、`max_conditional_depth`；session 还必须提供正数
+`max_transaction_bytes` 与 `max_execution_steps`。越界会明确失败，不会无界增长。
+
+root/可达 descriptor 借用到 program 销毁；`semantic_data` 指针数组会复制，但
+descriptor 对象仍借用。`initial_root` 只在 session init 期间借用，各 field 随即
+复制到 session-owned storage。普通 `vxml_session_cmeta_read` 的 string view 使用
+session-owned scratch，有效到下一次 read、任何 mutating session call、close 或
+destroy；exit result 的 name/string storage 由 session 拥有，有效到 close 或
+destroy。
+
+本 profile 不支持 `application.x`、`document.x`、`dialog.x`、`session.x` 等
+qualified scope object，也不支持 application-root/document aliasing。QuickJS、
+ECMAScript、DOM、`script`、`data`、resource retrieval，以及 `prompt`、`audio`、
+SSML、所有媒体 API/callback、grammar/recognition、`field`、`filled`、`record`、
+`transfer` 均仍是 deferred/unsupported；这里没有完整 VoiceXML conformance 声明。
+
 | VoiceXML surface | 当前状态 |
 |---|---|
 | `form` / `block` / `exit` 与同步 `EXITED` 生命周期 | 支持（仅限上述语法） |
+| 显式 `datamodel="cmeta"`、typed `var` / `assign` / `clear` / `if` / exit data | `VoiceXMLCMeta` 支持（仅限上述 profile） |
 | `prompt`、`audio`、SSML | 延后且不支持 |
-| recognition、grammar、collect | 延后且不支持 |
-| `record`、`transfer` | 延后且不支持 |
+| recognition、grammar、collect、`field`、`filled` | 延后且不支持 |
+| `record`、`transfer` 与 resource/script/data | 延后且不支持 |
 | 所有 media API/function、callback、ticket、token、wait state | 不存在；延后且不支持 |
 
 不支持的元素或属性返回明确的编译错误。core 没有隐藏的媒体对象、媒体函数、
@@ -125,7 +222,9 @@ callback、effect ticket、completion token 或等待状态。总体 roadmap 见
 [#42](https://github.com/qigao/turbo-scxml/issues/42)，prompt/audio/SSML 与媒体
 provider 工作见 [#47](https://github.com/qigao/turbo-scxml/issues/47)。架构、
 所有权与未来 adapter 隔离详见
-[`docs/specs/voicexml-architecture-design.md`](docs/specs/voicexml-architecture-design.md)。
+[`docs/specs/voicexml-architecture-design.md`](docs/specs/voicexml-architecture-design.md)，
+typed profile 的完整契约见
+[`docs/specs/voicexml-cmeta-design.md`](docs/specs/voicexml-cmeta-design.md)。
 
 ## 可选 CHTTP 资源适配器
 

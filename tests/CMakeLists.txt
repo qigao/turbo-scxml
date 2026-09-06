@@ -31,6 +31,7 @@ target_link_libraries(voicexml_api_test PRIVATE
   TurboSCXML::VoiceXML Salts::TinyTest)
 add_test(NAME voicexml_api_test COMMAND voicexml_api_test)
 
+if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
 add_executable(voicexml_cmeta_api_test voicexml/test_voicexml_cmeta_api.c)
 target_compile_features(voicexml_cmeta_api_test PRIVATE c_std_11)
 set_target_properties(voicexml_cmeta_api_test PROPERTIES
@@ -98,6 +99,7 @@ target_include_directories(voicexml_cmeta_session_test PRIVATE
 target_link_libraries(voicexml_cmeta_session_test PRIVATE
   TurboSCXML::VoiceXMLCMeta Salts::TinyTest)
 add_test(NAME voicexml_cmeta_session_test COMMAND voicexml_cmeta_session_test)
+endif()
 
 add_executable(voicexml_program_test voicexml/test_voicexml_program.c)
 target_compile_features(voicexml_program_test PRIVATE c_std_11)
@@ -158,6 +160,8 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release" AND
       -RealSaltsRoot "$ENV{SALTS_ROOT}"
       -XmlOnlyFixture
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts"
+      -CMetaFixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/cmeta_salts"
       -VcpkgPrefix
         "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
       -CMakeCommand "${CMAKE_COMMAND}")

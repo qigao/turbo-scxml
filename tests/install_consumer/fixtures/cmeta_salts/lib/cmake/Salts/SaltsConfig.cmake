@@ -1,0 +1,72 @@
+if(NOT DEFINED ENV{SALTS_CMETA_REAL_ROOT}
+   OR "$ENV{SALTS_CMETA_REAL_ROOT}" STREQUAL "")
+  set(Salts_FOUND FALSE)
+  set(Salts_NOT_FOUND_MESSAGE
+    "SALTS_CMETA_REAL_ROOT must name the real Salts install prefix")
+  return()
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_CMETA_REAL_ROOT}"
+  SALTS_CMETA_REAL_ROOT_PATH)
+if(NOT IS_DIRECTORY "${SALTS_CMETA_REAL_ROOT_PATH}/include" OR
+   NOT IS_DIRECTORY "${SALTS_CMETA_REAL_ROOT_PATH}/lib")
+  set(Salts_FOUND FALSE)
+  set(Salts_NOT_FOUND_MESSAGE
+    "SALTS_CMETA_REAL_ROOT is not a Salts install prefix: "
+    "$ENV{SALTS_CMETA_REAL_ROOT}")
+  return()
+endif()
+
+set(_SALTS_CMETA_FIXTURE_LIBRARIES)
+foreach(_SALTS_CMETA_FIXTURE_LIBRARY IN ITEMS
+    xml_parser
+    query_vm
+    salts_cmeta
+    salts
+    salts_coroutine
+    salts_concurrency
+    salts_platform)
+  unset(_SALTS_CMETA_FIXTURE_LIBRARY_PATH CACHE)
+  unset(_SALTS_CMETA_FIXTURE_LIBRARY_PATH)
+  find_library(_SALTS_CMETA_FIXTURE_LIBRARY_PATH
+    NAMES "${_SALTS_CMETA_FIXTURE_LIBRARY}"
+    PATHS "${SALTS_CMETA_REAL_ROOT_PATH}/lib"
+    NO_DEFAULT_PATH)
+  if(NOT _SALTS_CMETA_FIXTURE_LIBRARY_PATH)
+    set(Salts_FOUND FALSE)
+    set(Salts_NOT_FOUND_MESSAGE
+      "The CMeta fixture cannot find ${_SALTS_CMETA_FIXTURE_LIBRARY} under "
+      "${SALTS_CMETA_REAL_ROOT_PATH}/lib")
+    return()
+  endif()
+  list(APPEND _SALTS_CMETA_FIXTURE_LIBRARIES
+    "${_SALTS_CMETA_FIXTURE_LIBRARY_PATH}")
+endforeach()
+if(WIN32)
+  list(APPEND _SALTS_CMETA_FIXTURE_LIBRARIES bcrypt)
+endif()
+
+add_library(Salts::XmlParser INTERFACE IMPORTED)
+set_target_properties(Salts::XmlParser PROPERTIES
+  INTERFACE_COMPILE_FEATURES c_std_11
+  INTERFACE_INCLUDE_DIRECTORIES
+    "${SALTS_CMETA_REAL_ROOT_PATH}/include;${SALTS_CMETA_REAL_ROOT_PATH}/include/query_vm"
+  INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
+
+add_library(Salts::CMeta INTERFACE IMPORTED)
+set_target_properties(Salts::CMeta PROPERTIES
+  INTERFACE_COMPILE_FEATURES c_std_11
+  INTERFACE_COMPILE_OPTIONS
+    "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:preprocessor>"
+  INTERFACE_INCLUDE_DIRECTORIES
+    "${SALTS_CMETA_REAL_ROOT_PATH}/include"
+  INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
+
+add_library(Salts::QueryVM INTERFACE IMPORTED)
+set_target_properties(Salts::QueryVM PROPERTIES
+  INTERFACE_INCLUDE_DIRECTORIES
+    "${SALTS_CMETA_REAL_ROOT_PATH}/include/query_vm"
+  INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
+
+set(Salts_XmlParser_FOUND TRUE)
+set(Salts_CMeta_FOUND TRUE)
+set(Salts_QueryVM_FOUND TRUE)
