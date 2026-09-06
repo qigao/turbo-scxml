@@ -170,7 +170,8 @@ endif()
 
 add_library(turbo_voicexml_cmeta STATIC
   src/voicexml_cmeta_expr.c
-  src/voicexml_cmeta_program.c)
+  src/voicexml_cmeta_program.c
+  src/voicexml_cmeta_session.c)
 add_library(TurboSCXML::VoiceXMLCMeta ALIAS turbo_voicexml_cmeta)
 set_target_properties(turbo_voicexml_cmeta PROPERTIES
   EXPORT_NAME VoiceXMLCMeta

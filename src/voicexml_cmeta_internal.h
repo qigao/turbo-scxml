@@ -129,7 +129,41 @@ typedef struct vxml_cmeta_program_data {
     size_t string_size;
     size_t expression_scratch_bytes;
     size_t max_string_bytes;
+    size_t max_conditional_depth;
 } vxml_cmeta_program_data;
+
+typedef struct vxml_cmeta_root_storage {
+    void *allocation;
+    unsigned char *storage;
+    unsigned char *bound;
+} vxml_cmeta_root_storage;
+
+typedef struct vxml_cmeta_exec_frame {
+    size_t next_action;
+    size_t action_end;
+} vxml_cmeta_exec_frame;
+
+typedef struct vxml_cmeta_session_data {
+    size_t max_transaction_bytes;
+    size_t max_execution_steps;
+    size_t transaction_bytes_required;
+    size_t execution_steps;
+    vxml_cmeta_root_storage committed_root;
+    vxml_cmeta_root_storage staged_root;
+    cmeta_scope_storage *committed_scopes;
+    cmeta_scope_storage *staged_scopes;
+    size_t *declared_offsets;
+    unsigned char *committed_declared;
+    unsigned char *staged_declared;
+    size_t declared_count;
+    unsigned char *expression_scratch;
+    size_t expression_scratch_bytes;
+    vxml_cmeta_expr_runtime_scope *runtime_scopes;
+    size_t runtime_scope_capacity;
+    vxml_cmeta_exec_frame *exec_frames;
+    size_t exec_frame_capacity;
+    bool exit_requested;
+} vxml_cmeta_session_data;
 
 vxml_status vxml_cmeta_session_init_profile(
     vxml_session_impl *session, const void *options);

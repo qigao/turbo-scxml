@@ -84,16 +84,6 @@ static bool compile_options_valid(const vxml_cmeta_compile_options_v1 *options) 
     return true;
 }
 
-static bool session_options_valid(const vxml_cmeta_session_options_v1 *options) {
-    return options != NULL &&
-        options->abi_version == VXML_CMETA_SESSION_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options) &&
-        options->max_transaction_bytes != 0u &&
-        options->max_execution_steps != 0u &&
-        ((options->initially_undefined == NULL) ==
-         (options->initially_undefined_count == 0u));
-}
-
 static bool cmeta_decode_utf8(
     const char *data, size_t size, size_t *cursor, uint32_t *out_codepoint) {
     const size_t start = *cursor;
@@ -1162,6 +1152,7 @@ static bool cmeta_allocate_rows(
     profile->location_count = measurement->location_count;
     profile->location_candidate_count = candidate_count;
     profile->max_string_bytes = options->max_string_bytes;
+    profile->max_conditional_depth = options->max_conditional_depth;
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
             options->semantic_data_count * sizeof(*profile->semantic_data));
@@ -2080,6 +2071,8 @@ static vxml_status cmeta_lower_simple_action(
         if (cmeta_prior_var_action(
                 builder, first_action, block->scope, slot_index)) {
             action->kind = VXML_CMETA_ACTION_ASSIGN;
+            action->scope = block->scope;
+            action->slot = slot_index;
             status = cmeta_append_location(
                 builder, name_attribute, scopes, 3u, &action->target);
             if (status != VXML_OK) {
@@ -2526,74 +2519,4 @@ void vxml_cmeta_program_destroy_profile(vxml_program_impl *program) {
     program->forms = NULL;
     program->storage = NULL;
     program->profile_data = NULL;
-}
-
-vxml_status vxml_cmeta_session_init_profile(
-    vxml_session_impl *session, const void *options) {
-    (void)session;
-    return session_options_valid((const vxml_cmeta_session_options_v1 *)options)
-        ? VXML_OK : VXML_INVALID_CONTRACT;
-}
-
-vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
-    return vxml_session_start_literal(session);
-}
-
-void vxml_cmeta_session_destroy_profile(vxml_session_impl *session) {
-    (void)session;
-}
-
-vxml_status vxml_session_init_cmeta(
-    vxml_session *session, const vxml_program *program,
-    const vxml_cmeta_session_options_v1 *options) {
-    if (session == NULL) return VXML_INVALID_ARGUMENT;
-    session->impl = NULL;
-    if (!session_options_valid(options)) return VXML_INVALID_CONTRACT;
-    if (program == NULL || program->impl == NULL) return VXML_INVALID_ARGUMENT;
-    if (((const vxml_program_impl *)program->impl)->profile_kind !=
-        VXML_PROFILE_CMETA)
-        return VXML_INVALID_CONTRACT;
-    return vxml_session_init_profile(session, program, options);
-}
-
-static const vxml_session_impl *cmeta_session(const vxml_session *session) {
-    const vxml_session_impl *impl;
-    if (session == NULL || session->impl == NULL) return NULL;
-    impl = (const vxml_session_impl *)session->impl;
-    return impl->program != NULL && impl->program->profile_kind == VXML_PROFILE_CMETA
-        ? impl : NULL;
-}
-
-vxml_status vxml_session_cmeta_read(
-    const vxml_session *session, const char *name, size_t name_size,
-    vxml_cmeta_value_view *out_value) {
-    if (out_value != NULL) *out_value = (vxml_cmeta_value_view){0};
-    if (name == NULL || name_size == 0u || out_value == NULL)
-        return VXML_INVALID_ARGUMENT;
-    return cmeta_session(session) != NULL ? VXML_SEMANTIC_ERROR : VXML_INVALID_CONTRACT;
-}
-
-vxml_status vxml_session_cmeta_exit_kind(
-    const vxml_session *session, vxml_cmeta_exit_kind *out_kind) {
-    const vxml_session_impl *impl = cmeta_session(session);
-    if (out_kind == NULL) return VXML_INVALID_ARGUMENT;
-    if (impl == NULL) return VXML_INVALID_CONTRACT;
-    if (impl->state != VXML_SESSION_EXITED) return VXML_INVALID_STATE;
-    *out_kind = VXML_CMETA_EXIT_EMPTY;
-    return VXML_OK;
-}
-
-size_t vxml_session_cmeta_exit_count(const vxml_session *session) {
-    return cmeta_session(session) != NULL ? 0u : 0u;
-}
-
-vxml_status vxml_session_cmeta_exit_at(
-    const vxml_session *session, size_t index, vxml_cmeta_name_view *out_name,
-    vxml_cmeta_value_view *out_value) {
-    if (out_name != NULL) *out_name = (vxml_cmeta_name_view){0};
-    if (out_value != NULL) *out_value = (vxml_cmeta_value_view){0};
-    if (out_name == NULL || out_value == NULL) return VXML_INVALID_ARGUMENT;
-    if (cmeta_session(session) == NULL) return VXML_INVALID_CONTRACT;
-    (void)index;
-    return VXML_INVALID_ARGUMENT;
 }

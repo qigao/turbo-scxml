@@ -47,6 +47,7 @@ struct vxml_session_impl {
     const vxml_program_impl *program;
     vxml_session_state state;
     vxml_status error;
+    void *profile_data;
 };
 
 struct vxml_program_impl {

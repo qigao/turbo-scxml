@@ -74,6 +74,7 @@ vxml_status vxml_session_init_profile(
     impl->program = program_impl;
     impl->state = VXML_SESSION_READY;
     impl->error = VXML_OK;
+    impl->profile_data = NULL;
     if (program_impl->profile_session_init != NULL) {
         status = program_impl->profile_session_init(impl, options);
         if (status != VXML_OK) {

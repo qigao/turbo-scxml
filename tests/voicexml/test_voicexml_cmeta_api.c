@@ -61,9 +61,11 @@ static vxml_cmeta_compile_options_v1 compile_options(void) {
 }
 
 static vxml_cmeta_session_options_v1 session_options(void) {
+    static const vxml_cmeta_test_root initial_root = {0};
     return (vxml_cmeta_session_options_v1){
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_session_options_v1),
+        .initial_root = &initial_root,
         .max_transaction_bytes = 4096u,
         .max_execution_steps = 64u
     };
