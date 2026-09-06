@@ -245,6 +245,25 @@ spec("VoiceXML CMeta public API") {
         check_null(program.impl);
     }
 
+    it("rejects root fields whose descriptor storage disagrees with layout") {
+        cmeta_data_field_desc fields[] = {
+            vxml_cmeta_test_root_fields[0]
+        };
+        cmeta_data_struct_shape shape = vxml_cmeta_test_root_shape;
+        cmeta_data_desc root = vxml_cmeta_test_root_data;
+        vxml_cmeta_compile_options_v1 compile = compile_options();
+        vxml_program program = {(void *)1};
+
+        fields[0].value = &cmeta_data_float;
+        shape.fields = fields;
+        root.shape = &shape;
+        compile.root = &root;
+        check_equal(vxml_compile_cmeta(cmeta_source, sizeof(cmeta_source) - 1u,
+                                       NULL, &compile, &program, NULL),
+                    VXML_INVALID_CONTRACT);
+        check_null(program.impl);
+    }
+
     it("requires a CMeta datamodel while the plain compiler rejects it") {
         vxml_cmeta_compile_options_v1 compile = compile_options();
         vxml_program program = {0};

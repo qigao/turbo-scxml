@@ -35,8 +35,15 @@ static bool cmeta_root_supported(const cmeta_data_desc *root) {
             cmeta_struct_field(shape->layout, index);
         if (field->stable_id == NULL || field->name == NULL ||
             !cmeta_data_desc_valid(field->value) || layout_field == NULL ||
+            layout_field->type == NULL || field->value->storage_type == NULL ||
             strcmp(field->name, layout_field->name) != 0 ||
-            field->offset != layout_field->offset)
+            field->offset != layout_field->offset ||
+            layout_field->offset > root->storage_type->size ||
+            layout_field->size >
+                root->storage_type->size - layout_field->offset ||
+            !cmeta_type_equal(layout_field->type, field->value->storage_type) ||
+            layout_field->size != field->value->storage_type->size ||
+            layout_field->align != field->value->storage_type->align)
             return false;
     }
     return true;
