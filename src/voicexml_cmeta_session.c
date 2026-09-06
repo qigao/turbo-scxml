@@ -7,6 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
+static vxml_status read_scalar_value(
+    const cmeta_data_desc *data, const void *object,
+    unsigned char *string_scratch, size_t string_capacity,
+    vxml_cmeta_value_view *out_value);
+
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     return options != NULL &&
@@ -382,6 +387,87 @@ failure:
     return false;
 }
 
+static bool range_valid(size_t first, size_t count, size_t total) {
+    return first <= total && count <= total - first;
+}
+
+static bool exit_action_capacity(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_action_row *action,
+    size_t *out_entries, size_t *out_names, size_t *out_strings) {
+    size_t entries = 0u;
+    size_t names = 0u;
+    size_t strings = 0u;
+    size_t index;
+    if (action->exit_kind == VXML_CMETA_EXIT_EXPRESSION) {
+        if (action->expression >= program->expression_count ||
+            program->expressions == NULL)
+            return false;
+        entries = 1u;
+        if (vxml_cmeta_expr_program_value_kind(
+                &program->expressions[action->expression].program) ==
+            VXML_CMETA_VALUE_STRING)
+            strings = program->max_string_bytes;
+    } else if (action->exit_kind == VXML_CMETA_EXIT_NAMELIST) {
+        if (!range_valid(
+                action->first_location, action->location_count,
+                program->location_count) ||
+            (action->location_count != 0u && program->locations == NULL))
+            return false;
+        entries = action->location_count;
+        for (index = 0u; index < action->location_count; ++index) {
+            const vxml_cmeta_location_row *location =
+                &program->locations[action->first_location + index];
+            if ((location->name_size != 0u && location->name == NULL) ||
+                !checked_add(&names, location->name_size))
+                return false;
+            if (location->value != NULL &&
+                location->value->kind == CMETA_DATA_STRING &&
+                !checked_add(&strings, program->max_string_bytes))
+                return false;
+        }
+    } else if (action->exit_kind != VXML_CMETA_EXIT_EMPTY) {
+        return false;
+    }
+    *out_entries = entries;
+    *out_names = names;
+    *out_strings = strings;
+    return true;
+}
+
+static bool exit_capacity_measure(
+    const vxml_cmeta_program_data *program,
+    size_t first_action, size_t action_end,
+    size_t *out_entries, size_t *out_names, size_t *out_strings) {
+    size_t entries = 0u;
+    size_t names = 0u;
+    size_t strings = 0u;
+    size_t index;
+    if (first_action > action_end ||
+        !range_valid(first_action, action_end - first_action,
+                     program->action_count) ||
+        (first_action != action_end && program->actions == NULL))
+        return false;
+    for (index = first_action; index < action_end; ++index) {
+        const vxml_cmeta_action_row *action = &program->actions[index];
+        size_t action_entries;
+        size_t action_names;
+        size_t action_strings;
+        if (action->kind != VXML_CMETA_ACTION_EXIT) continue;
+        if (!exit_action_capacity(
+                program, action, &action_entries,
+                &action_names, &action_strings))
+            return false;
+        if (action_entries > entries) entries = action_entries;
+        if (action_names > names) names = action_names;
+        if (action_strings > strings) strings = action_strings;
+    }
+    *out_entries = entries;
+    *out_names = names;
+    *out_strings = strings;
+    return true;
+}
+
 static bool transaction_bytes_measure(
     const vxml_cmeta_program_data *program,
     size_t declared_count, size_t *out_bytes,
@@ -391,6 +477,9 @@ static bool transaction_bytes_measure(
     size_t amount;
     size_t scope_index;
     size_t frame_capacity;
+    size_t exit_entries = 0u;
+    size_t exit_names = 0u;
+    size_t exit_strings = 0u;
     if (shape == NULL || !storage_allocation_size(
             program->root->storage_type->size,
             program->root->storage_type->align,
@@ -409,6 +498,15 @@ static bool transaction_bytes_measure(
     if (!checked_add(&total, declared_count) ||
         !checked_add(&total, program->expression_scratch_bytes))
         return false;
+    if (!exit_capacity_measure(
+            program, 0u, program->action_count,
+            &exit_entries, &exit_names, &exit_strings) ||
+        !checked_multiply(
+            exit_entries, sizeof(vxml_cmeta_exit_entry), &amount) ||
+        !checked_add(&total, amount) ||
+        !checked_add(&total, exit_names) ||
+        !checked_add(&total, exit_strings))
+        return false;
     if (program->max_conditional_depth == SIZE_MAX) return false;
     frame_capacity = program->max_conditional_depth + 1u;
     if (!checked_multiply(
@@ -423,11 +521,102 @@ static bool transaction_bytes_measure(
     return true;
 }
 
+static void exit_snapshot_destroy(vxml_cmeta_exit_snapshot *snapshot) {
+    if (snapshot == NULL) return;
+    vxml_free(snapshot->strings);
+    vxml_free(snapshot->names);
+    vxml_free(snapshot->entries);
+    memset(snapshot, 0, sizeof(*snapshot));
+}
+
+static vxml_status exit_snapshot_prepare(
+    vxml_cmeta_exit_snapshot *snapshot,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_block_row *block) {
+    size_t entry_capacity;
+    size_t name_capacity;
+    size_t string_capacity;
+    exit_snapshot_destroy(snapshot);
+    if (!exit_capacity_measure(
+            program, block->first_action, block->action_end,
+            &entry_capacity, &name_capacity, &string_capacity))
+        return VXML_INVALID_STRUCTURE;
+    if (entry_capacity != 0u) {
+        snapshot->entries = (vxml_cmeta_exit_entry *)vxml_calloc(
+            entry_capacity, sizeof(*snapshot->entries));
+        if (snapshot->entries == NULL) goto allocation_failure;
+    }
+    if (name_capacity != 0u) {
+        snapshot->names = (char *)vxml_malloc(name_capacity);
+        if (snapshot->names == NULL) goto allocation_failure;
+    }
+    if (string_capacity != 0u) {
+        snapshot->strings = (char *)vxml_malloc(string_capacity);
+        if (snapshot->strings == NULL) goto allocation_failure;
+    }
+    snapshot->entry_capacity = entry_capacity;
+    snapshot->name_capacity = name_capacity;
+    snapshot->string_capacity = string_capacity;
+    return VXML_OK;
+
+allocation_failure:
+    exit_snapshot_destroy(snapshot);
+    return VXML_ALLOCATION_FAILED;
+}
+
+static vxml_status exit_snapshot_append(
+    vxml_cmeta_exit_snapshot *snapshot,
+    const char *name, size_t name_size,
+    const vxml_cmeta_value_view *value) {
+    vxml_cmeta_exit_entry *entry;
+    if (snapshot == NULL || value == NULL ||
+        snapshot->count >= snapshot->entry_capacity ||
+        snapshot->name_size > snapshot->name_capacity ||
+        name_size > snapshot->name_capacity - snapshot->name_size)
+        return VXML_LIMIT_EXCEEDED;
+    entry = &snapshot->entries[snapshot->count];
+    if (name_size != 0u) {
+        if (name == NULL || snapshot->names == NULL)
+            return VXML_INVALID_STRUCTURE;
+        memcpy(snapshot->names + snapshot->name_size, name, name_size);
+        entry->name.data = snapshot->names + snapshot->name_size;
+        entry->name.size = name_size;
+        snapshot->name_size += name_size;
+    }
+    entry->value = *value;
+    if (value->kind == VXML_CMETA_VALUE_STRING) {
+        const size_t string_size = value->data.string.size;
+        if ((string_size != 0u && value->data.string.data == NULL) ||
+            snapshot->string_size > snapshot->string_capacity ||
+            string_size >
+                snapshot->string_capacity - snapshot->string_size)
+            return VXML_LIMIT_EXCEEDED;
+        if (string_size != 0u) {
+            if (snapshot->strings == NULL) return VXML_INVALID_STRUCTURE;
+            memmove(snapshot->strings + snapshot->string_size,
+                    value->data.string.data, string_size);
+        }
+        entry->value.data.string.data =
+            snapshot->strings + snapshot->string_size;
+        snapshot->string_size += string_size;
+    }
+    ++snapshot->count;
+    return VXML_OK;
+}
+
+static void exit_snapshot_publish(vxml_cmeta_session_data *session) {
+    exit_snapshot_destroy(&session->terminal_exit);
+    session->terminal_exit = session->pending_exit;
+    memset(&session->pending_exit, 0, sizeof(session->pending_exit));
+}
+
 static void session_data_destroy(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    exit_snapshot_destroy(&session->terminal_exit);
+    exit_snapshot_destroy(&session->pending_exit);
     root_storage_destroy(&session->staged_root, program);
     root_storage_destroy(&session->committed_root, program);
     if (session->staged_scopes != NULL)
@@ -438,6 +627,7 @@ static void session_data_destroy(
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
     vxml_free(session->exec_frames);
     vxml_free(session->runtime_scopes);
+    vxml_free(session->read_scratch);
     vxml_free(session->expression_scratch);
     vxml_free(session->staged_declared);
     vxml_free(session->committed_declared);
@@ -518,10 +708,6 @@ static vxml_status session_fail(
     session->state = VXML_SESSION_FAILED;
     session->error = status;
     return status;
-}
-
-static bool range_valid(size_t first, size_t count, size_t total) {
-    return first <= total && count <= total - first;
 }
 
 static bool consume_step(vxml_cmeta_session_data *session) {
@@ -901,6 +1087,62 @@ static vxml_status resolve_staged_location(
     return VXML_SEMANTIC_ERROR;
 }
 
+static vxml_status read_staged_location_value(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_location_row *location,
+    vxml_cmeta_value_view *out_value) {
+    const cmeta_data_struct_shape *root_shape = session_root_shape(program);
+    resolved_location resolved;
+    const void *object = NULL;
+    unsigned char *string_scratch = NULL;
+    bool bound;
+    vxml_status status;
+    *out_value = (vxml_cmeta_value_view){0};
+    status = resolve_staged_location(session, program, location, &resolved);
+    if (status != VXML_OK) return status;
+    if (resolved.candidate->location.value != location->value)
+        return VXML_INVALID_STRUCTURE;
+    if (resolved.scope != NULL) {
+        const cmeta_scope_slot *slot = &resolved.scope->schema->slots[
+            resolved.candidate->location.slot];
+        const size_t offset = resolved.candidate->location.offset;
+        bound = resolved.scope->bound[
+            resolved.candidate->location.slot] != 0u;
+        if (offset > slot->value->storage_type->size ||
+            location->value->storage_type->size >
+                slot->value->storage_type->size - offset)
+            return VXML_INVALID_STRUCTURE;
+        if (bound) object = resolved.scope->storage + slot->offset + offset;
+    } else {
+        const size_t root_field = resolved.candidate->root_field;
+        const size_t offset = resolved.candidate->location.offset;
+        if (root_shape == NULL || root_field >= root_shape->field_count ||
+            offset > program->root->storage_type->size ||
+            location->value->storage_type->size >
+                program->root->storage_type->size - offset)
+            return VXML_INVALID_STRUCTURE;
+        bound = resolved.root->bound[root_field] != 0u;
+        if (bound) object = resolved.root->storage + offset;
+    }
+    if (!bound) return VXML_OK;
+    if (session->pending_exit.string_size >
+        session->pending_exit.string_capacity)
+        return VXML_INVALID_STRUCTURE;
+    if (session->pending_exit.string_size <
+        session->pending_exit.string_capacity) {
+        if (session->pending_exit.strings == NULL)
+            return VXML_INVALID_STRUCTURE;
+        string_scratch = (unsigned char *)session->pending_exit.strings +
+            session->pending_exit.string_size;
+    }
+    return read_scalar_value(
+        location->value, object, string_scratch,
+        session->pending_exit.string_capacity -
+            session->pending_exit.string_size,
+        out_value);
+}
+
 static void root_storage_clear_field(
     vxml_cmeta_root_storage *storage,
     const vxml_cmeta_program_data *program, size_t field_index) {
@@ -1092,10 +1334,13 @@ static vxml_status execute_exit(
         block->scope, form->scope, program->document_scope};
     size_t index;
     if (action->exit_kind == VXML_CMETA_EXIT_EXPRESSION) {
-        vxml_cmeta_value_view ignored;
-        const vxml_status status = evaluate_expression(
+        vxml_cmeta_value_view value;
+        vxml_status status = evaluate_expression(
             session, program, true, action->expression,
-            scopes, 3u, &ignored);
+            scopes, 3u, &value);
+        if (status != VXML_OK) return status;
+        status = exit_snapshot_append(
+            &session->pending_exit, NULL, 0u, &value);
         if (status != VXML_OK) return status;
     } else if (action->exit_kind == VXML_CMETA_EXIT_NAMELIST) {
         if (!range_valid(
@@ -1104,16 +1349,21 @@ static vxml_status execute_exit(
             (action->location_count != 0u && program->locations == NULL))
             return VXML_INVALID_STRUCTURE;
         for (index = 0u; index < action->location_count; ++index) {
-            resolved_location ignored;
-            const vxml_status status = resolve_staged_location(
-                session, program,
-                &program->locations[action->first_location + index],
-                &ignored);
+            const vxml_cmeta_location_row *location =
+                &program->locations[action->first_location + index];
+            vxml_cmeta_value_view value;
+            vxml_status status = read_staged_location_value(
+                session, program, location, &value);
+            if (status != VXML_OK) return status;
+            status = exit_snapshot_append(
+                &session->pending_exit,
+                location->name, location->name_size, &value);
             if (status != VXML_OK) return status;
         }
     } else if (action->exit_kind != VXML_CMETA_EXIT_EMPTY) {
         return VXML_INVALID_STRUCTURE;
     }
+    session->pending_exit.kind = action->exit_kind;
     session->exit_requested = true;
     return VXML_OK;
 }
@@ -1270,6 +1520,8 @@ vxml_status vxml_cmeta_session_init_profile(
     if (profile == NULL) return VXML_ALLOCATION_FAILED;
     profile->max_transaction_bytes = options->max_transaction_bytes;
     profile->max_execution_steps = options->max_execution_steps;
+    profile->active_form = VXML_CMETA_NO_INDEX;
+    profile->active_block = VXML_CMETA_NO_INDEX;
     if (root_shape->field_count != 0u) {
         undefined = (unsigned char *)vxml_calloc(
             root_shape->field_count, sizeof(*undefined));
@@ -1326,6 +1578,13 @@ vxml_status vxml_cmeta_session_init_profile(
             status = VXML_ALLOCATION_FAILED;
             goto failure;
         }
+    }
+    profile->read_scratch_bytes = program->max_string_bytes;
+    profile->read_scratch = (unsigned char *)vxml_malloc(
+        profile->read_scratch_bytes);
+    if (profile->read_scratch == NULL) {
+        status = VXML_ALLOCATION_FAILED;
+        goto failure;
     }
     profile->runtime_scope_capacity = 3u;
     profile->runtime_scopes = (vxml_cmeta_expr_runtime_scope *)vxml_calloc(
@@ -1387,6 +1646,7 @@ vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
         !range_valid(form->first_block, form->block_count,
                      program->block_count))
         return session_fail(session, VXML_INVALID_STRUCTURE);
+    profile->active_form = 0u;
     if (!transaction_begin(profile, program))
         return session_fail(session, VXML_ALLOCATION_FAILED);
     status = initialize_first_form(profile, program, form);
@@ -1424,31 +1684,42 @@ vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
             session->error = VXML_OK;
             return VXML_OK;
         }
+        profile->active_block = (size_t)(selected - program->blocks);
         if (!consume_step(profile))
             return session_fail(session, VXML_LIMIT_EXCEEDED);
-        if (!transaction_begin(profile, program))
+        status = exit_snapshot_prepare(
+            &profile->pending_exit, program, selected);
+        if (status != VXML_OK) return session_fail(session, status);
+        profile->exit_requested = false;
+        if (!transaction_begin(profile, program)) {
+            exit_snapshot_destroy(&profile->pending_exit);
             return session_fail(session, VXML_ALLOCATION_FAILED);
+        }
         {
             const bool completed = true;
             if (!cmeta_scope_view_assign(
                     &profile->staged_scopes[form->scope].view,
                     selected->form_item_slot, &completed)) {
                 transaction_reset(profile, program);
+                exit_snapshot_destroy(&profile->pending_exit);
                 return session_fail(session, VXML_ALLOCATION_FAILED);
             }
             status = execute_actions(
                 profile, program, form, selected);
             if (status != VXML_OK) {
                 transaction_reset(profile, program);
+                exit_snapshot_destroy(&profile->pending_exit);
                 return session_fail(session, status);
             }
         }
         transaction_commit(profile, program);
         if (profile->exit_requested) {
+            exit_snapshot_publish(profile);
             session->state = VXML_SESSION_EXITED;
             session->error = VXML_OK;
             return VXML_OK;
         }
+        exit_snapshot_destroy(&profile->pending_exit);
     }
 }
 
@@ -1490,38 +1761,337 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
         ? impl : NULL;
 }
 
+static bool read_sint_value(
+    const cmeta_data_desc *data, const void *object,
+    vxml_cmeta_value_view *out_value) {
+    const cmeta_data_integer_shape *shape;
+    if (data == NULL || data->kind != CMETA_DATA_SINT ||
+        data->shape == NULL || data->storage_type == NULL || object == NULL)
+        return false;
+    shape = (const cmeta_data_integer_shape *)data->shape;
+    out_value->kind = VXML_CMETA_VALUE_SINT;
+    switch (shape->bits) {
+        case 8u: {
+            int8_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.sint = value;
+            return true;
+        }
+        case 16u: {
+            int16_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.sint = value;
+            return true;
+        }
+        case 32u: {
+            int32_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.sint = value;
+            return true;
+        }
+        case 64u:
+            if (data->storage_type->size != sizeof(out_value->data.sint))
+                return false;
+            memcpy(&out_value->data.sint, object,
+                   sizeof(out_value->data.sint));
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool read_uint_value(
+    const cmeta_data_desc *data, const void *object,
+    vxml_cmeta_value_view *out_value) {
+    const cmeta_data_integer_shape *shape;
+    if (data == NULL || data->kind != CMETA_DATA_UINT ||
+        data->shape == NULL || data->storage_type == NULL ||
+        object == NULL)
+        return false;
+    shape = (const cmeta_data_integer_shape *)data->shape;
+    out_value->kind = VXML_CMETA_VALUE_UINT;
+    switch (shape->bits) {
+        case 8u: {
+            uint8_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.uint_value = value;
+            return true;
+        }
+        case 16u: {
+            uint16_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.uint_value = value;
+            return true;
+        }
+        case 32u: {
+            uint32_t value;
+            if (data->storage_type->size != sizeof(value)) return false;
+            memcpy(&value, object, sizeof(value));
+            out_value->data.uint_value = value;
+            return true;
+        }
+        case 64u:
+            if (data->storage_type->size !=
+                sizeof(out_value->data.uint_value))
+                return false;
+            memcpy(&out_value->data.uint_value, object,
+                   sizeof(out_value->data.uint_value));
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool read_float_value(
+    const cmeta_data_desc *data, const void *object,
+    vxml_cmeta_value_view *out_value) {
+    const cmeta_data_float_shape *shape;
+    if (data == NULL || data->kind != CMETA_DATA_FLOAT ||
+        data->shape == NULL || data->storage_type == NULL ||
+        object == NULL)
+        return false;
+    shape = (const cmeta_data_float_shape *)data->shape;
+    out_value->kind = VXML_CMETA_VALUE_FLOAT;
+    if (shape->bits == 32u) {
+        float value;
+        if (data->storage_type->size != sizeof(value)) return false;
+        memcpy(&value, object, sizeof(value));
+        out_value->data.number = value;
+        return true;
+    }
+    if (shape->bits == 64u) {
+        if (data->storage_type->size != sizeof(out_value->data.number))
+            return false;
+        memcpy(&out_value->data.number, object,
+               sizeof(out_value->data.number));
+        return true;
+    }
+    return false;
+}
+
+static vxml_status read_scalar_value(
+    const cmeta_data_desc *data, const void *object,
+    unsigned char *string_scratch, size_t string_capacity,
+    vxml_cmeta_value_view *out_value) {
+    if (data == NULL || object == NULL || out_value == NULL)
+        return VXML_INVALID_STRUCTURE;
+    if (data->kind == CMETA_DATA_BOOL) {
+        if (data->storage_type == NULL ||
+            data->storage_type->size != sizeof(out_value->data.boolean))
+            return VXML_INVALID_STRUCTURE;
+        out_value->kind = VXML_CMETA_VALUE_BOOL;
+        memcpy(&out_value->data.boolean, object,
+               sizeof(out_value->data.boolean));
+        return VXML_OK;
+    }
+    if (data->kind == CMETA_DATA_SINT)
+        return read_sint_value(data, object, out_value)
+            ? VXML_OK : VXML_INVALID_STRUCTURE;
+    if (data->kind == CMETA_DATA_UINT)
+        return read_uint_value(data, object, out_value)
+            ? VXML_OK : VXML_INVALID_STRUCTURE;
+    if (data->kind == CMETA_DATA_FLOAT)
+        return read_float_value(data, object, out_value)
+            ? VXML_OK : VXML_INVALID_STRUCTURE;
+    if (data->kind == CMETA_DATA_STRING) {
+        const unsigned char *bytes = NULL;
+        size_t size = 0u;
+        const cmeta_status status = cmeta_data_buffer_read(
+            data, object, string_capacity, &bytes, &size);
+        if (status != CMETA_OK) return buffer_status(status);
+        if (size > string_capacity)
+            return VXML_LIMIT_EXCEEDED;
+        if (size != 0u && (bytes == NULL || string_scratch == NULL))
+            return VXML_SEMANTIC_ERROR;
+        if (size != 0u) memmove(string_scratch, bytes, size);
+        out_value->kind = VXML_CMETA_VALUE_STRING;
+        out_value->data.string.data = (const char *)string_scratch;
+        out_value->data.string.size = size;
+        return VXML_OK;
+    }
+    return VXML_INVALID_STRUCTURE;
+}
+
+typedef struct committed_read_location {
+    const cmeta_data_desc *data;
+    const void *object;
+    bool bound;
+} committed_read_location;
+
+static vxml_status resolve_committed_read(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const char *name, size_t name_size,
+    committed_read_location *out) {
+    const cmeta_data_struct_shape *root_shape = session_root_shape(program);
+    size_t scopes[3];
+    size_t scope_count = 0u;
+    size_t index;
+    memset(out, 0, sizeof(*out));
+    if (session->active_block != VXML_CMETA_NO_INDEX) {
+        const vxml_cmeta_block_row *block;
+        if (session->active_block >= program->block_count ||
+            program->blocks == NULL)
+            return VXML_INVALID_STRUCTURE;
+        block = &program->blocks[session->active_block];
+        if (block->form != session->active_form)
+            return VXML_INVALID_STRUCTURE;
+        scopes[scope_count++] = block->scope;
+    }
+    if (session->active_form != VXML_CMETA_NO_INDEX) {
+        if (session->active_form >= program->form_count ||
+            program->forms == NULL)
+            return VXML_INVALID_STRUCTURE;
+        scopes[scope_count++] = program->forms[session->active_form].scope;
+    }
+    scopes[scope_count++] = program->document_scope;
+    for (index = 0u; index < scope_count; ++index) {
+        const size_t scope = scopes[index];
+        const cmeta_scope_schema *schema;
+        const cmeta_scope_view *view;
+        const cmeta_scope_slot *slot;
+        unsigned char *declared;
+        size_t slot_index = VXML_CMETA_NO_INDEX;
+        if (scope >= program->scope_count || program->scopes == NULL ||
+            session->committed_scopes == NULL)
+            return VXML_INVALID_STRUCTURE;
+        schema = &program->scopes[scope].schema;
+        view = &session->committed_scopes[scope].view;
+        slot = cmeta_scope_find(schema, name, name_size, &slot_index);
+        if (slot == NULL) continue;
+        declared = session_declared(session, program, false, scope);
+        if (slot_index >= schema->slot_count || declared == NULL ||
+            !cmeta_scope_view_valid(view) || view->schema != schema)
+            return VXML_INVALID_STRUCTURE;
+        if (declared[slot_index] == 0u) continue;
+        out->data = slot->value;
+        out->bound = view->bound[slot_index] != 0u;
+        if (out->bound) out->object = view->storage + slot->offset;
+        return VXML_OK;
+    }
+    if (root_shape == NULL || session->committed_root.storage == NULL ||
+        (root_shape->field_count != 0u &&
+         session->committed_root.bound == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (index = 0u; index < root_shape->field_count; ++index) {
+        const cmeta_data_field_desc *field = &root_shape->fields[index];
+        if (field->name == NULL || strlen(field->name) != name_size ||
+            memcmp(field->name, name, name_size) != 0)
+            continue;
+        out->data = field->value;
+        out->bound = session->committed_root.bound[index] != 0u;
+        if (out->bound)
+            out->object = session->committed_root.storage + field->offset;
+        return VXML_OK;
+    }
+    return VXML_SEMANTIC_ERROR;
+}
+
 vxml_status vxml_session_cmeta_read(
     const vxml_session *session, const char *name, size_t name_size,
     vxml_cmeta_value_view *out_value) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    vxml_cmeta_session_data *profile;
+    committed_read_location resolved;
+    vxml_status status;
     if (out_value != NULL) *out_value = (vxml_cmeta_value_view){0};
     if (name == NULL || name_size == 0u || out_value == NULL)
         return VXML_INVALID_ARGUMENT;
-    return cmeta_session(session) != NULL
-        ? VXML_SEMANTIC_ERROR : VXML_INVALID_CONTRACT;
+    if (!cmeta_location_path_valid(name, name_size, 1u))
+        return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_READY &&
+        impl->state != VXML_SESSION_EXITED &&
+        impl->state != VXML_SESSION_FAILED)
+        return VXML_INVALID_STATE;
+    if (impl->profile_data == NULL || impl->program->profile_data == NULL)
+        return VXML_INVALID_STRUCTURE;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    status = resolve_committed_read(
+        profile, program, name, name_size, &resolved);
+    if (status != VXML_OK || !resolved.bound) return status;
+    status = read_scalar_value(
+        resolved.data, resolved.object,
+        profile->read_scratch, profile->read_scratch_bytes,
+        out_value);
+    if (status != VXML_OK) *out_value = (vxml_cmeta_value_view){0};
+    return status;
+}
+
+static bool terminal_exit_valid(
+    const vxml_cmeta_exit_snapshot *snapshot) {
+    if (snapshot == NULL || snapshot->count > snapshot->entry_capacity ||
+        snapshot->name_size > snapshot->name_capacity ||
+        snapshot->string_size > snapshot->string_capacity ||
+        (snapshot->entry_capacity != 0u && snapshot->entries == NULL) ||
+        (snapshot->name_capacity != 0u && snapshot->names == NULL) ||
+        (snapshot->string_capacity != 0u && snapshot->strings == NULL))
+        return false;
+    if (snapshot->kind == VXML_CMETA_EXIT_EMPTY)
+        return snapshot->count == 0u;
+    if (snapshot->kind == VXML_CMETA_EXIT_EXPRESSION)
+        return snapshot->count == 1u;
+    if (snapshot->kind == VXML_CMETA_EXIT_NAMELIST)
+        return snapshot->count != 0u;
+    return false;
 }
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind) {
     const vxml_session_impl *impl = cmeta_session(session);
+    const vxml_cmeta_session_data *profile;
     if (out_kind == NULL) return VXML_INVALID_ARGUMENT;
+    *out_kind = VXML_CMETA_EXIT_EMPTY;
     if (impl == NULL) return VXML_INVALID_CONTRACT;
     if (impl->state != VXML_SESSION_EXITED) return VXML_INVALID_STATE;
-    *out_kind = VXML_CMETA_EXIT_EMPTY;
+    if (impl->profile_data == NULL) return VXML_INVALID_STRUCTURE;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (!terminal_exit_valid(&profile->terminal_exit))
+        return VXML_INVALID_STRUCTURE;
+    *out_kind = profile->terminal_exit.kind;
     return VXML_OK;
 }
 
 size_t vxml_session_cmeta_exit_count(const vxml_session *session) {
-    (void)session;
-    return 0u;
+    const vxml_session_impl *impl = cmeta_session(session);
+    const vxml_cmeta_session_data *profile;
+    if (impl == NULL || impl->state != VXML_SESSION_EXITED ||
+        impl->profile_data == NULL)
+        return 0u;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (!terminal_exit_valid(&profile->terminal_exit)) return 0u;
+    return profile->terminal_exit.kind == VXML_CMETA_EXIT_EXPRESSION ||
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_NAMELIST
+        ? profile->terminal_exit.count : 0u;
 }
 
 vxml_status vxml_session_cmeta_exit_at(
     const vxml_session *session, size_t index,
     vxml_cmeta_name_view *out_name, vxml_cmeta_value_view *out_value) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_session_data *profile;
     if (out_name != NULL) *out_name = (vxml_cmeta_name_view){0};
     if (out_value != NULL) *out_value = (vxml_cmeta_value_view){0};
     if (out_name == NULL || out_value == NULL) return VXML_INVALID_ARGUMENT;
-    if (cmeta_session(session) == NULL) return VXML_INVALID_CONTRACT;
-    (void)index;
-    return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_EXITED) return VXML_INVALID_STATE;
+    if (impl->profile_data == NULL) return VXML_INVALID_STRUCTURE;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (!terminal_exit_valid(&profile->terminal_exit))
+        return VXML_INVALID_STRUCTURE;
+    if (profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY ||
+        index >= profile->terminal_exit.count)
+        return VXML_INVALID_ARGUMENT;
+    *out_name = profile->terminal_exit.entries[index].name;
+    *out_value = profile->terminal_exit.entries[index].value;
+    return VXML_OK;
 }

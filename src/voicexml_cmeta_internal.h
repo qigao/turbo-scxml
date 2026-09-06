@@ -143,11 +143,31 @@ typedef struct vxml_cmeta_exec_frame {
     size_t action_end;
 } vxml_cmeta_exec_frame;
 
+typedef struct vxml_cmeta_exit_entry {
+    vxml_cmeta_name_view name;
+    vxml_cmeta_value_view value;
+} vxml_cmeta_exit_entry;
+
+typedef struct vxml_cmeta_exit_snapshot {
+    vxml_cmeta_exit_kind kind;
+    vxml_cmeta_exit_entry *entries;
+    size_t count;
+    size_t entry_capacity;
+    char *names;
+    size_t name_size;
+    size_t name_capacity;
+    char *strings;
+    size_t string_size;
+    size_t string_capacity;
+} vxml_cmeta_exit_snapshot;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
     size_t transaction_bytes_required;
     size_t execution_steps;
+    size_t active_form;
+    size_t active_block;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
@@ -158,10 +178,14 @@ typedef struct vxml_cmeta_session_data {
     size_t declared_count;
     unsigned char *expression_scratch;
     size_t expression_scratch_bytes;
+    unsigned char *read_scratch;
+    size_t read_scratch_bytes;
     vxml_cmeta_expr_runtime_scope *runtime_scopes;
     size_t runtime_scope_capacity;
     vxml_cmeta_exec_frame *exec_frames;
     size_t exec_frame_capacity;
+    vxml_cmeta_exit_snapshot pending_exit;
+    vxml_cmeta_exit_snapshot terminal_exit;
     bool exit_requested;
 } vxml_cmeta_session_data;
 

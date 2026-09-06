@@ -120,8 +120,12 @@ vxml_status vxml_session_close(vxml_session *session) {
     if (session == NULL) return VXML_INVALID_ARGUMENT;
     impl = (vxml_session_impl *)session->impl;
     if (impl == NULL) return VXML_INVALID_STATE;
-    if (impl->state != VXML_SESSION_CLOSED)
+    if (impl->state != VXML_SESSION_CLOSED) {
+        if (impl->program != NULL &&
+            impl->program->profile_session_destroy != NULL)
+            impl->program->profile_session_destroy(impl);
         impl->state = VXML_SESSION_CLOSED;
+    }
     return VXML_OK;
 }
 
