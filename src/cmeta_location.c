@@ -253,10 +253,15 @@ cmeta_location_status cmeta_location_compile_with_scope_detailed(
     size_t depth = 1u;
     size_t index;
     size_t lexical_error = 0u;
+    cmeta_location_diagnostic local_diagnostic = {0};
+    cmeta_location_diagnostic *detail =
+        diagnostic == NULL ? &local_diagnostic : diagnostic;
     cmeta_location compiled = {0};
     status = cmeta_location_compile_detailed(
-        out, path, path_size, root, max_depth, diagnostic);
+        out, path, path_size, root, max_depth, detail);
     if (status != CMETA_LOCATION_UNKNOWN || scope == NULL) return status;
+    if (detail->failure != CMETA_LOCATION_FAILURE_UNRESOLVED)
+        return status;
     if (!location_path_valid_detailed(path, path_size, &lexical_error))
         return location_result(
             CMETA_LOCATION_SYNTAX_ERROR, lexical_error,
@@ -289,11 +294,17 @@ cmeta_location_status cmeta_location_compile_with_scope_detailed(
         field = location_find_field(
             shape, path + segment_start, index - segment_start);
         if (field == NULL || !cmeta_data_desc_valid(field->value) ||
-            field->value->storage_type == NULL ||
             field->offset > current->storage_type->size ||
-            field->value->storage_type->size >
-                current->storage_type->size - field->offset ||
             absolute_offset > SIZE_MAX - field->offset)
+            return location_result(
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_UNRESOLVED, diagnostic);
+        if (field->value->storage_type == NULL)
+            return location_result(
+                CMETA_LOCATION_UNKNOWN, segment_start,
+                CMETA_LOCATION_FAILURE_UNADDRESSABLE, diagnostic);
+        if (field->value->storage_type->size >
+                current->storage_type->size - field->offset)
             return location_result(
                 CMETA_LOCATION_UNKNOWN, segment_start,
                 CMETA_LOCATION_FAILURE_UNRESOLVED, diagnostic);

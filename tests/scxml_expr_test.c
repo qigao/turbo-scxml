@@ -454,6 +454,73 @@ spec("TurboSCXML private SCXML expressions") {
                 "SCXML location does not expose addressable storage");
   }
 
+  it("preserves root non-struct diagnostics with a supplemental scope") {
+    static const char path[] = "order.count.value";
+    scxml_scope_schema supplemental = {0};
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    check_true(scxml_scope_schema_init(&supplemental, 1u));
+    check_equal(scxml_location_compile_with_scope(
+                    &location, path, sizeof(path) - 1u, &root_data,
+                    &supplemental, 3u, false, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(diagnostic.message,
+                "SCXML location traverses a non-struct value");
+    scxml_scope_schema_destroy(&supplemental);
+  }
+
+  it("preserves root unaddressable diagnostics with a supplemental scope") {
+    static const char path[] = "label";
+    cmeta_data_field_desc field = root_fields[2];
+    cmeta_data_struct_shape shape = root_shape;
+    cmeta_data_desc schema = root_data;
+    scxml_scope_schema supplemental = {0};
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+
+    field.value = &cmeta_data_sequence;
+    shape.fields = &field;
+    shape.field_count = 1u;
+    schema.shape = &shape;
+    check_true(scxml_scope_schema_init(&supplemental, 1u));
+    check_equal(scxml_location_compile_with_scope(
+                    &location, path, sizeof(path) - 1u, &schema,
+                    &supplemental, 1u, false, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(diagnostic.message,
+                "SCXML location does not expose addressable storage");
+    scxml_scope_schema_destroy(&supplemental);
+  }
+
+  it("reports unaddressable traversal in a supplemental scope") {
+    static const char path[] = "item.enabled";
+    cmeta_data_field_desc field = root_fields[0];
+    cmeta_data_struct_shape shape = root_shape;
+    cmeta_data_desc item = root_data;
+    scxml_scope_schema supplemental = {0};
+    scxml_location location = {0};
+    scxml_expr_diagnostic diagnostic = {0};
+    size_t slot = SIZE_MAX;
+    bool conflict = false;
+
+    field.value = &cmeta_data_sequence;
+    shape.fields = &field;
+    shape.field_count = 1u;
+    item.storage_type = &cmeta_type_int;
+    item.shape = &shape;
+    check_true(scxml_scope_schema_init(&supplemental, 1u));
+    check_true(scxml_scope_register(
+        &supplemental, "item", 4u, &item, &slot, &conflict));
+    check_equal(scxml_location_compile_with_scope(
+                    &location, path, sizeof(path) - 1u, &root_data,
+                    &supplemental, 2u, false, &diagnostic),
+                SCXML_EXPR_UNKNOWN_LOCATION);
+    check_equal(diagnostic.message,
+                "SCXML location does not expose addressable storage");
+    scxml_scope_schema_destroy(&supplemental);
+  }
+
   it("returns typed scalar values without weakening condition admission") {
     const char *sources[] = {
         "true", "order.count", "order.total", "order.ratio",
