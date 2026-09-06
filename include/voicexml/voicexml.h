@@ -65,6 +65,12 @@ typedef struct vxml_session {
 
 vxml_limits vxml_default_limits(void);
 
+/**
+ * Compile input bytes into a program. `out` may contain indeterminate storage;
+ * this function initializes it to an empty handle before validation. A caller
+ * must destroy any previously compiled program before reusing its handle.
+ * Every failure leaves a supplied output handle empty.
+ */
 vxml_status vxml_compile(const void *bytes, size_t size,
                          const vxml_limits *limits,
                          vxml_program *out,

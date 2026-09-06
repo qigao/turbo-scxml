@@ -2,6 +2,11 @@
 
 #include <string.h>
 
+static vxml_status fail(vxml_diagnostic *diagnostic, vxml_status status) {
+    if (diagnostic != NULL) diagnostic->status = status;
+    return status;
+}
+
 vxml_limits vxml_default_limits(void) {
     const vxml_limits limits = {
         salts_xml_default_limits(),
@@ -18,10 +23,11 @@ vxml_status vxml_compile(const void *bytes, size_t size,
                          vxml_diagnostic *diagnostic) {
     (void)limits;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
-    if (bytes == NULL || size == 0u || out == NULL || out->impl != NULL)
-        return VXML_INVALID_ARGUMENT;
+    if (out != NULL) out->impl = NULL;
+    if (bytes == NULL || size == 0u || out == NULL)
+        return fail(diagnostic, VXML_INVALID_ARGUMENT);
 
-    return VXML_UNSUPPORTED_FEATURE;
+    return fail(diagnostic, VXML_UNSUPPORTED_FEATURE);
 }
 
 void vxml_program_destroy(vxml_program *program) {

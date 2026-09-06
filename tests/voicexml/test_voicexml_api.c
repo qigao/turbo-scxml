@@ -21,15 +21,30 @@ spec("VoiceXML public API") {
 
     it("rejects null compile arguments") {
         static const char source[] = "<vxml/>";
-        vxml_program program = {0};
+        vxml_program program;
         vxml_diagnostic diagnostic = {0};
 
         check_equal(vxml_compile(NULL, 0u, NULL, &program, &diagnostic),
                     VXML_INVALID_ARGUMENT);
         check_null(program.impl);
+        check_equal(diagnostic.status, VXML_INVALID_ARGUMENT);
+        diagnostic = (vxml_diagnostic){0};
         check_equal(vxml_compile(source, sizeof(source) - 1u, NULL, NULL,
                                  &diagnostic),
                     VXML_INVALID_ARGUMENT);
+        check_equal(diagnostic.status, VXML_INVALID_ARGUMENT);
+    }
+
+    it("initializes an output handle before reporting a compile failure") {
+        static const char source[] = "<vxml/>";
+        vxml_program program;
+        vxml_diagnostic diagnostic = {0};
+
+        check_equal(vxml_compile(source, sizeof(source) - 1u, NULL, &program,
+                                 &diagnostic),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+        check_equal(diagnostic.status, VXML_UNSUPPORTED_FEATURE);
     }
 
     it("safely destroys a zero program") {
