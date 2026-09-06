@@ -1,0 +1,87 @@
+#ifndef TURBO_VOICEXML_H
+#define TURBO_VOICEXML_H
+
+#include <xml_parser/xml_parser.h>
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define VXML_DIAGNOSTIC_CAPACITY 256u
+
+typedef enum vxml_status {
+    VXML_OK = 0,
+    VXML_INVALID_ARGUMENT,
+    VXML_XML_ERROR,
+    VXML_ALLOCATION_FAILED,
+    VXML_LIMIT_EXCEEDED,
+    VXML_INVALID_NAMESPACE,
+    VXML_INVALID_VERSION,
+    VXML_DUPLICATE_ID,
+    VXML_INVALID_STRUCTURE,
+    VXML_UNSUPPORTED_FEATURE,
+    VXML_INVALID_STATE,
+    VXML_CLOSED
+} vxml_status;
+
+typedef struct vxml_limits {
+    salts_xml_limits xml;
+    size_t max_forms;
+    size_t max_blocks;
+    size_t max_actions;
+    size_t max_name_bytes;
+} vxml_limits;
+
+typedef struct vxml_diagnostic {
+    vxml_status status;
+    salts_xml_location location;
+    char message[VXML_DIAGNOSTIC_CAPACITY];
+} vxml_diagnostic;
+
+typedef enum vxml_program_state {
+    VXML_PROGRAM_EMPTY = 0,
+    VXML_PROGRAM_COMPILED
+} vxml_program_state;
+
+/** Caller-allocated handle owning one private immutable program. */
+typedef struct vxml_program {
+    void *impl;
+} vxml_program;
+
+typedef enum vxml_session_state {
+    VXML_SESSION_READY = 0,
+    VXML_SESSION_RUNNING,
+    VXML_SESSION_EXITED,
+    VXML_SESSION_FAILED,
+    VXML_SESSION_CLOSED
+} vxml_session_state;
+
+/** Caller-allocated handle owning one private single-owner session. */
+typedef struct vxml_session {
+    void *impl;
+} vxml_session;
+
+vxml_limits vxml_default_limits(void);
+
+vxml_status vxml_compile(const void *bytes, size_t size,
+                         const vxml_limits *limits,
+                         vxml_program *out,
+                         vxml_diagnostic *diagnostic);
+
+void vxml_program_destroy(vxml_program *program);
+
+vxml_status vxml_session_init(vxml_session *session,
+                              const vxml_program *program);
+vxml_status vxml_session_start(vxml_session *session);
+vxml_session_state vxml_session_get_state(const vxml_session *session);
+vxml_status vxml_session_error(const vxml_session *session);
+vxml_status vxml_session_close(vxml_session *session);
+void vxml_session_destroy(vxml_session *session);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* TURBO_VOICEXML_H */

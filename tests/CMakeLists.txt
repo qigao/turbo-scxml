@@ -21,6 +21,16 @@ function(turboscxml_add_test target source)
   add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+add_executable(voicexml_api_test voicexml/test_voicexml_api.c)
+target_compile_features(voicexml_api_test PRIVATE c_std_11)
+set_target_properties(voicexml_api_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_link_libraries(voicexml_api_test PRIVATE
+  TurboSCXML::VoiceXML Salts::TinyTest)
+add_test(NAME voicexml_api_test COMMAND voicexml_api_test)
+
 turboscxml_add_test(scxml_test scxml_test.c
   LIBS Salts::Core
   DEFINITIONS

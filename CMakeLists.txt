@@ -127,6 +127,24 @@ target_link_libraries(turbo_ccxml
   PUBLIC TurboSCXML::SCXML
   PRIVATE Salts::XmlParser)
 
+add_library(turbo_voicexml STATIC
+  src/voicexml_program.c)
+add_library(TurboSCXML::VoiceXML ALIAS turbo_voicexml)
+set_target_properties(turbo_voicexml PROPERTIES
+  EXPORT_NAME VoiceXML
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_voicexml PUBLIC c_std_11)
+target_compile_options(turbo_voicexml
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_voicexml
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(turbo_voicexml PUBLIC Salts::XmlParser)
+
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   if(NOT TARGET Salts::CHTTP)
     message(FATAL_ERROR
@@ -208,6 +226,13 @@ if(BUILD_TESTING)
   if(NOT TURBOCCXML_PUBLIC_LINKS STREQUAL TURBOCCXML_EXPECTED_LINKS)
     message(FATAL_ERROR
       "TurboSCXML::CCXML dependency contract changed")
+  endif()
+
+  get_target_property(
+    TURBOVOICEXML_PUBLIC_LINKS turbo_voicexml INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOVOICEXML_PUBLIC_LINKS STREQUAL "Salts::XmlParser")
+    message(FATAL_ERROR
+      "TurboSCXML::VoiceXML dependency contract changed")
   endif()
 
   if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
