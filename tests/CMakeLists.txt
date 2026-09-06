@@ -31,6 +31,18 @@ target_link_libraries(voicexml_api_test PRIVATE
   TurboSCXML::VoiceXML Salts::TinyTest)
 add_test(NAME voicexml_api_test COMMAND voicexml_api_test)
 
+add_executable(voicexml_program_test voicexml/test_voicexml_program.c)
+target_compile_features(voicexml_program_test PRIVATE c_std_11)
+set_target_properties(voicexml_program_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_include_directories(voicexml_program_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(voicexml_program_test PRIVATE
+  TurboSCXML::VoiceXML Salts::TinyTest)
+add_test(NAME voicexml_program_test COMMAND voicexml_program_test)
+
 turboscxml_add_test(scxml_test scxml_test.c
   LIBS Salts::Core
   DEFINITIONS

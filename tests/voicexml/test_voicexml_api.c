@@ -36,7 +36,9 @@ spec("VoiceXML public API") {
     }
 
     it("initializes an output handle before reporting a compile failure") {
-        static const char source[] = "<vxml/>";
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<prompt/></vxml>";
         vxml_program program;
         vxml_diagnostic diagnostic = {0};
 
