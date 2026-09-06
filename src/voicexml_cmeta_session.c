@@ -53,12 +53,16 @@ static bool checked_multiply(size_t left, size_t right, size_t *out) {
     return true;
 }
 
+static bool valid_alignment(size_t alignment) {
+    return alignment != 0u &&
+        (alignment & (alignment - 1u)) == 0u;
+}
+
 static bool storage_allocation_size(
     size_t object_size, size_t object_align, size_t bit_count,
     size_t *out_size) {
     size_t size;
-    if (object_size == 0u || object_align == 0u ||
-        (object_align & (object_align - 1u)) != 0u ||
+    if (object_size == 0u || !valid_alignment(object_align) ||
         object_size > SIZE_MAX - (object_align - 1u))
         return false;
     size = object_size + object_align - 1u;
@@ -110,7 +114,7 @@ static bool field_type_supported(
         return false;
     type = field->storage_type;
     if (!cmeta_type_desc_valid(type) || type->size == 0u ||
-        type->align == 0u || (type->align & (type->align - 1u)) != 0u)
+        !valid_alignment(type->align))
         return false;
     if (cmeta_type_require_traits(
             type, CMETA_TRAIT_TRIVIAL_COPY |
@@ -145,13 +149,17 @@ static bool session_root_fields_valid(
         (shape->field_count != 0u && shape->fields == NULL))
         return false;
     root_type = program->root->storage_type;
-    if (shape->layout->size != root_type->size ||
+    if (!cmeta_type_desc_valid(root_type) || root_type->size == 0u ||
+        !valid_alignment(root_type->align) ||
+        shape->layout->size != root_type->size ||
         shape->layout->align != root_type->align)
         return false;
     for (index = 0u; index < shape->field_count; ++index) {
         const cmeta_data_field_desc *field = &shape->fields[index];
         const cmeta_field_desc *layout_field =
             cmeta_struct_field(shape->layout, index);
+        const cmeta_type_desc *field_type;
+        size_t prior;
         bool managed;
         if (field->name == NULL || field->stable_id == NULL ||
             layout_field == NULL || layout_field->name == NULL ||
@@ -167,8 +175,31 @@ static bool session_root_fields_valid(
             layout_field->size != field->value->storage_type->size ||
             layout_field->align != field->value->storage_type->align)
             return false;
+        field_type = field->value->storage_type;
+        if (field->offset % field_type->align != 0u ||
+            root_type->align < field_type->align)
+            return false;
+        for (prior = 0u; prior < index; ++prior) {
+            const cmeta_data_field_desc *previous = &shape->fields[prior];
+            const size_t previous_size =
+                previous->value->storage_type->size;
+            if (field->offset >= previous->offset) {
+                if (field->offset - previous->offset < previous_size)
+                    return false;
+            } else if (previous->offset - field->offset < field_type->size) {
+                return false;
+            }
+        }
     }
     return true;
+}
+
+static bool session_root_contract_valid(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_options_v1 *options) {
+    const cmeta_data_struct_shape *shape = session_root_shape(program);
+    return session_root_fields_valid(program) && shape != NULL &&
+        (shape->field_count == 0u || options->initial_root != NULL);
 }
 
 static bool name_view_equal(
@@ -1028,7 +1059,8 @@ static vxml_status execute_assign(
     vxml_status status;
     if (action->scope != VXML_CMETA_NO_INDEX) {
         unsigned char *declared;
-        if (action->scope != block->scope ||
+        if (action->scope >= program->scope_count ||
+            action->scope != block->scope ||
             action->slot >=
                 program->scopes[action->scope].schema.slot_count)
             return VXML_INVALID_STRUCTURE;
@@ -1092,6 +1124,7 @@ static vxml_status select_if_branch(
     const vxml_cmeta_form_row *form,
     const vxml_cmeta_block_row *block,
     const vxml_cmeta_action_row *action,
+    size_t action_index,
     bool *out_selected, size_t *out_first, size_t *out_end) {
     const size_t scopes[3] = {
         block->scope, form->scope, program->document_scope};
@@ -1111,6 +1144,8 @@ static vxml_status select_if_branch(
         bool matches = true;
         vxml_status status;
         if (branch->first_action > branch->action_end ||
+            branch->first_action < action_index + 1u ||
+            branch->action_end > action->next_action ||
             branch->action_end > program->action_count)
             return VXML_INVALID_STRUCTURE;
         if (branch->condition != VXML_CMETA_NO_INDEX) {
@@ -1176,6 +1211,7 @@ static vxml_status execute_actions(
                 size_t end;
                 const vxml_status status = select_if_branch(
                     session, program, form, block, action,
+                    action_index,
                     &selected, &first, &end);
                 if (status != VXML_OK) return status;
                 if (selected && first != end) {
@@ -1228,8 +1264,7 @@ vxml_status vxml_cmeta_session_init_profile(
         return VXML_INVALID_CONTRACT;
     program = (const vxml_cmeta_program_data *)session->program->profile_data;
     root_shape = session_root_shape(program);
-    if (!session_root_fields_valid(program) || root_shape == NULL ||
-        (root_shape->field_count != 0u && options->initial_root == NULL))
+    if (!session_root_contract_valid(program, options))
         return VXML_INVALID_CONTRACT;
     profile = (vxml_cmeta_session_data *)vxml_calloc(1u, sizeof(*profile));
     if (profile == NULL) return VXML_ALLOCATION_FAILED;
@@ -1437,6 +1472,11 @@ vxml_status vxml_session_init_cmeta(
     if (program == NULL || program->impl == NULL) return VXML_INVALID_ARGUMENT;
     if (((const vxml_program_impl *)program->impl)->profile_kind !=
         VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (!session_root_contract_valid(
+            (const vxml_cmeta_program_data *)
+                ((const vxml_program_impl *)program->impl)->profile_data,
+            options))
         return VXML_INVALID_CONTRACT;
     return vxml_session_init_profile(session, program, options);
 }

@@ -217,6 +217,46 @@ static const cmeta_data_desc session_root_data = {
     .shape = &session_root_shape
 };
 
+typedef struct mutable_session_root_contract {
+    cmeta_type_traits text_traits;
+    cmeta_type_desc text_type;
+    cmeta_data_buffer_ops text_ops;
+    cmeta_data_desc text_data;
+    cmeta_field_desc layout_fields[5];
+    cmeta_struct_desc layout;
+    cmeta_data_field_desc fields[5];
+    cmeta_data_struct_shape shape;
+    cmeta_type_desc root_type;
+    cmeta_data_desc root_data;
+} mutable_session_root_contract;
+
+static void mutable_session_root_contract_init(
+    mutable_session_root_contract *contract) {
+    memset(contract, 0, sizeof(*contract));
+    contract->text_traits = session_text_traits;
+    contract->text_type = session_text_type;
+    contract->text_ops = session_text_ops;
+    contract->text_data = session_text_data;
+    memcpy(contract->layout_fields, session_root_layout_fields,
+           sizeof(contract->layout_fields));
+    contract->layout = session_root_layout;
+    memcpy(contract->fields, session_root_fields, sizeof(contract->fields));
+    contract->shape = session_root_shape;
+    contract->root_type = session_root_type;
+    contract->root_data = session_root_data;
+    contract->text_type.traits = &contract->text_traits;
+    contract->text_ops.storage_type = &contract->text_type;
+    contract->text_data.storage_type = &contract->text_type;
+    contract->text_data.buffer_ops = &contract->text_ops;
+    contract->layout_fields[4].type = &contract->text_type;
+    contract->layout.fields = contract->layout_fields;
+    contract->fields[4].value = &contract->text_data;
+    contract->shape.layout = &contract->layout;
+    contract->shape.fields = contract->fields;
+    contract->root_data.storage_type = &contract->root_type;
+    contract->root_data.shape = &contract->shape;
+}
+
 static void reset_session_text_probe(void) {
     session_text_copy_calls = 0u;
     session_text_assign_calls = 0u;
@@ -361,6 +401,36 @@ static void check_session_init_rejected(
     check_equal(vxml_session_init_cmeta(&session, program, options), expected);
     check_null(session.impl);
     vxml_session_destroy(&session);
+}
+
+static void check_root_contract_rejected_before_allocation(
+    const vxml_program *program,
+    const vxml_cmeta_session_options_v1 *options) {
+    vxml_session session = {(void *)(uintptr_t)1u};
+    const size_t copy_calls = session_text_copy_calls;
+    vxml_status status;
+    bool published;
+    size_t allocation_calls;
+    size_t final_live_count;
+    size_t invalid_operations;
+    memset(&session_allocations, 0, sizeof(session_allocations));
+    session_allocations.fail_on_call = SIZE_MAX;
+    vxml_test_allocator_set(&session_test_allocator);
+
+    status = vxml_session_init_cmeta(&session, program, options);
+    published = session.impl != NULL;
+    allocation_calls = session_allocations.calls;
+    vxml_session_destroy(&session);
+    final_live_count = session_allocations.live_count;
+    invalid_operations = session_allocations.invalid_operations;
+    vxml_test_allocator_reset();
+
+    check_equal(status, VXML_INVALID_CONTRACT);
+    check_false(published);
+    check_equal(allocation_calls, (size_t)0u);
+    check_equal(session_text_copy_calls, copy_calls);
+    check_equal(final_live_count, (size_t)0u);
+    check_equal(invalid_operations, (size_t)0u);
 }
 
 static bool scope_int(
@@ -565,6 +635,120 @@ spec("VoiceXML CMeta session execution") {
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
+    }
+
+    it("rejects an IF branch that escapes into another block") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<block name='first'><if cond='true'>"
+            "<assign name='value' expr='99'/></if></block>"
+            "<block name='second' expr='true'>"
+            "<assign name='other' expr='77'/></block>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 1, .other = 2, .late = 3, .flag = false};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_program_data *compiled;
+        vxml_cmeta_action_row *conditional;
+        vxml_cmeta_branch_row *branch;
+        const vxml_cmeta_session_root *committed;
+        vxml_status status;
+        vxml_status repeated_start;
+        vxml_status stable_error;
+        vxml_session_state state;
+        int committed_value;
+        int committed_other;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options),
+                    VXML_OK);
+        compiled = (vxml_cmeta_program_data *)(void *)program_data(&program);
+        check_equal(compiled->block_count, (size_t)2u);
+        conditional = &compiled->actions[compiled->blocks[0].first_action];
+        check_equal(conditional->kind, VXML_CMETA_ACTION_IF);
+        branch = &compiled->branches[conditional->first_branch];
+        branch->first_action = compiled->blocks[1].first_action;
+        branch->action_end = compiled->blocks[1].action_end;
+
+        status = vxml_session_start(&session);
+        state = vxml_session_get_state(&session);
+        stable_error = vxml_session_error(&session);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        committed_value = committed->value;
+        committed_other = committed->other;
+        repeated_start = vxml_session_start(&session);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        check_equal(status, VXML_INVALID_STRUCTURE);
+        check_equal(state, VXML_SESSION_FAILED);
+        check_equal(stable_error, VXML_INVALID_STRUCTURE);
+        check_equal(repeated_start, VXML_INVALID_STATE);
+        check_equal(committed_value, 1);
+        check_equal(committed_other, 2);
+    }
+
+    it("rejects an out-of-range repeated-var assignment scope") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<if cond='false'><var name='late' expr='1'/></if>"
+            "<var name='late' expr='2'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 1, .other = 2, .late = 3, .flag = false};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_program_data *compiled;
+        vxml_cmeta_action_row *repeated;
+        const vxml_cmeta_session_root *committed;
+        vxml_status status;
+        vxml_status stable_error;
+        vxml_status repeated_start;
+        vxml_session_state state;
+        bool form_item_bound;
+        int committed_late;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options),
+                    VXML_OK);
+        compiled = (vxml_cmeta_program_data *)(void *)program_data(&program);
+        repeated = &compiled->actions[compiled->blocks[0].action_end - 1u];
+        check_equal(repeated->kind, VXML_CMETA_ACTION_ASSIGN);
+        check_equal(repeated->scope, compiled->blocks[0].scope);
+        repeated->scope = compiled->scope_count;
+
+        status = vxml_session_start(&session);
+        state = vxml_session_get_state(&session);
+        stable_error = vxml_session_error(&session);
+        repeated_start = vxml_session_start(&session);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        committed_late = committed->late;
+        form_item_bound = session_data(&session)->committed_scopes[
+            compiled->forms[0].scope].view.bound[
+                compiled->blocks[0].form_item_slot] != 0u;
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        check_equal(status, VXML_INVALID_STRUCTURE);
+        check_equal(state, VXML_SESSION_FAILED);
+        check_equal(stable_error, VXML_INVALID_STRUCTURE);
+        check_equal(repeated_start, VXML_INVALID_STATE);
+        check_equal(committed_late, 3);
+        check_false(form_item_bound);
     }
 
     it("initializes block items and skips false FIA guards in document order") {
@@ -1341,6 +1525,83 @@ spec("VoiceXML CMeta session execution") {
             session_root_shape.field_count + 1u;
         check_session_init_rejected(&program, &options, VXML_INVALID_CONTRACT);
 
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects a misaligned root field before allocation or copy") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block expr='true'/></form></vxml>";
+        mutable_session_root_contract contract;
+        vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {0};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        mutable_session_root_contract_init(&contract);
+        compile.root = &contract.root_data;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        contract.fields[0].offset = 1u;
+        contract.layout_fields[0].offset = 1u;
+        reset_session_text_probe();
+        check_root_contract_rejected_before_allocation(&program, &options);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects aggregate alignment below a root field requirement") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block expr='true'/></form></vxml>";
+        mutable_session_root_contract contract;
+        vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {0};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        mutable_session_root_contract_init(&contract);
+        compile.root = &contract.root_data;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        contract.root_type.align = 1u;
+        contract.layout.align = 1u;
+        reset_session_text_probe();
+        check_root_contract_rejected_before_allocation(&program, &options);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects partial and full managed root-field overlap before copy") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block expr='true'/></form></vxml>";
+        mutable_session_root_contract contract;
+        vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {0};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        mutable_session_root_contract_init(&contract);
+        compile.root = &contract.root_data;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        contract.fields[0].value = &contract.text_data;
+        contract.layout_fields[0].size = contract.text_type.size;
+        contract.layout_fields[0].align = contract.text_type.align;
+        contract.layout_fields[0].type = &contract.text_type;
+        reset_session_text_probe();
+        check_root_contract_rejected_before_allocation(&program, &options);
+
+        contract.fields[0].offset = offsetof(vxml_cmeta_session_root, text);
+        contract.layout_fields[0].offset =
+            offsetof(vxml_cmeta_session_root, text);
+        reset_session_text_probe();
+        check_root_contract_rejected_before_allocation(&program, &options);
         vxml_program_destroy(&program);
     }
 
