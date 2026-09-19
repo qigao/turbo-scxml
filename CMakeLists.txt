@@ -253,7 +253,7 @@ if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
   set(_TURBOSCXML_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
   set(_TURBOSCXML_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
   set(CMAKE_REQUIRED_INCLUDES
-    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_ROOT_PATH}/include/query_vm")
+    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include/query_vm")
   unset(CMAKE_REQUIRED_LIBRARIES)
   check_cxx_source_compiles(
     "#include <voicexml/cmeta.h>\nint main() { vxml_program p{}; return p.impl == nullptr ? 0 : 1; }"
