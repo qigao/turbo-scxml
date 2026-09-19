@@ -3,8 +3,12 @@ param(
     [Parameter(Mandatory = $true)][string]$ArtifactRoot,
     [Parameter(Mandatory = $true)][string]$InstallRoot,
     [Parameter(Mandatory = $true)][string]$RealSaltsRoot,
+    [Parameter(Mandatory = $true)][string]$RealSaltsUtilsRoot,
+    [Parameter(Mandatory = $true)][string]$RealCHttpRoot,
     [Parameter(Mandatory = $true)][string]$XmlOnlyFixture,
+    [Parameter(Mandatory = $true)][string]$XmlOnlySaltsUtilsFixture,
     [Parameter(Mandatory = $true)][string]$CMetaFixture,
+    [Parameter(Mandatory = $true)][string]$CMetaSaltsUtilsFixture,
     [Parameter(Mandatory = $true)][string]$VcpkgPrefix,
     [Parameter(Mandatory = $true)][string]$CMakeCommand
 )
@@ -89,8 +93,10 @@ function Test-BaseCMetaMissing {
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $XmlOnlyFixture
+        SALTS_UTILS_ROOT = $XmlOnlySaltsUtilsFixture
         SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
-        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $RealSaltsUtilsRoot
+        CMAKE_PREFIX_PATH = "$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture"
     } {
         Invoke-ExpectedFailure 'base required VoiceXMLCMeta component' @(
             '--fresh',
@@ -99,12 +105,12 @@ function Test-BaseCMetaMissing {
             '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") `
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture") `
             'does not include the VoiceXMLCMeta component'
         Configure-Consumer 'base optional VoiceXMLCMeta probe' `
             (Join-Path $ArtifactRoot 'base-cmeta-missing') @(
                 '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING=ON',
-                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture")
+                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture")
     }
 }
 
@@ -113,28 +119,31 @@ function Test-CMetaIsolation {
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $XmlOnlyFixture
+        SALTS_UTILS_ROOT = $XmlOnlySaltsUtilsFixture
         SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $RealSaltsUtilsRoot
         SALTS_CMETA_REAL_ROOT = $null
-        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+        SALTS_UTILS_CMETA_REAL_ROOT = $null
+        CMAKE_PREFIX_PATH = "$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture"
     } {
         $optionalBuild = Join-Path $ArtifactRoot 'cmeta-optional-missing-salts'
         Configure-Consumer 'CMeta optional missing Salts targets' `
             $optionalBuild @(
                 '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING=ON',
                 '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture")
+                "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture")
         Run-Consumers 'CMeta optional missing Salts targets' $optionalBuild @(
             'turboscxml_voicexml_install_consumer',
             'turboscxml_voicexml_install_consumer_cpp')
 
-        Invoke-ExpectedFailure 'CMeta missing Salts targets' @(
+        Invoke-ExpectedFailure 'CMeta missing Salts/SaltsUtils targets' @(
             '--fresh',
             '-S', (Join-Path $SourceDir 'tests/install_consumer'),
             '-B', (Join-Path $ArtifactRoot 'cmeta-missing-salts'),
             '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") `
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture") `
             'Salts::CMeta, Salts::QueryVM'
     }
 
@@ -142,15 +151,18 @@ function Test-CMetaIsolation {
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $CMetaFixture
+        SALTS_UTILS_ROOT = $CMetaSaltsUtilsFixture
         SALTS_CMETA_REAL_ROOT = $RealSaltsRoot
+        SALTS_UTILS_CMETA_REAL_ROOT = $RealSaltsUtilsRoot
         SALTS_XML_ONLY_REAL_ROOT = $null
-        CMAKE_PREFIX_PATH = $CMetaFixture
-        PATH = "$(Join-Path $RealSaltsRoot 'bin');$env:PATH"
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $null
+        CMAKE_PREFIX_PATH = "$CMetaFixture;$CMetaSaltsUtilsFixture"
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$env:PATH"
     } {
         Configure-Consumer 'CMeta-enabled VoiceXML' $consumerBuild @(
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$CMetaFixture")
+            "-DCMAKE_PREFIX_PATH:PATH=$CMetaFixture;$CMetaSaltsUtilsFixture")
         Run-Consumers 'CMeta-enabled VoiceXML' $consumerBuild @(
             'turboscxml_voicexml_cmeta_install_consumer',
             'turboscxml_voicexml_cmeta_install_consumer_cpp')
@@ -201,14 +213,16 @@ function Test-VoiceOnlyIsolation {
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $XmlOnlyFixture
+        SALTS_UTILS_ROOT = $XmlOnlySaltsUtilsFixture
         SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
-        CMAKE_PREFIX_PATH = $XmlOnlyFixture
-        PATH = "$(Join-Path $RealSaltsRoot 'bin');$env:PATH"
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $RealSaltsUtilsRoot
+        CMAKE_PREFIX_PATH = "$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture"
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$env:PATH"
     } {
         Configure-Consumer "$Profile VoiceXML-only" $consumerBuild @(
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture")
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture")
         Run-Consumers "$Profile VoiceXML-only" $consumerBuild @(
             'turboscxml_voicexml_install_consumer',
             'turboscxml_voicexml_install_consumer_cpp')
@@ -220,8 +234,10 @@ function Test-QuickJsDiscovery {
     $fixtureEnvironment = @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $XmlOnlyFixture
+        SALTS_UTILS_ROOT = $XmlOnlySaltsUtilsFixture
         SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
-        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $RealSaltsUtilsRoot
+        CMAKE_PREFIX_PATH = "$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture"
     }
     Invoke-WithEnvironment $fixtureEnvironment {
         Invoke-ExpectedFailure 'QuickJS explicit component dependency' @(
@@ -232,7 +248,7 @@ function Test-QuickJsDiscovery {
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") 'qjs|disabled'
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture") 'qjs|disabled'
         Invoke-ExpectedFailure 'QuickJS no-component dependency' @(
             '--fresh',
             '-S', (Join-Path $SourceDir 'tests/install_consumer'),
@@ -241,15 +257,17 @@ function Test-QuickJsDiscovery {
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") 'qjs|disabled'
+            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture") 'qjs|disabled'
     }
 
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $RealSaltsRoot
+        SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
         SALTS_XML_ONLY_REAL_ROOT = $null
+        SALTS_UTILS_XML_ONLY_REAL_ROOT = $null
         CMAKE_PREFIX_PATH = $VcpkgPrefix
-        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
     } {
         $explicitBuild = Join-Path $ArtifactRoot 'quickjs-explicit'
         Configure-Consumer 'QuickJS explicit component' $explicitBuild @(
@@ -273,11 +291,14 @@ function Test-QuickJsDiscovery {
 
 function Test-CHttpDiscovery {
     param([Parameter(Mandatory = $true)][string]$InstallDir)
+
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
-        SALTS_ROOT = $XmlOnlyFixture
-        SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
-        CMAKE_PREFIX_PATH = $XmlOnlyFixture
+        SALTS_ROOT = $RealSaltsRoot
+        SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
+        HTTP_SERVICES_ROOT = $null
+        CMAKE_PREFIX_PATH = $VcpkgPrefix
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
     } {
         Invoke-ExpectedFailure 'CHTTP explicit component dependency' @(
             '--fresh',
@@ -287,7 +308,7 @@ function Test-CHttpDiscovery {
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") 'Salts::CHTTP'
+            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'HTTP_SERVICES_ROOT'
         Invoke-ExpectedFailure 'CHTTP no-component dependency' @(
             '--fresh',
             '-S', (Join-Path $SourceDir 'tests/install_consumer'),
@@ -295,15 +316,16 @@ function Test-CHttpDiscovery {
             '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture") 'Salts::CHTTP'
+            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'HTTP_SERVICES_ROOT'
     }
 
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $RealSaltsRoot
-        SALTS_XML_ONLY_REAL_ROOT = $null
+        SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
+        HTTP_SERVICES_ROOT = $RealCHttpRoot
         CMAKE_PREFIX_PATH = $VcpkgPrefix
-        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
+        PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$(Join-Path $RealCHttpRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
     } {
         $explicitBuild = Join-Path $ArtifactRoot 'chttp-explicit'
         Configure-Consumer 'CHTTP explicit components' $explicitBuild @(
@@ -349,8 +371,9 @@ function Reset-WorktreeDirectory {
 }
 
 foreach ($requiredDirectory in @(
-    $SourceDir, $RealSaltsRoot, $XmlOnlyFixture, $CMetaFixture,
-    $VcpkgPrefix)) {
+    $SourceDir, $RealSaltsRoot, $RealSaltsUtilsRoot, $RealCHttpRoot,
+    $XmlOnlyFixture, $XmlOnlySaltsUtilsFixture,
+    $CMetaFixture, $CMetaSaltsUtilsFixture, $VcpkgPrefix)) {
     if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
         throw "Required package-isolation directory is missing: $requiredDirectory"
     }
