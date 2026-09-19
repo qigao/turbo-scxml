@@ -1,0 +1,208 @@
+name: TurboSCXML dependency boundary #54
+
+on:
+  push:
+    branches:
+      - fix/dependency-boundaries-54
+    paths:
+      - CMakeLists.txt
+      - CMakeUserPresets.json
+      - cmake/**
+      - tests/**
+      - vcpkg.json
+      - .github/workflows/dependency-boundary-54.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turboscxml-boundary-54-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SALTS_SHA: c4197712261a563ed7e238152b34cb50a2ef98a9
+  SALTS_UTILS_SHA: 73958c5eb971947f8fd590609fabd83e1fdb721a
+  CHTTP_SHA: e210fae990f3197a99ee5e212b18d86d62fe133c
+  VCPKG_SHA: b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout exact TurboSCXML head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Static ownership gates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          grep -n 'find_package(SaltsUtils CONFIG REQUIRED' CMakeLists.txt
+          grep -n 'find_dependency(SaltsUtils CONFIG REQUIRED' cmake/TurboSCXMLConfig.cmake.in
+          grep -n 'CHttp::Client' CMakeLists.txt cmake/TurboSCXMLConfig.cmake.in
+          grep -n 'CHttp::Server' CMakeLists.txt cmake/TurboSCXMLConfig.cmake.in
+          if git grep -n 'Salts::CHTTP' -- CMakeLists.txt cmake tests; then
+            echo 'legacy Salts::CHTTP ownership remains in active package/build wiring' >&2
+            exit 1
+          fi
+          git diff --check HEAD^
+
+      - name: Checkout exact public dependencies
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ env.SALTS_SHA }}
+          path: salts
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: ${{ env.SALTS_UTILS_SHA }}
+          path: salts-utils
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: qigao/chttp
+          ref: ${{ env.CHTTP_SHA }}
+          path: chttp
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: ${{ env.VCPKG_SHA }}
+          path: vcpkg
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go for BoringSSL
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config nasm curl xz-utils
+          ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          sudo mkdir -p /opt/salts /opt/salts-utils /opt/http-services
+          sudo ln -sfn "$GITHUB_WORKSPACE/vcpkg" /opt/vcpkg
+          bash salts-utils/cmake/ci/install-re2c.sh
+
+      - name: Build and install exact Salts
+        shell: bash
+        working-directory: salts
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$SALTS_SHA"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build build/linux-gcc-debug --target install -j2
+          package="$RUNNER_TEMP/salts-project/external/pkgs/salts/debug"
+          test -f "$package/lib/cmake/Salts/SaltsConfig.cmake"
+          sudo ln -sfn "$package" /opt/salts/debug
+
+      - name: Build standalone SaltsUtils host Lemon
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S salts-utils/tools/lemon -B salts-utils/build/host-lemon             -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build salts-utils/build/host-lemon --target lemon -j2
+
+      - name: Build and install exact SaltsUtils
+        shell: bash
+        working-directory: salts-utils
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$SALTS_UTILS_SHA"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF             -DSALTS_UTILS_HOST_LEMON_EXECUTABLE="$GITHUB_WORKSPACE/salts-utils/build/host-lemon/lemon"
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -f /opt/salts-utils/debug/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake
+
+          mkdir -p "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils"
+          ln -sfn /opt/salts-utils/debug             "$RUNNER_TEMP/salts-project/external/pkgs/salts-utils/debug"
+
+      - name: Build and install exact CHTTP
+        shell: bash
+        working-directory: chttp
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          HTTP_SERVICES_ROOT: /opt/http-services/debug
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:/opt/salts/debug/lib:/opt/salts/debug/bin
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$CHTTP_SHA"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF             -DENABLE_SANITIZER_UNDEFINED=OFF
+          cmake --build --preset linux-dev-user -j2
+          cmake --build build/linux-gcc-debug --target install -j2
+          test -f /opt/http-services/debug/lib/cmake/Chttp/ChttpConfig.cmake
+
+      - name: Configure TurboSCXML core against split owners
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          cmake --preset linux-dev-user             -DENABLE_SANITIZER_ADDRESS=OFF
+
+      - name: Build and test TurboSCXML core
+        shell: bash
+        env:
+          PROJECT_ROOT: ${{ runner.temp }}/salts-project
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: /opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:/opt/salts/debug/lib:/opt/salts/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake --build --preset linux-dev-user -j2
+          ctest --test-dir build/linux-gcc-debug --no-tests=error --output-on-failure
+
+      - name: Configure optional standalone CHTTP adapters
+        shell: bash
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          HTTP_SERVICES_ROOT: /opt/http-services/debug
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: /opt/http-services/debug/lib:/opt/http-services/debug/bin:/opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:/opt/salts/debug/lib:/opt/salts/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/linux-chttp -G Ninja             -DCMAKE_BUILD_TYPE=Debug             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=ON             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON
+
+      - name: Build and test standalone CHTTP adapters
+        shell: bash
+        env:
+          SALTS_ROOT: /opt/salts/debug
+          SALTS_UTILS_ROOT: /opt/salts-utils/debug
+          HTTP_SERVICES_ROOT: /opt/http-services/debug
+          VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+          LD_LIBRARY_PATH: /opt/http-services/debug/lib:/opt/http-services/debug/bin:/opt/salts-utils/debug/lib:/opt/salts-utils/debug/bin:/opt/salts/debug/lib:/opt/salts/debug/bin
+        run: |
+          set -euxo pipefail
+          cmake --build build/linux-chttp -j2
+          ctest --test-dir build/linux-chttp --no-tests=error --output-on-failure
+
+      - name: Verify exact head and clean tracked source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test -z "$(git status --porcelain --untracked-files=no)"
