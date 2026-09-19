@@ -30,12 +30,12 @@ TurboSCXML reuses the Salts execution and type foundations:
 - **Core** for common systems support.
 - **TinyTest** for repository tests.
 
-Parser/query ownership is moving to the current ecosystem boundary:
+Parser/query and HTTP ownership follow the current ecosystem boundary:
 
-- **SaltsUtils** owns QueryVM and XML/parser components.
-- **CHTTP** owns HTTP client/server infrastructure.
+- **SaltsUtils** owns QueryVM and XML/parser components while preserving their existing `Salts::*` target names.
+- **CHTTP** owns HTTP client/server infrastructure through the standalone `CHttp::*` package targets.
 
-The current `main` branch still contains legacy package wiring that expects some of those targets from Salts. That packaging mismatch is tracked in [#54](https://github.com/qigao/turbo-scxml/issues/54). Build against a matching SDK set until that migration is completed.
+TurboSCXML resolves those packages explicitly from their installed roots and does not fall back to the former core-Salts ownership model.
 
 ## Ecosystem role
 
@@ -54,7 +54,10 @@ TurboSCXML belongs in the **framework/application layer**, not in the Salts kern
 The dependency direction must remain one-way:
 
 ```text
-TurboSCXML -> Salts
+TurboSCXML
+  -> Salts
+  -> SaltsUtils-owned parser/query targets
+  -> standalone CHTTP only when an HTTP adapter is enabled
 ```
 
 CFlow must remain independent of XML and SCXML.
@@ -120,7 +123,8 @@ Requirements:
 - Ninja
 - a C11-capable compiler
 - matching installed Salts SDK
-- matching parser/query package wiring for the selected revision
+- matching installed SaltsUtils SDK
+- standalone CHTTP only when an optional CHTTP adapter is enabled
 - Visual Studio 2022 developer environment on Windows
 
 Set:
@@ -129,9 +133,11 @@ Set:
 PROJECT_ROOT
 VCPKG_ROOT
 SALTS_ROOT
+SALTS_UTILS_ROOT
+HTTP_SERVICES_ROOT   # only for CHTTP-enabled profiles
 ```
 
-As the package-boundary migration in #54 is completed, parser/query and CHTTP roots should be resolved from their owning installed packages rather than from the core Salts package.
+The historical `HTTP_SERVICES_ROOT` variable names the installed CHTTP package root. It does not imply a separate legacy runtime boundary.
 
 ### Windows Release
 
@@ -180,7 +186,7 @@ Two optional adapters exist:
 
 They are adapter layers only. HTTP ownership belongs to the standalone CHTTP package.
 
-The migration from the old `Salts::CHTTP` package assumption to the standalone `CHttp::*` boundary is part of [#54](https://github.com/qigao/turbo-scxml/issues/54).
+`TurboSCXML::CHttpResource` publicly depends on `CHttp::Client`. `TurboSCXML::CHttpEventIO` publicly depends on both `CHttp::Client` and `CHttp::Server`. The old `Salts::CHTTP` ownership assumption is not used.
 
 ## VoiceXML core profile
 
