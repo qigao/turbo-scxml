@@ -15,8 +15,7 @@ find_package(TurboSCXML CONFIG REQUIRED COMPONENTS CHttpEventIO)
 target_link_libraries(app PRIVATE TurboSCXML::CHttpEventIO)
 ```
 
-匹配 profile 的 `SALTS_ROOT` 必须提供 `Salts::CHTTP`。功能默认关闭；关闭后
-不会安装该 header/target，也不会改变 `TurboSCXML::SCXML` 的 link interface。
+匹配 profile 的 `SALTS_ROOT` 与 `SALTS_UTILS_ROOT` 必须可用；启用该组件时，`HTTP_SERVICES_ROOT` 必须指向独立 CHTTP package，并提供 `CHttp::Client` 与 `CHttp::Server`。功能默认关闭；关闭后不会安装该 header/target，也不会改变 `TurboSCXML::SCXML` 的 link interface。
 
 ## 生命周期
 
