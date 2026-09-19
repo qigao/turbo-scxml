@@ -15,11 +15,32 @@ if(NOT IS_DIRECTORY "${SALTS_ROOT_PATH}")
   return()
 endif()
 
+if(NOT DEFINED ENV{SALTS_UTILS_ROOT}
+   OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "SALTS_UTILS_ROOT must name the installed SaltsUtils profile")
+  return()
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
+if(NOT IS_DIRECTORY "${SALTS_UTILS_ROOT_PATH}")
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "SALTS_UTILS_ROOT is not a directory: $ENV{SALTS_UTILS_ROOT}")
+  return()
+endif()
+
 include(CMakeFindDependencyMacro)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 find_dependency(Salts 1.1 CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
+  NO_DEFAULT_PATH)
+
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
+find_dependency(SaltsUtils CONFIG REQUIRED
+  PATHS "${SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 
 set(_TURBOSCXML_PACKAGE_WIDE FALSE)
@@ -52,6 +73,30 @@ if(@TURBOSCXML_PACKAGE_HAS_QUICKJS@ AND _TURBOSCXML_NEEDS_SCXML)
   find_dependency(qjs CONFIG REQUIRED)
 endif()
 
+if(_TURBOSCXML_NEEDS_CHTTP AND
+   (@TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@ OR
+    @TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO@))
+  if(NOT DEFINED ENV{HTTP_SERVICES_ROOT}
+     OR "$ENV{HTTP_SERVICES_ROOT}" STREQUAL "")
+    set(TurboSCXML_FOUND FALSE)
+    set(TurboSCXML_NOT_FOUND_MESSAGE
+      "HTTP_SERVICES_ROOT must name the installed CHTTP profile")
+    return()
+  endif()
+  file(TO_CMAKE_PATH "$ENV{HTTP_SERVICES_ROOT}" CHTTP_ROOT_PATH)
+  if(NOT IS_DIRECTORY "${CHTTP_ROOT_PATH}")
+    set(TurboSCXML_FOUND FALSE)
+    set(TurboSCXML_NOT_FOUND_MESSAGE
+      "HTTP_SERVICES_ROOT is not a directory: $ENV{HTTP_SERVICES_ROOT}")
+    return()
+  endif()
+  unset(Chttp_DIR CACHE)
+  unset(Chttp_DIR)
+  find_dependency(Chttp CONFIG REQUIRED
+    PATHS "${CHTTP_ROOT_PATH}"
+    NO_DEFAULT_PATH)
+endif()
+
 set(TurboSCXML_SCXML_FOUND TRUE)
 set(TurboSCXML_CCXML_FOUND TRUE)
 set(TurboSCXML_VoiceXML_FOUND TRUE)
@@ -70,20 +115,37 @@ if(VoiceXMLCMeta IN_LIST TurboSCXML_FIND_COMPONENTS AND
     "This TurboSCXML package does not include the VoiceXMLCMeta component")
   return()
 endif()
-if(_TURBOSCXML_NEEDS_CHTTP AND
-   (TurboSCXML_CHttpResource_FOUND OR TurboSCXML_CHttpEventIO_FOUND) AND
-   NOT TARGET Salts::CHTTP)
+if(_TURBOSCXML_NEEDS_CHTTP AND TurboSCXML_CHttpResource_FOUND AND
+   NOT TARGET CHttp::Client)
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
-    "This TurboSCXML package includes a CHTTP component, but the selected "
-    "Salts SDK does not provide Salts::CHTTP")
+    "The CHttpResource component requires CHttp::Client from the selected "
+    "CHTTP package")
   return()
+endif()
+if(_TURBOSCXML_NEEDS_CHTTP AND TurboSCXML_CHttpEventIO_FOUND)
+  set(_TURBOSCXML_MISSING_CHTTP_TARGETS)
+  foreach(_TURBOSCXML_REQUIRED_TARGET IN ITEMS
+      CHttp::Client CHttp::Server)
+    if(NOT TARGET ${_TURBOSCXML_REQUIRED_TARGET})
+      list(APPEND _TURBOSCXML_MISSING_CHTTP_TARGETS
+        ${_TURBOSCXML_REQUIRED_TARGET})
+    endif()
+  endforeach()
+  if(_TURBOSCXML_MISSING_CHTTP_TARGETS)
+    string(JOIN ", " _TURBOSCXML_MISSING_CHTTP_TARGETS_TEXT
+      ${_TURBOSCXML_MISSING_CHTTP_TARGETS})
+    set(TurboSCXML_FOUND FALSE)
+    set(TurboSCXML_NOT_FOUND_MESSAGE
+      "The CHttpEventIO component requires these targets from the selected CHTTP package: ${_TURBOSCXML_MISSING_CHTTP_TARGETS_TEXT}")
+    return()
+  endif()
 endif()
 if(TurboSCXML_VoiceXML_FOUND AND NOT TARGET Salts::XmlParser)
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
-    "The VoiceXML component requires Salts::XmlParser, but the selected "
-    "Salts SDK does not provide it")
+    "The VoiceXML component requires Salts::XmlParser from the selected "
+    "SaltsUtils package")
   return()
 endif()
 if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
@@ -104,7 +166,7 @@ if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
        TurboSCXML_FIND_REQUIRED_VoiceXMLCMeta)
       set(TurboSCXML_FOUND FALSE)
       set(TurboSCXML_NOT_FOUND_MESSAGE
-        "The VoiceXMLCMeta component requires these targets from the selected Salts SDK: ${_TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS_TEXT}")
+        "The VoiceXMLCMeta component requires these targets from the selected Salts/SaltsUtils SDKs: ${_TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS_TEXT}")
       return()
     endif()
   endif()
