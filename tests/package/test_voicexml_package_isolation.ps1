@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$InstallRoot,
     [Parameter(Mandatory = $true)][string]$RealSaltsRoot,
     [Parameter(Mandatory = $true)][string]$RealSaltsUtilsRoot,
-    [Parameter(Mandatory = $true)][string]$RealCHttpRoot,
+    [string]$RealCHttpRoot = "",
     [Parameter(Mandatory = $true)][string]$XmlOnlyFixture,
     [Parameter(Mandatory = $true)][string]$XmlOnlySaltsUtilsFixture,
     [Parameter(Mandatory = $true)][string]$CMetaFixture,
@@ -371,13 +371,15 @@ function Reset-WorktreeDirectory {
 }
 
 foreach ($requiredDirectory in @(
-    $SourceDir, $RealSaltsRoot, $RealSaltsUtilsRoot, $RealCHttpRoot,
+    $SourceDir, $RealSaltsRoot, $RealSaltsUtilsRoot,
     $XmlOnlyFixture, $XmlOnlySaltsUtilsFixture,
     $CMetaFixture, $CMetaSaltsUtilsFixture, $VcpkgPrefix)) {
     if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
         throw "Required package-isolation directory is missing: $requiredDirectory"
     }
 }
+$hasStandaloneCHttp = -not [string]::IsNullOrWhiteSpace($RealCHttpRoot) -and
+    (Test-Path -LiteralPath $RealCHttpRoot -PathType Container)
 Reset-WorktreeDirectory $ArtifactRoot
 Reset-WorktreeDirectory $InstallRoot
 $quickJsInstall = Join-Path $InstallRoot 'quickjs'
@@ -400,14 +402,20 @@ try {
         'install-win-release-quickjs-user' $quickJsInstall
     Test-VoiceOnlyIsolation 'quickjs' $quickJsInstall
     Test-QuickJsDiscovery $quickJsInstall
-    Install-OptionalProfile 'win-release-chttp-user' `
-        'install-win-release-chttp-user' $chttpInstall
-    Test-VoiceOnlyIsolation 'chttp' $chttpInstall
-    Test-CHttpDiscovery $chttpInstall
+    if ($hasStandaloneCHttp) {
+        Install-OptionalProfile 'win-release-chttp-user' `
+            'install-win-release-chttp-user' $chttpInstall
+        Test-VoiceOnlyIsolation 'chttp' $chttpInstall
+        Test-CHttpDiscovery $chttpInstall
+    } else {
+        Write-Host '[package-isolation] SKIP: standalone CHTTP package not installed; CHTTP profile is optional'
+    }
 } finally {
     Pop-Location
 }
 
-Write-Host '[package-isolation] PASS: 4 isolated install profiles,' `
-    '10 VoiceXML consumer runs, 2 optional CMeta probes,' `
-    '6 required-dependency failures, and 16 optional/package-wide consumer runs'
+if ($hasStandaloneCHttp) {
+    Write-Host '[package-isolation] PASS: core, CMeta, QuickJS, and standalone CHTTP package profiles validated'
+} else {
+    Write-Host '[package-isolation] PASS: core, CMeta, and QuickJS package profiles validated; standalone CHTTP profile skipped'
+}
