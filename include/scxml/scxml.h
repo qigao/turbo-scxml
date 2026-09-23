@@ -26,6 +26,7 @@ extern "C" {
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
+#define SCXML_CMETA_SESSION_OPTIONS_ABI_V4 4u
 #define SCXML_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define SCXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 1u
@@ -202,10 +203,11 @@ typedef struct scxml_data_resource_adapter_v1 {
 /**
  * Versioned CMeta session provider with external data resources.
  *
- * V2 fields retain their semantics. A program containing `<data src>`
- * requires a valid adapter and positive CBind scratch, depth, container-item,
- * and per-value buffer limits. Adapter operations are copied; its user pointer
- * remains borrowed until successful session destruction.
+ * V2 fields retain their semantics. This v3 record is retained for source and
+ * ABI compatibility. New callers should use v4; the legacy
+ * `cbind_scratch_bytes`/container-item limits are translated conservatively
+ * to the DataBind native workspace/item budgets. Adapter operations are copied;
+ * its user pointer remains borrowed until successful session destruction.
  */
 typedef struct scxml_cmeta_session_options_v3 {
     uint32_t abi_version;
@@ -220,6 +222,29 @@ typedef struct scxml_cmeta_session_options_v3 {
     size_t max_data_container_items;
     size_t max_data_buffer_bytes;
 } scxml_cmeta_session_options_v3;
+
+/**
+ * Canonical DataBind-backed CMeta session provider with external resources.
+ *
+ * `databind_workspace_bytes` bounds the caller-owned DataBind native
+ * workspace. `max_data_items` bounds the whole native descriptor/value graph,
+ * `max_data_owned_bytes` bounds aggregate owned STRING/BYTES payload, and
+ * `max_data_buffer_bytes` bounds any one owned value.
+ */
+typedef struct scxml_cmeta_session_options_v4 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const void *initial_state;
+    const scxml_cmeta_environment_override *environment_overrides;
+    size_t environment_override_count;
+    const scxml_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t databind_workspace_bytes;
+    size_t max_data_depth;
+    size_t max_data_items;
+    size_t max_data_owned_bytes;
+    size_t max_data_buffer_bytes;
+} scxml_cmeta_session_options_v4;
 
 /** Adapter-owned immutable UTF-8 text returned during program admission. */
 typedef struct scxml_text_resource {
@@ -834,6 +859,12 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v3(
     scxml_session *session,
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v3 *options);
+
+/** Initialize a CMeta session using the canonical DataBind resource profile. */
+cflow_statechart_instance_status scxml_session_init_cmeta_v4(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v4 *options);
 
 /** Initialize one session for a QuickJS-compiled program. */
 cflow_statechart_instance_status scxml_session_init_quickjs(

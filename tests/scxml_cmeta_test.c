@@ -5074,22 +5074,23 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 1u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .databind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(scxml_program_requirements(&program, &requirements));
         check_true((requirements & SCXML_REQUIREMENT_DATA_RESOURCE) != 0u);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5203,20 +5204,21 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 2u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .databind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5255,20 +5257,21 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 2u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .databind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5313,20 +5316,21 @@ spec("TurboSCXML public CMeta data model") {
             .completion_capacity = 1u,
             .microstep_limit = 16u,
             .effect_capacity = 1u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .databind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_program_event(

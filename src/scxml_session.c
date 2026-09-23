@@ -132,7 +132,7 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->system_name);
     free(impl->ioprocessor_storage);
     free(impl->payload_scratch);
-    free(impl->cbind_scratch);
+    free(impl->databind_workspace);
     free(impl->data_decode_allocation);
     free(impl->supplemental_checkpoint_allocation);
     free(impl->supplemental_staged_allocation);
@@ -235,7 +235,7 @@ static cflow_statechart_instance_status retain_supplemental_scope(
 
 static cflow_statechart_instance_status retain_data_resource_options(
     scxml_session_impl *session,
-    const scxml_cmeta_session_options_v3 *options) {
+    const scxml_cmeta_session_options_v4 *options) {
     size_t assignment;
     size_t max_size = 0u;
     size_t max_align = 0u;
@@ -268,17 +268,19 @@ static cflow_statechart_instance_status retain_data_resource_options(
     if (max_size == 0u) return CFLOW_STATECHART_INSTANCE_OK;
     if (options == NULL ||
         !data_resource_adapter_valid(options->data_resources) ||
-        options->cbind_scratch_bytes == 0u ||
+        options->databind_workspace_bytes == 0u ||
         options->max_data_depth == 0u ||
-        options->max_data_container_items == 0u ||
+        options->max_data_items == 0u ||
+        options->max_data_owned_bytes == 0u ||
         options->max_data_buffer_bytes == 0u ||
         max_size > SIZE_MAX - (max_align - 1u))
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     allocation_size = max_size + max_align - 1u;
     session->data_decode_allocation = calloc(1u, allocation_size);
-    session->cbind_scratch = calloc(1u, options->cbind_scratch_bytes);
+    session->databind_workspace =
+        calloc(1u, options->databind_workspace_bytes);
     if (session->data_decode_allocation == NULL ||
-        session->cbind_scratch == NULL)
+        session->databind_workspace == NULL)
         return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
     address = (uintptr_t)session->data_decode_allocation;
     if (address > UINTPTR_MAX - (max_align - 1u))
@@ -289,11 +291,16 @@ static cflow_statechart_instance_status retain_data_resource_options(
     session->data_decode_storage_size = max_size;
     session->data_resources = *options->data_resources;
     session->data_resource_user = options->data_resource_user;
-    session->cbind = (cbind_context)
-        CBIND_CONTEXT_WITH_BUFFERS_INIT(
-            session->cbind_scratch, options->cbind_scratch_bytes,
-            options->max_data_depth, options->max_data_container_items,
-            options->max_data_buffer_bytes);
+    session->databind_options.size = sizeof(session->databind_options);
+    session->databind_options.abi_version = DATA_BIND_NATIVE_ABI_VERSION;
+    session->databind_options.workspace = session->databind_workspace;
+    session->databind_options.workspace_bytes =
+        options->databind_workspace_bytes;
+    session->databind_options.max_depth = options->max_data_depth;
+    session->databind_options.max_items = options->max_data_items;
+    session->databind_options.max_owned_bytes =
+        options->max_data_owned_bytes;
+    session->max_data_buffer_bytes = options->max_data_buffer_bytes;
     session->has_data_resources = true;
     return CFLOW_STATECHART_INSTANCE_OK;
 }
@@ -628,7 +635,7 @@ static cflow_statechart_instance_status scxml_session_init_model(
     scxml_data_model data_model, const void *cmeta_initial_state,
     const scxml_cmeta_environment_override *environment_overrides,
     size_t environment_override_count,
-    const scxml_cmeta_session_options_v3 *resource_options,
+    const scxml_cmeta_session_options_v4 *resource_options,
     bool quickjs_profile) {
     scxml_session_impl *impl;
     const scxml_program_impl *program;
@@ -1077,17 +1084,63 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v3(
     scxml_session *session,
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v3 *options) {
+    scxml_cmeta_session_options_v4 translated = {0};
+    size_t max_owned_bytes = 0u;
     if (options == NULL ||
         options->abi_version != SCXML_CMETA_SESSION_OPTIONS_ABI_V3 ||
+        options->struct_size < sizeof(*options) ||
+        options->initial_state == NULL ||
+        (options->environment_override_count != 0u &&
+         options->environment_overrides == NULL))
+        return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+    if (options->data_resources != NULL) {
+        if (!data_resource_adapter_valid(options->data_resources) ||
+            options->cbind_scratch_bytes == 0u ||
+            options->max_data_depth == 0u ||
+            options->max_data_container_items == 0u ||
+            options->max_data_buffer_bytes == 0u ||
+            options->max_data_container_items >
+                SIZE_MAX / options->max_data_buffer_bytes)
+            return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        max_owned_bytes =
+            options->max_data_container_items *
+            options->max_data_buffer_bytes;
+    }
+    translated.abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4;
+    translated.struct_size = sizeof(translated);
+    translated.initial_state = options->initial_state;
+    translated.environment_overrides = options->environment_overrides;
+    translated.environment_override_count =
+        options->environment_override_count;
+    translated.data_resources = options->data_resources;
+    translated.data_resource_user = options->data_resource_user;
+    translated.databind_workspace_bytes = options->cbind_scratch_bytes;
+    translated.max_data_depth = options->max_data_depth;
+    translated.max_data_items = options->max_data_container_items;
+    translated.max_data_owned_bytes = max_owned_bytes;
+    translated.max_data_buffer_bytes = options->max_data_buffer_bytes;
+    return scxml_session_init_model(
+        session, config, SCXML_DATA_MODEL_CMETA,
+        translated.initial_state, translated.environment_overrides,
+        translated.environment_override_count, &translated, false);
+}
+
+cflow_statechart_instance_status scxml_session_init_cmeta_v4(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v4 *options) {
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_SESSION_OPTIONS_ABI_V4 ||
         options->struct_size < sizeof(*options) ||
         options->initial_state == NULL ||
         (options->environment_override_count != 0u &&
          options->environment_overrides == NULL) ||
         (options->data_resources != NULL &&
          (!data_resource_adapter_valid(options->data_resources) ||
-          options->cbind_scratch_bytes == 0u ||
+          options->databind_workspace_bytes == 0u ||
           options->max_data_depth == 0u ||
-          options->max_data_container_items == 0u ||
+          options->max_data_items == 0u ||
+          options->max_data_owned_bytes == 0u ||
           options->max_data_buffer_bytes == 0u)))
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     return scxml_session_init_model(

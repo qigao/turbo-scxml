@@ -4,7 +4,7 @@
 #include "scxml_expr.h"
 #include "scxml_location.h"
 
-#include <cbind/cbind.h>
+#include <data_bind_native.h>
 
 typedef struct scxml_quickjs_compile_options_v1
     scxml_quickjs_compile_options_v1;
@@ -77,7 +77,8 @@ bool scxml_assign_external_source(
 scxml_expr_status scxml_assign_apply_external(
     const scxml_assign_program *program,
     cserde_reader *reader,
-    const cbind_context *context,
+    const DataBindNativeOptions *options,
+    size_t max_buffer_bytes,
     void *decode_storage, size_t decode_storage_size,
     void *staged_root,
     scxml_expr_diagnostic *diagnostic);
