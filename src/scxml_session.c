@@ -132,7 +132,7 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->system_name);
     free(impl->ioprocessor_storage);
     free(impl->payload_scratch);
-    free(impl->databind_workspace);
+    free(impl->data_bind_workspace);
     free(impl->data_decode_allocation);
     free(impl->supplemental_checkpoint_allocation);
     free(impl->supplemental_staged_allocation);
@@ -268,7 +268,7 @@ static cflow_statechart_instance_status retain_data_resource_options(
     if (max_size == 0u) return CFLOW_STATECHART_INSTANCE_OK;
     if (options == NULL ||
         !data_resource_adapter_valid(options->data_resources) ||
-        options->databind_workspace_bytes == 0u ||
+        options->data_bind_workspace_bytes == 0u ||
         options->max_data_depth == 0u ||
         options->max_data_items == 0u ||
         options->max_data_owned_bytes == 0u ||
@@ -277,10 +277,10 @@ static cflow_statechart_instance_status retain_data_resource_options(
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     allocation_size = max_size + max_align - 1u;
     session->data_decode_allocation = calloc(1u, allocation_size);
-    session->databind_workspace =
-        calloc(1u, options->databind_workspace_bytes);
+    session->data_bind_workspace =
+        calloc(1u, options->data_bind_workspace_bytes);
     if (session->data_decode_allocation == NULL ||
-        session->databind_workspace == NULL)
+        session->data_bind_workspace == NULL)
         return CFLOW_STATECHART_INSTANCE_ALLOCATION_FAILED;
     address = (uintptr_t)session->data_decode_allocation;
     if (address > UINTPTR_MAX - (max_align - 1u))
@@ -291,16 +291,16 @@ static cflow_statechart_instance_status retain_data_resource_options(
     session->data_decode_storage_size = max_size;
     session->data_resources = *options->data_resources;
     session->data_resource_user = options->data_resource_user;
-    session->databind_options.size = sizeof(session->databind_options);
-    session->databind_options.abi_version = DATA_BIND_NATIVE_ABI_VERSION;
-    session->databind_options.workspace = session->databind_workspace;
-    session->databind_options.workspace_bytes =
-        options->databind_workspace_bytes;
-    session->databind_options.max_depth = options->max_data_depth;
-    session->databind_options.max_items = options->max_data_items;
-    session->databind_options.max_owned_bytes =
+    session->data_bind_options.size = sizeof(session->data_bind_options);
+    session->data_bind_options.abi_version = DATA_BIND_NATIVE_ABI_VERSION;
+    session->data_bind_options.workspace = session->data_bind_workspace;
+    session->data_bind_options.workspace_bytes =
+        options->data_bind_workspace_bytes;
+    session->data_bind_options.max_depth = options->max_data_depth;
+    session->data_bind_options.max_items = options->max_data_items;
+    session->data_bind_options.max_owned_bytes =
         options->max_data_owned_bytes;
-    session->max_data_buffer_bytes = options->max_data_buffer_bytes;
+    session->data_bind_max_buffer_bytes = options->max_data_buffer_bytes;
     session->has_data_resources = true;
     return CFLOW_STATECHART_INSTANCE_OK;
 }
@@ -1095,15 +1095,15 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v3(
         return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
     if (options->data_resources != NULL) {
         if (!data_resource_adapter_valid(options->data_resources) ||
-            options->cbind_scratch_bytes == 0u ||
+            options->data_bind_workspace_bytes == 0u ||
             options->max_data_depth == 0u ||
-            options->max_data_container_items == 0u ||
+            options->max_data_items == 0u ||
             options->max_data_buffer_bytes == 0u ||
-            options->max_data_container_items >
+            options->max_data_items >
                 SIZE_MAX / options->max_data_buffer_bytes)
             return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
         max_owned_bytes =
-            options->max_data_container_items *
+            options->max_data_items *
             options->max_data_buffer_bytes;
     }
     translated.abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4;
@@ -1114,9 +1114,9 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v3(
         options->environment_override_count;
     translated.data_resources = options->data_resources;
     translated.data_resource_user = options->data_resource_user;
-    translated.databind_workspace_bytes = options->cbind_scratch_bytes;
+    translated.data_bind_workspace_bytes = options->data_bind_workspace_bytes;
     translated.max_data_depth = options->max_data_depth;
-    translated.max_data_items = options->max_data_container_items;
+    translated.max_data_items = options->max_data_items;
     translated.max_data_owned_bytes = max_owned_bytes;
     translated.max_data_buffer_bytes = options->max_data_buffer_bytes;
     return scxml_session_init_model(
@@ -1137,7 +1137,7 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v4(
          options->environment_overrides == NULL) ||
         (options->data_resources != NULL &&
          (!data_resource_adapter_valid(options->data_resources) ||
-          options->databind_workspace_bytes == 0u ||
+          options->data_bind_workspace_bytes == 0u ||
           options->max_data_depth == 0u ||
           options->max_data_items == 0u ||
           options->max_data_owned_bytes == 0u ||
