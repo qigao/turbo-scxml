@@ -205,7 +205,7 @@ typedef struct scxml_data_resource_adapter_v1 {
  *
  * V2 fields retain their semantics. This v3 record is retained for source and
  * ABI compatibility. New callers should use v4; the legacy
- * `cbind_scratch_bytes`/container-item limits are translated conservatively
+ * `data_bind_workspace_bytes`/container-item limits are translated conservatively
  * to the DataBind native workspace/item budgets. Adapter operations are copied;
  * its user pointer remains borrowed until successful session destruction.
  */
@@ -217,9 +217,9 @@ typedef struct scxml_cmeta_session_options_v3 {
     size_t environment_override_count;
     const scxml_data_resource_adapter_v1 *data_resources;
     void *data_resource_user;
-    size_t cbind_scratch_bytes;
+    size_t data_bind_workspace_bytes;
     size_t max_data_depth;
-    size_t max_data_container_items;
+    size_t max_data_items;
     size_t max_data_buffer_bytes;
 } scxml_cmeta_session_options_v3;
 
