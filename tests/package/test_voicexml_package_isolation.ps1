@@ -296,7 +296,7 @@ function Test-CHttpDiscovery {
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $RealSaltsRoot
         SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
-        HTTP_SERVICES_ROOT = $null
+        CHTTP_ROOT = $null
         CMAKE_PREFIX_PATH = $VcpkgPrefix
         PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
     } {
@@ -308,7 +308,7 @@ function Test-CHttpDiscovery {
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'HTTP_SERVICES_ROOT'
+            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'CHTTP_ROOT'
         Invoke-ExpectedFailure 'CHTTP no-component dependency' @(
             '--fresh',
             '-S', (Join-Path $SourceDir 'tests/install_consumer'),
@@ -316,14 +316,14 @@ function Test-CHttpDiscovery {
             '-G', 'Ninja',
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'HTTP_SERVICES_ROOT'
+            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix") 'CHTTP_ROOT'
     }
 
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
         SALTS_ROOT = $RealSaltsRoot
         SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
-        HTTP_SERVICES_ROOT = $RealCHttpRoot
+        CHTTP_ROOT = $RealCHttpRoot
         CMAKE_PREFIX_PATH = $VcpkgPrefix
         PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$(Join-Path $RealCHttpRoot 'bin');$(Join-Path $VcpkgPrefix 'bin');$env:PATH"
     } {
