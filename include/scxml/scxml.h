@@ -203,11 +203,12 @@ typedef struct scxml_data_resource_adapter_v1 {
 /**
  * Versioned CMeta session provider with external data resources.
  *
- * V2 fields retain their semantics. This v3 record is retained for source and
- * ABI compatibility. New callers should use v4; the legacy
- * `data_bind_workspace_bytes`/container-item limits are translated conservatively
- * to the DataBind native workspace/item budgets. Adapter operations are copied;
- * its user pointer remains borrowed until successful session destruction.
+ * V2 fields retain their semantics. This v3 record retains its published ABI
+ * layout while using the DataBind terminology. New callers should use v4,
+ * which exposes an explicit aggregate-owned byte bound. v3 derives that bound
+ * from max_data_items * max_data_buffer_bytes with checked arithmetic.
+ * Adapter operations are copied; its user pointer remains borrowed until
+ * successful session destruction.
  */
 typedef struct scxml_cmeta_session_options_v3 {
     uint32_t abi_version;
@@ -226,7 +227,7 @@ typedef struct scxml_cmeta_session_options_v3 {
 /**
  * Canonical DataBind-backed CMeta session provider with external resources.
  *
- * `databind_workspace_bytes` bounds the caller-owned DataBind native
+ * `data_bind_workspace_bytes` bounds the caller-owned DataBind native
  * workspace. `max_data_items` bounds the whole native descriptor/value graph,
  * `max_data_owned_bytes` bounds aggregate owned STRING/BYTES payload, and
  * `max_data_buffer_bytes` bounds any one owned value.
@@ -239,7 +240,7 @@ typedef struct scxml_cmeta_session_options_v4 {
     size_t environment_override_count;
     const scxml_data_resource_adapter_v1 *data_resources;
     void *data_resource_user;
-    size_t databind_workspace_bytes;
+    size_t data_bind_workspace_bytes;
     size_t max_data_depth;
     size_t max_data_items;
     size_t max_data_owned_bytes;
