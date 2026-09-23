@@ -649,9 +649,9 @@ struct scxml_session_impl {
     void *data_decode_allocation;
     void *data_decode_storage;
     size_t data_decode_storage_size;
-    void *databind_workspace;
-    DataBindNativeOptions databind_options;
-    size_t max_data_buffer_bytes;
+    void *data_bind_workspace;
+    DataBindNativeOptions data_bind_options;
+    size_t data_bind_max_buffer_bytes;
     bool has_data_resources;
     bool late_initializer_ticket_pending;
     void *supplemental_committed_allocation;
