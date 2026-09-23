@@ -1,0 +1,165 @@
+name: Native SDK CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turboscxml-native-sdk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SALTS_SDK_VERSION: "1.2.0"
+  SALTS_UTILS_SDK_VERSION: "2.0.2"
+  CHTTP_SDK_VERSION: "1.0.0"
+
+jobs:
+  linux:
+    name: Linux x64 released SDK
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+
+      - name: Restore released native SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/turboscxml-nuget.config"
+          packages="$RUNNER_TEMP/turboscxml-native-sdks"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$packages/chttp.native/$CHTTP_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+
+      - name: Restore third-party dependencies from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --only-binarycaching
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/ci --parallel 2
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          ctest --test-dir build/ci --no-tests=error --output-on-failure
+
+      - name: Install and verify installed consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install build/ci
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml"
+          export LD_LIBRARY_PATH="$TURBOSCXML_ROOT/lib:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          cmake -S tests/install_consumer -B build/consumer-chttp -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON
+          cmake --build build/consumer-chttp --parallel 2
+          cmake -S tests/install_consumer -B build/consumer-wide -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
+          cmake --build build/consumer-wide --parallel 2
+
+  windows:
+    name: Windows x64 released SDK
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore released native SDK graph
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "turboscxml-nuget.config"
+          $packages = Join-Path $env:RUNNER_TEMP "turboscxml-native-sdks"
+          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
+          dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile $config --packages $packages
+          if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
+          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          "CHTTP_ROOT=$packages\chttp.native\$env:CHTTP_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+
+      - name: Restore third-party dependencies from shared cache only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (Test-Path -LiteralPath vcpkg_installed) { Remove-Item -Recurse -Force vcpkg_installed }
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" --triplet x64-windows --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg cache-only restore failed" }
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\stage\turboscxml"
+          if ($LASTEXITCODE -ne 0) { throw "configure failed" }
+
+      - name: Build and test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --build build/ci --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+          $env:PATH = "$env:SALTS_ROOT\bin;$env:SALTS_UTILS_ROOT\bin;$env:CHTTP_ROOT\bin;$env:GITHUB_WORKSPACE\vcpkg_installed\x64-windows\bin;$env:PATH"
+          ctest --test-dir build/ci -C Release --no-tests=error --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "CTest failed" }
+
+      - name: Install and verify installed consumers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cmake --install build/ci --config Release
+          if ($LASTEXITCODE -ne 0) { throw "install failed" }
+          $env:TURBOSCXML_ROOT = "$env:GITHUB_WORKSPACE\stage\turboscxml"
+          $env:PATH = "$env:TURBOSCXML_ROOT\bin;$env:SALTS_ROOT\bin;$env:SALTS_UTILS_ROOT\bin;$env:CHTTP_ROOT\bin;$env:GITHUB_WORKSPACE\vcpkg_installed\x64-windows\bin;$env:PATH"
+          cmake -S tests/install_consumer -B build/consumer-chttp -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON
+          if ($LASTEXITCODE -ne 0) { throw "CHTTP consumer configure failed" }
+          cmake --build build/consumer-chttp --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "CHTTP consumer build failed" }
+          cmake -S tests/install_consumer -B build/consumer-wide -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
+          if ($LASTEXITCODE -ne 0) { throw "wide consumer configure failed" }
+          cmake --build build/consumer-wide --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "wide consumer build failed" }
