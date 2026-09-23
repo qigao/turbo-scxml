@@ -33,15 +33,15 @@ endif()
 include(CMakeFindDependencyMacro)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_dependency(Salts 1.1 CONFIG REQUIRED
+find_dependency(Salts 1.2.0 EXACT CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_dependency(SaltsUtils CONFIG REQUIRED
+find_dependency(SaltsUtils 2.0.2 EXACT CONFIG REQUIRED
   PATHS "${SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 set(_TURBOSCXML_PACKAGE_WIDE FALSE)
 if(NOT TurboSCXML_FIND_COMPONENTS)
@@ -73,26 +73,33 @@ if(@TURBOSCXML_PACKAGE_HAS_QUICKJS@ AND _TURBOSCXML_NEEDS_SCXML)
   find_dependency(qjs CONFIG REQUIRED)
 endif()
 
+if(_TURBOSCXML_NEEDS_SCXML AND NOT TARGET Salts::Databind)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "The SCXML component requires Salts::Databind from SaltsUtils 2.0.2")
+  return()
+endif()
+
 if(_TURBOSCXML_NEEDS_CHTTP AND
    (@TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@ OR
     @TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO@))
-  if(NOT DEFINED ENV{HTTP_SERVICES_ROOT}
-     OR "$ENV{HTTP_SERVICES_ROOT}" STREQUAL "")
+  if(NOT DEFINED ENV{CHTTP_ROOT}
+     OR "$ENV{CHTTP_ROOT}" STREQUAL "")
     set(TurboSCXML_FOUND FALSE)
     set(TurboSCXML_NOT_FOUND_MESSAGE
-      "HTTP_SERVICES_ROOT must name the installed CHTTP profile")
+      "CHTTP_ROOT must name the installed CHTTP profile")
     return()
   endif()
-  file(TO_CMAKE_PATH "$ENV{HTTP_SERVICES_ROOT}" CHTTP_ROOT_PATH)
+  file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" CHTTP_ROOT_PATH)
   if(NOT IS_DIRECTORY "${CHTTP_ROOT_PATH}")
     set(TurboSCXML_FOUND FALSE)
     set(TurboSCXML_NOT_FOUND_MESSAGE
-      "HTTP_SERVICES_ROOT is not a directory: $ENV{HTTP_SERVICES_ROOT}")
+      "CHTTP_ROOT is not a directory: $ENV{CHTTP_ROOT}")
     return()
   endif()
   unset(Chttp_DIR CACHE)
   unset(Chttp_DIR)
-  find_dependency(Chttp CONFIG REQUIRED
+  find_dependency(Chttp 1.0.0 EXACT CONFIG REQUIRED
     PATHS "${CHTTP_ROOT_PATH}"
     NO_DEFAULT_PATH)
 endif()
