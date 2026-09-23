@@ -43,23 +43,77 @@ endif()
 
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_package(Salts 1.1 CONFIG REQUIRED
+find_package(Salts 1.2.0 EXACT CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+
+if(NOT DEFINED ENV{SALTS_UTILS_ROOT}
+   OR "$ENV{SALTS_UTILS_ROOT}" STREQUAL "")
+  message(FATAL_ERROR
+    "SALTS_UTILS_ROOT must name the installed SaltsUtils profile")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTS_UTILS_ROOT_PATH)
+if(NOT IS_DIRECTORY "${SALTS_UTILS_ROOT_PATH}")
+  message(FATAL_ERROR
+    "SALTS_UTILS_ROOT is not a directory: $ENV{SALTS_UTILS_ROOT}")
+endif()
+
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
+find_package(SaltsUtils 2.0.2 EXACT CONFIG REQUIRED
+  PATHS "${SALTS_UTILS_ROOT_PATH}"
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 foreach(required_target IN ITEMS
     Salts::CFlow
     Salts::CMeta
     Salts::CSerde
-    Salts::CBind
-    Salts::XmlParser
-    Salts::Core
-    Salts::QueryVM)
+    Salts::Core)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
       "Salts SDK does not provide required target: ${required_target}")
   endif()
 endforeach()
+
+foreach(required_target IN ITEMS
+    Salts::XmlParser
+    Salts::QueryVM
+    Salts::Databind)
+  if(NOT TARGET ${required_target})
+    message(FATAL_ERROR
+      "SaltsUtils SDK does not provide required target: ${required_target}")
+  endif()
+endforeach()
+
+if(TURBOSCXML_ENABLE_CHTTP_RESOURCE OR
+   TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
+  if(NOT DEFINED ENV{CHTTP_ROOT}
+     OR "$ENV{CHTTP_ROOT}" STREQUAL "")
+    message(FATAL_ERROR
+      "CHTTP_ROOT must name the installed CHTTP profile")
+  endif()
+  file(TO_CMAKE_PATH "$ENV{CHTTP_ROOT}" CHTTP_ROOT_PATH)
+  if(NOT IS_DIRECTORY "${CHTTP_ROOT_PATH}")
+    message(FATAL_ERROR
+      "CHTTP_ROOT is not a directory: $ENV{CHTTP_ROOT}")
+  endif()
+
+  unset(Chttp_DIR CACHE)
+  unset(Chttp_DIR)
+  find_package(Chttp 1.0.0 EXACT CONFIG REQUIRED
+    PATHS "${CHTTP_ROOT_PATH}"
+    NO_DEFAULT_PATH)
+
+  if(NOT TARGET CHttp::Client)
+    message(FATAL_ERROR
+      "The CHTTP package does not provide required target CHttp::Client")
+  endif()
+  if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO AND
+     NOT TARGET CHttp::Server)
+    message(FATAL_ERROR
+      "The CHTTP package does not provide required target CHttp::Server")
+  endif()
+endif()
 
 add_library(turbo_scxml_cmeta_runtime STATIC
   src/cmeta_scope.c
@@ -114,7 +168,7 @@ target_link_libraries(turbo_scxml
     Salts::XmlParser
   PRIVATE
     Salts::Core
-    Salts::CBind
+    Salts::Databind
     Salts::QueryVM
     TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
@@ -199,7 +253,7 @@ if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
   set(_TURBOSCXML_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
   set(_TURBOSCXML_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
   set(CMAKE_REQUIRED_INCLUDES
-    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_ROOT_PATH}/include/query_vm")
+    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include/query_vm")
   unset(CMAKE_REQUIRED_LIBRARIES)
   check_cxx_source_compiles(
     "#include <voicexml/cmeta.h>\nint main() { vxml_program p{}; return p.impl == nullptr ? 0 : 1; }"
@@ -214,10 +268,6 @@ if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
-  if(NOT TARGET Salts::CHTTP)
-    message(FATAL_ERROR
-      "TURBOSCXML_ENABLE_CHTTP_RESOURCE requires Salts::CHTTP")
-  endif()
   add_library(turbo_scxml_chttp_resource STATIC
     src/scxml_chttp_resource.c)
   add_library(TurboSCXML::CHttpResource ALIAS turbo_scxml_chttp_resource)
@@ -236,16 +286,12 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   target_link_libraries(turbo_scxml_chttp_resource
     PUBLIC
       TurboSCXML::SCXML
-      Salts::CHTTP
+      CHttp::Client
     PRIVATE
       Salts::Core)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
-  if(NOT TARGET Salts::CHTTP)
-    message(FATAL_ERROR
-      "TURBOSCXML_ENABLE_CHTTP_EVENT_IO requires Salts::CHTTP")
-  endif()
   add_library(turbo_scxml_chttp_event_io STATIC
     src/chttp_event_io_codec.c
     src/chttp_event_io_egress.c
@@ -263,7 +309,7 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(turbo_scxml_chttp_event_io
-    PUBLIC TurboSCXML::SCXML Salts::CHTTP
+    PUBLIC TurboSCXML::SCXML CHttp::Client CHttp::Server
     PRIVATE Salts::Core)
 endif()
 
@@ -278,7 +324,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::CBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::Databind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
@@ -328,7 +374,7 @@ if(BUILD_TESTING)
       TURBOSCXML_CHTTP_PUBLIC_LINKS
       turbo_scxml_chttp_resource INTERFACE_LINK_LIBRARIES)
     set(TURBOSCXML_CHTTP_EXPECTED_LINKS
-      "TurboSCXML::SCXML;Salts::CHTTP;$<LINK_ONLY:Salts::Core>")
+      "TurboSCXML::SCXML;CHttp::Client;$<LINK_ONLY:Salts::Core>")
     if(NOT TURBOSCXML_CHTTP_PUBLIC_LINKS STREQUAL
        TURBOSCXML_CHTTP_EXPECTED_LINKS)
       message(FATAL_ERROR
@@ -341,7 +387,7 @@ if(BUILD_TESTING)
       TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS
       turbo_scxml_chttp_event_io INTERFACE_LINK_LIBRARIES)
     set(TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS
-      "TurboSCXML::SCXML;Salts::CHTTP;$<LINK_ONLY:Salts::Core>")
+      "TurboSCXML::SCXML;CHttp::Client;CHttp::Server;$<LINK_ONLY:Salts::Core>")
     if(NOT TURBOSCXML_CHTTP_EVENT_IO_PUBLIC_LINKS STREQUAL
        TURBOSCXML_CHTTP_EVENT_IO_EXPECTED_LINKS)
       message(FATAL_ERROR

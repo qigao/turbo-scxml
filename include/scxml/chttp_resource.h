@@ -1,7 +1,7 @@
 #ifndef SCXML_CHTTP_RESOURCE_H
 #define SCXML_CHTTP_RESOURCE_H
 
-#include <chttp/chttp.h>
+#include <http_client/http.h>
 #include <scxml/scxml.h>
 
 #include <stddef.h>

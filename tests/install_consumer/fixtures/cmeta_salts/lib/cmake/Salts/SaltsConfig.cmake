@@ -18,8 +18,6 @@ endif()
 
 set(_SALTS_CMETA_FIXTURE_LIBRARIES)
 foreach(_SALTS_CMETA_FIXTURE_LIBRARY IN ITEMS
-    xml_parser
-    query_vm
     salts_cmeta
     salts
     salts_coroutine
@@ -45,13 +43,6 @@ if(WIN32)
   list(APPEND _SALTS_CMETA_FIXTURE_LIBRARIES bcrypt)
 endif()
 
-add_library(Salts::XmlParser INTERFACE IMPORTED)
-set_target_properties(Salts::XmlParser PROPERTIES
-  INTERFACE_COMPILE_FEATURES c_std_11
-  INTERFACE_INCLUDE_DIRECTORIES
-    "${SALTS_CMETA_REAL_ROOT_PATH}/include;${SALTS_CMETA_REAL_ROOT_PATH}/include/query_vm"
-  INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
-
 add_library(Salts::CMeta INTERFACE IMPORTED)
 set_target_properties(Salts::CMeta PROPERTIES
   INTERFACE_COMPILE_FEATURES c_std_11
@@ -61,12 +52,5 @@ set_target_properties(Salts::CMeta PROPERTIES
     "${SALTS_CMETA_REAL_ROOT_PATH}/include"
   INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
 
-add_library(Salts::QueryVM INTERFACE IMPORTED)
-set_target_properties(Salts::QueryVM PROPERTIES
-  INTERFACE_INCLUDE_DIRECTORIES
-    "${SALTS_CMETA_REAL_ROOT_PATH}/include/query_vm"
-  INTERFACE_LINK_LIBRARIES "${_SALTS_CMETA_FIXTURE_LIBRARIES}")
-
-set(Salts_XmlParser_FOUND TRUE)
 set(Salts_CMeta_FOUND TRUE)
-set(Salts_QueryVM_FOUND TRUE)
+set(Salts_FOUND TRUE)

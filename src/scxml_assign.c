@@ -739,17 +739,30 @@ bool scxml_assign_external_source(
     return true;
 }
 
-static void assign_destroy_decoded(
-    const cmeta_type_desc *type, void *object, bool trivial) {
-    if (!trivial && type != NULL && type->traits != NULL &&
-        type->traits->destroy != NULL)
-        type->traits->destroy(object);
+static scxml_expr_status assign_databind_failure(
+    DataBindStatus status,
+    const DataBindNativeDiagnostic *native_diagnostic,
+    scxml_expr_diagnostic *diagnostic) {
+    const char *message =
+        native_diagnostic != NULL &&
+                native_diagnostic->error.message[0] != '\0'
+            ? native_diagnostic->error.message
+            : "DataBind external data decode failed";
+    return assign_report(
+        diagnostic,
+        status == DATA_BIND_ERR_LIMIT
+            ? SCXML_EXPR_LIMIT_EXCEEDED
+            : status == DATA_BIND_ERR_INVALID_ARG
+                  ? SCXML_EXPR_INVALID_ARGUMENT
+                  : SCXML_EXPR_EVALUATION_ERROR,
+        0u, message);
 }
 
 scxml_expr_status scxml_assign_apply_external(
     const scxml_assign_program *program,
     cserde_reader *reader,
-    const cbind_context *context,
+    const DataBindNativeOptions *options,
+    size_t max_buffer_bytes,
     void *decode_storage, size_t decode_storage_size,
     void *staged_root,
     scxml_expr_diagnostic *diagnostic) {
@@ -757,13 +770,15 @@ scxml_expr_status scxml_assign_apply_external(
         ? (const scxml_assign_program_impl *)program->impl : NULL;
     const cmeta_type_desc *type;
     unsigned char *destination;
-    cbind_error bind_error = CBIND_ERROR_INIT;
+    DataBindNativeDiagnostic bind_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindStatus bind_status;
     cserde_token trailing;
     cserde_status reader_status;
-    cbind_status bind_status;
     bool trivial;
-    if (impl == NULL || reader == NULL || context == NULL ||
+    if (impl == NULL || reader == NULL || options == NULL ||
         decode_storage == NULL || staged_root == NULL ||
+        max_buffer_bytes == 0u ||
         impl->source_kind != SCXML_ASSIGN_SOURCE_EXTERNAL ||
         impl->destination_kind != SCXML_ASSIGN_DESTINATION_MUTABLE ||
         impl->destination == NULL ||
@@ -783,21 +798,34 @@ scxml_expr_status scxml_assign_apply_external(
             type, CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY) != CMETA_OK)
         return assign_report(diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
                              "CMeta external data replacement traits are invalid");
+
     memset(decode_storage, 0, type->size);
-    bind_status = cbind_decode(
-        context, impl->destination, reader, decode_storage, &bind_error);
-    if (bind_status != CBIND_OK) {
+    bind_status = data_bind_native_init(
+        options, impl->destination, decode_storage, decode_storage_size,
+        &bind_diagnostic);
+    if (bind_status != DATA_BIND_OK) {
         memset(decode_storage, 0, type->size);
-        return assign_report(
-            diagnostic,
-            bind_status == CBIND_LIMIT_EXCEEDED
-                ? SCXML_EXPR_LIMIT_EXCEEDED
-                : SCXML_EXPR_EVALUATION_ERROR,
-            0u, "CMeta external data decode failed");
+        return assign_databind_failure(
+            bind_status, &bind_diagnostic, diagnostic);
     }
+
+    bind_status = data_bind_native_decode_bounded(
+        options, impl->destination, reader, decode_storage,
+        decode_storage_size, max_buffer_bytes, &bind_diagnostic);
+    if (bind_status != DATA_BIND_OK) {
+        (void)data_bind_native_clear(
+            options, impl->destination, decode_storage, decode_storage_size,
+            &bind_diagnostic);
+        memset(decode_storage, 0, type->size);
+        return assign_databind_failure(
+            bind_status, &bind_diagnostic, diagnostic);
+    }
+
     reader_status = cserde_reader_next(reader, &trailing);
     if (reader_status != CSERDE_DONE) {
-        assign_destroy_decoded(type, decode_storage, trivial);
+        (void)data_bind_native_clear(
+            options, impl->destination, decode_storage, decode_storage_size,
+            &bind_diagnostic);
         memset(decode_storage, 0, type->size);
         return assign_report(
             diagnostic,
@@ -808,6 +836,7 @@ scxml_expr_status scxml_assign_apply_external(
                     ? "CMeta external data contains trailing tokens"
                     : "CMeta external data reader failed after one value");
     }
+
     destination = (unsigned char *)staged_root + impl->destination_offset;
     if (trivial) {
         memcpy(destination, decode_storage, type->size);
@@ -815,7 +844,16 @@ scxml_expr_status scxml_assign_apply_external(
         type->traits->destroy(destination);
         type->traits->move_construct(destination, decode_storage);
     }
+
+    bind_diagnostic = (DataBindNativeDiagnostic)
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    bind_status = data_bind_native_clear(
+        options, impl->destination, decode_storage, decode_storage_size,
+        &bind_diagnostic);
     memset(decode_storage, 0, type->size);
+    if (bind_status != DATA_BIND_OK)
+        return assign_databind_failure(
+            bind_status, &bind_diagnostic, diagnostic);
     return assign_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
 }
 

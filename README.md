@@ -26,16 +26,17 @@ TurboSCXML reuses the Salts execution and type foundations:
 
 - **CFlow** for Machine/Statechart semantics and execution.
 - **CMeta** for typed data-model integration.
-- **CSerde / CBind** for serialization/binding primitives used by the implementation.
+- **CSerde** for the canonical token stream used at resource boundaries.
+- **DataBind** from SaltsUtils for bounded CMeta-native data binding.
 - **Core** for common systems support.
 - **TinyTest** for repository tests.
 
-Parser/query ownership is moving to the current ecosystem boundary:
+Parser/query and HTTP ownership follow the current ecosystem boundary:
 
-- **SaltsUtils** owns QueryVM and XML/parser components.
-- **CHTTP** owns HTTP client/server infrastructure.
+- **SaltsUtils** owns QueryVM, XML/parser components, and DataBind; installed consumers use `Salts::Databind`.
+- **CHTTP** owns HTTP client/server infrastructure through the standalone `CHttp::*` package targets.
 
-The current `main` branch still contains legacy package wiring that expects some of those targets from Salts. That packaging mismatch is tracked in [#54](https://github.com/qigao/turbo-scxml/issues/54). Build against a matching SDK set until that migration is completed.
+TurboSCXML resolves those packages explicitly from their installed roots and does not fall back to the former core-Salts ownership model.
 
 ## Ecosystem role
 
@@ -54,7 +55,10 @@ TurboSCXML belongs in the **framework/application layer**, not in the Salts kern
 The dependency direction must remain one-way:
 
 ```text
-TurboSCXML -> Salts
+TurboSCXML
+  -> Salts
+  -> SaltsUtils-owned parser/query/DataBind targets
+  -> standalone CHTTP only when an HTTP adapter is enabled
 ```
 
 CFlow must remain independent of XML and SCXML.
@@ -119,8 +123,9 @@ Requirements:
 - CMake 3.20+
 - Ninja
 - a C11-capable compiler
-- matching installed Salts SDK
-- matching parser/query package wiring for the selected revision
+- installed `Salts.Native 1.2.0` SDK
+- installed `SaltsUtils.Native 2.0.2` SDK
+- standalone CHTTP only when an optional CHTTP adapter is enabled
 - Visual Studio 2022 developer environment on Windows
 
 Set:
@@ -129,9 +134,11 @@ Set:
 PROJECT_ROOT
 VCPKG_ROOT
 SALTS_ROOT
+SALTS_UTILS_ROOT
+CHTTP_ROOT   # only for CHTTP-enabled profiles
 ```
 
-As the package-boundary migration in #54 is completed, parser/query and CHTTP roots should be resolved from their owning installed packages rather than from the core Salts package.
+`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.0.0` SDK when an HTTP adapter is enabled.
 
 ### Windows Release
 
@@ -180,7 +187,7 @@ Two optional adapters exist:
 
 They are adapter layers only. HTTP ownership belongs to the standalone CHTTP package.
 
-The migration from the old `Salts::CHTTP` package assumption to the standalone `CHttp::*` boundary is part of [#54](https://github.com/qigao/turbo-scxml/issues/54).
+`TurboSCXML::CHttpResource` publicly depends on `CHttp::Client`. `TurboSCXML::CHttpEventIO` publicly depends on both `CHttp::Client` and `CHttp::Server`. The old `Salts::CHTTP` ownership assumption is not used.
 
 ## VoiceXML core profile
 
