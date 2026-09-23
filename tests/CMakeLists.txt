@@ -159,7 +159,7 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release" AND
         "${PROJECT_SOURCE_DIR}/.superpowers/sdd/2026-09-06-voicexml-nonmedia-core-mvp/final-fix-package-installs"
       -RealSaltsRoot "$ENV{SALTS_ROOT}"
       -RealSaltsUtilsRoot "$ENV{SALTS_UTILS_ROOT}"
-      -RealCHttpRoot "$ENV{PKG_ROOT}/http-services/release"
+      -RealCHttpRoot "$ENV{CHTTP_ROOT}"
       -XmlOnlyFixture
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts"
       -XmlOnlySaltsUtilsFixture
