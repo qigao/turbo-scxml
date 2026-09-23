@@ -108,8 +108,8 @@
       },
       "environment": {
         "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
-        "PATH": "${sourceDir}/build/Msvc-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/debug"
+        "PATH": "${sourceDir}/build/Msvc-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{CHTTP_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "CHTTP_ROOT": "$env{PKG_ROOT}/chttp/debug"
       }
     },
     {
@@ -137,8 +137,8 @@
       },
       "environment": {
         "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",
-        "PATH": "${sourceDir}/build/Msvc-Release-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{HTTP_SERVICES_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "HTTP_SERVICES_ROOT": "$env{PKG_ROOT}/http-services/release"
+        "PATH": "${sourceDir}/build/Msvc-Release-CHttp/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{CHTTP_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "CHTTP_ROOT": "$env{PKG_ROOT}/chttp/release"
       }
     },
     {
