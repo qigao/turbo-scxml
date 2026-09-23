@@ -301,6 +301,31 @@ static cflow_statechart_instance_status retain_data_resource_options(
     session->data_bind_options.max_owned_bytes =
         options->max_data_owned_bytes;
     session->data_bind_max_buffer_bytes = options->max_data_buffer_bytes;
+
+    for (assignment = 0u;
+         assignment < session->program->assignment_count; ++assignment) {
+        const cmeta_data_desc *destination = NULL;
+        const char *uri = NULL;
+        size_t uri_size = 0u;
+        DataBindNativeRequirements requirements =
+            DATA_BIND_NATIVE_REQUIREMENTS_INIT;
+        DataBindNativeDiagnostic bind_diagnostic =
+            DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+        DataBindStatus bind_status;
+        if (scxml_session_data_initializer_is_overridden(session, assignment) ||
+            !scxml_assign_external_source(
+                &session->program->assignments[assignment], &uri, &uri_size,
+                &destination))
+            continue;
+        bind_status = data_bind_native_measure(
+            &session->data_bind_options, destination,
+            &requirements, &bind_diagnostic);
+        if (bind_status != DATA_BIND_OK)
+            return bind_status == DATA_BIND_ERR_LIMIT
+                ? CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT
+                : CFLOW_STATECHART_INSTANCE_INVALID_CONFIGURATION;
+    }
+
     session->has_data_resources = true;
     return CFLOW_STATECHART_INSTANCE_OK;
 }
