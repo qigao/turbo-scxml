@@ -26,13 +26,14 @@ TurboSCXML reuses the Salts execution and type foundations:
 
 - **CFlow** for Machine/Statechart semantics and execution.
 - **CMeta** for typed data-model integration.
-- **CSerde / CBind** for serialization/binding primitives used by the implementation.
+- **CSerde** for the canonical token stream used at resource boundaries.
+- **DataBind** from SaltsUtils for bounded CMeta-native data binding.
 - **Core** for common systems support.
 - **TinyTest** for repository tests.
 
 Parser/query and HTTP ownership follow the current ecosystem boundary:
 
-- **SaltsUtils** owns QueryVM and XML/parser components while preserving their existing `Salts::*` target names.
+- **SaltsUtils** owns QueryVM, XML/parser components, and DataBind; installed consumers use `Salts::Databind`.
 - **CHTTP** owns HTTP client/server infrastructure through the standalone `CHttp::*` package targets.
 
 TurboSCXML resolves those packages explicitly from their installed roots and does not fall back to the former core-Salts ownership model.
@@ -56,7 +57,7 @@ The dependency direction must remain one-way:
 ```text
 TurboSCXML
   -> Salts
-  -> SaltsUtils-owned parser/query targets
+  -> SaltsUtils-owned parser/query/DataBind targets
   -> standalone CHTTP only when an HTTP adapter is enabled
 ```
 
@@ -122,8 +123,8 @@ Requirements:
 - CMake 3.20+
 - Ninja
 - a C11-capable compiler
-- matching installed Salts SDK
-- matching installed SaltsUtils SDK
+- installed `Salts.Native 1.2.0` SDK
+- installed `SaltsUtils.Native 2.0.2` SDK
 - standalone CHTTP only when an optional CHTTP adapter is enabled
 - Visual Studio 2022 developer environment on Windows
 
@@ -134,10 +135,10 @@ PROJECT_ROOT
 VCPKG_ROOT
 SALTS_ROOT
 SALTS_UTILS_ROOT
-HTTP_SERVICES_ROOT   # only for CHTTP-enabled profiles
+CHTTP_ROOT   # only for CHTTP-enabled profiles
 ```
 
-The historical `HTTP_SERVICES_ROOT` variable names the installed CHTTP package root. It does not imply a separate legacy runtime boundary.
+`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.0.0` SDK when an HTTP adapter is enabled.
 
 ### Windows Release
 
