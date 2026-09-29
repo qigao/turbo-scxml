@@ -3,7 +3,7 @@
 #include "scxml_chttp_resource_internal.h"
 
 #include <salts/error_codes.h>
-#include <salts_vstr.h>
+#include <vstr.h>
 
 #include <stdbool.h>
 #include <stddef.h>
