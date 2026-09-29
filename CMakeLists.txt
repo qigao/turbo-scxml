@@ -78,7 +78,12 @@ endforeach()
 foreach(required_target IN ITEMS
     Salts::XmlParser
     Salts::QueryVM
-    Salts::DataBind)
+    Salts::DataBind
+    Salts::DataBindCore
+    Salts::DataBindJsonAdapter
+    Salts::DataBindYamlAdapter
+    Salts::DataBindCsvAdapter
+    Salts::DataBindXmlAdapter)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
       "SaltsUtils SDK does not provide required target: ${required_target}")
@@ -170,6 +175,10 @@ target_link_libraries(turbo_scxml
   PRIVATE
     Salts::Core
     Salts::DataBind
+    Salts::DataBindJsonAdapter
+    Salts::DataBindYamlAdapter
+    Salts::DataBindCsvAdapter
+    Salts::DataBindXmlAdapter
     Salts::QueryVM
     TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
@@ -314,7 +323,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
