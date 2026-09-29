@@ -13,6 +13,7 @@ extern "C" {
 #endif
 
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V1 1u
+#define VXML_DIALOG_MANAGER_CONFIG_ABI_V2 2u
 #define VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 1u
 #define VXML_DIALOG_EVENT_SINK_ABI_V1 1u
 
@@ -123,6 +124,36 @@ typedef struct vxml_dialog_manager_config_v1 {
     void *event_user;
 } vxml_dialog_manager_config_v1;
 
+struct vxml_document_store;
+
+/**
+ * V2 manager configuration using the canonical bounded document store.
+ *
+ * The store is borrowed through manager destruction and must outlive every
+ * manager row/session. Document fetch/compile limits and application URI policy
+ * belong to the store; the manager only bounds copied CCXML request bytes and
+ * fragment bytes retained per row.
+ */
+typedef struct vxml_dialog_manager_config_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+
+    size_t capacity;
+    size_t max_source_bytes;
+    size_t max_media_type_bytes;
+    size_t max_connection_id_bytes;
+    size_t max_dialog_id_bytes;
+    size_t max_fragment_bytes;
+
+    const ccxml_telephony_adapter_v1 *upstream;
+    void *upstream_user;
+
+    struct vxml_document_store *document_store;
+
+    const vxml_dialog_event_sink_v1 *events;
+    void *event_user;
+} vxml_dialog_manager_config_v2;
+
 typedef struct vxml_dialog_manager_stats {
     size_t capacity;
     size_t active;
@@ -144,12 +175,19 @@ typedef struct vxml_dialog_manager {
 /** Defaults include bounded capacities but no provider pointers. */
 vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void);
 
+/** V2 defaults include copied-request/fragment bounds but no borrowed owners. */
+vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void);
+
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status);
 
 vxml_dialog_manager_status vxml_dialog_manager_init(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v1 *config);
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v2(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v2 *config);
 
 /**
  * Full-size CCXML telephony decorator. Non-dialog operations forward to the
