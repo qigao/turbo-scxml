@@ -20,11 +20,6 @@ concurrency:
   group: turboscxml-native-sdk-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-env:
-  SALTS_SDK_VERSION: "1.8.4"
-  SALTS_UTILS_SDK_VERSION: "4.1.5"
-  CHTTP_SDK_VERSION: "1.1.5"
-
 jobs:
   linux:
     name: Linux x64 released SDK
@@ -59,9 +54,24 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
           dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$packages/chttp.native/$CHTTP_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          sdk_root() {
+            local package="$1"
+            local rid="$2"
+            local roots=()
+            mapfile -t roots < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
+                -path "*/sdk/$rid" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              printf 'expected exactly one restored %s SDK for %s, found %s\n' \
+                "$package" "$rid" "${#roots[@]}" >&2
+              return 1
+            fi
+            printf '%s' "${roots[0]}"
+          }
+          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         shell: bash
@@ -124,9 +134,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
           dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile $config --packages $packages
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
-          $saltsRoot = ("$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
-          $saltsUtilsRoot = ("$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
-          $chttpRoot = ("$packages\chttp.native\$env:CHTTP_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
+          function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
+            $packageRoot = Join-Path $packages $packageName
+            $roots = @(
+              Get-ChildItem -LiteralPath $packageRoot -Directory |
+                ForEach-Object { Join-Path $_.FullName "sdk\$rid" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+            )
+            if ($roots.Count -ne 1) {
+              throw "expected exactly one restored $packageName SDK for $rid, found $($roots.Count)"
+            }
+            return ($roots[0] -replace '\\', '/')
+          }
+          $saltsRoot = Get-RestoredSdkRoot "salts.native" "windows-x64"
+          $saltsUtilsRoot = Get-RestoredSdkRoot "saltsutils.native" "windows-x64"
+          $chttpRoot = Get-RestoredSdkRoot "chttp.native" "windows-x64"
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
           "CHTTP_ROOT=$chttpRoot" >> $env:GITHUB_ENV
