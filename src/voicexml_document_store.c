@@ -338,8 +338,14 @@ static bool build_resolved_candidate(
            base[base_path_dir_end - 1u] != '/')
         --base_path_dir_end;
     if (!append_bytes(out, capacity - 1u, &cursor,
-                      base, base_path_dir_end) ||
-        !append_bytes(out, capacity - 1u, &cursor, ref, ref_size))
+                      base, base_path_dir_end))
+        return false;
+    if (base_parts.has_authority &&
+        base_path_dir_end == base_parts.path_start &&
+        (cursor == 0u || out[cursor - 1u] != '/') &&
+        !append_bytes(out, capacity - 1u, &cursor, "/", 1u))
+        return false;
+    if (!append_bytes(out, capacity - 1u, &cursor, ref, ref_size))
         return false;
     out[cursor] = '\0';
     *out_size = cursor;
