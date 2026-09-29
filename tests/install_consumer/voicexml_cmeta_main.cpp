@@ -1,6 +1,14 @@
 #include "voicexml_cmeta_fixture.h"
 
 #include <cstring>
+#include <type_traits>
+
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_resource_v1>::value,
+    "external data resource must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_resource_adapter_v1>::value,
+    "external data adapter must remain C-compatible");
 
 int main() {
     static constexpr char document[] =
@@ -15,6 +23,8 @@ int main() {
     const cmeta_type_desc *peer_type =
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
+    vxml_cmeta_data_resource_v1 data_resource{};
+    vxml_cmeta_data_resource_adapter_v1 data_adapter{};
     vxml_cmeta_compile_options_v1 compile_options{};
     vxml_cmeta_session_options_v1 session_options{};
     vxml_program program{};
@@ -25,6 +35,11 @@ int main() {
     vxml_cmeta_value_view exit_value{};
     int result = 1;
 
+    data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
+    data_adapter.struct_size = sizeof(data_adapter);
+    if (data_resource.format != static_cast<vxml_cmeta_data_format>(0) ||
+        data_adapter.abi_version != VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1)
+        return 5;
     compile_options.abi_version = VXML_CMETA_COMPILE_OPTIONS_ABI_V1;
     compile_options.struct_size = sizeof(compile_options);
     compile_options.root = root;
