@@ -83,6 +83,16 @@ typedef struct scxml_custom_action_argument {
     const cmeta_type_desc *type;
 } scxml_custom_action_argument;
 
+typedef struct scxml_custom_action_registration {
+    const char *namespace_uri;
+    size_t namespace_uri_size;
+    const char *local_name;
+    size_t local_name_size;
+    cmeta_callable callable;
+    const char *const *parameter_names;
+    size_t parameter_count;
+} scxml_custom_action_registration;
+
 typedef struct scxml_custom_action_descriptor {
     cmeta_callable callable;
     size_t argument_first;
@@ -321,7 +331,7 @@ typedef struct scxml_build {
     scxml_diagnostic *diagnostic;
     scxml_data_model data_model;
     const cmeta_data_desc *cmeta_root;
-    const scxml_cmeta_custom_action_v1 *custom_action_registry;
+    const scxml_custom_action_registration *custom_action_registry;
     size_t custom_action_registry_count;
     scxml_expr_limits expression_limits;
     cflow_statechart_state *states;
