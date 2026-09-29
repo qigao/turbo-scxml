@@ -803,12 +803,18 @@ spec("VoiceXML CMeta program compiler") {
             const int written = snprintf(
                 source, sizeof(source), "%s%s</vxml>", prefix, bodies[index]);
             check_true(written > 0 && (size_t)written < sizeof(source));
-            check_equal(vxml_compile_cmeta(
-                            source, (size_t)written, NULL, &options,
-                            &program, &diagnostic),
-                        VXML_UNSUPPORTED_FEATURE);
-            check_null(program.impl);
-            check_equal(diagnostic.status, VXML_UNSUPPORTED_FEATURE);
+            {
+                const vxml_status expected =
+                    index == 13u
+                        ? VXML_INVALID_STRUCTURE
+                        : VXML_UNSUPPORTED_FEATURE;
+                check_equal(vxml_compile_cmeta(
+                                source, (size_t)written, NULL, &options,
+                                &program, &diagnostic),
+                            expected);
+                check_null(program.impl);
+                check_equal(diagnostic.status, expected);
+            }
             vxml_program_destroy(&program);
         }
     }
