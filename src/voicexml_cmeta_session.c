@@ -1821,7 +1821,17 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->max_transaction_bytes = options->max_transaction_bytes;
     profile->max_execution_steps = options->max_execution_steps;
     profile->active_form = VXML_CMETA_NO_INDEX;
+    profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    if (program->field_count != 0u) {
+        if (program->fields == NULL ||
+            !session_collect_options_valid(options)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->collect_adapter = options->collect;
+        profile->collect_user = options->collect_user;
+    }
     if (root_shape->field_count != 0u) {
         undefined = (unsigned char *)vxml_calloc(
             root_shape->field_count, sizeof(*undefined));
