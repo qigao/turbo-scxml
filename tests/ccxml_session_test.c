@@ -1,4 +1,5 @@
 #include <ccxml/ccxml.h>
+#include <voicexml/dialog_manager.h>
 
 #include "tinytest.h"
 
@@ -724,6 +725,85 @@ static ccxml_event loaded_event(void) {
         .name_size = sizeof("ccxml.loaded") - 1u};
     return event;
 }
+
+typedef struct dialog_manager_document_probe {
+    size_t open_calls;
+    size_t close_calls;
+} dialog_manager_document_probe;
+
+static vxml_dialog_manager_status dialog_manager_document_open(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    vxml_dialog_document *out_document) {
+    static const char expected_source[] = "app.vxml";
+    static const char expected_media[] = "application/voicexml+xml";
+    static const char document[] =
+        "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+        "<form id='main'><block><exit/></block></form></vxml>";
+    dialog_manager_document_probe *probe =
+        (dialog_manager_document_probe *)user;
+    if (probe == NULL || out_document == NULL ||
+        source == NULL || media_type == NULL ||
+        source_size != sizeof(expected_source) - 1u ||
+        memcmp(source, expected_source, source_size) != 0 ||
+        media_type_size != sizeof(expected_media) - 1u ||
+        memcmp(media_type, expected_media, media_type_size) != 0 ||
+        sizeof(document) - 1u > max_bytes)
+        return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+    ++probe->open_calls;
+    *out_document = (vxml_dialog_document){
+        .data = document,
+        .size = sizeof(document) - 1u,
+        .lease = probe};
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+static void dialog_manager_document_close(
+    void *user, vxml_dialog_document *document) {
+    dialog_manager_document_probe *probe =
+        (dialog_manager_document_probe *)user;
+    if (probe != NULL && document != NULL &&
+        document->lease == probe)
+        ++probe->close_calls;
+    if (document != NULL)
+        memset(document, 0, sizeof(*document));
+}
+
+static const vxml_dialog_document_adapter_v1
+dialog_manager_document_adapter = {
+    .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_dialog_document_adapter_v1),
+    .open = dialog_manager_document_open,
+    .close = dialog_manager_document_close};
+
+typedef struct dialog_manager_event_probe {
+    size_t count;
+    char name[64];
+    char dialog_id[96];
+} dialog_manager_event_probe;
+
+static vxml_dialog_event_sink_status dialog_manager_publish_event(
+    void *user, const vxml_dialog_event_v1 *event) {
+    dialog_manager_event_probe *probe =
+        (dialog_manager_event_probe *)user;
+    if (probe == NULL || event == NULL ||
+        event->name_size >= sizeof(probe->name) ||
+        event->dialog_id_size >= sizeof(probe->dialog_id))
+        return VXML_DIALOG_EVENT_INVALID_ARGUMENT;
+    ++probe->count;
+    memcpy(probe->name, event->name, event->name_size);
+    probe->name[event->name_size] = '\0';
+    memcpy(probe->dialog_id, event->dialog_id, event->dialog_id_size);
+    probe->dialog_id[event->dialog_id_size] = '\0';
+    return VXML_DIALOG_EVENT_ACCEPTED;
+}
+
+static const vxml_dialog_event_sink_v1 dialog_manager_event_sink = {
+    .abi_version = VXML_DIALOG_EVENT_SINK_ABI_V1,
+    .struct_size = sizeof(vxml_dialog_event_sink_v1),
+    .try_publish = dialog_manager_publish_event};
 
 spec("CCXML session") {
     it("requires the built-in typed CMeta profile for foreach") {
@@ -3308,6 +3388,146 @@ spec("CCXML session") {
             check_equal(datamodel.value, "conf-43");
 
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("drives the dialog manager only after CCXML writes the returned ID") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe upstream = {.quiescent = true};
+            datamodel_probe datamodel = {0};
+            dialog_manager_document_probe documents = {0};
+            dialog_manager_event_probe events = {0};
+            vxml_dialog_manager manager = {0};
+            vxml_dialog_manager_config_v1 manager_config =
+                vxml_dialog_manager_default_config_v1();
+            vxml_dialog_manager_stats manager_stats = {0};
+            ccxml_session_config session_config;
+            ccxml_event event = alerting_event();
+            size_t processed = 0u;
+
+            manager_config.capacity = 2u;
+            manager_config.upstream = &provider_adapter;
+            manager_config.upstream_user = &upstream;
+            manager_config.documents = &dialog_manager_document_adapter;
+            manager_config.document_user = &documents;
+            manager_config.events = &dialog_manager_event_sink;
+            manager_config.event_user = &events;
+            check_equal(
+                vxml_dialog_manager_init(&manager, &manager_config),
+                VXML_DIALOG_MANAGER_OK);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogprepare dialogid='dialog.prepared' "
+                    "src=\"'app.vxml'\"/>"),
+                CCXML_OK);
+            session_config = (ccxml_session_config){
+                .program = &program,
+                .telephony = vxml_dialog_manager_ccxml_adapter(),
+                .telephony_user =
+                    vxml_dialog_manager_ccxml_user(&manager),
+                .datamodel = &datamodel_adapter,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &session_config),
+                CCXML_OK);
+
+            transaction_commit_sequence = 0u;
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_OK);
+            check_equal(datamodel.prepare_count, (size_t)1u);
+            check_equal(datamodel.commit_count, (size_t)1u);
+            check_true(datamodel.commit_sequence != 0u);
+            check_true(datamodel.value_size != 0u);
+            check_true(strstr(datamodel.value, "vxml-") == datamodel.value);
+
+            check_true(vxml_dialog_manager_get_stats(
+                &manager, &manager_stats));
+            check_equal(manager_stats.accepted_operations, UINT64_C(1));
+            check_equal(manager_stats.pending, (size_t)1u);
+            check_equal(documents.open_calls, (size_t)0u);
+            check_equal(events.count, (size_t)0u);
+
+            check_equal(
+                vxml_dialog_manager_run_ready(
+                    &manager, 1u, &processed),
+                VXML_DIALOG_MANAGER_OK);
+            check_equal(processed, (size_t)1u);
+            check_equal(documents.open_calls, (size_t)1u);
+            check_equal(documents.close_calls, (size_t)1u);
+            check_equal(events.count, (size_t)1u);
+            check_equal(events.name, "dialog.prepared");
+            check_equal(events.dialog_id, datamodel.value);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_true(vxml_dialog_manager_is_quiescent(&manager));
+            check_equal(
+                vxml_dialog_manager_destroy(&manager),
+                VXML_DIALOG_MANAGER_OK);
+            check_equal(upstream.close_count, (size_t)1u);
+            ccxml_program_destroy(&program);
+        }
+
+        it("discards a dialog-manager reservation when returned-ID writeback is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe upstream = {.quiescent = true};
+            datamodel_probe datamodel = {.reject_prepare = true};
+            dialog_manager_document_probe documents = {0};
+            dialog_manager_event_probe events = {0};
+            vxml_dialog_manager manager = {0};
+            vxml_dialog_manager_config_v1 manager_config =
+                vxml_dialog_manager_default_config_v1();
+            vxml_dialog_manager_stats manager_stats = {0};
+            ccxml_session_config session_config;
+            ccxml_event event = alerting_event();
+
+            manager_config.capacity = 1u;
+            manager_config.upstream = &provider_adapter;
+            manager_config.upstream_user = &upstream;
+            manager_config.documents = &dialog_manager_document_adapter;
+            manager_config.document_user = &documents;
+            manager_config.events = &dialog_manager_event_sink;
+            manager_config.event_user = &events;
+            check_equal(
+                vxml_dialog_manager_init(&manager, &manager_config),
+                VXML_DIALOG_MANAGER_OK);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogprepare dialogid='dialog.prepared' "
+                    "src=\"'app.vxml'\"/>"),
+                CCXML_OK);
+            session_config = (ccxml_session_config){
+                .program = &program,
+                .telephony = vxml_dialog_manager_ccxml_adapter(),
+                .telephony_user =
+                    vxml_dialog_manager_ccxml_user(&manager),
+                .datamodel = &datamodel_adapter,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &session_config),
+                CCXML_OK);
+
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_true(vxml_dialog_manager_get_stats(
+                &manager, &manager_stats));
+            check_equal(manager_stats.discarded_operations, UINT64_C(1));
+            check_equal(manager_stats.active, (size_t)0u);
+            check_equal(documents.open_calls, (size_t)0u);
+            check_equal(events.count, (size_t)0u);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_true(vxml_dialog_manager_is_quiescent(&manager));
+            check_equal(
+                vxml_dialog_manager_destroy(&manager),
+                VXML_DIALOG_MANAGER_OK);
             ccxml_program_destroy(&program);
         }
 
