@@ -91,6 +91,7 @@ typedef struct vxml_cmeta_external_data_row {
     size_t name_size;
     const char *uri;
     size_t uri_size;
+    size_t field_index;
     size_t field_offset;
     const cmeta_data_desc *field_data;
     DataBindNativePlan *plan;
