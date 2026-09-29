@@ -227,6 +227,117 @@ static vxml_dialog_manager_status manager_init_v2(
     return vxml_dialog_manager_init_v2(manager, &config);
 }
 
+typedef struct navigation_document_entry {
+    const char *uri;
+    const char *body;
+    vxml_dialog_manager_status status;
+} navigation_document_entry;
+
+typedef struct navigation_document_probe {
+    const navigation_document_entry *entries;
+    size_t entry_count;
+    size_t open_calls;
+    size_t close_calls;
+} navigation_document_probe;
+
+static vxml_dialog_manager_status navigation_document_open(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    vxml_dialog_document *out_document) {
+    static const char expected_media[] = "application/voicexml+xml";
+    navigation_document_probe *probe =
+        (navigation_document_probe *)user;
+    size_t index;
+    if (probe == NULL || source == NULL ||
+        out_document == NULL || media_type == NULL ||
+        media_type_size != sizeof(expected_media) - 1u ||
+        memcmp(media_type, expected_media, media_type_size) != 0)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    ++probe->open_calls;
+    for (index = 0u; index < probe->entry_count; ++index) {
+        const navigation_document_entry *entry =
+            &probe->entries[index];
+        const size_t uri_size = strlen(entry->uri);
+        const size_t body_size =
+            entry->body != NULL ? strlen(entry->body) : 0u;
+        if (uri_size != source_size ||
+            memcmp(entry->uri, source, source_size) != 0)
+            continue;
+        if (entry->status != VXML_DIALOG_MANAGER_OK)
+            return entry->status;
+        if (entry->body == NULL || body_size > max_bytes)
+            return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+        *out_document = (vxml_dialog_document){
+            .data = entry->body,
+            .size = body_size,
+            .lease = (void *)entry};
+        return VXML_DIALOG_MANAGER_OK;
+    }
+    return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+}
+
+static void navigation_document_close(
+    void *user, vxml_dialog_document *document) {
+    navigation_document_probe *probe =
+        (navigation_document_probe *)user;
+    if (probe != NULL && document != NULL &&
+        document->lease != NULL)
+        ++probe->close_calls;
+    if (document != NULL)
+        memset(document, 0, sizeof(*document));
+}
+
+static const vxml_dialog_document_adapter_v1
+navigation_document_adapter = {
+    .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_dialog_document_adapter_v1),
+    .open = navigation_document_open,
+    .close = navigation_document_close};
+
+static vxml_document_store_status navigation_store_init(
+    vxml_document_store *store,
+    navigation_document_probe *documents,
+    size_t capacity) {
+    static const char application_uri[] =
+        "https://voice.example/app/root.vxml";
+    vxml_document_store_config_v1 config = {
+        .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1,
+        .struct_size = sizeof(vxml_document_store_config_v1),
+        .application_uri = application_uri,
+        .application_uri_size = sizeof(application_uri) - 1u,
+        .capacity = capacity,
+        .max_uri_bytes = 256u,
+        .max_document_bytes = 1024u,
+        .max_cache_bytes = 8192u,
+        .voice_limits = {0},
+        .documents = &navigation_document_adapter,
+        .document_user = documents};
+    config.voice_limits = vxml_default_limits();
+    return vxml_document_store_init(store, &config);
+}
+
+static vxml_dialog_manager_status manager_init_v3(
+    vxml_dialog_manager *manager,
+    size_t capacity,
+    size_t max_navigation_hops,
+    upstream_probe *upstream,
+    vxml_document_store *store,
+    event_probe *events) {
+    vxml_dialog_manager_config_v3 config =
+        vxml_dialog_manager_default_config_v3();
+    config.capacity = capacity;
+    config.max_source_bytes = 256u;
+    config.max_navigation_hops = max_navigation_hops;
+    config.upstream = &upstream_adapter;
+    config.upstream_user = upstream;
+    config.document_store = store;
+    config.events = &event_sink;
+    config.event_user = events;
+    return vxml_dialog_manager_init_v3(manager, &config);
+}
+
 static void manager_close_destroy(
     vxml_dialog_manager *manager,
     upstream_probe *upstream) {
