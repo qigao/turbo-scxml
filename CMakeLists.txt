@@ -43,7 +43,7 @@ endif()
 
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_package(Salts 1.2.0 EXACT CONFIG REQUIRED
+find_package(Salts 1.8.3 EXACT CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -60,7 +60,7 @@ endif()
 
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(SaltsUtils 2.0.2 EXACT CONFIG REQUIRED
+find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
   PATHS "${SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -78,7 +78,7 @@ endforeach()
 foreach(required_target IN ITEMS
     Salts::XmlParser
     Salts::QueryVM
-    Salts::Databind)
+    Salts::DataBind)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
       "SaltsUtils SDK does not provide required target: ${required_target}")
@@ -100,7 +100,7 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE OR
 
   unset(Chttp_DIR CACHE)
   unset(Chttp_DIR)
-  find_package(Chttp 1.0.0 EXACT CONFIG REQUIRED
+  find_package(Chttp 1.1.4 EXACT CONFIG REQUIRED
     PATHS "${CHTTP_ROOT_PATH}"
     NO_DEFAULT_PATH)
 
@@ -168,7 +168,7 @@ target_link_libraries(turbo_scxml
     Salts::XmlParser
   PRIVATE
     Salts::Core
-    Salts::Databind
+    Salts::DataBind
     Salts::QueryVM
     TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
@@ -324,7 +324,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::Databind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
