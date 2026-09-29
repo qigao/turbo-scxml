@@ -1021,6 +1021,79 @@ spec("VoiceXML dialog manager") {
     }
 
 
+    it("V2 keeps external goto fail-closed without fetching the target document") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml'/>"
+            "</block></form></vxml>";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block><exit/></block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-v2-external";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 2u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v2(
+                &manager, 1u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(
+            events.rows[0].voice_status,
+            VXML_UNSUPPORTED_FEATURE);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)1u);
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("V3 follows relative external goto to a target fragment and reuses both cached programs") {
         static const char a_uri[] =
             "https://voice.example/app/dialogs/a.vxml";
