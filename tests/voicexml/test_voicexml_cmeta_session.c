@@ -981,6 +981,49 @@ spec("VoiceXML CMeta session execution") {
         check_equal(value.data.sint, INT64_C(4));
     }
 
+    it("starts a named non-first CMeta form through the shared form-entry API") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<form id='first'><block><exit expr='value'/></block></form>"
+            "<form id='second'><block><exit expr='other'/></block></form>"
+            "</vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {.value = 11, .other = 22};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_exit_kind kind = VXML_CMETA_EXIT_EMPTY;
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options),
+                    VXML_OK);
+        check_equal(
+            vxml_session_start_at_form(
+                &session, "second", sizeof("second") - 1u),
+            VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_exit_kind(&session, &kind), VXML_OK);
+        check_equal(kind, VXML_CMETA_EXIT_EXPRESSION);
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)1u);
+        check_equal(
+            vxml_session_cmeta_exit_at(&session, 0u, &name, &value),
+            VXML_OK);
+        check_null(name.data);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(22));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("publishes one unnamed scalar for an exit expression") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
