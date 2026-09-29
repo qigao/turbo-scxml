@@ -360,7 +360,7 @@ spec("VoiceXML dialog manager") {
         check_equal(documents.open_calls, (size_t)1u);
         check_equal(events.count, (size_t)0u);
         check_true(vxml_dialog_manager_get_stats(&manager, &stats));
-        check_equal(stats.terminal_pending, (size_t)1u);
+        check_equal(stats.event_pending, (size_t)1u);
 
         events.full = false;
         check_equal(
