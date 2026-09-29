@@ -631,6 +631,18 @@ typedef struct scxml_external_event_metadata_row {
     scxml_event_data_storage data_object;
 } scxml_external_event_metadata_row;
 
+typedef struct scxml_data_resource_session_options {
+    const scxml_data_resource_adapter_v1 *legacy;
+    const scxml_data_resource_adapter_v2 *raw;
+    void *user;
+    size_t data_bind_workspace_bytes;
+    size_t max_data_depth;
+    size_t max_data_items;
+    size_t max_data_owned_bytes;
+    size_t max_data_buffer_bytes;
+    size_t max_data_resource_bytes;
+} scxml_data_resource_session_options;
+
 struct scxml_session_impl {
     const scxml_program_impl *program;
     cflow_statechart_instance instance;
@@ -645,7 +657,10 @@ struct scxml_session_impl {
     size_t *environment_override_assignments;
     size_t environment_override_count;
     scxml_data_resource_adapter_v1 data_resources;
+    scxml_data_resource_adapter_v2 raw_data_resources;
     void *data_resource_user;
+    size_t max_data_resource_bytes;
+    bool raw_data_resource_boundary;
     void *data_decode_allocation;
     void *data_decode_storage;
     size_t data_decode_storage_size;
