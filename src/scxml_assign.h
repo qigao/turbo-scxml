@@ -69,6 +69,19 @@ scxml_expr_status scxml_assign_compile_external(
     const scxml_expr_limits *limits,
     scxml_expr_diagnostic *diagnostic);
 
+scxml_expr_status scxml_assign_compile_external_plan(
+    scxml_assign_program *out,
+    const char *location, size_t location_size,
+    const char *uri, size_t uri_size,
+    const cmeta_data_desc *root,
+    const scxml_expr_limits *limits,
+    size_t max_data_depth, size_t max_data_items,
+    scxml_expr_diagnostic *diagnostic);
+
+bool scxml_assign_external_plan_requirements(
+    const scxml_assign_program *program,
+    const DataBindNativeRequirements **out_requirements);
+
 bool scxml_assign_external_source(
     const scxml_assign_program *program,
     const char **out_uri, size_t *out_uri_size,
