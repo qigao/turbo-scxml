@@ -6610,6 +6610,23 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(atomic_load_explicit(
                         &custom_action_observed, memory_order_relaxed),
                     10);
+        {
+            cflow_statechart_instance_status init_status;
+            cflow_statechart_instance_status destroy_status;
+            atomic_store_explicit(
+                &custom_action_observed, 0, memory_order_relaxed);
+            stats = run_direct_to_idle(
+                &program,
+                (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD},
+                &init_status, &destroy_status);
+            check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+            check_equal(destroy_status, CFLOW_STATECHART_INSTANCE_OK);
+            check_true(stats.done);
+            check_false(stats.errored);
+            check_equal(atomic_load_explicit(
+                            &custom_action_observed, memory_order_relaxed),
+                        10);
+        }
         scxml_program_destroy(&program);
     }
 
