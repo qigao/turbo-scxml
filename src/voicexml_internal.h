@@ -9,11 +9,13 @@
 #define VXML_DEFAULT_MAX_NAME_BYTES (256u * 1024u)
 
 typedef enum vxml_action_kind {
-    VXML_ACTION_EXIT = 1
+    VXML_ACTION_EXIT = 1,
+    VXML_ACTION_GOTO
 } vxml_action_kind;
 
 typedef struct vxml_action_row {
     vxml_action_kind kind;
+    size_t target_form;
 } vxml_action_row;
 
 typedef struct vxml_block_row {
