@@ -4,6 +4,8 @@
 #include "scxml_runtime.h"
 #include "scxml_quickjs.h"
 
+#include <cflow/function_projection.h>
+
 scxml_limits scxml_default_limits(void) {
     const scxml_limits limits = {
         {16u * 1024u * 1024u, 1048576u, 1048576u, 256u,
@@ -1148,7 +1150,7 @@ static bool custom_action_function_row_valid(
     const scxml_cmeta_custom_action_v2 *prior_actions,
     size_t prior_count,
     cmeta_callable *out_bound) {
-    cmeta_callable bound;
+    cflow_function_action_projection projection = {0};
     const cmeta_sig_desc *signature;
     size_t parameter;
     size_t prior;
@@ -1156,22 +1158,11 @@ static bool custom_action_function_row_valid(
     if (action == NULL || action->struct_size < sizeof(*action) ||
         action->namespace_uri == NULL || action->namespace_uri_size == 0u ||
         action->local_name == NULL || action->local_name_size == 0u ||
-        !cmeta_function_desc_valid(action->function) ||
-        !cmeta_function_abi_desc_valid(action->abi) ||
-        action->abi->function == NULL ||
-        !cmeta_function_desc_equal(action->function, action->abi->function) ||
-        !cmeta_callable_bind(action->callable, &bound) ||
-        (signature = cmeta_callable_signature(bound)) == NULL ||
-        signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
-        signature->param_count != action->function->param_count ||
-        action->abi->param_count != action->function->param_count ||
-        bound.meta.effects != action->function->effects ||
-        bound.meta.properties != action->function->properties ||
-        !cmeta_type_equal(signature->return_type,
-                          action->function->return_type) ||
-        !cmeta_abi_carrier_matches_type(
-            action->abi->return_carrier, action->function->return_type) ||
-        !custom_action_scalar_type_supported(action->function->return_type))
+        cflow_function_action_projection_admit(
+            action->function, action->abi, action->callable, &projection) !=
+            CFLOW_FUNCTION_PROJECTION_OK ||
+        (signature = cmeta_callable_signature(projection.callable)) == NULL ||
+        !custom_action_scalar_type_supported(signature->return_type))
         return false;
 
     for (parameter = 0u; parameter < action->function->param_count;
@@ -1180,11 +1171,7 @@ static bool custom_action_function_row_valid(
             cmeta_function_param(action->function, parameter);
         if (param == NULL || param->name == NULL || param->name[0] == '\0' ||
             (param->flags & CMETA_PARAM_DIRECTION_MASK) != CMETA_PARAM_IN ||
-            !custom_action_scalar_type_supported(param->type) ||
-            !cmeta_type_equal(param->type, signature->params[parameter]) ||
-            !cmeta_abi_carrier_matches_type(
-                cmeta_function_param_abi(action->abi, parameter),
-                param->type))
+            !custom_action_scalar_type_supported(param->type))
             return false;
         for (prior = 0u; prior < parameter; ++prior) {
             const cmeta_param_desc *earlier =
@@ -1205,7 +1192,7 @@ static bool custom_action_function_row_valid(
             return false;
     }
 
-    if (out_bound != NULL) *out_bound = bound;
+    if (out_bound != NULL) *out_bound = projection.callable;
     return true;
 }
 

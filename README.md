@@ -123,8 +123,8 @@ Requirements:
 - CMake 3.20+
 - Ninja
 - a C11-capable compiler
-- installed `Salts.Native 1.8.3` SDK
-- installed `SaltsUtils.Native 4.1.3` SDK
+- installed `Salts.Native` SDK
+- installed `SaltsUtils.Native` SDK
 - standalone CHTTP only when an optional CHTTP adapter is enabled
 - Visual Studio 2022 developer environment on Windows
 
@@ -138,7 +138,7 @@ SALTS_UTILS_ROOT
 CHTTP_ROOT   # only for CHTTP-enabled profiles
 ```
 
-`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.1.5` SDK when an HTTP adapter is enabled.
+`CHTTP_ROOT` names the installed standalone `CHttp.Native` SDK when an HTTP adapter is enabled.
 
 ### Windows Release
 
