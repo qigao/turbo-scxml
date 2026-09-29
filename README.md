@@ -33,7 +33,7 @@ TurboSCXML reuses the Salts execution and type foundations:
 
 Parser/query and HTTP ownership follow the current ecosystem boundary:
 
-- **SaltsUtils** owns QueryVM, XML/parser components, and DataBind; installed consumers use `Salts::Databind`.
+- **SaltsUtils** owns QueryVM, XML/parser components, and DataBind; installed consumers use `Salts::DataBind`.
 - **CHTTP** owns HTTP client/server infrastructure through the standalone `CHttp::*` package targets.
 
 TurboSCXML resolves those packages explicitly from their installed roots and does not fall back to the former core-Salts ownership model.
@@ -138,7 +138,7 @@ SALTS_UTILS_ROOT
 CHTTP_ROOT   # only for CHTTP-enabled profiles
 ```
 
-`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.0.0` SDK when an HTTP adapter is enabled.
+`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.1.4` SDK when an HTTP adapter is enabled.
 
 ### Windows Release
 
