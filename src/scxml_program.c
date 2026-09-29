@@ -1164,8 +1164,13 @@ static bool custom_action_function_row_valid(
         (signature = cmeta_callable_signature(bound)) == NULL ||
         signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
         signature->param_count != action->function->param_count ||
+        action->abi->param_count != action->function->param_count ||
+        bound.meta.effects != action->function->effects ||
+        bound.meta.properties != action->function->properties ||
         !cmeta_type_equal(signature->return_type,
                           action->function->return_type) ||
+        !cmeta_abi_carrier_matches_type(
+            action->abi->return_carrier, action->function->return_type) ||
         !custom_action_scalar_type_supported(action->function->return_type))
         return false;
 
@@ -1176,7 +1181,10 @@ static bool custom_action_function_row_valid(
         if (param == NULL || param->name == NULL || param->name[0] == '\0' ||
             (param->flags & CMETA_PARAM_DIRECTION_MASK) != CMETA_PARAM_IN ||
             !custom_action_scalar_type_supported(param->type) ||
-            !cmeta_type_equal(param->type, signature->params[parameter]))
+            !cmeta_type_equal(param->type, signature->params[parameter]) ||
+            !cmeta_abi_carrier_matches_type(
+                cmeta_function_param_abi(action->abi, parameter),
+                param->type))
             return false;
         for (prior = 0u; prior < parameter; ++prior) {
             const cmeta_param_desc *earlier =
