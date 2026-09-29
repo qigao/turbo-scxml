@@ -124,9 +124,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
           dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile $config --packages $packages
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "SALTS_UTILS_ROOT=$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
-          "CHTTP_ROOT=$packages\chttp.native\$env:CHTTP_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $saltsRoot = ("$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
+          $saltsUtilsRoot = ("$packages\saltsutils.native\$env:SALTS_UTILS_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
+          $chttpRoot = ("$packages\chttp.native\$env:CHTTP_SDK_VERSION\sdk\windows-x64" -replace '\\', '/')
+          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$saltsUtilsRoot" >> $env:GITHUB_ENV
+          "CHTTP_ROOT=$chttpRoot" >> $env:GITHUB_ENV
 
       - name: Restore third-party dependencies from shared cache only
         shell: pwsh
