@@ -2041,7 +2041,6 @@ static scxml_status emit_custom_action_step(
         !cmeta_callable_bind(registration.callable, &bound) ||
         (signature = cmeta_callable_signature(bound)) == NULL ||
         registration.parameter_count != signature->param_count ||
-        registration.parameter_count > SCXML_CUSTOM_ACTION_MAX_PARAMETERS ||
         build->custom_action_argument_index >
             build->custom_action_argument_capacity ||
         registration.parameter_count >
