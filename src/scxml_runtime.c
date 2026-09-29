@@ -2415,9 +2415,8 @@ static scxml_expr_status data_resource_failure(
 
 static scxml_expr_status apply_raw_external_data_initializer(
     const scxml_assign_program *assignment,
-    scxml_session_impl *session, const cmeta_data_desc *destination,
-    const char *uri, size_t uri_size, void *state,
-    scxml_expr_diagnostic *diagnostic) {
+    scxml_session_impl *session, const char *uri, size_t uri_size,
+    void *state, scxml_expr_diagnostic *diagnostic) {
     scxml_data_resource_v2 resource = {0};
     DataBindFormatReader format_reader = DATA_BIND_FORMAT_READER_INIT;
     DataBindError format_error = DATA_BIND_ERROR_INIT;
@@ -2497,8 +2496,7 @@ static scxml_expr_status apply_external_data_initializer(
             session->max_data_resource_bytes == 0u)
             return SCXML_EXPR_INVALID_ARGUMENT;
         return apply_raw_external_data_initializer(
-            assignment, session, destination, uri, uri_size, state,
-            diagnostic);
+            assignment, session, uri, uri_size, state, diagnostic);
     }
 
     if (session->data_resources.open == NULL ||
