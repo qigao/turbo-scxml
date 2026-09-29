@@ -718,11 +718,42 @@ static vxml_status measure_exit(
     return VXML_OK;
 }
 
+static vxml_status measure_goto(
+    salts_xml_node node, vxml_measurement *measurement,
+    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    salts_xml_attribute next;
+    size_t index;
+    vxml_status status = validate_attributes(node, "next", diagnostic);
+    if (status != VXML_OK) return status;
+    next = unqualified_attribute(node, "next");
+    if (next.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML goto requires next");
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(node, index);
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML goto child element");
+        return reject_non_element(child, diagnostic);
+    }
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count))
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML action count exceeds max_actions");
+    return append_goto(measurement, next, limits, diagnostic);
+}
+
 static vxml_status measure_block(
     salts_xml_node node, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
-    size_t exits = 0u;
+    size_t actions = 0u;
     vxml_status status = validate_attributes(node, NULL, diagnostic);
     if (status != VXML_OK) return status;
     if (measurement->block_count >= limits->max_blocks ||
@@ -735,23 +766,26 @@ static vxml_status measure_block(
     }
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
+        const salts_xml_string_view local_name =
+            salts_xml_node_local_name(child);
         if (node_is_ignorable(child)) continue;
         if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
             return reject_non_element(child, diagnostic);
         if (!normalized_view_equal(
                 salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "exit")) {
+            (!view_equal(local_name, "exit") &&
+             !view_equal(local_name, "goto")))
             return reject_unexpected_element(
                 child, diagnostic, "unsupported VoiceXML block child element");
-        }
-        if (exits != 0u) {
+        if (actions != 0u)
             return fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "VoiceXML block accepts at most one exit child");
-        }
-        ++exits;
-        status = measure_exit(child, measurement, limits, diagnostic);
+                "VoiceXML literal block accepts at most one transfer action");
+        ++actions;
+        status = view_equal(local_name, "goto")
+            ? measure_goto(child, measurement, limits, diagnostic)
+            : measure_exit(child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
