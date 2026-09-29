@@ -10,6 +10,10 @@ typedef struct provider_probe {
     size_t invoke_cancel_calls;
     size_t invoke_forward_calls;
     size_t close_calls;
+    size_t data_open_calls;
+    size_t data_close_calls;
+    size_t text_open_calls;
+    size_t text_close_calls;
     bool quiescent;
 } provider_probe;
 
@@ -83,6 +87,57 @@ static bool probe_quiescent(void *user) {
     return probe != NULL && probe->quiescent;
 }
 
+static scxml_resource_status probe_data_open(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_data_resource_v2 *out) {
+    provider_probe *probe = (provider_probe *)user;
+    static const char data[] = "7";
+    (void)uri;
+    (void)uri_size;
+    if (probe == NULL || out == NULL || max_bytes < sizeof(data) - 1u)
+        return SCXML_RESOURCE_FAILED;
+    ++probe->data_open_calls;
+    *out = (scxml_data_resource_v2){
+        .data = data,
+        .size = sizeof(data) - 1u,
+        .format = DATA_BIND_FORMAT_JSON,
+        .lease = probe};
+    return SCXML_RESOURCE_OK;
+}
+
+static void probe_data_close(
+    void *user, scxml_data_resource_v2 *resource) {
+    provider_probe *probe = (provider_probe *)user;
+    if (probe != NULL && resource != NULL && resource->lease == probe)
+        ++probe->data_close_calls;
+    if (resource != NULL) memset(resource, 0, sizeof(*resource));
+}
+
+static scxml_resource_status probe_text_open(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_text_resource *out) {
+    provider_probe *probe = (provider_probe *)user;
+    static const char text[] = "script";
+    (void)uri;
+    (void)uri_size;
+    if (probe == NULL || out == NULL || max_bytes < sizeof(text) - 1u)
+        return SCXML_RESOURCE_FAILED;
+    ++probe->text_open_calls;
+    *out = (scxml_text_resource){
+        .data = text,
+        .size = sizeof(text) - 1u,
+        .lease = probe};
+    return SCXML_RESOURCE_OK;
+}
+
+static void probe_text_close(
+    void *user, scxml_text_resource *resource) {
+    provider_probe *probe = (provider_probe *)user;
+    if (probe != NULL && resource != NULL && resource->lease == probe)
+        ++probe->text_close_calls;
+    if (resource != NULL) memset(resource, 0, sizeof(*resource));
+}
+
 spec("TurboSCXML CMeta provider interfaces") {
     it("publishes stable Event I/O and Invoke interface descriptors") {
         const cmeta_interface_desc *event_meta =
@@ -110,6 +165,23 @@ spec("TurboSCXML CMeta provider interfaces") {
         check_equal(invoke_meta->methods[2].name, "prepare_forward");
         check_equal(invoke_meta->methods[3].name, "close");
         check_equal(invoke_meta->methods[4].name, "is_quiescent");
+
+        {
+            const cmeta_interface_desc *data_meta =
+                scxml_data_resource_provider_interface();
+            const cmeta_interface_desc *text_meta =
+                scxml_text_resource_provider_interface();
+            check_true(cmeta_interface_desc_valid(data_meta));
+            check_equal(data_meta->method_count, (size_t)2u);
+            check_equal(data_meta->methods[0].name, "open");
+            check_equal(cmeta_interface_method_arity(&data_meta->methods[0]),
+                        (size_t)4u);
+            check_equal(data_meta->methods[1].name, "close");
+            check_true(cmeta_interface_desc_valid(text_meta));
+            check_equal(text_meta->method_count, (size_t)2u);
+            check_equal(cmeta_interface_method_arity(&text_meta->methods[0]),
+                        (size_t)4u);
+        }
     }
 
     it("projects a static Event I/O adapter through CMeta Interface and back") {
@@ -242,4 +314,82 @@ spec("TurboSCXML CMeta provider interfaces") {
 
 int main(void) {
     return run_specs();
+
+    it("projects canonical raw data resources through CMeta Interface and back") {
+        provider_probe probe = {0};
+        const scxml_data_resource_adapter_v2 adapter = {
+            .abi_version = SCXML_DATA_RESOURCE_ADAPTER_ABI_V2,
+            .struct_size = sizeof(scxml_data_resource_adapter_v2),
+            .open = probe_data_open,
+            .close = probe_data_close};
+        scxml_data_resource_provider_bridge provider_bridge = {0};
+        scxml_data_resource_adapter_bridge adapter_bridge = {0};
+        scxml_data_resource_provider *provider;
+        const scxml_data_resource_adapter_v2 *round_trip;
+        scxml_data_resource_v2 resource = {0};
+
+        check_true(scxml_data_resource_provider_bridge_init(
+            &provider_bridge, &adapter, &probe));
+        provider = scxml_data_resource_provider_bridge_get(&provider_bridge);
+        check_not_null(provider);
+        check_equal(scxml_data_resource_provider_open(
+                        provider, "mem:x", 5u, 16u, &resource),
+                    SCXML_RESOURCE_OK);
+        check_equal(probe.data_open_calls, (size_t)1u);
+        scxml_data_resource_provider_close(provider, &resource);
+        check_equal(probe.data_close_calls, (size_t)1u);
+
+        check_true(scxml_data_resource_adapter_bridge_init(
+            &adapter_bridge, provider));
+        round_trip = scxml_data_resource_adapter_bridge_get(&adapter_bridge);
+        check_not_null(round_trip);
+        check_equal(round_trip->open(
+                        scxml_data_resource_adapter_bridge_user(&adapter_bridge),
+                        "mem:x", 5u, 16u, &resource),
+                    SCXML_RESOURCE_OK);
+        check_equal(probe.data_open_calls, (size_t)2u);
+        round_trip->close(
+            scxml_data_resource_adapter_bridge_user(&adapter_bridge),
+            &resource);
+        check_equal(probe.data_close_calls, (size_t)2u);
+    }
+
+    it("projects compile-time text resources through the same CMeta model") {
+        provider_probe probe = {0};
+        const scxml_text_resource_adapter_v1 adapter = {
+            .abi_version = SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1,
+            .struct_size = sizeof(scxml_text_resource_adapter_v1),
+            .open = probe_text_open,
+            .close = probe_text_close};
+        scxml_text_resource_provider_bridge provider_bridge = {0};
+        scxml_text_resource_adapter_bridge adapter_bridge = {0};
+        scxml_text_resource_provider *provider;
+        const scxml_text_resource_adapter_v1 *round_trip;
+        scxml_text_resource resource = {0};
+
+        check_true(scxml_text_resource_provider_bridge_init(
+            &provider_bridge, &adapter, &probe));
+        provider = scxml_text_resource_provider_bridge_get(&provider_bridge);
+        check_not_null(provider);
+        check_equal(scxml_text_resource_provider_open(
+                        provider, "mem:s", 5u, 16u, &resource),
+                    SCXML_RESOURCE_OK);
+        check_equal(probe.text_open_calls, (size_t)1u);
+        scxml_text_resource_provider_close(provider, &resource);
+        check_equal(probe.text_close_calls, (size_t)1u);
+
+        check_true(scxml_text_resource_adapter_bridge_init(
+            &adapter_bridge, provider));
+        round_trip = scxml_text_resource_adapter_bridge_get(&adapter_bridge);
+        check_equal(round_trip->open(
+                        scxml_text_resource_adapter_bridge_user(&adapter_bridge),
+                        "mem:s", 5u, 16u, &resource),
+                    SCXML_RESOURCE_OK);
+        check_equal(probe.text_open_calls, (size_t)2u);
+        round_trip->close(
+            scxml_text_resource_adapter_bridge_user(&adapter_bridge),
+            &resource);
+        check_equal(probe.text_close_calls, (size_t)2u);
+    }
+
 }
