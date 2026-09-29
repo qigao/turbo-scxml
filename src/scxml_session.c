@@ -1602,6 +1602,22 @@ bool scxml_session_matches_event_io(
     return descriptor_found;
 }
 
+bool scxml_session_copy_data_resource_diagnostic(
+    const scxml_session *session,
+    scxml_data_resource_diagnostic *out) {
+    scxml_session_impl *impl = session != NULL
+        ? (scxml_session_impl *)session->impl : NULL;
+    if (impl == NULL || out == NULL) return false;
+    salts_mutex_lock(&impl->registry_lock);
+    if (!impl->has_data_resource_diagnostic) {
+        salts_mutex_unlock(&impl->registry_lock);
+        return false;
+    }
+    *out = impl->data_resource_diagnostic;
+    salts_mutex_unlock(&impl->registry_lock);
+    return true;
+}
+
 const char *scxml_session_error(
     const scxml_session *session) {
     const scxml_session_impl *impl = session != NULL
