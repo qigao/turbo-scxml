@@ -16,6 +16,9 @@ extern "C" {
 #define VXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
+#define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
+
+#define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -64,6 +67,10 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_data_uri_bytes;
     size_t max_data_bind_depth;
     size_t max_data_bind_items;
+
+    /* Optional append-only directed-field admission tail. */
+    size_t max_fields;
+    size_t max_grammar_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -80,6 +87,10 @@ typedef struct vxml_cmeta_session_options_v1 {
     void *data_resource_user;
     size_t max_data_bytes;
     size_t max_data_owned_bytes;
+
+    /* Optional append-only directed collect provider tail. */
+    const struct vxml_cmeta_collect_adapter_v1 *collect;
+    void *collect_user;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -109,6 +120,38 @@ typedef struct vxml_cmeta_data_resource_adapter_v1 {
         vxml_cmeta_data_resource_v1 *resource);
 } vxml_cmeta_data_resource_adapter_v1;
 
+typedef struct vxml_cmeta_collect_ticket_v1 {
+    void (*commit)(void *user);
+    void (*discard)(void *user);
+    void *user;
+} vxml_cmeta_collect_ticket_v1;
+
+typedef struct vxml_cmeta_collect_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view field;
+    vxml_cmeta_name_view grammar_type;
+    vxml_cmeta_name_view grammar_src;
+} vxml_cmeta_collect_request_v1;
+
+typedef struct vxml_cmeta_collect_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t capabilities;
+    vxml_status (*prepare)(
+        void *user,
+        const vxml_cmeta_collect_request_v1 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
+    /**
+     * No-fail/nonblocking cancellation of one previously committed generation.
+     * The provider must ignore an already-settled generation.
+     */
+    void (*cancel)(void *user, uint64_t generation);
+} vxml_cmeta_collect_adapter_v1;
+
 typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_EMPTY = 0,
     VXML_CMETA_EXIT_EXPRESSION,
@@ -128,6 +171,25 @@ vxml_status vxml_session_init_cmeta(
 vxml_status vxml_session_cmeta_read(
     const vxml_session *session, const char *name, size_t name_size,
     vxml_cmeta_value_view *out_value);
+
+/** Borrow the currently selected directed-field collect request. */
+vxml_status vxml_session_cmeta_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_collect_request_v1 *out_request);
+
+/**
+ * Ask the configured provider to reserve the selected collect operation.
+ * Success stores the provider ticket inside the session; no provider work is
+ * committed until vxml_session_cmeta_collect_commit().
+ */
+vxml_status vxml_session_cmeta_collect_prepare(
+    vxml_session *session, const char **out_error);
+
+/** Commit the currently prepared provider ticket; no-fail provider callback. */
+vxml_status vxml_session_cmeta_collect_commit(vxml_session *session);
+
+/** Discard the currently prepared provider ticket and restore admission. */
+vxml_status vxml_session_cmeta_collect_discard(vxml_session *session);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
