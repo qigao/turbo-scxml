@@ -137,6 +137,15 @@ static vxml_cmeta_compile_options_v1 compile_options(void) {
     };
 }
 
+static vxml_cmeta_compile_options_v1 data_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_external_data_resources = 2u;
+    options.max_data_uri_bytes = 64u;
+    options.max_data_bind_depth = 16u;
+    options.max_data_bind_items = 128u;
+    return options;
+}
+
 enum { PROGRAM_ALLOCATION_CAPACITY = 256 };
 
 typedef struct program_allocation_tracker {
@@ -242,6 +251,96 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("compiles document data into one pre-admitted NativePlan") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            data_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_external_data_row *row;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->external_data_count, (size_t)1u);
+        check_not_null(profile->external_data);
+        row = &profile->external_data[0];
+        check_equal(row->name, "value");
+        check_equal(row->uri, "config.json");
+        check_equal(row->field_index, (size_t)0u);
+        check_equal(row->field_offset,
+                    offsetof(vxml_cmeta_program_root, value));
+        check_true(row->field_data == &cmeta_data_int);
+        check_not_null(row->plan);
+        check_true(row->workspace_alignment != 0u);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("requires explicit external-data limits when a data element is present") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            compile_options();
+        vxml_program program = {(void *)(uintptr_t)1u};
+        vxml_diagnostic diagnostic = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, &diagnostic),
+                    VXML_INVALID_CONTRACT);
+        check_null(program.impl);
+        check_equal(diagnostic.status, VXML_INVALID_CONTRACT);
+    }
+
+    it("rejects data names that do not map to one application-root field") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='missing' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            data_compile_options();
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, &diagnostic),
+                    VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
+        check_equal(diagnostic.status, VXML_SEMANTIC_ERROR);
+    }
+
+    it("rejects duplicate document var and data names") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<var name='value' expr='1'/>"
+            "<data name='value' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            data_compile_options();
+        vxml_program program = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+    }
+
     it("admits an entity-decoded CMeta datamodel") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
