@@ -569,8 +569,9 @@ static scxml_status compile_scxml_model(
     }
     status = scxml_analyze_emit_state(&build, root, 0u, true);
     if (status != SCXML_OK) goto cleanup;
-    qsort(build.state_names, build.state_name_index,
-          sizeof(*build.state_names), scxml_analyze_compare_name_ref);
+    if (build.state_name_index > 1u)
+        qsort(build.state_names, build.state_name_index,
+              sizeof(*build.state_names), scxml_analyze_compare_name_ref);
     {
         const scxml_name_ref *duplicate = scxml_analyze_find_earliest_duplicate(
             build.state_names, build.state_name_index);
@@ -581,13 +582,15 @@ static scxml_status compile_scxml_model(
             goto cleanup;
         }
     }
-    qsort(build.node_refs, build.node_ref_index, sizeof(*build.node_refs),
-          scxml_analyze_compare_node_ref);
+    if (build.node_ref_index > 1u)
+        qsort(build.node_refs, build.node_ref_index, sizeof(*build.node_refs),
+              scxml_analyze_compare_node_ref);
     status = scxml_analyze_emit_invocation_declarations(
         &build, root, build.node_ref_index);
     if (status != SCXML_OK) goto cleanup;
-    qsort(build.invocation_names, build.invocation_index,
-          sizeof(*build.invocation_names), scxml_analyze_compare_name_ref);
+    if (build.invocation_index > 1u)
+        qsort(build.invocation_names, build.invocation_index,
+              sizeof(*build.invocation_names), scxml_analyze_compare_name_ref);
     {
         const scxml_name_ref *duplicate = scxml_analyze_find_earliest_duplicate(
             build.invocation_names, build.invocation_index);
@@ -923,10 +926,12 @@ static scxml_status compile_scxml_model(
     build.invocation_storage = NULL;
     build.script_storage = NULL;
     impl->null_value = false;
-    qsort(impl->state_names, impl->state_name_count,
-          sizeof(*impl->state_names), scxml_analyze_compare_program_name);
-    qsort(impl->event_names, impl->event_name_count,
-          sizeof(*impl->event_names), scxml_analyze_compare_program_name);
+    if (impl->state_name_count > 1u)
+        qsort(impl->state_names, impl->state_name_count,
+              sizeof(*impl->state_names), scxml_analyze_compare_program_name);
+    if (impl->event_name_count > 1u)
+        qsort(impl->event_names, impl->event_name_count,
+              sizeof(*impl->event_names), scxml_analyze_compare_program_name);
     for (index = 0u; index < impl->event_name_count; ++index) {
         const uint64_t id = impl->event_names[index].id;
         if (id == 0u || id > impl->event_name_count ||

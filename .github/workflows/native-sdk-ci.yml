@@ -136,6 +136,111 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-wide -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
           cmake --build build/consumer-wide --parallel 2
 
+
+  linux-sanitizers:
+    name: Linux x64 ASan + UBSan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+
+      - name: Restore current published native SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-native-sdks"
+          project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+          </Project>
+          EOF
+          (
+            cd "$RUNNER_TEMP"
+            dotnet add "$project" package Salts.Native
+            dotnet add "$project" package SaltsUtils.Native
+            dotnet add "$project" package CHttp.Native
+          )
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1"
+            local rid="$2"
+            local roots=()
+            local root
+            while IFS= read -r root; do
+              roots+=("$root")
+            done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
+                -path "*/sdk/$rid" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              printf 'expected exactly one restored %s SDK for %s, found %s\n' \
+                "$package" "$rid" "${#roots[@]}" >&2
+              return 1
+            fi
+            printf '%s' "${roots[0]}"
+          }
+          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
+
+      - name: Restore third-party dependencies from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --only-binarycaching
+
+      - name: Configure sanitizer build
+        shell: bash
+        run: |
+          set -euo pipefail
+          sanitizer_flags="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all"
+          cmake -S . -B build/ci-sanitizers -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DBUILD_TESTING=ON \
+            -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON \
+            -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON \
+            -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON \
+            -DCMAKE_C_FLAGS="$sanitizer_flags" \
+            -DCMAKE_CXX_FLAGS="$sanitizer_flags" \
+            -DCMAKE_EXE_LINKER_FLAGS="$sanitizer_flags" \
+            -DCMAKE_SHARED_LINKER_FLAGS="$sanitizer_flags"
+
+      - name: Build and run sanitizer tests
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          cmake --build build/ci-sanitizers --parallel 2
+          bash cmake/ci/run-sanitizer-tests.sh
+
   windows:
     name: Windows x64 released SDK
     runs-on: windows-2022

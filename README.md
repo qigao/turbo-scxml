@@ -148,6 +148,7 @@ The single `Native SDK CI` workflow consumes the current published native SDK gr
 | --- | --- |
 | Windows x64 | Release build, full CTest, install, and installed C/C++ consumers |
 | Linux x64 | Release build, full CTest, install, and installed C/C++ consumers |
+| Linux x64 sanitizers | Debug ASan + UBSan full CTest; LSan remains enabled except the W3C case isolated for upstream Salts #630 |
 | macOS (runner architecture) | Release build, full CTest, install, and installed C/C++ consumers |
 | Android arm64-v8a, API 26+ | Release cross-build, install, and installed C/C++ consumer build; target execution is not performed on the Linux host runner |
 
