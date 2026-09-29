@@ -327,6 +327,12 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     scxml_chttp_resource_test.c
     LIBS TurboSCXML::CHttpResource CHttp::Server
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
+
+  turboscxml_add_test(
+    voicexml_chttp_resource_test
+    voicexml_chttp_resource_test.c
+    LIBS TurboSCXML::VoiceXMLCHttpResource
+    INCLUDES ${PROJECT_SOURCE_DIR}/src)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
