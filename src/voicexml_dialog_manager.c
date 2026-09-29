@@ -871,6 +871,20 @@ vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void) {
     return config;
 }
 
+vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void) {
+    vxml_dialog_manager_config_v2 config;
+    memset(&config, 0, sizeof(config));
+    config.abi_version = VXML_DIALOG_MANAGER_CONFIG_ABI_V2;
+    config.struct_size = sizeof(config);
+    config.capacity = 32u;
+    config.max_source_bytes = 4096u;
+    config.max_media_type_bytes = 127u;
+    config.max_connection_id_bytes = 511u;
+    config.max_dialog_id_bytes = 63u;
+    config.max_fragment_bytes = 255u;
+    return config;
+}
+
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status) {
     switch (status) {
@@ -967,7 +981,83 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
                 row, impl->max_source_bytes,
                 impl->max_media_type_bytes,
                 impl->max_connection_id_bytes,
-                impl->max_dialog_id_bytes)) {
+                impl->max_dialog_id_bytes,
+                0u)) {
+            size_t cleanup;
+            for (cleanup = 0u; cleanup <= index; ++cleanup)
+                row_free_buffers(&impl->rows[cleanup]);
+            free(impl->rows);
+            free(impl);
+            return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+        }
+    }
+
+    manager->impl = impl;
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v2(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v2 *config) {
+    vxml_dialog_manager_impl *impl;
+    size_t index;
+    if (manager == NULL || manager->impl != NULL ||
+        config == NULL ||
+        config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V2 ||
+        config->struct_size < sizeof(*config) ||
+        config->capacity == 0u ||
+        config->max_source_bytes == 0u ||
+        config->max_media_type_bytes < sizeof(VXML_MEDIA_TYPE) - 1u ||
+        config->max_connection_id_bytes == 0u ||
+        config->max_dialog_id_bytes < 16u ||
+        config->max_fragment_bytes == 0u ||
+        config->max_fragment_bytes == SIZE_MAX ||
+        !upstream_prefix_valid(config->upstream) ||
+        config->document_store == NULL ||
+        config->document_store->impl == NULL ||
+        config->events == NULL ||
+        config->events->abi_version != VXML_DIALOG_EVENT_SINK_ABI_V1 ||
+        config->events->struct_size < sizeof(*config->events) ||
+        config->events->try_publish == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+
+    impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL)
+        return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+    impl->rows = (vxml_dialog_row *)calloc(
+        config->capacity, sizeof(*impl->rows));
+    if (impl->rows == NULL) {
+        free(impl);
+        return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+    }
+
+    impl->capacity = config->capacity;
+    impl->max_source_bytes = config->max_source_bytes;
+    impl->max_media_type_bytes = config->max_media_type_bytes;
+    impl->max_connection_id_bytes = config->max_connection_id_bytes;
+    impl->max_dialog_id_bytes = config->max_dialog_id_bytes;
+    impl->max_fragment_bytes = config->max_fragment_bytes;
+    impl->use_document_store = true;
+    impl->document_store = config->document_store;
+    memset(&impl->upstream, 0, sizeof(impl->upstream));
+    memcpy(
+        &impl->upstream, config->upstream,
+        min_size(config->upstream->struct_size, sizeof(impl->upstream)));
+    impl->upstream_user = config->upstream_user;
+    impl->events = *config->events;
+    impl->event_user = config->event_user;
+
+    for (index = 0u; index < impl->capacity; ++index) {
+        vxml_dialog_row *row = &impl->rows[index];
+        row->owner = impl;
+        row->slot = index;
+        row->state = VXML_DIALOG_ROW_EMPTY;
+        if (!row_allocate_buffers(
+                row, impl->max_source_bytes,
+                impl->max_media_type_bytes,
+                impl->max_connection_id_bytes,
+                impl->max_dialog_id_bytes,
+                impl->max_fragment_bytes)) {
             size_t cleanup;
             for (cleanup = 0u; cleanup <= index; ++cleanup)
                 row_free_buffers(&impl->rows[cleanup]);
