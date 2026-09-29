@@ -67,6 +67,9 @@ typedef struct vxml_dialog_row {
     size_t media_type_size;
     char *connection_id;
     size_t connection_id_size;
+    char *start_fragment;
+    size_t start_fragment_size;
+    size_t navigation_hops;
 
     vxml_program program;
     bool program_live;
@@ -93,6 +96,8 @@ struct vxml_dialog_manager_impl {
     void *document_user;
     vxml_document_store *document_store;
     bool store_backed;
+    bool navigation_enabled;
+    size_t max_navigation_hops;
     char *resolve_uri_scratch;
     char *resolve_fragment_scratch;
     vxml_dialog_event_sink_v1 events;
@@ -170,6 +175,7 @@ static void row_clear(vxml_dialog_row *row) {
     char *source;
     char *media_type;
     char *connection_id;
+    char *start_fragment;
     if (row == NULL) return;
     row_destroy_runtime(row);
     generation = row->generation;
@@ -179,6 +185,7 @@ static void row_clear(vxml_dialog_row *row) {
     source = row->source;
     media_type = row->media_type;
     connection_id = row->connection_id;
+    start_fragment = row->start_fragment;
     memset(row, 0, sizeof(*row));
     row->generation = generation;
     row->owner = owner;
@@ -187,6 +194,7 @@ static void row_clear(vxml_dialog_row *row) {
     row->source = source;
     row->media_type = media_type;
     row->connection_id = connection_id;
+    row->start_fragment = start_fragment;
     row->state = VXML_DIALOG_ROW_EMPTY;
 }
 
@@ -200,8 +208,10 @@ static bool row_allocate_buffers(
     row->media_type = (char *)calloc(media_type_bytes + 1u, 1u);
     row->connection_id = (char *)calloc(connection_bytes + 1u, 1u);
     row->dialog_id = (char *)calloc(dialog_id_bytes + 1u, 1u);
+    row->start_fragment = (char *)calloc(source_bytes + 1u, 1u);
     return row->source != NULL && row->media_type != NULL &&
-           row->connection_id != NULL && row->dialog_id != NULL;
+           row->connection_id != NULL && row->dialog_id != NULL &&
+           row->start_fragment != NULL;
 }
 
 static void row_free_buffers(vxml_dialog_row *row) {
@@ -210,10 +220,12 @@ static void row_free_buffers(vxml_dialog_row *row) {
     free(row->media_type);
     free(row->connection_id);
     free(row->dialog_id);
+    free(row->start_fragment);
     row->source = NULL;
     row->media_type = NULL;
     row->connection_id = NULL;
     row->dialog_id = NULL;
+    row->start_fragment = NULL;
 }
 
 static bool row_copy(
