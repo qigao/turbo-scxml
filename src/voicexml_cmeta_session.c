@@ -667,6 +667,8 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->data_value_allocation);
+    vxml_free(session->data_workspace_allocation);
     vxml_free(session->exec_frames);
     vxml_free(session->runtime_scopes);
     vxml_free(session->read_scratch);
@@ -1537,6 +1539,231 @@ static vxml_status execute_actions(
             default:
                 return VXML_INVALID_STRUCTURE;
         }
+    }
+    return VXML_OK;
+}
+
+static vxml_status map_databind_runtime_status(
+    DataBindStatus status) {
+    switch (status) {
+    case DATA_BIND_OK:
+        return VXML_OK;
+    case DATA_BIND_ERR_OOM:
+        return VXML_ALLOCATION_FAILED;
+    case DATA_BIND_ERR_LIMIT:
+    case DATA_BIND_ERR_BUFFER_TOO_SMALL:
+        return VXML_LIMIT_EXCEEDED;
+    case DATA_BIND_ERR_PARSE:
+    case DATA_BIND_ERR_TYPE_MISMATCH:
+    case DATA_BIND_ERR_VALIDATION:
+        return VXML_SEMANTIC_ERROR;
+    case DATA_BIND_ERR_INVALID_ARG:
+    case DATA_BIND_ERR_SCHEMA:
+    case DATA_BIND_ERR_TYPE_NOT_FOUND:
+        return VXML_INVALID_CONTRACT;
+    case DATA_BIND_ERR_CANCELED:
+    case DATA_BIND_ERR_IO:
+    case DATA_BIND_ERR_RUNTIME:
+    default:
+        return VXML_INVALID_STATE;
+    }
+}
+
+static bool align_buffer(
+    unsigned char *allocation, size_t allocation_bytes,
+    size_t alignment, size_t required_bytes,
+    unsigned char **out) {
+    uintptr_t address;
+    uintptr_t aligned;
+    size_t adjustment;
+    if (out == NULL || !valid_alignment(alignment))
+        return false;
+    *out = NULL;
+    if (required_bytes == 0u) return true;
+    if (allocation == NULL || allocation_bytes < required_bytes)
+        return false;
+    address = (uintptr_t)allocation;
+    if (address > UINTPTR_MAX - (alignment - 1u))
+        return false;
+    aligned = (address + alignment - 1u) &
+        ~((uintptr_t)alignment - 1u);
+    adjustment = (size_t)(aligned - address);
+    if (adjustment > allocation_bytes ||
+        required_bytes > allocation_bytes - adjustment)
+        return false;
+    *out = (unsigned char *)aligned;
+    return true;
+}
+
+static bool measure_external_data_scratch(
+    const vxml_cmeta_program_data *program,
+    size_t *out_workspace_bytes,
+    size_t *out_workspace_alignment,
+    size_t *out_value_bytes,
+    size_t *out_value_alignment) {
+    size_t workspace_bytes = 0u;
+    size_t workspace_alignment = 1u;
+    size_t value_bytes = 0u;
+    size_t value_alignment = 1u;
+    size_t index;
+    if (program == NULL || out_workspace_bytes == NULL ||
+        out_workspace_alignment == NULL ||
+        out_value_bytes == NULL || out_value_alignment == NULL)
+        return false;
+    for (index = 0u; index < program->external_data_count; ++index) {
+        const vxml_cmeta_external_data_row *row =
+            &program->external_data[index];
+        const cmeta_type_desc *type =
+            row->field_data != NULL ? row->field_data->storage_type : NULL;
+        if (row->plan == NULL || type == NULL ||
+            !valid_alignment(row->workspace_alignment) ||
+            !valid_alignment(type->align) ||
+            type->size == 0u)
+            return false;
+        if (row->decode_workspace_bytes > workspace_bytes)
+            workspace_bytes = row->decode_workspace_bytes;
+        if (row->workspace_alignment > workspace_alignment)
+            workspace_alignment = row->workspace_alignment;
+        if (type->size > value_bytes)
+            value_bytes = type->size;
+        if (type->align > value_alignment)
+            value_alignment = type->align;
+    }
+    *out_workspace_bytes = workspace_bytes;
+    *out_workspace_alignment = workspace_alignment;
+    *out_value_bytes = value_bytes;
+    *out_value_alignment = value_alignment;
+    return true;
+}
+
+static vxml_status load_external_data(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_options_v1 *options) {
+    const cmeta_data_struct_shape *root_shape =
+        session_root_shape(program);
+    size_t index;
+    if (program->external_data_count == 0u)
+        return VXML_OK;
+    if (!session_data_options_valid(options) ||
+        root_shape == NULL || program->external_data == NULL)
+        return VXML_INVALID_CONTRACT;
+
+    for (index = 0u; index < program->external_data_count; ++index) {
+        const vxml_cmeta_external_data_row *row =
+            &program->external_data[index];
+        vxml_cmeta_data_resource_v1 resource = {0};
+        DataBindFormatReader format_reader =
+            DATA_BIND_FORMAT_READER_INIT;
+        DataBindError format_error = DATA_BIND_ERROR_INIT;
+        DataBindNativeDiagnostic native_diagnostic =
+            DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+        DataBindNativeOptions native_options =
+            DATA_BIND_NATIVE_OPTIONS_INIT;
+        const DataBindFormatProvider *provider;
+        cmeta_status meta_status;
+        DataBindStatus bind_status;
+        vxml_status status;
+        bool resource_open = false;
+        bool reader_open = false;
+        unsigned char *destination;
+
+        if (row->field_index >= root_shape->field_count ||
+            row->field_data == NULL ||
+            root_shape->fields[row->field_index].value != row->field_data ||
+            root_shape->fields[row->field_index].offset != row->field_offset)
+            return VXML_INVALID_STRUCTURE;
+
+        status = options->data_resources->open(
+            options->data_resource_user,
+            row->uri, row->uri_size,
+            options->max_data_bytes, &resource);
+        if (status != VXML_OK)
+            return status;
+        resource_open = true;
+        if (resource.lease == NULL ||
+            resource.size > options->max_data_bytes ||
+            (resource.size != 0u && resource.data == NULL)) {
+            status = resource.size > options->max_data_bytes
+                ? VXML_LIMIT_EXCEEDED : VXML_INVALID_CONTRACT;
+            goto settle;
+        }
+
+        provider = data_format_provider(resource.format);
+        if (provider == NULL) {
+            status = VXML_UNSUPPORTED_FEATURE;
+            goto settle;
+        }
+        bind_status = data_bind_format_reader_open(
+            provider,
+            (const char *)resource.data, resource.size,
+            program->max_data_bind_depth,
+            &format_reader, &format_error);
+        if (bind_status != DATA_BIND_OK) {
+            status = map_databind_runtime_status(bind_status);
+            goto settle;
+        }
+        reader_open = true;
+
+        memset(session->data_value, 0, session->data_value_bytes);
+        meta_status = cmeta_data_value_init_zero(
+            row->field_data, session->data_value);
+        if (meta_status != CMETA_OK) {
+            status = VXML_INVALID_CONTRACT;
+            goto settle;
+        }
+
+        native_options.workspace = session->data_workspace;
+        native_options.workspace_bytes = session->data_workspace_bytes;
+        native_options.max_depth = program->max_data_bind_depth;
+        native_options.max_items = program->max_data_bind_items;
+        native_options.max_owned_bytes = options->max_data_owned_bytes;
+        bind_status = data_bind_native_plan_decode(
+            row->plan, &native_options,
+            format_reader.reader,
+            session->data_value,
+            row->field_data->storage_type->size,
+            &native_diagnostic);
+        if (bind_status != DATA_BIND_OK) {
+            (void)cmeta_data_value_restore_zero(
+                row->field_data, session->data_value);
+            status = map_databind_runtime_status(bind_status);
+            goto settle;
+        }
+
+        destination =
+            session->committed_root.storage + row->field_offset;
+        meta_status = session->committed_root.bound[row->field_index] != 0u
+            ? cmeta_data_value_restore_zero(row->field_data, destination)
+            : cmeta_data_value_init_zero(row->field_data, destination);
+        if (meta_status != CMETA_OK) {
+            (void)cmeta_data_value_restore_zero(
+                row->field_data, session->data_value);
+            status = VXML_INVALID_CONTRACT;
+            goto settle;
+        }
+        meta_status = cmeta_data_value_move(
+            row->field_data, destination, session->data_value);
+        if (meta_status != CMETA_OK) {
+            (void)cmeta_data_value_restore_zero(
+                row->field_data, destination);
+            (void)cmeta_data_value_restore_zero(
+                row->field_data, session->data_value);
+            session->committed_root.bound[row->field_index] = 0u;
+            status = VXML_INVALID_CONTRACT;
+            goto settle;
+        }
+        session->committed_root.bound[row->field_index] = 1u;
+        status = VXML_OK;
+
+settle:
+        if (reader_open)
+            (void)data_bind_format_reader_close(&format_reader);
+        if (resource_open)
+            options->data_resources->close(
+                options->data_resource_user, &resource);
+        if (status != VXML_OK)
+            return status;
     }
     return VXML_OK;
 }
