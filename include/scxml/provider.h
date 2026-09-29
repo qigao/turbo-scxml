@@ -48,6 +48,30 @@ CMETA_INTERFACE(scxml_event_io_provider, SCXML_EVENT_IO_PROVIDER_METHODS);
 
 CMETA_INTERFACE(scxml_invoke_provider, SCXML_INVOKE_PROVIDER_METHODS);
 
+#define SCXML_DATA_RESOURCE_PROVIDER_METHODS(X, I) \
+    X(I, R4, scxml_resource_status, open, \
+      const char *, uri, \
+      size_t, uri_size, \
+      size_t, max_bytes, \
+      scxml_data_resource_v2 *, out) \
+    X(I, V1, void, close, scxml_data_resource_v2 *, resource)
+
+CMETA_INTERFACE(
+    scxml_data_resource_provider,
+    SCXML_DATA_RESOURCE_PROVIDER_METHODS);
+
+#define SCXML_TEXT_RESOURCE_PROVIDER_METHODS(X, I) \
+    X(I, R4, scxml_resource_status, open, \
+      const char *, uri, \
+      size_t, uri_size, \
+      size_t, max_bytes, \
+      scxml_text_resource *, out) \
+    X(I, V1, void, close, scxml_text_resource *, resource)
+
+CMETA_INTERFACE(
+    scxml_text_resource_provider,
+    SCXML_TEXT_RESOURCE_PROVIDER_METHODS);
+
 /*
  * Static adapter -> canonical CMeta Interface bridge.
  *
@@ -120,6 +144,66 @@ const scxml_invoke_adapter *scxml_invoke_adapter_bridge_get(
 
 void *scxml_invoke_adapter_bridge_user(
     scxml_invoke_adapter_bridge *bridge);
+
+typedef struct scxml_data_resource_provider_bridge {
+    scxml_data_resource_adapter_v2 adapter;
+    void *adapter_user;
+    scxml_data_resource_provider_vtable vtable;
+    scxml_data_resource_provider provider;
+} scxml_data_resource_provider_bridge;
+
+bool scxml_data_resource_provider_bridge_init(
+    scxml_data_resource_provider_bridge *bridge,
+    const scxml_data_resource_adapter_v2 *adapter,
+    void *adapter_user);
+
+scxml_data_resource_provider *scxml_data_resource_provider_bridge_get(
+    scxml_data_resource_provider_bridge *bridge);
+
+typedef struct scxml_data_resource_adapter_bridge {
+    scxml_data_resource_provider provider;
+    scxml_data_resource_adapter_v2 adapter;
+} scxml_data_resource_adapter_bridge;
+
+bool scxml_data_resource_adapter_bridge_init(
+    scxml_data_resource_adapter_bridge *bridge,
+    const scxml_data_resource_provider *provider);
+
+const scxml_data_resource_adapter_v2 *scxml_data_resource_adapter_bridge_get(
+    const scxml_data_resource_adapter_bridge *bridge);
+
+void *scxml_data_resource_adapter_bridge_user(
+    scxml_data_resource_adapter_bridge *bridge);
+
+typedef struct scxml_text_resource_provider_bridge {
+    scxml_text_resource_adapter_v1 adapter;
+    void *adapter_user;
+    scxml_text_resource_provider_vtable vtable;
+    scxml_text_resource_provider provider;
+} scxml_text_resource_provider_bridge;
+
+bool scxml_text_resource_provider_bridge_init(
+    scxml_text_resource_provider_bridge *bridge,
+    const scxml_text_resource_adapter_v1 *adapter,
+    void *adapter_user);
+
+scxml_text_resource_provider *scxml_text_resource_provider_bridge_get(
+    scxml_text_resource_provider_bridge *bridge);
+
+typedef struct scxml_text_resource_adapter_bridge {
+    scxml_text_resource_provider provider;
+    scxml_text_resource_adapter_v1 adapter;
+} scxml_text_resource_adapter_bridge;
+
+bool scxml_text_resource_adapter_bridge_init(
+    scxml_text_resource_adapter_bridge *bridge,
+    const scxml_text_resource_provider *provider);
+
+const scxml_text_resource_adapter_v1 *scxml_text_resource_adapter_bridge_get(
+    const scxml_text_resource_adapter_bridge *bridge);
+
+void *scxml_text_resource_adapter_bridge_user(
+    scxml_text_resource_adapter_bridge *bridge);
 
 #ifdef __cplusplus
 }
