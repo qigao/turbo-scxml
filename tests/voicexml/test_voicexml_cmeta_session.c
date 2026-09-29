@@ -3016,7 +3016,8 @@ spec("VoiceXML CMeta session execution") {
         options.abi_version = 0u;
         check_session_init_rejected(&program, &options, VXML_INVALID_CONTRACT);
         options = session_options(&root);
-        options.struct_size = sizeof(options) - 1u;
+        options.struct_size =
+            offsetof(vxml_cmeta_session_options_v1, max_execution_steps);
         check_session_init_rejected(&program, &options, VXML_INVALID_CONTRACT);
         options = session_options(&root);
         options.max_transaction_bytes = 0u;
