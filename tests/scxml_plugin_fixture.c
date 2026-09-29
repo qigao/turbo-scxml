@@ -1,5 +1,4 @@
 #include <salts/plugin.h>
-#include <salts/thread.h>
 
 #include <string.h>
 
@@ -30,22 +29,6 @@ static bool SALTS_PLUGIN_CALL fixture_invoke(
 }
 
 static salts_plugin_export fixture_export;
-static salts_once_t fixture_once = SALTS_ONCE_INIT;
-
-static void fixture_init(void) {
-    fixture_export = (salts_plugin_export){
-        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-        .kind = SALTS_PLUGIN_EXPORT_FUNCTION,
-        .contract_version = 1u,
-        .capabilities = UINT64_C(1),
-        .export_id = "test.scxml.action.check",
-        .contract_id = "test.scxml.action",
-        .value.function = {
-            .desc = FunctionMeta(scxml_plugin_fixture_check),
-            .abi = FunctionAbi(scxml_plugin_fixture_check),
-            .context = NULL,
-            .invoke = fixture_invoke}};
-}
 
 static const salts_plugin_manifest fixture_manifest = {
     .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
@@ -60,6 +43,17 @@ const salts_plugin_manifest *SALTS_PLUGIN_CALL
 salts_plugin_query(uint32_t host_abi) {
     if (host_abi != SALTS_PLUGIN_ABI_VERSION)
         return NULL;
-    salts_once(&fixture_once, fixture_init);
+    fixture_export = (salts_plugin_export){
+        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
+        .kind = SALTS_PLUGIN_EXPORT_FUNCTION,
+        .contract_version = 1u,
+        .capabilities = UINT64_C(1),
+        .export_id = "test.scxml.action.check",
+        .contract_id = "test.scxml.action",
+        .value.function = {
+            .desc = FunctionMeta(scxml_plugin_fixture_check),
+            .abi = FunctionAbi(scxml_plugin_fixture_check),
+            .context = NULL,
+            .invoke = fixture_invoke}};
     return &fixture_manifest;
 }
