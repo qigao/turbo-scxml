@@ -668,6 +668,8 @@ struct scxml_session_impl {
     DataBindNativeOptions data_bind_options;
     size_t data_bind_max_buffer_bytes;
     bool has_data_resources;
+    scxml_data_resource_diagnostic data_resource_diagnostic;
+    bool has_data_resource_diagnostic;
     bool late_initializer_ticket_pending;
     void *supplemental_committed_allocation;
     void *supplemental_staged_allocation;
