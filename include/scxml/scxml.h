@@ -33,6 +33,10 @@ extern "C" {
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V5 5u
 #define SCXML_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define SCXML_DATA_RESOURCE_ADAPTER_ABI_V2 2u
+#define SCXML_DATA_RESOURCE_DIAGNOSTIC_ABI_V1 1u
+#define SCXML_DATA_RESOURCE_DIAGNOSTIC_URI_CAPACITY 256u
+#define SCXML_DATA_RESOURCE_DIAGNOSTIC_PATH_CAPACITY 260u
+#define SCXML_DATA_RESOURCE_DIAGNOSTIC_MESSAGE_CAPACITY 512u
 #define SCXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 1u
@@ -280,6 +284,38 @@ typedef struct scxml_data_resource_adapter_v2 {
         size_t max_bytes, scxml_data_resource_v2 *out);
     void (*close)(void *user, scxml_data_resource_v2 *resource);
 } scxml_data_resource_adapter_v2;
+
+typedef enum scxml_data_resource_diagnostic_stage {
+    SCXML_DATA_RESOURCE_DIAGNOSTIC_ACQUIRE = 1,
+    SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_OPEN,
+    SCXML_DATA_RESOURCE_DIAGNOSTIC_NATIVE_BIND,
+    SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_CLOSE
+} scxml_data_resource_diagnostic_stage;
+
+/**
+ * Copyable last-failure diagnostic for the canonical data-resource path.
+ *
+ * URI bytes are bounded and NUL-terminated; uri_size is the original source
+ * length, so values >= the buffer capacity indicate truncation in this view.
+ * DataBind line/column/path/message are copied when available. The record is
+ * observation only and never changes SCXML error.execution semantics.
+ */
+typedef struct scxml_data_resource_diagnostic {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_data_resource_diagnostic_stage stage;
+    scxml_resource_status resource_status;
+    DataBindStatus data_bind_status;
+    cserde_status source_status;
+    bool has_format;
+    DataBindFormat format;
+    size_t uri_size;
+    int line;
+    int column;
+    char uri[SCXML_DATA_RESOURCE_DIAGNOSTIC_URI_CAPACITY];
+    char path[SCXML_DATA_RESOURCE_DIAGNOSTIC_PATH_CAPACITY];
+    char message[SCXML_DATA_RESOURCE_DIAGNOSTIC_MESSAGE_CAPACITY];
+} scxml_data_resource_diagnostic;
 
 /**
  * Versioned CMeta session provider with external data resources.
@@ -1100,6 +1136,18 @@ bool scxml_session_matches_event_io(
     const scxml_ioprocessor_descriptor *ioprocessor);
 const char *scxml_session_error(
     const scxml_session *session);
+
+/**
+ * Copy the most recent data-resource failure observed by this session.
+ *
+ * Returns false when no data-resource failure has been recorded. The copy is
+ * synchronized and remains caller-owned. A handled error.execution still
+ * leaves this diagnostic observable until session destruction or a later
+ * resource failure replaces it.
+ */
+bool scxml_session_copy_data_resource_diagnostic(
+    const scxml_session *session,
+    scxml_data_resource_diagnostic *out);
 
 /**
  * Stop admission and close the adapter exactly once. Destruction returns
