@@ -4,9 +4,13 @@
 #include <tinytest.h>
 
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
-static const char *plugin_fixture_path;
+static const char *plugin_fixture_path(void) {
+    const char *path = getenv("SCXML_PLUGIN_FIXTURE_PATH");
+    return path != NULL && path[0] != '\0' ? path : NULL;
+}
 
 Struct(scxml_plugin_test_state,
     (int, count)
@@ -98,7 +102,7 @@ spec("TurboSCXML Plugin bridge") {
             SALTS_PLUGIN_OK);
         check_equal(
             salts_plugin_registry_load(
-                &registry, plugin_fixture_path, &ref),
+                &registry, plugin_fixture_path(), &ref),
             SALTS_PLUGIN_OK);
         check_equal(
             salts_plugin_registry_start(&registry, ref),
@@ -211,7 +215,7 @@ spec("TurboSCXML Plugin bridge") {
             SALTS_PLUGIN_OK);
         check_equal(
             salts_plugin_registry_load(
-                &registry, plugin_fixture_path, &ref),
+                &registry, plugin_fixture_path(), &ref),
             SALTS_PLUGIN_OK);
         check_equal(
             salts_plugin_registry_start(&registry, ref),
@@ -253,10 +257,3 @@ spec("TurboSCXML Plugin bridge") {
     }
 }
 
-int main(int argc, char **argv) {
-    if (argc != 2 || argv == NULL || argv[1] == NULL ||
-        argv[1][0] == '\0')
-        return 2;
-    plugin_fixture_path = argv[1];
-    return run_specs();
-}
