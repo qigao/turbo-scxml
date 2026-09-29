@@ -386,6 +386,8 @@ spec("VoiceXML dialog manager") {
             .media_type_size = sizeof(media) - 1u};
         ccxml_string_view first_id = {0};
         ccxml_string_view second_id = {0};
+        char first_id_copy[96] = {0};
+        size_t first_id_copy_size = 0u;
         cflow_statechart_effect_ticket first = {0};
         cflow_statechart_effect_ticket second = {0};
 
@@ -404,6 +406,10 @@ spec("VoiceXML dialog manager") {
                 vxml_dialog_manager_ccxml_user(&manager),
                 &request, &second_id, &second, NULL),
             SCXML_ADAPTER_FULL);
+        check_true(first_id.size < sizeof(first_id_copy));
+        first_id_copy_size = first_id.size;
+        memcpy(first_id_copy, first_id.data, first_id.size);
+        first_id_copy[first_id.size] = '\0';
         first.discard(first.user);
         check_equal(
             adapter->prepare_dialog_prepare(
@@ -411,8 +417,8 @@ spec("VoiceXML dialog manager") {
                 &request, &second_id, &second, NULL),
             SCXML_ADAPTER_ACCEPTED);
         check_true(
-            first_id.size != second_id.size ||
-            memcmp(first_id.data, second_id.data, second_id.size) != 0);
+            first_id_copy_size != second_id.size ||
+            memcmp(first_id_copy, second_id.data, second_id.size) != 0);
         second.discard(second.user);
 
         manager_close_destroy(&manager, &upstream);
