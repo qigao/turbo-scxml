@@ -271,7 +271,7 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   turboscxml_add_test(
     scxml_chttp_resource_test
     scxml_chttp_resource_test.c
-    LIBS TurboSCXML::CHttpResource
+    LIBS TurboSCXML::CHttpResource CHttp::Server
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
 endif()
 
