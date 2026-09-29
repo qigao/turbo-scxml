@@ -272,28 +272,55 @@ spec("VoiceXML program compiler") {
             vxml_program_destroy(&program);
         }
 
-        it("rejects missing empty external and unknown goto targets") {
+        it("retains an external goto target in immutable Program storage") {
+            char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block>"
+                "<goto next='dialogs/next.vxml#target'/>"
+                "</block></form></vxml>";
+            static const char target[] = "dialogs/next.vxml#target";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text(source, NULL, &program, NULL), VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->action_count, (size_t)1u);
+                check_equal(
+                    impl->actions[0].kind,
+                    VXML_ACTION_GOTO_EXTERNAL);
+                check_equal(
+                    impl->actions[0].target_uri_size,
+                    sizeof(target) - 1u);
+                check_equal(impl->actions[0].target_uri, target);
+                check_true(
+                    impl->actions[0].target_uri >= impl->storage);
+                check_true(
+                    impl->actions[0].target_uri +
+                        impl->actions[0].target_uri_size + 1u <=
+                    impl->storage + impl->storage_size);
+                memset(source, 'x', sizeof(source) - 1u);
+                check_equal(impl->actions[0].target_uri, target);
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("rejects missing empty and unknown local goto targets") {
             const char *sources[] = {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block><goto/></block></form></vxml>",
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block><goto next='#'/></block></form></vxml>",
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='a'><block><goto next='other.vxml#b'/></block></form>"
-                "</vxml>",
-                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block><goto next='#missing'/></block></form>"
                 "</vxml>"};
-            const vxml_status expected[] = {
-                VXML_INVALID_STRUCTURE,
-                VXML_INVALID_STRUCTURE,
-                VXML_UNSUPPORTED_FEATURE,
-                VXML_INVALID_STRUCTURE};
             size_t index;
 
-            for (index = 0u; index < 4u; ++index)
+            for (index = 0u; index < 3u; ++index)
                 check_empty_failure(
-                    sources[index], expected[index], NULL, 1u);
+                    sources[index], VXML_INVALID_STRUCTURE, NULL, 1u);
         }
 
         it("rejects self and multi-form literal goto cycles before publication") {
