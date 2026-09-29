@@ -60,7 +60,7 @@ endif()
 
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+find_package(SaltsUtils 4.1.5 EXACT CONFIG REQUIRED
   PATHS "${SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
