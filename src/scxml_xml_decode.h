@@ -11,7 +11,12 @@ typedef enum scxml_xml_decode_status {
     SCXML_XML_DECODE_CAPACITY_EXCEEDED
 } scxml_xml_decode_status;
 
-/* Decode XML attribute entities. A NULL output performs a measurement pass. */
+/*
+ * Decode entity references inside one attribute value already admitted by
+ * Salts XmlParser. This helper is expression-source unescaping only: it does
+ * not perform XML tokenization, structural parsing, namespace processing, or
+ * document validation. A NULL output performs a measurement pass.
+ */
 scxml_xml_decode_status scxml_xml_decode_attribute_entities(
     const char *input, size_t input_size,
     char *output, size_t output_capacity,
