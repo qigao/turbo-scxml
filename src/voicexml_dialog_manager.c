@@ -1093,6 +1093,20 @@ vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void) {
     return config;
 }
 
+vxml_dialog_manager_config_v3 vxml_dialog_manager_default_config_v3(void) {
+    vxml_dialog_manager_config_v3 config;
+    memset(&config, 0, sizeof(config));
+    config.abi_version = VXML_DIALOG_MANAGER_CONFIG_ABI_V3;
+    config.struct_size = sizeof(config);
+    config.capacity = 32u;
+    config.max_source_bytes = 4096u;
+    config.max_media_type_bytes = 127u;
+    config.max_connection_id_bytes = 511u;
+    config.max_dialog_id_bytes = 63u;
+    config.max_navigation_hops = 32u;
+    return config;
+}
+
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status) {
     switch (status) {
@@ -1283,6 +1297,40 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
     }
 
     manager->impl = impl;
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v3(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v3 *config) {
+    vxml_dialog_manager_config_v2 v2;
+    vxml_dialog_manager_impl *impl;
+    vxml_dialog_manager_status status;
+
+    if (manager == NULL || config == NULL ||
+        config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V3 ||
+        config->struct_size < sizeof(*config) ||
+        config->max_navigation_hops == 0u)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+
+    v2 = vxml_dialog_manager_default_config_v2();
+    v2.capacity = config->capacity;
+    v2.max_source_bytes = config->max_source_bytes;
+    v2.max_media_type_bytes = config->max_media_type_bytes;
+    v2.max_connection_id_bytes = config->max_connection_id_bytes;
+    v2.max_dialog_id_bytes = config->max_dialog_id_bytes;
+    v2.upstream = config->upstream;
+    v2.upstream_user = config->upstream_user;
+    v2.document_store = config->document_store;
+    v2.events = config->events;
+    v2.event_user = config->event_user;
+
+    status = vxml_dialog_manager_init_v2(manager, &v2);
+    if (status != VXML_DIALOG_MANAGER_OK)
+        return status;
+    impl = (vxml_dialog_manager_impl *)manager->impl;
+    impl->navigation_enabled = true;
+    impl->max_navigation_hops = config->max_navigation_hops;
     return VXML_DIALOG_MANAGER_OK;
 }
 
