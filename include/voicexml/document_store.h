@@ -155,6 +155,25 @@ vxml_document_store_status vxml_document_store_acquire(
     vxml_document_ref *out_ref,
     vxml_document_store_error *out_error);
 
+/**
+ * Resolve and acquire in one bounded operation.
+ *
+ * base_document_uri semantics match vxml_document_store_resolve(). The
+ * fragment is copied to caller storage only after the document acquire
+ * succeeds. document URI identity remains available through store_view().
+ */
+vxml_document_store_status vxml_document_store_acquire_reference(
+    vxml_document_store *store,
+    const char *base_document_uri,
+    size_t base_document_uri_size,
+    const char *reference,
+    size_t reference_size,
+    char *fragment,
+    size_t fragment_capacity,
+    size_t *out_fragment_size,
+    vxml_document_ref *out_ref,
+    vxml_document_store_error *out_error);
+
 /** Borrow one cached immutable view while ref remains live. */
 vxml_document_store_status vxml_document_store_view(
     const vxml_document_store *store,
