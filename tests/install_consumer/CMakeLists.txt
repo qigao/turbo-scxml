@@ -226,6 +226,19 @@ else()
   target_link_libraries(
     turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
 
+  add_executable(turboscxml_provider_install_consumer provider_main.c)
+  target_compile_features(
+    turboscxml_provider_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_provider_install_consumer PRIVATE TurboSCXML::SCXML)
+
+  add_executable(
+    turboscxml_provider_install_consumer_cpp provider_main.cpp)
+  target_compile_features(
+    turboscxml_provider_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_provider_install_consumer_cpp PRIVATE TurboSCXML::SCXML)
+
   if(NOT TARGET TurboSCXML::CCXML)
     message(FATAL_ERROR "Expected installed TurboSCXML::CCXML")
   endif()
