@@ -2413,6 +2413,58 @@ static scxml_expr_status data_resource_failure(
         ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
 }
 
+static void copy_diagnostic_text(
+    char *destination, size_t capacity, const char *source) {
+    if (destination == NULL || capacity == 0u) return;
+    destination[0] = '\0';
+    if (source == NULL) return;
+    (void)snprintf(destination, capacity, "%s", source);
+}
+
+static void store_data_resource_diagnostic(
+    scxml_session_impl *session,
+    const char *uri, size_t uri_size,
+    scxml_data_resource_diagnostic_stage stage,
+    scxml_resource_status resource_status,
+    bool has_format, DataBindFormat format,
+    DataBindStatus bind_status, cserde_status source_status,
+    const DataBindError *error, const char *fallback_message) {
+    scxml_data_resource_diagnostic value = {0};
+    size_t copy_size;
+    if (session == NULL || uri == NULL || uri_size == 0u ||
+        session->registry_lock == NULL)
+        return;
+    value.abi_version = SCXML_DATA_RESOURCE_DIAGNOSTIC_ABI_V1;
+    value.struct_size = sizeof(value);
+    value.stage = stage;
+    value.resource_status = resource_status;
+    value.data_bind_status = bind_status;
+    value.source_status = source_status;
+    value.has_format = has_format;
+    value.format = format;
+    value.uri_size = uri_size;
+    copy_size = uri_size;
+    if (copy_size >= sizeof(value.uri))
+        copy_size = sizeof(value.uri) - 1u;
+    memcpy(value.uri, uri, copy_size);
+    value.uri[copy_size] = '\0';
+    if (error != NULL) {
+        value.line = error->line;
+        value.column = error->column;
+        copy_diagnostic_text(value.path, sizeof(value.path), error->path);
+        copy_diagnostic_text(
+            value.message, sizeof(value.message),
+            error->message[0] != '\0' ? error->message : fallback_message);
+    } else {
+        copy_diagnostic_text(
+            value.message, sizeof(value.message), fallback_message);
+    }
+    salts_mutex_lock(&session->registry_lock);
+    session->data_resource_diagnostic = value;
+    session->has_data_resource_diagnostic = true;
+    salts_mutex_unlock(&session->registry_lock);
+}
+
 static scxml_expr_status apply_raw_external_data_initializer(
     const scxml_assign_program *assignment,
     scxml_session_impl *session, const char *uri, size_t uri_size,
@@ -2420,6 +2472,8 @@ static scxml_expr_status apply_raw_external_data_initializer(
     scxml_data_resource_v2 resource = {0};
     DataBindFormatReader format_reader = DATA_BIND_FORMAT_READER_INIT;
     DataBindError format_error = DATA_BIND_ERROR_INIT;
+    DataBindNativeDiagnostic bind_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     const DataBindFormatProvider *provider;
     DataBindStatus bind_status;
     DataBindStatus close_status;
@@ -2430,18 +2484,43 @@ static scxml_expr_status apply_raw_external_data_initializer(
     resource_status = session->raw_data_resources.open(
         session->data_resource_user, uri, uri_size,
         session->max_data_resource_bytes, &resource);
-    if (resource_status != SCXML_RESOURCE_OK)
+    if (resource_status != SCXML_RESOURCE_OK) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_ACQUIRE,
+            resource_status, false, DATA_BIND_FORMAT_BINARY,
+            DATA_BIND_OK, CSERDE_OK, NULL,
+            "SCXML data resource acquisition failed");
         return data_resource_failure(resource_status);
+    }
     if (resource.size > session->max_data_resource_bytes ||
         (resource.size != 0u && resource.data == NULL)) {
+        const scxml_resource_status invalid_status =
+            resource.size > session->max_data_resource_bytes
+                ? SCXML_RESOURCE_LIMIT_EXCEEDED
+                : SCXML_RESOURCE_INVALID_DATA;
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_ACQUIRE,
+            invalid_status, true, resource.format,
+            DATA_BIND_OK, CSERDE_OK, NULL,
+            invalid_status == SCXML_RESOURCE_LIMIT_EXCEEDED
+                ? "SCXML data resource exceeds the configured byte bound"
+                : "SCXML data resource returned an invalid byte view");
         session->raw_data_resources.close(
             session->data_resource_user, &resource);
-        return resource.size > session->max_data_resource_bytes
+        return invalid_status == SCXML_RESOURCE_LIMIT_EXCEEDED
             ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
     }
 
     provider = data_resource_format_provider(resource.format);
     if (provider == NULL) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_OPEN,
+            SCXML_RESOURCE_INVALID_DATA, true, resource.format,
+            DATA_BIND_ERR_INVALID_ARG, CSERDE_OK, NULL,
+            "SCXML data resource selected an unsupported DataBind format");
         session->raw_data_resources.close(
             session->data_resource_user, &resource);
         return SCXML_EXPR_EVALUATION_ERROR;
@@ -2452,22 +2531,51 @@ static scxml_expr_status apply_raw_external_data_initializer(
         provider, bytes, resource.size, session->data_bind_options.max_depth,
         &format_reader, &format_error);
     if (bind_status != DATA_BIND_OK) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_OPEN,
+            SCXML_RESOURCE_INVALID_DATA, true, resource.format,
+            bind_status, CSERDE_OK, &format_error,
+            "DataBind format reader open failed");
         session->raw_data_resources.close(
             session->data_resource_user, &resource);
         return bind_status == DATA_BIND_ERR_LIMIT
             ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
     }
 
-    status = scxml_assign_apply_external(
+    status = scxml_assign_apply_external_diagnostic(
         assignment, format_reader.reader, &session->data_bind_options,
         session->data_bind_max_buffer_bytes,
         session->data_decode_storage, session->data_decode_storage_size,
-        state, diagnostic);
+        state, diagnostic, &bind_diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        DataBindStatus failure_status = bind_diagnostic.error.code;
+        if (failure_status == DATA_BIND_OK)
+            failure_status = status == SCXML_EXPR_LIMIT_EXCEEDED
+                ? DATA_BIND_ERR_LIMIT : DATA_BIND_ERR_RUNTIME;
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_NATIVE_BIND,
+            SCXML_RESOURCE_INVALID_DATA, true, resource.format,
+            failure_status, bind_diagnostic.source_status,
+            bind_diagnostic.error.message[0] != '\0'
+                ? &bind_diagnostic.error : NULL,
+            diagnostic != NULL && diagnostic->message[0] != '\0'
+                ? diagnostic->message
+                : "DataBind native binding failed");
+    }
     close_status = data_bind_format_reader_close(&format_reader);
     session->raw_data_resources.close(
         session->data_resource_user, &resource);
-    if (status == SCXML_EXPR_OK && close_status != DATA_BIND_OK)
+    if (status == SCXML_EXPR_OK && close_status != DATA_BIND_OK) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_CLOSE,
+            SCXML_RESOURCE_INVALID_DATA, true, resource.format,
+            close_status, CSERDE_OK, NULL,
+            "DataBind format reader close failed");
         return SCXML_EXPR_EVALUATION_ERROR;
+    }
     return status;
 }
 
@@ -2479,6 +2587,8 @@ static scxml_expr_status apply_external_data_initializer(
     const char *uri = NULL;
     size_t uri_size = 0u;
     scxml_data_resource resource = {0};
+    DataBindNativeDiagnostic bind_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     scxml_resource_status resource_status;
     scxml_expr_status status;
     if (assignment == NULL || session == NULL || state == NULL ||
@@ -2504,19 +2614,48 @@ static scxml_expr_status apply_external_data_initializer(
         return SCXML_EXPR_INVALID_ARGUMENT;
     resource_status = session->data_resources.open(
         session->data_resource_user, uri, uri_size, destination, &resource);
-    if (resource_status != SCXML_RESOURCE_OK)
+    if (resource_status != SCXML_RESOURCE_OK) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_ACQUIRE,
+            resource_status, false, DATA_BIND_FORMAT_BINARY,
+            DATA_BIND_OK, CSERDE_OK, NULL,
+            "legacy SCXML data resource acquisition failed");
         return data_resource_failure(resource_status);
+    }
     if (resource.reader.state != CSERDE_READER_READY ||
         resource.reader.ops == NULL) {
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_OPEN,
+            SCXML_RESOURCE_INVALID_DATA, false, DATA_BIND_FORMAT_BINARY,
+            DATA_BIND_ERR_PARSE, CSERDE_INVALID_STATE, NULL,
+            "legacy SCXML data resource returned an invalid CSerde reader");
         session->data_resources.close(
             session->data_resource_user, &resource);
         return SCXML_EXPR_EVALUATION_ERROR;
     }
-    status = scxml_assign_apply_external(
+    status = scxml_assign_apply_external_diagnostic(
         assignment, &resource.reader, &session->data_bind_options,
         session->data_bind_max_buffer_bytes,
         session->data_decode_storage, session->data_decode_storage_size,
-        state, diagnostic);
+        state, diagnostic, &bind_diagnostic);
+    if (status != SCXML_EXPR_OK) {
+        DataBindStatus failure_status = bind_diagnostic.error.code;
+        if (failure_status == DATA_BIND_OK)
+            failure_status = status == SCXML_EXPR_LIMIT_EXCEEDED
+                ? DATA_BIND_ERR_LIMIT : DATA_BIND_ERR_RUNTIME;
+        store_data_resource_diagnostic(
+            session, uri, uri_size,
+            SCXML_DATA_RESOURCE_DIAGNOSTIC_NATIVE_BIND,
+            SCXML_RESOURCE_INVALID_DATA, false, DATA_BIND_FORMAT_BINARY,
+            failure_status, bind_diagnostic.source_status,
+            bind_diagnostic.error.message[0] != '\0'
+                ? &bind_diagnostic.error : NULL,
+            diagnostic != NULL && diagnostic->message[0] != '\0'
+                ? diagnostic->message
+                : "legacy DataBind native binding failed");
+    }
     session->data_resources.close(
         session->data_resource_user, &resource);
     return status;
