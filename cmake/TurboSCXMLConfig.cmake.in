@@ -50,7 +50,7 @@ endif()
 
 set(_TURBOSCXML_NEEDS_SCXML ${_TURBOSCXML_PACKAGE_WIDE})
 foreach(_TURBOSCXML_COMPONENT IN ITEMS
-    SCXML CCXML VoiceXMLDialogManager VoiceXMLDocumentStore VoiceXMLCHttpResource
+    SCXML CCXML VoiceXMLDialogManager VoiceXMLCHttpResource
     QuickJS Plugin CHttpResource CHttpEventIO)
   if(_TURBOSCXML_COMPONENT IN_LIST TurboSCXML_FIND_COMPONENTS)
     set(_TURBOSCXML_NEEDS_SCXML TRUE)
