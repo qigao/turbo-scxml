@@ -60,7 +60,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          config="$RUNNER_TEMP/turboscxml-nuget.config"
+          config="$RUNNER_TEMP/NuGet.Config"
           packages="$RUNNER_TEMP/turboscxml-native-sdks"
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
@@ -68,13 +68,14 @@ jobs:
           cat > "$project" <<'EOF'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
-              <PackageReference Include="CHttp.Native" Version="*" />
-            </ItemGroup>
           </Project>
           EOF
+          (
+            cd "$RUNNER_TEMP"
+            dotnet add "$project" package Salts.Native
+            dotnet add "$project" package SaltsUtils.Native
+            dotnet add "$project" package CHttp.Native
+          )
           dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
           sdk_root() {
             local package="$1"
@@ -152,7 +153,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = "Stop"
-          $config = Join-Path $env:RUNNER_TEMP "turboscxml-nuget.config"
+          $config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
           $packages = Join-Path $env:RUNNER_TEMP "turboscxml-native-sdks"
           $project = Join-Path $env:RUNNER_TEMP "turboscxml-native-dependencies.csproj"
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
@@ -161,13 +162,20 @@ jobs:
           @'
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="*" />
-              <PackageReference Include="SaltsUtils.Native" Version="*" />
-              <PackageReference Include="CHttp.Native" Version="*" />
-            </ItemGroup>
           </Project>
           '@ | Set-Content -LiteralPath $project
+          Push-Location $env:RUNNER_TEMP
+          try {
+            dotnet add $project package Salts.Native
+            if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
+            dotnet add $project package SaltsUtils.Native
+            if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
+            dotnet add $project package CHttp.Native
+            if ($LASTEXITCODE -ne 0) { throw "failed to resolve CHttp.Native" }
+          }
+          finally {
+            Pop-Location
+          }
           dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
           function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
