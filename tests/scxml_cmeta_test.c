@@ -5394,6 +5394,62 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("loads early data src from raw XML through DataBind without reparsing the SCXML document") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='early' initial='active'>"
+            "<datamodel><data id='count' src='mem:count'/></datamodel>"
+            "<state id='active'><transition cond='count == 7' "
+            "target='done'/><transition target='failed'/></state>"
+            "<final id='done'/><state id='failed'/></scxml>";
+        static const char external_xml[] = "<count>7</count>";
+        const scxml_public_data initial = {
+            false, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        raw_data_resource_probe probe = {
+            .data = external_xml,
+            .size = sizeof(external_xml) - 1u,
+            .format = DATA_BIND_FORMAT_XML};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v5 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V5,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .data_resources = &raw_data_resource_adapter,
+            .data_resource_user = &probe,
+            .data_bind_workspace_bytes = 16384u,
+            .max_data_depth = 8u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
+            .max_data_buffer_bytes = 1024u,
+            .max_data_resource_bytes = 1024u};
+
+        check_equal(compile_cmeta_v4(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v5(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("rejects external DataBind plans beyond compile-time descriptor bounds") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
