@@ -1502,21 +1502,24 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
 
 static void w3c_capture_invoke_cancellation_log(
     const salts_log_entry_t *entry, void *user_data) {
+    static const char component[] = "cflow.scxml";
     w3c_invoke_cancellation_log *capture =
         (w3c_invoke_cancellation_log *)user_data;
     size_t message_size;
-    if (entry == NULL || capture == NULL || entry->component == NULL ||
-        strcmp(entry->component, "cflow.scxml") != 0)
+    if (entry == NULL || capture == NULL ||
+        entry->component.data == NULL ||
+        entry->component.len != sizeof(component) - 1u ||
+        memcmp(entry->component.data, component, sizeof(component) - 1u) != 0)
         return;
     if (capture->count >= W3C_CANCELLATION_LOG_CAPACITY) {
         if (capture->count != SIZE_MAX) ++capture->count;
         return;
     }
-    message_size = entry->message_len;
+    message_size = entry->message.len;
     if (message_size >= W3C_CANCELLATION_LOG_MESSAGE_CAPACITY)
         message_size = W3C_CANCELLATION_LOG_MESSAGE_CAPACITY - 1u;
-    if (message_size != 0u)
-        memcpy(capture->messages[capture->count], entry->message,
+    if (message_size != 0u && entry->message.data != NULL)
+        memcpy(capture->messages[capture->count], entry->message.data,
                message_size);
     capture->messages[capture->count][message_size] = '\0';
     ++capture->count;
@@ -3751,8 +3754,8 @@ static bool run_w3c_cmeta_fixture_with_schema(
             ? options->environment_overrides : NULL,
         .environment_override_count = options != NULL
             ? options->environment_override_count : 0u};
-    const scxml_cmeta_session_options_v3 resource_data = {
-        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+    const scxml_cmeta_session_options_v4 resource_data = {
+        .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
         .struct_size = sizeof(resource_data),
         .initial_state = initial_state,
         .environment_overrides = options != NULL
@@ -3762,9 +3765,10 @@ static bool run_w3c_cmeta_fixture_with_schema(
         .data_resources = options != NULL ? options->data_resources : NULL,
         .data_resource_user = options != NULL
             ? options->data_resource_user : NULL,
-        .cbind_scratch_bytes = 256u,
+        .data_bind_workspace_bytes = 16384u,
         .max_data_depth = 8u,
-        .max_data_container_items = 16u,
+        .max_data_items = 64u,
+        .max_data_owned_bytes = 4096u,
         .max_data_buffer_bytes = 1024u};
     scxml_cmeta_compile_options_v1 compile_options =
         scxml_cmeta_default_compile_options(root);
@@ -3814,7 +3818,7 @@ static bool run_w3c_cmeta_fixture_with_schema(
     {
         cflow_statechart_instance_status init_status;
         if (options != NULL && options->data_resources != NULL)
-            init_status = scxml_session_init_cmeta_v3(
+            init_status = scxml_session_init_cmeta_v4(
                 &session, &config, &resource_data);
         else if (options != NULL &&
                  options->environment_override_count != 0u)
