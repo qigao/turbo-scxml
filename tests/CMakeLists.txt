@@ -298,7 +298,7 @@ turboscxml_add_test(
 turboscxml_add_test(
   ccxml_session_test
   ccxml_session_test.c
-  LIBS TurboSCXML::CCXML
+  LIBS TurboSCXML::CCXML TurboSCXML::VoiceXMLDialogManager
   INCLUDES ${PROJECT_SOURCE_DIR}/src)
 
 turboscxml_add_test(
