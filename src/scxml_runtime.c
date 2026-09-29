@@ -4,6 +4,12 @@
 #include "scxml_quickjs.h"
 #include "scxml_session.h"
 
+#include <data_bind_csv_provider.h>
+#include <data_bind_format_provider.h>
+#include <data_bind_json_provider.h>
+#include <data_bind_xml_provider.h>
+#include <data_bind_yaml_provider.h>
+
 #include <float.h>
 #include <limits.h>
 #include <math.h>
@@ -2384,6 +2390,87 @@ static scxml_execute_outcome raise_block_execution_error(
     return SCXML_EXECUTE_BLOCK_ABORTED;
 }
 
+static const DataBindFormatProvider *data_resource_format_provider(
+    DataBindFormat format) {
+    switch (format) {
+    case DATA_BIND_FORMAT_JSON:
+        return data_bind_json_format_provider();
+    case DATA_BIND_FORMAT_YAML:
+        return data_bind_yaml_format_provider();
+    case DATA_BIND_FORMAT_CSV:
+        return data_bind_csv_format_provider();
+    case DATA_BIND_FORMAT_XML:
+        return data_bind_xml_format_provider();
+    case DATA_BIND_FORMAT_BINARY:
+    default:
+        return NULL;
+    }
+}
+
+static scxml_expr_status data_resource_failure(
+    scxml_resource_status status) {
+    return status == SCXML_RESOURCE_LIMIT_EXCEEDED
+        ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
+}
+
+static scxml_expr_status apply_raw_external_data_initializer(
+    const scxml_assign_program *assignment,
+    scxml_session_impl *session, const char *uri, size_t uri_size,
+    void *state, scxml_expr_diagnostic *diagnostic) {
+    scxml_data_resource_v2 resource = {0};
+    DataBindFormatReader format_reader = DATA_BIND_FORMAT_READER_INIT;
+    DataBindError format_error = DATA_BIND_ERROR_INIT;
+    const DataBindFormatProvider *provider;
+    DataBindStatus bind_status;
+    DataBindStatus close_status;
+    scxml_resource_status resource_status;
+    scxml_expr_status status;
+    const char *bytes;
+
+    resource_status = session->raw_data_resources.open(
+        session->data_resource_user, uri, uri_size,
+        session->max_data_resource_bytes, &resource);
+    if (resource_status != SCXML_RESOURCE_OK)
+        return data_resource_failure(resource_status);
+    if (resource.size > session->max_data_resource_bytes ||
+        (resource.size != 0u && resource.data == NULL)) {
+        session->raw_data_resources.close(
+            session->data_resource_user, &resource);
+        return resource.size > session->max_data_resource_bytes
+            ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
+    }
+
+    provider = data_resource_format_provider(resource.format);
+    if (provider == NULL) {
+        session->raw_data_resources.close(
+            session->data_resource_user, &resource);
+        return SCXML_EXPR_EVALUATION_ERROR;
+    }
+
+    bytes = resource.data != NULL ? resource.data : "";
+    bind_status = data_bind_format_reader_open(
+        provider, bytes, resource.size, session->data_bind_options.max_depth,
+        &format_reader, &format_error);
+    if (bind_status != DATA_BIND_OK) {
+        session->raw_data_resources.close(
+            session->data_resource_user, &resource);
+        return bind_status == DATA_BIND_ERR_LIMIT
+            ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
+    }
+
+    status = scxml_assign_apply_external(
+        assignment, format_reader.reader, &session->data_bind_options,
+        session->data_bind_max_buffer_bytes,
+        session->data_decode_storage, session->data_decode_storage_size,
+        state, diagnostic);
+    close_status = data_bind_format_reader_close(&format_reader);
+    session->raw_data_resources.close(
+        session->data_resource_user, &resource);
+    if (status == SCXML_EXPR_OK && close_status != DATA_BIND_OK)
+        return SCXML_EXPR_EVALUATION_ERROR;
+    return status;
+}
+
 static scxml_expr_status apply_external_data_initializer(
     const scxml_assign_program *assignment,
     scxml_session_impl *session, void *state,
@@ -2399,16 +2486,26 @@ static scxml_expr_status apply_external_data_initializer(
         !scxml_assign_external_source(
             assignment, &uri, &uri_size, &destination) ||
         uri == NULL || uri_size == 0u || destination == NULL ||
-        session->data_resources.open == NULL ||
-        session->data_resources.close == NULL ||
         session->data_decode_storage == NULL ||
         session->data_decode_storage_size == 0u)
+        return SCXML_EXPR_INVALID_ARGUMENT;
+
+    if (session->raw_data_resource_boundary) {
+        if (session->raw_data_resources.open == NULL ||
+            session->raw_data_resources.close == NULL ||
+            session->max_data_resource_bytes == 0u)
+            return SCXML_EXPR_INVALID_ARGUMENT;
+        return apply_raw_external_data_initializer(
+            assignment, session, uri, uri_size, state, diagnostic);
+    }
+
+    if (session->data_resources.open == NULL ||
+        session->data_resources.close == NULL)
         return SCXML_EXPR_INVALID_ARGUMENT;
     resource_status = session->data_resources.open(
         session->data_resource_user, uri, uri_size, destination, &resource);
     if (resource_status != SCXML_RESOURCE_OK)
-        return resource_status == SCXML_RESOURCE_LIMIT_EXCEEDED
-            ? SCXML_EXPR_LIMIT_EXCEEDED : SCXML_EXPR_EVALUATION_ERROR;
+        return data_resource_failure(resource_status);
     if (resource.reader.state != CSERDE_READER_READY ||
         resource.reader.ops == NULL) {
         session->data_resources.close(

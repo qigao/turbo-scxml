@@ -1203,6 +1203,50 @@ static const scxml_data_resource_adapter_v1 data_resource_adapter = {
     .open = data_resource_open,
     .close = data_resource_close};
 
+typedef struct raw_data_resource_probe {
+    const char *data;
+    size_t size;
+    DataBindFormat format;
+    size_t open_calls;
+    size_t close_calls;
+    scxml_resource_status open_status;
+} raw_data_resource_probe;
+
+static scxml_resource_status raw_data_resource_open(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_data_resource_v2 *out) {
+    raw_data_resource_probe *probe = (raw_data_resource_probe *)user;
+    if (probe == NULL || uri == NULL || out == NULL ||
+        uri_size != sizeof("mem:count") - 1u ||
+        memcmp(uri, "mem:count", uri_size) != 0)
+        return SCXML_RESOURCE_FAILED;
+    ++probe->open_calls;
+    if (probe->open_status != SCXML_RESOURCE_OK)
+        return probe->open_status;
+    if (probe->size > max_bytes)
+        return SCXML_RESOURCE_LIMIT_EXCEEDED;
+    *out = (scxml_data_resource_v2){
+        .data = probe->data,
+        .size = probe->size,
+        .format = probe->format,
+        .lease = probe};
+    return SCXML_RESOURCE_OK;
+}
+
+static void raw_data_resource_close(
+    void *user, scxml_data_resource_v2 *resource) {
+    raw_data_resource_probe *probe = (raw_data_resource_probe *)user;
+    if (probe != NULL && resource != NULL && resource->lease == probe)
+        ++probe->close_calls;
+    if (resource != NULL) memset(resource, 0, sizeof(*resource));
+}
+
+static const scxml_data_resource_adapter_v2 raw_data_resource_adapter = {
+    .abi_version = SCXML_DATA_RESOURCE_ADAPTER_ABI_V2,
+    .struct_size = sizeof(scxml_data_resource_adapter_v2),
+    .open = raw_data_resource_open,
+    .close = raw_data_resource_close};
+
 spec("TurboSCXML public CMeta data model") {
     it("admits bounded CMeta transition conditions and copies session state") {
         static const char source[] =
@@ -5180,6 +5224,117 @@ spec("TurboSCXML public CMeta data model") {
         check_true((requirements & SCXML_REQUIREMENT_DATA_RESOURCE) != 0u);
         check_true(cflow_executor_serial_init(&executor));
         check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("loads early data src from raw JSON through DataBind") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='early' initial='active'>"
+            "<datamodel><data id='count' src='mem:count'/></datamodel>"
+            "<state id='active'><transition cond='count == 7' "
+            "target='done'/><transition target='failed'/></state>"
+            "<final id='done'/><state id='failed'/></scxml>";
+        const scxml_public_data initial = {
+            false, 0, SCXML_PUBLIC_SOURCE_GOOD};
+        raw_data_resource_probe probe = {
+            .data = "7",
+            .size = sizeof("7") - 1u,
+            .format = DATA_BIND_FORMAT_JSON};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v5 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V5,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .data_resources = &raw_data_resource_adapter,
+            .data_resource_user = &probe,
+            .data_bind_workspace_bytes = 16384u,
+            .max_data_depth = 8u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
+            .max_data_buffer_bytes = 1024u,
+            .max_data_resource_bytes = 1024u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v5(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("closes unsupported raw formats without publishing partial data") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<datamodel><data id='count' src='mem:count'/></datamodel>"
+            "<state id='active'><transition event='error.execution' "
+            "cond='count == 3' target='done'/><transition event='*' "
+            "target='failed'/></state><final id='done'/>"
+            "<state id='failed'/></scxml>";
+        const scxml_public_data initial = {
+            false, 3, SCXML_PUBLIC_SOURCE_GOOD};
+        raw_data_resource_probe probe = {
+            .data = "7",
+            .size = sizeof("7") - 1u,
+            .format = DATA_BIND_FORMAT_BINARY};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v5 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V5,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .data_resources = &raw_data_resource_adapter,
+            .data_resource_user = &probe,
+            .data_bind_workspace_bytes = 16384u,
+            .max_data_depth = 8u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
+            .max_data_buffer_bytes = 1024u,
+            .max_data_resource_bytes = 1024u};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v5(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
