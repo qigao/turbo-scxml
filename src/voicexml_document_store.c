@@ -890,6 +890,75 @@ vxml_document_store_status vxml_document_store_acquire(
     return VXML_DOCUMENT_STORE_OK;
 }
 
+vxml_document_store_status vxml_document_store_acquire_reference(
+    vxml_document_store *store,
+    const char *base_document_uri,
+    size_t base_document_uri_size,
+    const char *reference,
+    size_t reference_size,
+    char *fragment,
+    size_t fragment_capacity,
+    size_t *out_fragment_size,
+    vxml_document_ref *out_ref,
+    vxml_document_store_error *out_error) {
+    vxml_document_store_impl *impl =
+        store != NULL ? (vxml_document_store_impl *)store->impl : NULL;
+    char *document_uri = NULL;
+    char *fragment_tmp = NULL;
+    vxml_resolved_uri_v1 resolved;
+    vxml_document_store_status status;
+
+    if (out_fragment_size != NULL) *out_fragment_size = 0u;
+    if (out_ref != NULL) *out_ref = (vxml_document_ref){0};
+    if (fragment != NULL && fragment_capacity != 0u)
+        fragment[0] = '\0';
+    if (impl == NULL || out_fragment_size == NULL || out_ref == NULL ||
+        (fragment_capacity != 0u && fragment == NULL))
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+
+    document_uri = (char *)malloc(impl->max_uri_bytes + 1u);
+    fragment_tmp = fragment_capacity != 0u
+        ? (char *)malloc(fragment_capacity) : NULL;
+    if (document_uri == NULL ||
+        (fragment_capacity != 0u && fragment_tmp == NULL)) {
+        free(fragment_tmp);
+        free(document_uri);
+        error_set(out_error, VXML_DOCUMENT_STORE_ALLOCATION_FAILED,
+                  VXML_DIALOG_MANAGER_OK, VXML_OK);
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
+    }
+
+    resolved = (vxml_resolved_uri_v1){
+        .abi_version = 1u,
+        .struct_size = sizeof(vxml_resolved_uri_v1),
+        .document_uri = document_uri,
+        .document_uri_capacity = impl->max_uri_bytes + 1u,
+        .fragment = fragment_tmp,
+        .fragment_capacity = fragment_capacity};
+    status = vxml_document_store_resolve(
+        store, base_document_uri, base_document_uri_size,
+        reference, reference_size, &resolved);
+    if (status == VXML_DOCUMENT_STORE_OK) {
+        status = vxml_document_store_acquire(
+            store, resolved.document_uri, resolved.document_uri_size,
+            out_ref, out_error);
+    }
+    if (status == VXML_DOCUMENT_STORE_OK) {
+        if (resolved.fragment_size != 0u)
+            memcpy(fragment, fragment_tmp, resolved.fragment_size);
+        if (fragment != NULL && fragment_capacity != 0u)
+            fragment[resolved.fragment_size] = '\0';
+        *out_fragment_size = resolved.fragment_size;
+    } else {
+        if (fragment != NULL && fragment_capacity != 0u)
+            fragment[0] = '\0';
+        *out_fragment_size = 0u;
+    }
+    free(fragment_tmp);
+    free(document_uri);
+    return status;
+}
+
 vxml_document_store_status vxml_document_store_view(
     const vxml_document_store *store,
     vxml_document_ref ref,
