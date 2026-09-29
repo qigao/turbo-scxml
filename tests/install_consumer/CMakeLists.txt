@@ -268,7 +268,7 @@ else()
       TURBOSCXML_DOCUMENT_STORE_LINKS
       TurboSCXML::VoiceXMLDocumentStore INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOSCXML_DOCUMENT_STORE_LINKS STREQUAL
-       "TurboSCXML::VoiceXMLDialogManager")
+       "TurboSCXML::VoiceXML")
       message(FATAL_ERROR
         "Unexpected VoiceXMLDocumentStore link closure: "
         "${TURBOSCXML_DOCUMENT_STORE_LINKS}")
@@ -300,7 +300,7 @@ else()
       TURBOSCXML_DIALOG_MANAGER_LINKS
       TurboSCXML::VoiceXMLDialogManager INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOSCXML_DIALOG_MANAGER_LINKS STREQUAL
-       "TurboSCXML::VoiceXML;TurboSCXML::CCXML")
+       "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>")
       message(FATAL_ERROR
         "Unexpected VoiceXMLDialogManager link closure: "
         "${TURBOSCXML_DIALOG_MANAGER_LINKS}")
@@ -396,7 +396,7 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE)
     TURBOSCXML_VOICEXML_CHTTP_LINKS
     TurboSCXML::VoiceXMLCHttpResource INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOSCXML_VOICEXML_CHTTP_LINKS STREQUAL
-     "TurboSCXML::VoiceXMLDialogManager;TurboSCXML::CHttpResource")
+     "TurboSCXML::CHttpResource")
     message(FATAL_ERROR
       "Unexpected VoiceXMLCHttpResource link closure: "
       "${TURBOSCXML_VOICEXML_CHTTP_LINKS}")

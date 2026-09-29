@@ -1,4 +1,5 @@
 #include <voicexml/dialog_manager.h>
+#include <voicexml/document_store.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -69,6 +70,9 @@ typedef struct vxml_dialog_row {
 
     vxml_program program;
     bool program_live;
+    vxml_document_ref document_ref;
+    bool document_ref_live;
+    const vxml_program *program_view;
     vxml_session session;
     bool session_live;
     vxml_status voice_status;
@@ -87,6 +91,10 @@ struct vxml_dialog_manager_impl {
     void *upstream_user;
     vxml_dialog_document_adapter_v1 documents;
     void *document_user;
+    vxml_document_store *document_store;
+    bool store_backed;
+    char *resolve_uri_scratch;
+    char *resolve_fragment_scratch;
     vxml_dialog_event_sink_v1 events;
     void *event_user;
 
@@ -144,6 +152,13 @@ static void row_destroy_runtime(vxml_dialog_row *row) {
         vxml_program_destroy(&row->program);
         row->program_live = false;
     }
+    if (row->document_ref_live && row->owner != NULL &&
+        row->owner->document_store != NULL) {
+        (void)vxml_document_store_release(
+            row->owner->document_store, &row->document_ref);
+        row->document_ref_live = false;
+    }
+    row->program_view = NULL;
     row->voice_status = VXML_OK;
 }
 
@@ -695,15 +710,114 @@ static vxml_dialog_manager_status compile_document(
         return VXML_DIALOG_MANAGER_OK;
     }
     row->program_live = true;
+    row->program_view = &row->program;
     return VXML_DIALOG_MANAGER_OK;
+}
+
+static vxml_status store_failure_voice_status(
+    vxml_document_store_status status,
+    const vxml_document_store_error *error) {
+    if (status == VXML_DOCUMENT_STORE_COMPILE_ERROR &&
+        error != NULL && error->voice_status != VXML_OK)
+        return error->voice_status;
+    switch (status) {
+    case VXML_DOCUMENT_STORE_LIMIT_EXCEEDED:
+        return VXML_LIMIT_EXCEEDED;
+    case VXML_DOCUMENT_STORE_ALLOCATION_FAILED:
+        return VXML_ALLOCATION_FAILED;
+    case VXML_DOCUMENT_STORE_INVALID_URI:
+    case VXML_DOCUMENT_STORE_INVALID_ARGUMENT:
+        return VXML_INVALID_ARGUMENT;
+    default:
+        return VXML_INVALID_STATE;
+    }
+}
+
+static vxml_dialog_manager_status acquire_store_document(
+    vxml_dialog_row *row,
+    vxml_dialog_event_kind failure_event) {
+    vxml_dialog_manager_impl *impl;
+    vxml_resolved_uri_v1 resolved;
+    vxml_document_store_status store_status;
+    vxml_document_store_error error = {0};
+    vxml_document_view view = {0};
+    if (row == NULL || row->owner == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    impl = row->owner;
+    if (!impl->store_backed || impl->document_store == NULL ||
+        impl->resolve_uri_scratch == NULL ||
+        impl->resolve_fragment_scratch == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_STATE;
+
+    resolved = (vxml_resolved_uri_v1){
+        .abi_version = 1u,
+        .struct_size = sizeof(vxml_resolved_uri_v1),
+        .document_uri = impl->resolve_uri_scratch,
+        .document_uri_capacity = impl->max_source_bytes + 1u,
+        .fragment = impl->resolve_fragment_scratch,
+        .fragment_capacity = impl->max_source_bytes + 1u};
+
+    store_status = vxml_document_store_resolve(
+        impl->document_store,
+        NULL, 0u,
+        row->source, row->source_size,
+        &resolved);
+    if (store_status != VXML_DOCUMENT_STORE_OK) {
+        (void)queue_event(
+            row, failure_event,
+            store_failure_voice_status(store_status, NULL));
+        return VXML_DIALOG_MANAGER_OK;
+    }
+    if (resolved.fragment_size != 0u) {
+        (void)queue_event(
+            row, failure_event, VXML_UNSUPPORTED_FEATURE);
+        return VXML_DIALOG_MANAGER_OK;
+    }
+
+    store_status = vxml_document_store_acquire(
+        impl->document_store,
+        resolved.document_uri, resolved.document_uri_size,
+        &row->document_ref, &error);
+    if (store_status != VXML_DOCUMENT_STORE_OK) {
+        row->document_ref = (vxml_document_ref){0};
+        (void)queue_event(
+            row, failure_event,
+            store_failure_voice_status(store_status, &error));
+        return VXML_DIALOG_MANAGER_OK;
+    }
+    row->document_ref_live = true;
+
+    store_status = vxml_document_store_view(
+        impl->document_store, row->document_ref, &view);
+    if (store_status != VXML_DOCUMENT_STORE_OK ||
+        view.program == NULL) {
+        (void)vxml_document_store_release(
+            impl->document_store, &row->document_ref);
+        row->document_ref_live = false;
+        row->document_ref = (vxml_document_ref){0};
+        (void)queue_event(row, failure_event, VXML_INVALID_STATE);
+        return VXML_DIALOG_MANAGER_OK;
+    }
+    row->program_view = view.program;
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+static vxml_dialog_manager_status load_document_program(
+    vxml_dialog_row *row,
+    vxml_dialog_event_kind failure_event) {
+    if (row == NULL || row->owner == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    return row->owner->store_backed
+        ? acquire_store_document(row, failure_event)
+        : compile_document(row, failure_event);
 }
 
 static vxml_dialog_manager_status start_session(
     vxml_dialog_row *row) {
     vxml_status status;
-    if (row == NULL || !row->program_live)
+    if (row == NULL || row->program_view == NULL)
         return VXML_DIALOG_MANAGER_INVALID_STATE;
-    status = vxml_session_init(&row->session, &row->program);
+    status = vxml_session_init(&row->session, row->program_view);
     if (status != VXML_OK) {
         (void)queue_event(row, VXML_DIALOG_EVENT_ERROR_START, status);
         return VXML_DIALOG_MANAGER_OK;
@@ -723,7 +837,7 @@ static vxml_dialog_manager_status progress_row(
     if (row == NULL) return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
     switch (row->state) {
     case VXML_DIALOG_ROW_PENDING_PREPARE:
-        status = compile_document(row, VXML_DIALOG_EVENT_ERROR_PREPARE);
+        status = load_document_program(row, VXML_DIALOG_EVENT_ERROR_PREPARE);
         if (status != VXML_DIALOG_MANAGER_OK)
             return status;
         if (row->state == VXML_DIALOG_ROW_PENDING_PREPARE)
@@ -731,7 +845,7 @@ static vxml_dialog_manager_status progress_row(
         break;
 
     case VXML_DIALOG_ROW_PENDING_DIRECT_START:
-        status = compile_document(row, VXML_DIALOG_EVENT_ERROR_START);
+        status = load_document_program(row, VXML_DIALOG_EVENT_ERROR_START);
         if (status != VXML_DIALOG_MANAGER_OK)
             return status;
         if (row->state == VXML_DIALOG_ROW_PENDING_DIRECT_START) {
@@ -779,6 +893,19 @@ vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void) {
     config.max_dialog_id_bytes = 63u;
     config.max_document_bytes = 1024u * 1024u;
     config.voice_limits = vxml_default_limits();
+    return config;
+}
+
+vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void) {
+    vxml_dialog_manager_config_v2 config;
+    memset(&config, 0, sizeof(config));
+    config.abi_version = VXML_DIALOG_MANAGER_CONFIG_ABI_V2;
+    config.struct_size = sizeof(config);
+    config.capacity = 32u;
+    config.max_source_bytes = 4096u;
+    config.max_media_type_bytes = 127u;
+    config.max_connection_id_bytes = 511u;
+    config.max_dialog_id_bytes = 63u;
     return config;
 }
 
@@ -882,6 +1009,89 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
             size_t cleanup;
             for (cleanup = 0u; cleanup <= index; ++cleanup)
                 row_free_buffers(&impl->rows[cleanup]);
+            free(impl->rows);
+            free(impl);
+            return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+        }
+    }
+
+    manager->impl = impl;
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v2(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v2 *config) {
+    vxml_dialog_manager_impl *impl;
+    size_t index;
+    if (manager == NULL || manager->impl != NULL ||
+        config == NULL ||
+        config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V2 ||
+        config->struct_size < sizeof(*config) ||
+        config->capacity == 0u ||
+        config->max_source_bytes == 0u ||
+        config->max_source_bytes == SIZE_MAX ||
+        config->max_media_type_bytes < sizeof(VXML_MEDIA_TYPE) - 1u ||
+        config->max_connection_id_bytes == 0u ||
+        config->max_dialog_id_bytes < 16u ||
+        !upstream_prefix_valid(config->upstream) ||
+        config->document_store == NULL ||
+        config->document_store->impl == NULL ||
+        config->events == NULL ||
+        config->events->abi_version != VXML_DIALOG_EVENT_SINK_ABI_V1 ||
+        config->events->struct_size < sizeof(*config->events) ||
+        config->events->try_publish == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+
+    impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL)
+        return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+    impl->rows = (vxml_dialog_row *)calloc(
+        config->capacity, sizeof(*impl->rows));
+    impl->resolve_uri_scratch =
+        (char *)calloc(config->max_source_bytes + 1u, 1u);
+    impl->resolve_fragment_scratch =
+        (char *)calloc(config->max_source_bytes + 1u, 1u);
+    if (impl->rows == NULL ||
+        impl->resolve_uri_scratch == NULL ||
+        impl->resolve_fragment_scratch == NULL) {
+        free(impl->resolve_fragment_scratch);
+        free(impl->resolve_uri_scratch);
+        free(impl->rows);
+        free(impl);
+        return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
+    }
+
+    impl->capacity = config->capacity;
+    impl->max_source_bytes = config->max_source_bytes;
+    impl->max_media_type_bytes = config->max_media_type_bytes;
+    impl->max_connection_id_bytes = config->max_connection_id_bytes;
+    impl->max_dialog_id_bytes = config->max_dialog_id_bytes;
+    impl->document_store = config->document_store;
+    impl->store_backed = true;
+    memset(&impl->upstream, 0, sizeof(impl->upstream));
+    memcpy(
+        &impl->upstream, config->upstream,
+        min_size(config->upstream->struct_size, sizeof(impl->upstream)));
+    impl->upstream_user = config->upstream_user;
+    impl->events = *config->events;
+    impl->event_user = config->event_user;
+
+    for (index = 0u; index < impl->capacity; ++index) {
+        vxml_dialog_row *row = &impl->rows[index];
+        row->owner = impl;
+        row->slot = index;
+        row->state = VXML_DIALOG_ROW_EMPTY;
+        if (!row_allocate_buffers(
+                row, impl->max_source_bytes,
+                impl->max_media_type_bytes,
+                impl->max_connection_id_bytes,
+                impl->max_dialog_id_bytes)) {
+            size_t cleanup;
+            for (cleanup = 0u; cleanup <= index; ++cleanup)
+                row_free_buffers(&impl->rows[cleanup]);
+            free(impl->resolve_fragment_scratch);
+            free(impl->resolve_uri_scratch);
             free(impl->rows);
             free(impl);
             return VXML_DIALOG_MANAGER_ALLOCATION_FAILED;
@@ -1026,6 +1236,8 @@ vxml_dialog_manager_status vxml_dialog_manager_destroy(
     impl = (vxml_dialog_manager_impl *)manager->impl;
     for (index = 0u; index < impl->capacity; ++index)
         row_free_buffers(&impl->rows[index]);
+    free(impl->resolve_fragment_scratch);
+    free(impl->resolve_uri_scratch);
     free(impl->rows);
     free(impl);
     manager->impl = NULL;

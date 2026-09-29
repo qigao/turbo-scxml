@@ -2,6 +2,7 @@
 #define TURBO_VOICEXML_DIALOG_MANAGER_H
 
 #include <ccxml/ccxml.h>
+#include <voicexml/resource.h>
 #include <voicexml/voicexml.h>
 
 #include <stdbool.h>
@@ -13,23 +14,8 @@ extern "C" {
 #endif
 
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V1 1u
-#define VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 1u
+#define VXML_DIALOG_MANAGER_CONFIG_ABI_V2 2u
 #define VXML_DIALOG_EVENT_SINK_ABI_V1 1u
-
-typedef enum vxml_dialog_manager_status {
-    VXML_DIALOG_MANAGER_OK = 0,
-    VXML_DIALOG_MANAGER_INVALID_ARGUMENT,
-    VXML_DIALOG_MANAGER_ALLOCATION_FAILED,
-    VXML_DIALOG_MANAGER_FULL,
-    VXML_DIALOG_MANAGER_CLOSED,
-    VXML_DIALOG_MANAGER_NOT_FOUND,
-    VXML_DIALOG_MANAGER_INVALID_STATE,
-    VXML_DIALOG_MANAGER_DOCUMENT_ERROR,
-    VXML_DIALOG_MANAGER_VXML_ERROR,
-    VXML_DIALOG_MANAGER_EVENT_FULL,
-    VXML_DIALOG_MANAGER_EVENT_CLOSED,
-    VXML_DIALOG_MANAGER_BUSY
-} vxml_dialog_manager_status;
 
 typedef enum vxml_dialog_event_sink_status {
     VXML_DIALOG_EVENT_ACCEPTED = 0,
@@ -37,37 +23,6 @@ typedef enum vxml_dialog_event_sink_status {
     VXML_DIALOG_EVENT_CLOSED,
     VXML_DIALOG_EVENT_INVALID_ARGUMENT
 } vxml_dialog_event_sink_status;
-
-/**
- * Provider-owned immutable VoiceXML source bytes.
- *
- * A successful open is paired with exactly one close after compilation.
- * The manager never retains data beyond close.
- */
-typedef struct vxml_dialog_document {
-    const void *data;
-    size_t size;
-    void *lease;
-} vxml_dialog_document;
-
-/**
- * Synchronous document acquisition boundary.
- *
- * source/media_type are copied manager-owned bytes. max_bytes is a hard
- * caller limit. Network policy, redirects, authorization and cache policy
- * belong to the provider; #48 may supply a CHTTP implementation.
- */
-typedef struct vxml_dialog_document_adapter_v1 {
-    uint32_t abi_version;
-    size_t struct_size;
-    vxml_dialog_manager_status (*open)(
-        void *user,
-        const char *source, size_t source_size,
-        const char *media_type, size_t media_type_size,
-        size_t max_bytes,
-        vxml_dialog_document *out_document);
-    void (*close)(void *user, vxml_dialog_document *document);
-} vxml_dialog_document_adapter_v1;
 
 /** Callback-scoped manager Event. Copy any retained bytes before returning. */
 typedef struct vxml_dialog_event_v1 {
@@ -94,6 +49,8 @@ typedef struct vxml_dialog_event_sink_v1 {
     vxml_dialog_event_sink_status (*try_publish)(
         void *user, const vxml_dialog_event_v1 *event);
 } vxml_dialog_event_sink_v1;
+
+typedef struct vxml_document_store vxml_document_store;
 
 typedef struct vxml_dialog_manager_config_v1 {
     uint32_t abi_version;
@@ -123,6 +80,35 @@ typedef struct vxml_dialog_manager_config_v1 {
     void *event_user;
 } vxml_dialog_manager_config_v1;
 
+/**
+ * Store-backed dialog-manager configuration.
+ *
+ * V2 does not own/fetch/compile documents itself. It borrows one
+ * VoiceXMLDocumentStore and retains generation-safe document refs in dialog
+ * rows for as long as a prepared Program or running Session needs them.
+ *
+ * max_source_bytes also bounds URI-resolution scratch. A resolved URI that
+ * exceeds this bound fails before store acquisition.
+ */
+typedef struct vxml_dialog_manager_config_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+
+    size_t capacity;
+    size_t max_source_bytes;
+    size_t max_media_type_bytes;
+    size_t max_connection_id_bytes;
+    size_t max_dialog_id_bytes;
+
+    const ccxml_telephony_adapter_v1 *upstream;
+    void *upstream_user;
+
+    vxml_document_store *document_store;
+
+    const vxml_dialog_event_sink_v1 *events;
+    void *event_user;
+} vxml_dialog_manager_config_v2;
+
 typedef struct vxml_dialog_manager_stats {
     size_t capacity;
     size_t active;
@@ -143,6 +129,7 @@ typedef struct vxml_dialog_manager {
 
 /** Defaults include bounded capacities but no provider pointers. */
 vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void);
+vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void);
 
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status);
@@ -150,6 +137,10 @@ const char *vxml_dialog_manager_status_string(
 vxml_dialog_manager_status vxml_dialog_manager_init(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v1 *config);
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v2(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v2 *config);
 
 /**
  * Full-size CCXML telephony decorator. Non-dialog operations forward to the
