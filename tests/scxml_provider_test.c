@@ -310,10 +310,6 @@ spec("TurboSCXML CMeta provider interfaces") {
         check_false(scxml_invoke_provider_bridge_init(
             &invoke_bridge, &invalid_invoke, &probe));
     }
-}
-
-int main(void) {
-    return run_specs();
 
     it("projects canonical raw data resources through CMeta Interface and back") {
         provider_probe probe = {0};
