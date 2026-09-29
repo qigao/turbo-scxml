@@ -178,8 +178,7 @@ vxml_status vxml_session_start_at_form(
     if (impl == NULL) return VXML_INVALID_STATE;
     if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
     if (impl->state != VXML_SESSION_READY) return VXML_INVALID_STATE;
-    if (impl->program == NULL ||
-        impl->program->profile_kind != VXML_PROFILE_LITERAL)
+    if (impl->program == NULL || impl->program->forms == NULL)
         return VXML_INVALID_CONTRACT;
     for (form_index = 0u;
          form_index < impl->program->form_count;
@@ -196,6 +195,10 @@ vxml_status vxml_session_start_at_form(
     impl->navigation_uri_size = 0u;
     if (form_index == impl->program->form_count)
         return fail_structure(impl);
+    if (impl->program->profile_session_start_at != NULL)
+        return impl->program->profile_session_start_at(impl, form_index);
+    if (impl->program->profile_session_start != NULL)
+        return VXML_INVALID_CONTRACT;
     return vxml_session_start_literal_at(impl, form_index);
 }
 
