@@ -3,6 +3,12 @@
 #include "voicexml_allocator.h"
 #include "voicexml_cmeta_internal.h"
 
+#include <data_bind_csv_provider.h>
+#include <data_bind_format_provider.h>
+#include <data_bind_json_provider.h>
+#include <data_bind_xml_provider.h>
+#include <data_bind_yaml_provider.h>
+
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -14,13 +20,49 @@ static vxml_status read_scalar_value(
 
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
+    const size_t v1_prefix_size =
+        offsetof(vxml_cmeta_session_options_v1, max_execution_steps) +
+        sizeof(options->max_execution_steps);
     return options != NULL &&
         options->abi_version == VXML_CMETA_SESSION_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options) &&
+        options->struct_size >= v1_prefix_size &&
         options->max_transaction_bytes != 0u &&
         options->max_execution_steps != 0u &&
         ((options->initially_undefined == NULL) ==
          (options->initially_undefined_count == 0u));
+}
+
+static bool session_data_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_data_owned_bytes) +
+        sizeof(options->max_data_owned_bytes);
+    const vxml_cmeta_data_resource_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size ||
+        options->max_data_bytes == 0u ||
+        options->max_data_owned_bytes == 0u)
+        return false;
+    adapter = options->data_resources;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->open != NULL && adapter->close != NULL;
+}
+
+static const DataBindFormatProvider *data_format_provider(
+    vxml_cmeta_data_format format) {
+    switch (format) {
+    case VXML_CMETA_DATA_JSON:
+        return data_bind_json_format_provider();
+    case VXML_CMETA_DATA_YAML:
+        return data_bind_yaml_format_provider();
+    case VXML_CMETA_DATA_CSV:
+        return data_bind_csv_format_provider();
+    case VXML_CMETA_DATA_XML:
+        return data_bind_xml_format_provider();
+    default:
+        return NULL;
+    }
 }
 
 static void *session_scope_allocate(void *user, size_t size) {
