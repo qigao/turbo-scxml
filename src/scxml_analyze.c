@@ -560,38 +560,83 @@ static scxml_status require_scxml_element(scxml_build *build,
     return scxml_analyze_validate_element_attributes(build, node, kind);
 }
 
-const scxml_cmeta_custom_action_v1 *scxml_analyze_find_custom_action(
-    const scxml_build *build, scxml_syntax_node node) {
+bool scxml_analyze_find_custom_action(
+    const scxml_build *build, scxml_syntax_node node,
+    scxml_custom_action_registration_view *out) {
     const salts_xml_string_view namespace_uri =
         scxml_syntax_node_namespace_uri(node);
     const salts_xml_string_view local_name =
         scxml_syntax_node_local_name(node);
     size_t index;
-    if (build == NULL || namespace_uri.data == NULL ||
+    if (out != NULL) memset(out, 0, sizeof(*out));
+    if (build == NULL || out == NULL || namespace_uri.data == NULL ||
         namespace_uri.size == 0u ||
         scxml_analyze_view_equal_raw(namespace_uri, SCXML_NAMESPACE))
-        return NULL;
-    for (index = 0u; index < build->custom_action_registry_count; ++index) {
-        const scxml_cmeta_custom_action_v1 *action =
-            &build->custom_action_registry[index];
+        return false;
+    for (index = 0u;
+         index < build->function_custom_action_registry_count; ++index) {
+        const scxml_cmeta_custom_action_v2 *action =
+            &build->function_custom_action_registry[index];
         if (action->namespace_uri_size == namespace_uri.size &&
             action->local_name_size == local_name.size &&
             memcmp(action->namespace_uri, namespace_uri.data,
                    namespace_uri.size) == 0 &&
             memcmp(action->local_name, local_name.data,
-                   local_name.size) == 0)
-            return action;
+                   local_name.size) == 0) {
+            *out = (scxml_custom_action_registration_view){
+                .namespace_uri = action->namespace_uri,
+                .namespace_uri_size = action->namespace_uri_size,
+                .local_name = action->local_name,
+                .local_name_size = action->local_name_size,
+                .callable = action->callable,
+                .function = action->function,
+                .parameter_count = action->function->param_count};
+            return true;
+        }
     }
-    return NULL;
+    for (index = 0u;
+         index < build->legacy_custom_action_registry_count; ++index) {
+        const scxml_cmeta_custom_action_v1 *action =
+            &build->legacy_custom_action_registry[index];
+        if (action->namespace_uri_size == namespace_uri.size &&
+            action->local_name_size == local_name.size &&
+            memcmp(action->namespace_uri, namespace_uri.data,
+                   namespace_uri.size) == 0 &&
+            memcmp(action->local_name, local_name.data,
+                   local_name.size) == 0) {
+            *out = (scxml_custom_action_registration_view){
+                .namespace_uri = action->namespace_uri,
+                .namespace_uri_size = action->namespace_uri_size,
+                .local_name = action->local_name,
+                .local_name_size = action->local_name_size,
+                .callable = action->callable,
+                .legacy_parameter_names = action->parameter_names,
+                .parameter_count = action->parameter_count};
+            return true;
+        }
+    }
+    return false;
+}
+
+const char *scxml_analyze_custom_action_parameter_name(
+    const scxml_custom_action_registration_view *action, size_t index) {
+    if (action == NULL || index >= action->parameter_count) return NULL;
+    if (action->function != NULL) {
+        const cmeta_param_desc *param =
+            cmeta_function_param(action->function, index);
+        return param != NULL ? param->name : NULL;
+    }
+    return action->legacy_parameter_names != NULL
+        ? action->legacy_parameter_names[index] : NULL;
 }
 
 static scxml_status analyze_custom_action(
     scxml_build *build, scxml_syntax_node node, scxml_counts *counts) {
-    const scxml_cmeta_custom_action_v1 *action =
-        scxml_analyze_find_custom_action(build, node);
+    scxml_custom_action_registration_view action = {0};
     size_t index, matched = 0u;
     if (build->data_model != SCXML_DATA_MODEL_CMETA ||
-        build->quickjs_profile || action == NULL)
+        build->quickjs_profile ||
+        !scxml_analyze_find_custom_action(build, node, &action))
         return scxml_analyze_fail(
             build, SCXML_UNSUPPORTED_FEATURE,
             scxml_syntax_node_location(node),
@@ -622,9 +667,10 @@ static scxml_status analyze_custom_action(
                 build, SCXML_INVALID_STRUCTURE,
                 scxml_syntax_attribute_location(attribute),
                 "CMeta custom action arguments must be unqualified");
-        for (parameter = 0u; parameter < action->parameter_count;
+        for (parameter = 0u; parameter < action.parameter_count;
              ++parameter) {
-            const char *expected = action->parameter_names[parameter];
+            const char *expected =
+                scxml_analyze_custom_action_parameter_name(&action, parameter);
             if (strlen(expected) == name.size &&
                 memcmp(expected, name.data, name.size) == 0) {
                 found = true;
@@ -639,7 +685,7 @@ static scxml_status analyze_custom_action(
                 "CMeta custom action has an unknown or empty argument");
         ++matched;
     }
-    if (matched != action->parameter_count)
+    if (matched != action.parameter_count)
         return scxml_analyze_fail(
             build, SCXML_INVALID_STRUCTURE,
             scxml_syntax_node_location(node),
@@ -651,7 +697,7 @@ static scxml_status analyze_custom_action(
             &counts->custom_action_rows) ||
         !scxml_analyze_checked_add(
             counts->custom_action_argument_rows,
-            action->parameter_count,
+            action.parameter_count,
             &counts->custom_action_argument_rows))
         return scxml_analyze_fail(
             build, SCXML_LIMIT_EXCEEDED,
