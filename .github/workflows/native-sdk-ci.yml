@@ -10,6 +10,8 @@ on:
       - "tests/**"
       - "vcpkg.json"
       - "CMakeUserPresets.json"
+      - "presets/**"
+      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
   push:
     branches: [main]
@@ -21,6 +23,8 @@ on:
       - "tests/**"
       - "vcpkg.json"
       - "CMakeUserPresets.json"
+      - "presets/**"
+      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
 
 permissions:
@@ -238,3 +242,208 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wide consumer configure failed" }
           cmake --build build/consumer-wide --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "wide consumer build failed" }
+
+  macos:
+    name: macOS released SDK
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja nasm
+          case "$RUNNER_ARCH" in
+            X64)
+              rid=macos-x64
+              triplet=x64-osx
+              ;;
+            ARM64)
+              rid=macos-arm64
+              triplet=arm64-osx
+              ;;
+            *)
+              echo "unsupported RUNNER_ARCH=$RUNNER_ARCH" >&2
+              exit 1
+              ;;
+          esac
+          echo "NATIVE_SDK_RID=$rid" >> "$GITHUB_ENV"
+          echo "VCPKG_TARGET_TRIPLET=$triplet" >> "$GITHUB_ENV"
+
+      - name: Restore current published native SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-native-sdks"
+          project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+          </Project>
+          EOF
+          (
+            cd "$RUNNER_TEMP"
+            dotnet add "$project" package Salts.Native
+            dotnet add "$project" package SaltsUtils.Native
+            dotnet add "$project" package CHttp.Native
+          )
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1"
+            local rid="$2"
+            local roots=()
+            local root
+            while IFS= read -r root; do
+              roots+=("$root")
+            done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d                 -path "*/sdk/$rid" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
+              return 1
+            fi
+            printf '%s' "${roots[0]}"
+          }
+          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+
+      - name: Restore third-party dependencies from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/ci-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+
+      - name: Build and test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/ci-macos --parallel 2
+          export DYLD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
+          ctest --test-dir build/ci-macos --no-tests=error --output-on-failure
+
+      - name: Install and verify installed consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --install build/ci-macos
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml"
+          export DYLD_LIBRARY_PATH="$TURBOSCXML_ROOT/lib:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
+          cmake -S tests/install_consumer -B build/consumer-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON
+          cmake --build build/consumer-macos --parallel 2
+
+  android:
+    name: Android arm64-v8a released SDK
+    runs-on: ubuntu-24.04
+    env:
+      NATIVE_SDK_RID: android-arm64-v8a
+      VCPKG_TARGET_TRIPLET: arm64-android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          test -n "${ANDROID_NDK_HOME:-}"
+          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+
+      - name: Restore current published native SDK graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-native-sdks"
+          project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+          </Project>
+          EOF
+          (
+            cd "$RUNNER_TEMP"
+            dotnet add "$project" package Salts.Native
+            dotnet add "$project" package SaltsUtils.Native
+            dotnet add "$project" package CHttp.Native
+          )
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local package="$1"
+            local rid="$2"
+            local roots=()
+            local root
+            while IFS= read -r root; do
+              roots+=("$root")
+            done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d                 -path "*/sdk/$rid" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
+              return 1
+            fi
+            printf '%s' "${roots[0]}"
+          }
+          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+
+      - name: Restore third-party dependencies from shared cache only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+
+      - name: Configure and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/ci-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DBUILD_TESTING=OFF             -DBUILD_TESTS=OFF             -DBUILD_EXAMPLES=OFF             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+          cmake --build build/ci-android --parallel 2
+          cmake --install build/ci-android
+
+      - name: Verify installed C/C++ consumers build
+        shell: bash
+        run: |
+          set -euo pipefail
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml"
+          cmake -S tests/install_consumer -B build/consumer-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON
+          cmake --build build/consumer-android --parallel 2
+
