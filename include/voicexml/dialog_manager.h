@@ -15,6 +15,7 @@ extern "C" {
 
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V1 1u
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V2 2u
+#define VXML_DIALOG_MANAGER_CONFIG_ABI_V3 3u
 #define VXML_DIALOG_EVENT_SINK_ABI_V1 1u
 
 typedef enum vxml_dialog_event_sink_status {
@@ -109,6 +110,34 @@ typedef struct vxml_dialog_manager_config_v2 {
     void *event_user;
 } vxml_dialog_manager_config_v2;
 
+/**
+ * Navigation-enabled store-backed manager configuration.
+ *
+ * V3 keeps the V2 ownership model and adds one hard bound for external
+ * document handoffs produced by VXML_SESSION_NAVIGATING. Each hop resolves
+ * against the current cached document URI, acquires the next document before
+ * releasing the old borrow, and optionally enters the resolved fragment.
+ */
+typedef struct vxml_dialog_manager_config_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+
+    size_t capacity;
+    size_t max_source_bytes;
+    size_t max_media_type_bytes;
+    size_t max_connection_id_bytes;
+    size_t max_dialog_id_bytes;
+    size_t max_navigation_hops;
+
+    const ccxml_telephony_adapter_v1 *upstream;
+    void *upstream_user;
+
+    vxml_document_store *document_store;
+
+    const vxml_dialog_event_sink_v1 *events;
+    void *event_user;
+} vxml_dialog_manager_config_v3;
+
 typedef struct vxml_dialog_manager_stats {
     size_t capacity;
     size_t active;
@@ -130,6 +159,7 @@ typedef struct vxml_dialog_manager {
 /** Defaults include bounded capacities but no provider pointers. */
 vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void);
 vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void);
+vxml_dialog_manager_config_v3 vxml_dialog_manager_default_config_v3(void);
 
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status);
@@ -141,6 +171,10 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
 vxml_dialog_manager_status vxml_dialog_manager_init_v2(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v2 *config);
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v3(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v3 *config);
 
 /**
  * Full-size CCXML telephony decorator. Non-dialog operations forward to the
