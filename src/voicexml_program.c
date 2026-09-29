@@ -18,6 +18,7 @@ typedef struct vxml_decoded_goto {
     size_t target_size;
     size_t target_form;
     salts_xml_location location;
+    bool external;
 } vxml_decoded_goto;
 
 typedef struct vxml_measurement {
@@ -579,25 +580,42 @@ static vxml_status append_goto(
     }
     entry.target[decoded_size] = '\0';
     entry.location = salts_xml_attribute_location(attribute);
-    if (decoded_size == 0u || entry.target[0] != '#') {
-        vxml_free(entry.target);
-        return fail(
-            diagnostic, VXML_UNSUPPORTED_FEATURE,
-            salts_xml_attribute_location(attribute),
-            "external VoiceXML goto is not supported in the literal profile");
-    }
-    if (decoded_size == 1u ||
-        !is_ncname(entry.target + 1u, decoded_size - 1u)) {
+    if (decoded_size == 0u) {
         vxml_free(entry.target);
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(attribute),
-            "VoiceXML goto next must be one nonempty local form fragment");
+            "VoiceXML goto next must be nonempty");
     }
-    memmove(entry.target, entry.target + 1u, decoded_size - 1u);
-    entry.target_size = decoded_size - 1u;
-    entry.target[entry.target_size] = '\0';
     entry.target_form = SIZE_MAX;
+    if (entry.target[0] == '#') {
+        if (decoded_size == 1u ||
+            !is_ncname(entry.target + 1u, decoded_size - 1u)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML goto next must be one valid local form fragment");
+        }
+        memmove(entry.target, entry.target + 1u, decoded_size - 1u);
+        entry.target_size = decoded_size - 1u;
+        entry.target[entry.target_size] = '\0';
+    } else {
+        size_t retained_size;
+        entry.external = true;
+        entry.target_size = decoded_size;
+        if (!checked_add(entry.target_size, 1u, &retained_size) ||
+            !checked_add(
+                measurement->name_bytes, retained_size,
+                &measurement->name_bytes) ||
+            measurement->name_bytes > limits->max_name_bytes) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                entry.location,
+                "VoiceXML retained goto URI bytes exceed max_name_bytes");
+        }
+    }
 
     if (measurement->goto_count == measurement->goto_capacity) {
         size_t capacity = measurement->goto_capacity == 0u
@@ -646,6 +664,8 @@ static vxml_status resolve_gotos(
         vxml_decoded_goto *entry =
             &measurement->gotos[goto_index];
         size_t form_index;
+        if (entry->external)
+            continue;
         for (form_index = 0u;
              form_index < measurement->id_count;
              ++form_index) {
@@ -920,6 +940,8 @@ static void write_exit(vxml_writer *writer) {
         &writer->impl->actions[writer->action_index++];
     action->kind = VXML_ACTION_EXIT;
     action->target_form = SIZE_MAX;
+    action->target_uri = NULL;
+    action->target_uri_size = 0u;
 }
 
 static void write_goto(vxml_writer *writer) {
@@ -927,8 +949,22 @@ static void write_goto(vxml_writer *writer) {
         &writer->impl->actions[writer->action_index++];
     const vxml_decoded_goto target =
         writer->measurement->gotos[writer->goto_index++];
-    action->kind = VXML_ACTION_GOTO;
-    action->target_form = target.target_form;
+    action->target_uri = NULL;
+    action->target_uri_size = 0u;
+    if (target.external) {
+        action->kind = VXML_ACTION_GOTO_EXTERNAL;
+        action->target_form = SIZE_MAX;
+        action->target_uri =
+            writer->impl->storage + writer->storage_index;
+        action->target_uri_size = target.target_size;
+        memcpy(
+            writer->impl->storage + writer->storage_index,
+            target.target, target.target_size + 1u);
+        writer->storage_index += target.target_size + 1u;
+    } else {
+        action->kind = VXML_ACTION_GOTO;
+        action->target_form = target.target_form;
+    }
 }
 
 static void write_block(vxml_writer *writer, salts_xml_node node) {
@@ -1028,7 +1064,9 @@ static vxml_status validate_literal_goto_graph(
                 return fail(
                     diagnostic, VXML_INVALID_STRUCTURE, location,
                     "VoiceXML literal Program structure is invalid");
-            if (action == NULL || action->kind == VXML_ACTION_EXIT)
+            if (action == NULL ||
+                action->kind == VXML_ACTION_EXIT ||
+                action->kind == VXML_ACTION_GOTO_EXTERNAL)
                 break;
             if (action->kind != VXML_ACTION_GOTO ||
                 action->target_form >= impl->form_count)
