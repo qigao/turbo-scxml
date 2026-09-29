@@ -1,4 +1,5 @@
 #include <voicexml/dialog_manager.h>
+#include <voicexml/document_store.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +67,11 @@ typedef struct vxml_dialog_row {
     size_t media_type_size;
     char *connection_id;
     size_t connection_id_size;
+    char *fragment;
+    size_t fragment_size;
 
+    vxml_document_ref document_ref;
+    bool document_ref_live;
     vxml_program program;
     bool program_live;
     vxml_session session;
@@ -80,8 +85,11 @@ struct vxml_dialog_manager_impl {
     size_t max_media_type_bytes;
     size_t max_connection_id_bytes;
     size_t max_dialog_id_bytes;
+    size_t max_fragment_bytes;
     size_t max_document_bytes;
     vxml_limits voice_limits;
+    bool use_document_store;
+    vxml_document_store *document_store;
 
     ccxml_telephony_adapter_v1 upstream;
     void *upstream_user;
@@ -144,6 +152,16 @@ static void row_destroy_runtime(vxml_dialog_row *row) {
         vxml_program_destroy(&row->program);
         row->program_live = false;
     }
+    if (row->document_ref_live &&
+        row->owner != NULL &&
+        row->owner->document_store != NULL) {
+        (void)vxml_document_store_release(
+            row->owner->document_store, &row->document_ref);
+        row->document_ref_live = false;
+    }
+    row->fragment_size = 0u;
+    if (row->fragment != NULL)
+        row->fragment[0] = '\0';
     row->voice_status = VXML_OK;
 }
 
@@ -155,6 +173,7 @@ static void row_clear(vxml_dialog_row *row) {
     char *source;
     char *media_type;
     char *connection_id;
+    char *fragment;
     if (row == NULL) return;
     row_destroy_runtime(row);
     generation = row->generation;
@@ -164,6 +183,7 @@ static void row_clear(vxml_dialog_row *row) {
     source = row->source;
     media_type = row->media_type;
     connection_id = row->connection_id;
+    fragment = row->fragment;
     memset(row, 0, sizeof(*row));
     row->generation = generation;
     row->owner = owner;
@@ -172,6 +192,7 @@ static void row_clear(vxml_dialog_row *row) {
     row->source = source;
     row->media_type = media_type;
     row->connection_id = connection_id;
+    row->fragment = fragment;
     row->state = VXML_DIALOG_ROW_EMPTY;
 }
 
@@ -180,13 +201,17 @@ static bool row_allocate_buffers(
     size_t source_bytes,
     size_t media_type_bytes,
     size_t connection_bytes,
-    size_t dialog_id_bytes) {
+    size_t dialog_id_bytes,
+    size_t fragment_bytes) {
     row->source = (char *)calloc(source_bytes + 1u, 1u);
     row->media_type = (char *)calloc(media_type_bytes + 1u, 1u);
     row->connection_id = (char *)calloc(connection_bytes + 1u, 1u);
     row->dialog_id = (char *)calloc(dialog_id_bytes + 1u, 1u);
+    row->fragment = fragment_bytes != 0u
+        ? (char *)calloc(fragment_bytes + 1u, 1u) : NULL;
     return row->source != NULL && row->media_type != NULL &&
-           row->connection_id != NULL && row->dialog_id != NULL;
+           row->connection_id != NULL && row->dialog_id != NULL &&
+           (fragment_bytes == 0u || row->fragment != NULL);
 }
 
 static void row_free_buffers(vxml_dialog_row *row) {
@@ -195,10 +220,12 @@ static void row_free_buffers(vxml_dialog_row *row) {
     free(row->media_type);
     free(row->connection_id);
     free(row->dialog_id);
+    free(row->fragment);
     row->source = NULL;
     row->media_type = NULL;
     row->connection_id = NULL;
     row->dialog_id = NULL;
+    row->fragment = NULL;
 }
 
 static bool row_copy(
