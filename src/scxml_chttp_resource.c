@@ -19,6 +19,8 @@ typedef enum scxml_chttp_active_kind {
 
 typedef struct scxml_chttp_resource_impl {
     scxml_chttp_resource_config_v1 config;
+    scxml_chttp_resolve_v2_fn resolve_v2;
+    bool raw_profile;
     scxml_chttp_transport_v1 transport;
     void *transport_user;
     scxml_chttp_active_kind active;
@@ -183,7 +185,7 @@ static const char *single_content_type(const chttp_response *response) {
     return value;
 }
 
-static bool config_valid(
+static bool config_v1_valid(
     const scxml_chttp_resource_config_v1 *config) {
     return config != NULL &&
         config->abi_version == SCXML_CHTTP_RESOURCE_CONFIG_ABI_V1 &&
@@ -195,6 +197,33 @@ static bool config_valid(
         config->max_target_bytes != 0u &&
         config->max_media_type_bytes != 0u &&
         config->max_response_body_bytes != 0u;
+}
+
+static bool config_v2_valid(
+    const scxml_chttp_resource_config_v2 *config) {
+    return config != NULL &&
+        config->abi_version == SCXML_CHTTP_RESOURCE_CONFIG_ABI_V2 &&
+        config->struct_size >= sizeof(*config) && config->client != NULL &&
+        config->client->impl != NULL && config->resolve != NULL &&
+        config->timeout_ms != 0u &&
+        config->max_connection_uri_bytes != 0u &&
+        config->max_authority_bytes != 0u &&
+        config->max_target_bytes != 0u &&
+        config->max_media_type_bytes != 0u &&
+        config->max_response_body_bytes != 0u;
+}
+
+static bool data_format_valid(DataBindFormat format) {
+    switch (format) {
+    case DATA_BIND_FORMAT_BINARY:
+    case DATA_BIND_FORMAT_JSON:
+    case DATA_BIND_FORMAT_YAML:
+    case DATA_BIND_FORMAT_CSV:
+    case DATA_BIND_FORMAT_XML:
+        return true;
+    default:
+        return false;
+    }
 }
 
 static bool allocate_request_storage(
@@ -266,11 +295,13 @@ static scxml_resource_status acquire_response(
     scxml_chttp_resource_impl *impl, const char *uri, size_t uri_size,
     scxml_chttp_resource_kind kind, size_t caller_max_bytes,
     const cmeta_data_desc *expected,
-    scxml_text_resource *out_text, scxml_data_resource *out_data) {
+    scxml_text_resource *out_text, scxml_data_resource *out_data,
+    scxml_data_resource_v2 *out_raw_data) {
     scxml_chttp_resolution_v1 resolution = {0};
     const scxml_chttp_data_decoder_v1 *decoder = NULL;
     scxml_chttp_data_decoder_v1 decoder_copy = {0};
     void *decoder_user = NULL;
+    DataBindFormat format = DATA_BIND_FORMAT_BINARY;
     scxml_chttp_request_storage storage = {0};
     chttp_response response = {0};
     chttp_error error = {0};
@@ -284,19 +315,33 @@ static scxml_resource_status acquire_response(
         (kind == SCXML_CHTTP_RESOURCE_TEXT &&
          (out_text == NULL || caller_max_bytes == 0u)) ||
         (kind == SCXML_CHTTP_RESOURCE_DATA &&
-         (out_data == NULL || expected == NULL)))
+         ((!impl->raw_profile && (out_data == NULL || expected == NULL)) ||
+          (impl->raw_profile &&
+           (out_raw_data == NULL || caller_max_bytes == 0u)))))
         return SCXML_RESOURCE_FAILED;
     if (memchr(uri, '\0', uri_size) != NULL)
         return SCXML_RESOURCE_INVALID_DATA;
     if (has_https_scheme(uri, uri_size)) return SCXML_RESOURCE_DENIED;
-    status = impl->config.resolve(
-        impl->config.resolver_user, uri, uri_size, kind,
-        &resolution, &decoder, &decoder_user);
+
+    if (impl->raw_profile) {
+        if (impl->resolve_v2 == NULL) return SCXML_RESOURCE_FAILED;
+        status = impl->resolve_v2(
+            impl->config.resolver_user, uri, uri_size, kind,
+            &resolution, &format);
+    } else {
+        status = impl->config.resolve(
+            impl->config.resolver_user, uri, uri_size, kind,
+            &resolution, &decoder, &decoder_user);
+    }
     if (status != SCXML_RESOURCE_OK) return status;
     if (!resolution_valid(impl, &resolution) ||
-        (kind == SCXML_CHTTP_RESOURCE_DATA && !decoder_valid(decoder)))
+        (!impl->raw_profile && kind == SCXML_CHTTP_RESOURCE_DATA &&
+         !decoder_valid(decoder)) ||
+        (impl->raw_profile && kind == SCXML_CHTTP_RESOURCE_DATA &&
+         !data_format_valid(format)))
         return SCXML_RESOURCE_DENIED;
-    if (kind == SCXML_CHTTP_RESOURCE_DATA) decoder_copy = *decoder;
+    if (!impl->raw_profile && kind == SCXML_CHTTP_RESOURCE_DATA)
+        decoder_copy = *decoder;
     if (!allocate_request_storage(&resolution, &storage))
         return SCXML_RESOURCE_FAILED;
     options = (chttp_options){
@@ -314,7 +359,8 @@ static scxml_resource_status acquire_response(
     status = map_http_status(response.status_code);
     if (status != SCXML_RESOURCE_OK) goto fail_response;
     body_limit = impl->config.max_response_body_bytes;
-    if (kind == SCXML_CHTTP_RESOURCE_TEXT && caller_max_bytes < body_limit)
+    if ((kind == SCXML_CHTTP_RESOURCE_TEXT || impl->raw_profile) &&
+        caller_max_bytes < body_limit)
         body_limit = caller_max_bytes;
     if (response.body_size > body_limit) {
         status = SCXML_RESOURCE_LIMIT_EXCEEDED;
@@ -340,6 +386,18 @@ static scxml_resource_status acquire_response(
         *out_text = (scxml_text_resource){
             .data = (const char *)impl->response.body,
             .size = impl->response.body_size,
+            .lease = impl};
+        free(storage.allocation);
+        return SCXML_RESOURCE_OK;
+    }
+
+    if (impl->raw_profile) {
+        impl->response = response;
+        impl->active = SCXML_CHTTP_ACTIVE_DATA;
+        *out_raw_data = (scxml_data_resource_v2){
+            .data = (const char *)impl->response.body,
+            .size = impl->response.body_size,
+            .format = format,
             .lease = impl};
         free(storage.allocation);
         return SCXML_RESOURCE_OK;
@@ -388,18 +446,46 @@ static scxml_resource_status data_open(
     return acquire_response(
         (scxml_chttp_resource_impl *)resource->impl,
         uri, uri_size, SCXML_CHTTP_RESOURCE_DATA, 0u,
-        expected, NULL, out);
+        expected, NULL, out, NULL);
 }
 
 static void data_close(void *user, scxml_data_resource *resource_value) {
     scxml_chttp_resource *resource = (scxml_chttp_resource *)user;
     scxml_chttp_resource_impl *impl = resource != NULL
         ? (scxml_chttp_resource_impl *)resource->impl : NULL;
-    if (impl == NULL || resource_value == NULL ||
+    if (impl == NULL || resource_value == NULL || impl->raw_profile ||
         impl->active != SCXML_CHTTP_ACTIVE_DATA ||
         resource_value->lease != impl)
         return;
     impl->decoded.reader = resource_value->reader;
+    release_active(impl);
+    memset(resource_value, 0, sizeof(*resource_value));
+}
+
+static scxml_resource_status data_open_v2(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_data_resource_v2 *out) {
+    scxml_chttp_resource *resource = (scxml_chttp_resource *)user;
+    scxml_chttp_resource_impl *impl = resource != NULL
+        ? (scxml_chttp_resource_impl *)resource->impl : NULL;
+    if (out != NULL) memset(out, 0, sizeof(*out));
+    if (impl == NULL || !impl->raw_profile || out == NULL ||
+        max_bytes == 0u)
+        return SCXML_RESOURCE_FAILED;
+    return acquire_response(
+        impl, uri, uri_size, SCXML_CHTTP_RESOURCE_DATA, max_bytes,
+        NULL, NULL, NULL, out);
+}
+
+static void data_close_v2(
+    void *user, scxml_data_resource_v2 *resource_value) {
+    scxml_chttp_resource *resource = (scxml_chttp_resource *)user;
+    scxml_chttp_resource_impl *impl = resource != NULL
+        ? (scxml_chttp_resource_impl *)resource->impl : NULL;
+    if (impl == NULL || resource_value == NULL || !impl->raw_profile ||
+        impl->active != SCXML_CHTTP_ACTIVE_DATA ||
+        resource_value->lease != impl)
+        return;
     release_active(impl);
     memset(resource_value, 0, sizeof(*resource_value));
 }
@@ -414,7 +500,7 @@ static scxml_resource_status text_open(
     return acquire_response(
         (scxml_chttp_resource_impl *)resource->impl,
         uri, uri_size, SCXML_CHTTP_RESOURCE_TEXT, max_bytes,
-        NULL, out, NULL);
+        NULL, out, NULL, NULL);
 }
 
 static void text_close(void *user, scxml_text_resource *resource_value) {
@@ -435,6 +521,12 @@ static const scxml_data_resource_adapter_v1 data_adapter = {
     .open = data_open,
     .close = data_close};
 
+static const scxml_data_resource_adapter_v2 data_adapter_v2 = {
+    .abi_version = SCXML_DATA_RESOURCE_ADAPTER_ABI_V2,
+    .struct_size = sizeof(scxml_data_resource_adapter_v2),
+    .open = data_open_v2,
+    .close = data_close_v2};
+
 static const scxml_text_resource_adapter_v1 text_adapter = {
     .abi_version = SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1,
     .struct_size = sizeof(scxml_text_resource_adapter_v1),
@@ -445,7 +537,7 @@ scxml_status scxml_chttp_resource_init(
     scxml_chttp_resource *resource,
     const scxml_chttp_resource_config_v1 *config) {
     scxml_chttp_resource_impl *impl;
-    if (resource == NULL || resource->impl != NULL || !config_valid(config))
+    if (resource == NULL || resource->impl != NULL || !config_v1_valid(config))
         return SCXML_INVALID_ARGUMENT;
     impl = (scxml_chttp_resource_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return SCXML_ALLOCATION_FAILED;
@@ -455,9 +547,45 @@ scxml_status scxml_chttp_resource_init(
     return SCXML_OK;
 }
 
+scxml_status scxml_chttp_resource_init_v2(
+    scxml_chttp_resource *resource,
+    const scxml_chttp_resource_config_v2 *config) {
+    scxml_chttp_resource_impl *impl;
+    if (resource == NULL || resource->impl != NULL || !config_v2_valid(config))
+        return SCXML_INVALID_ARGUMENT;
+    impl = (scxml_chttp_resource_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL) return SCXML_ALLOCATION_FAILED;
+    impl->config = (scxml_chttp_resource_config_v1){
+        .abi_version = SCXML_CHTTP_RESOURCE_CONFIG_ABI_V1,
+        .struct_size = sizeof(scxml_chttp_resource_config_v1),
+        .client = config->client,
+        .resolve = NULL,
+        .resolver_user = config->resolver_user,
+        .timeout_ms = config->timeout_ms,
+        .max_connection_uri_bytes = config->max_connection_uri_bytes,
+        .max_authority_bytes = config->max_authority_bytes,
+        .max_target_bytes = config->max_target_bytes,
+        .max_media_type_bytes = config->max_media_type_bytes,
+        .max_response_body_bytes = config->max_response_body_bytes};
+    impl->resolve_v2 = config->resolve;
+    impl->raw_profile = true;
+    impl->transport = production_transport;
+    resource->impl = impl;
+    return SCXML_OK;
+}
+
 const scxml_data_resource_adapter_v1 *
 scxml_chttp_resource_data_adapter(const scxml_chttp_resource *resource) {
-    return resource != NULL && resource->impl != NULL ? &data_adapter : NULL;
+    const scxml_chttp_resource_impl *impl = resource != NULL
+        ? (const scxml_chttp_resource_impl *)resource->impl : NULL;
+    return impl != NULL && !impl->raw_profile ? &data_adapter : NULL;
+}
+
+const scxml_data_resource_adapter_v2 *
+scxml_chttp_resource_data_adapter_v2(const scxml_chttp_resource *resource) {
+    const scxml_chttp_resource_impl *impl = resource != NULL
+        ? (const scxml_chttp_resource_impl *)resource->impl : NULL;
+    return impl != NULL && impl->raw_profile ? &data_adapter_v2 : NULL;
 }
 
 const scxml_text_resource_adapter_v1 *

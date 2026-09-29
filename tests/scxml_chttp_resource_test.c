@@ -39,6 +39,7 @@ typedef struct resource_probe {
     bool replace_decoder_after_resolve;
     scxml_resource_status decoder_open_status;
     bool publish_invalid_reader;
+    DataBindFormat raw_format;
 } resource_probe;
 
 static cserde_status int_reader_next(void *context, cserde_token *out) {
@@ -127,6 +128,26 @@ static scxml_resource_status probe_resolve(
     return SCXML_RESOURCE_OK;
 }
 
+static scxml_resource_status probe_resolve_v2(
+    void *user, const char *uri, size_t uri_size,
+    scxml_chttp_resource_kind kind,
+    scxml_chttp_resolution_v1 *out_resolution,
+    DataBindFormat *out_format) {
+    resource_probe *probe = (resource_probe *)user;
+    (void)uri;
+    (void)uri_size;
+    if (probe == NULL || out_resolution == NULL || out_format == NULL ||
+        (kind != SCXML_CHTTP_RESOURCE_DATA &&
+         kind != SCXML_CHTTP_RESOURCE_TEXT))
+        return SCXML_RESOURCE_FAILED;
+    ++probe->resolve_calls;
+    if (probe->resolve_status != SCXML_RESOURCE_OK)
+        return probe->resolve_status;
+    *out_resolution = probe->resolution;
+    *out_format = probe->raw_format;
+    return SCXML_RESOURCE_OK;
+}
+
 static int probe_get(
     void *user, chttp_client *client, const chttp_options *options,
     chttp_response *out_response, chttp_error *out_error) {
@@ -184,7 +205,8 @@ static resource_probe default_probe(void) {
         .response_status = 200u,
         .response_media_type = "application/json",
         .response_body = body,
-        .response_body_size = sizeof(body) - 1u};
+        .response_body_size = sizeof(body) - 1u,
+        .raw_format = DATA_BIND_FORMAT_JSON};
     probe.resolution = (scxml_chttp_resolution_v1){
         .abi_version = SCXML_CHTTP_RESOLUTION_ABI_V1,
         .struct_size = sizeof(scxml_chttp_resolution_v1),
@@ -219,6 +241,24 @@ static scxml_chttp_resource_config_v1 default_config(resource_probe *probe) {
         .max_response_body_bytes = 32u};
 }
 
+static scxml_chttp_resource_config_v2 default_config_v2(
+    resource_probe *probe) {
+    static chttp_client borrowed_client;
+    borrowed_client.impl = &borrowed_client;
+    return (scxml_chttp_resource_config_v2){
+        .abi_version = SCXML_CHTTP_RESOURCE_CONFIG_ABI_V2,
+        .struct_size = sizeof(scxml_chttp_resource_config_v2),
+        .client = &borrowed_client,
+        .resolve = probe_resolve_v2,
+        .resolver_user = probe,
+        .timeout_ms = 250u,
+        .max_connection_uri_bytes = 64u,
+        .max_authority_bytes = 64u,
+        .max_target_bytes = 128u,
+        .max_media_type_bytes = 64u,
+        .max_response_body_bytes = 32u};
+}
+
 static void init_with_probe(
     scxml_chttp_resource *resource, resource_probe *probe) {
     const scxml_chttp_resource_config_v1 config = default_config(probe);
@@ -227,6 +267,52 @@ static void init_with_probe(
                     resource, &probe_transport, probe),
                 SCXML_OK);
 }
+
+static void init_with_probe_v2(
+    scxml_chttp_resource *resource, resource_probe *probe) {
+    const scxml_chttp_resource_config_v2 config = default_config_v2(probe);
+    check_equal(scxml_chttp_resource_init_v2(resource, &config), SCXML_OK);
+    check_equal(scxml_chttp_resource_set_transport_for_test(
+                    resource, &probe_transport, probe),
+                SCXML_OK);
+}
+
+Struct(chttp_session_data,
+    (int, count)
+);
+
+static const cmeta_type_traits chttp_session_data_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
+static const cmeta_type_desc chttp_session_data_type = {
+    .name = "chttp_session_data",
+    .size = sizeof(chttp_session_data),
+    .align = _Alignof(chttp_session_data),
+    .kind = CMETA_T_OBJECT,
+    .traits = &chttp_session_data_traits
+};
+
+static const cmeta_data_field_desc chttp_session_data_fields[] = {{
+    "test.chttp.session.count", "count",
+    offsetof(chttp_session_data, count), &cmeta_data_int
+}};
+
+static const cmeta_data_struct_shape chttp_session_data_shape = {
+    .layout = StructMeta(chttp_session_data),
+    .fields = chttp_session_data_fields,
+    .field_count = 1u
+};
+
+static const cmeta_data_desc chttp_session_data_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.chttp.session.data",
+    .display_name = "CHTTP session data",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &chttp_session_data_type,
+    .shape = &chttp_session_data_shape
+};
 
 static native_io_backend_kind loopback_backend(void) {
 #if defined(_WIN32)
@@ -616,6 +702,133 @@ spec("TurboSCXML optional CHTTP resource adapter") {
         check_equal(probe.decoder_open_calls, 1u);
         adapter->close(&resource, &data);
         check_equal(probe.decoder_close_calls, 1u);
+        check_equal(scxml_chttp_resource_destroy(&resource), SCXML_OK);
+    }
+
+    it("returns raw HTTP bytes with an explicit DataBind format") {
+        resource_probe probe = default_probe();
+        scxml_chttp_resource resource = {0};
+        scxml_data_resource_v2 data = {0};
+        scxml_data_resource_v2 second = {0};
+        const scxml_data_resource_adapter_v2 *adapter;
+        init_with_probe_v2(&resource, &probe);
+        check_null(scxml_chttp_resource_data_adapter(&resource));
+        adapter = scxml_chttp_resource_data_adapter_v2(&resource);
+        check_not_null(adapter);
+
+        check_equal(adapter->open(
+                        &resource, "tenant:data", sizeof("tenant:data") - 1u,
+                        32u, &data),
+                    SCXML_RESOURCE_OK);
+        check_equal(data.data, probe.response_body);
+        check_equal(data.size, probe.response_body_size);
+        check_equal(data.format, DATA_BIND_FORMAT_JSON);
+        check_equal(probe.decoder_open_calls, 0u);
+        check_equal(probe.response_destroy_calls, 0u);
+        check_equal(adapter->open(
+                        &resource, "tenant:second",
+                        sizeof("tenant:second") - 1u, 32u, &second),
+                    SCXML_RESOURCE_FAILED);
+        check_equal(probe.get_calls, 1u);
+        check_equal(scxml_chttp_resource_destroy(&resource),
+                    SCXML_INVALID_ARGUMENT);
+
+        adapter->close(&resource, &data);
+        check_equal(probe.decoder_close_calls, 0u);
+        check_equal(probe.response_destroy_calls, 1u);
+        adapter->close(&resource, &data);
+        check_equal(probe.response_destroy_calls, 1u);
+        check_equal(scxml_chttp_resource_destroy(&resource), SCXML_OK);
+    }
+
+    it("rejects invalid raw formats and caller body overflow explicitly") {
+        static const char larger[] = "77";
+        resource_probe probe = default_probe();
+        scxml_chttp_resource resource = {0};
+        scxml_data_resource_v2 data = {0};
+        const scxml_data_resource_adapter_v2 *adapter;
+        init_with_probe_v2(&resource, &probe);
+        adapter = scxml_chttp_resource_data_adapter_v2(&resource);
+
+        probe.raw_format = (DataBindFormat)999;
+        check_equal(adapter->open(
+                        &resource, "tenant:data", sizeof("tenant:data") - 1u,
+                        32u, &data),
+                    SCXML_RESOURCE_DENIED);
+        check_equal(probe.get_calls, 0u);
+
+        probe.raw_format = DATA_BIND_FORMAT_JSON;
+        probe.response_body = larger;
+        probe.response_body_size = sizeof(larger) - 1u;
+        check_equal(adapter->open(
+                        &resource, "tenant:data", sizeof("tenant:data") - 1u,
+                        1u, &data),
+                    SCXML_RESOURCE_LIMIT_EXCEEDED);
+        check_equal(probe.get_calls, 1u);
+        check_equal(probe.response_destroy_calls, 1u);
+        check_equal(scxml_chttp_resource_destroy(&resource), SCXML_OK);
+    }
+
+    it("qualifies CHTTP raw JSON through DataBind into CMeta state") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' binding='early' initial='active'>"
+            "<datamodel><data id='count' src='tenant:data'/></datamodel>"
+            "<state id='active'><transition cond='count == 7' "
+            "target='done'/><transition target='failed'/></state>"
+            "<final id='done'/><state id='failed'/></scxml>";
+        resource_probe probe = default_probe();
+        scxml_chttp_resource resource = {0};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        cflow_statechart_instance_stats stats = {0};
+        const scxml_cmeta_compile_options_v1 compile_options =
+            scxml_cmeta_default_compile_options(&chttp_session_data_desc);
+        const chttp_session_data initial = {0};
+        scxml_cmeta_session_options_v5 data_options = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V5,
+            .struct_size = sizeof(data_options),
+            .initial_state = &initial,
+            .data_resource_user = &resource,
+            .data_bind_workspace_bytes = 16384u,
+            .max_data_depth = 8u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
+            .max_data_buffer_bytes = 1024u,
+            .max_data_resource_bytes = 32u};
+        scxml_session_config session_config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+
+        init_with_probe_v2(&resource, &probe);
+        data_options.data_resources =
+            scxml_chttp_resource_data_adapter_v2(&resource);
+        check_not_null(data_options.data_resources);
+        check_equal(scxml_compile_cmeta(
+                        &program, source, strlen(source), NULL,
+                        &compile_options, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init_cmeta_v5(
+                        &session, &session_config, &data_options),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(probe.decoder_open_calls, 0u);
+        check_equal(probe.decoder_close_calls, 0u);
+        check_equal(probe.response_destroy_calls, 1u);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
         check_equal(scxml_chttp_resource_destroy(&resource), SCXML_OK);
     }
 

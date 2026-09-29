@@ -12,6 +12,7 @@ extern "C" {
 #endif
 
 #define SCXML_CHTTP_RESOURCE_CONFIG_ABI_V1 1u
+#define SCXML_CHTTP_RESOURCE_CONFIG_ABI_V2 2u
 #define SCXML_CHTTP_RESOLUTION_ABI_V1 1u
 #define SCXML_CHTTP_DATA_DECODER_ABI_V1 1u
 
@@ -42,12 +43,11 @@ typedef struct scxml_chttp_resolution_v1 {
 } scxml_chttp_resolution_v1;
 
 /**
- * Decode one bounded HTTP body into an adapter-owned CSerde reader.
+ * Compatibility-only decoder for the legacy V1 resource profile.
  *
- * Body bytes and `expected` are borrowed through `open`. A successful open is
- * paired with exactly one close, including when the returned reader violates
- * its READY contract. Decoder operations are copied; `user` remains borrowed
- * until the matching close returns.
+ * New CHTTP resource providers should use config/resolver V2 so the provider
+ * returns raw response bytes plus an explicit DataBindFormat and never owns a
+ * CSerde reader or observes a CMeta destination descriptor.
  */
 typedef struct scxml_chttp_data_decoder_v1 {
     uint32_t abi_version;
@@ -75,6 +75,19 @@ typedef scxml_resource_status (*scxml_chttp_resolve_fn)(
     scxml_chttp_resolution_v1 *out_resolution,
     const scxml_chttp_data_decoder_v1 **out_decoder,
     void **out_decoder_user);
+
+/**
+ * Canonical resolver for CHTTP resource V2.
+ *
+ * For DATA requests, `out_format` must receive one explicit DataBindFormat.
+ * For TEXT requests the format result is ignored. No MIME/extension inference,
+ * parser registry lookup or fallback occurs in TurboSCXML.
+ */
+typedef scxml_resource_status (*scxml_chttp_resolve_v2_fn)(
+    void *user, const char *uri, size_t uri_size,
+    scxml_chttp_resource_kind kind,
+    scxml_chttp_resolution_v1 *out_resolution,
+    DataBindFormat *out_format);
 
 /**
  * Fixed policy for one single-owner blocking CHTTP adapter.
@@ -105,22 +118,56 @@ typedef struct scxml_chttp_resource_config_v1 {
     size_t max_response_body_bytes;
 } scxml_chttp_resource_config_v1;
 
+/**
+ * Canonical V2 policy. Limits and client ownership match V1; only resolver
+ * semantics change. DATA resolution selects DataBindFormat explicitly and the
+ * returned generic adapter exposes response bytes without a decoder layer.
+ */
+typedef struct scxml_chttp_resource_config_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    chttp_client *client;
+    scxml_chttp_resolve_v2_fn resolve;
+    void *resolver_user;
+    uint32_t timeout_ms;
+    size_t max_connection_uri_bytes;
+    size_t max_authority_bytes;
+    size_t max_target_bytes;
+    size_t max_media_type_bytes;
+    size_t max_response_body_bytes;
+} scxml_chttp_resource_config_v2;
+
 /** Opaque single-owner adapter. Zero initialization is required. */
 typedef struct scxml_chttp_resource {
     void *impl;
 } scxml_chttp_resource;
 
-/** Initialize without taking ownership of the configured CHTTP client. */
+/**
+ * Initialize the legacy V1 decoder profile without taking ownership of the
+ * configured CHTTP client.
+ */
 scxml_status scxml_chttp_resource_init(
     scxml_chttp_resource *resource,
     const scxml_chttp_resource_config_v1 *config);
 
 /**
- * Return the generic `<data src>` adapter. Pass `resource` as its user value.
- * The returned operations are immutable and process-lifetime stable.
+ * Initialize the canonical V2 raw-resource profile without taking ownership of
+ * the configured CHTTP client.
  */
+scxml_status scxml_chttp_resource_init_v2(
+    scxml_chttp_resource *resource,
+    const scxml_chttp_resource_config_v2 *config);
+
+/** Return the compatibility V1 CSerde-returning data adapter. */
 const scxml_data_resource_adapter_v1 *
 scxml_chttp_resource_data_adapter(const scxml_chttp_resource *resource);
+
+/**
+ * Return the canonical V2 raw-bytes + DataBindFormat data adapter.
+ * Pass `resource` as its user value.
+ */
+const scxml_data_resource_adapter_v2 *
+scxml_chttp_resource_data_adapter_v2(const scxml_chttp_resource *resource);
 
 /**
  * Return the generic compile-time text adapter. Pass `resource` as its user
