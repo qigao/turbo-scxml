@@ -121,7 +121,12 @@ static salts_xml_location input_location_at(
     salts_xml_location location = {offset, 1u, 1u};
     size_t index;
     for (index = 0u; index < offset; ++index) {
-        if (input[index] == '\n') {
+        if (input[index] == '\r') {
+            if (location.line != UINT32_MAX) ++location.line;
+            location.column = 1u;
+            if (index + 1u < offset && input[index + 1u] == '\n')
+                ++index;
+        } else if (input[index] == '\n') {
             if (location.line != UINT32_MAX) ++location.line;
             location.column = 1u;
         } else if (location.column != UINT32_MAX) {
@@ -135,6 +140,7 @@ static vxml_status validate_xml_characters(
     const char *input, size_t size, vxml_diagnostic *diagnostic) {
     salts_xml_location location = {0u, 1u, 1u};
     size_t cursor = 0u;
+    bool previous_was_cr = false;
     while (cursor < size) {
         const size_t start = cursor;
         const salts_xml_location codepoint_location = location;
@@ -150,11 +156,18 @@ static vxml_status validate_xml_characters(
                 "VoiceXML input contains an invalid XML character");
         }
         location.byte_offset = cursor;
-        if (codepoint == 0xau) {
+        if (codepoint == 0xdu) {
             if (location.line != UINT32_MAX) ++location.line;
             location.column = 1u;
+            previous_was_cr = true;
+        } else if (codepoint == 0xau) {
+            if (!previous_was_cr && location.line != UINT32_MAX)
+                ++location.line;
+            location.column = 1u;
+            previous_was_cr = false;
         } else {
             const size_t width = cursor - start;
+            previous_was_cr = false;
             if (width >= UINT32_MAX ||
                 location.column > UINT32_MAX - (uint32_t)width)
                 location.column = UINT32_MAX;
