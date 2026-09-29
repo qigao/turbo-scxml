@@ -2,62 +2,105 @@
 
 ## Scope
 
-The CMeta compiler accepts empty foreign-namespace executable elements when a
-matching action is explicitly registered. A registration is keyed by exact
-namespace URI and local name and binds one immutable `cmeta_callable` plus an
-ordered list of unqualified XML attributes containing its argument expressions.
+TurboSCXML supports compile-scoped foreign-namespace executable elements for
+the CMeta data model. SCXML owns XML element identity, attribute-expression
+binding, lifecycle and `error.execution` behavior. CMeta owns reflected
+function semantics. Exact callable execution remains a separate admitted
+representation.
 
-Custom elements remain illegal outside executable-content positions. Unknown
-foreign elements, nested content, namespaced argument attributes, missing or
-extra arguments, duplicate registrations, and unsupported callable signatures
-fail compilation.
+## Canonical FunctionDesc-first contract
 
-## Public contract
+New code uses `scxml_compile_cmeta_v3()` with
+`scxml_cmeta_custom_action_v2` rows:
 
-`scxml_compile_cmeta_v2()` receives a versioned provider containing the V1
-expression settings and a bounded action registration array. Each row contains:
+- exact namespace URI and local name identify the XML element;
+- `cmeta_function_desc` is the sole semantic source for parameter names,
+  order, types, directions, effects and properties;
+- `cmeta_function_abi_desc` supplies the exact reflected C ABI contract;
+- `cmeta_callable` supplies the finite exact execution adapter.
 
-- exact namespace URI and local name views;
-- a `cmeta_callable` copied and bound into the compiled program;
-- `parameter_names`, in callable-signature order.
+The caller does **not** repeat a `parameter_names[]` array or parameter count.
+During compilation TurboSCXML validates that FunctionDesc, ABI and callable
+describe the same finite scalar shape. Only IN parameters are admitted by this
+profile because XML attributes are input expressions, not output storage.
 
-The initial profile supports CMeta value callables whose parameters and return
-type are built-in scalar descriptors representable by the expression VM.
-Callable return values are intentionally discarded. Failure of
-`cmeta_callable_invoke()` raises `error.execution`; a successful call continues
-the executable block.
+V1 custom-action rows and `scxml_compile_cmeta_v2()` remain compatibility
+surfaces. They do not define the canonical semantic source for new code.
 
-## Ownership, lifetime, and execution
+## Compile-time lowering
 
-- Provider rows and strings are borrowed only during compilation.
-- The bound callable, including inline capture bytes, is copied into owned
-  program IR and remains immutable until program destruction.
-- Argument programs are owned by the program and evaluated against the staged
-  state on the session SerialExecutor.
-- Argument and return scratch is stack-local, aligned, bounded, and never
-  retained by TurboSCXML. A callable that retains an argument pointer violates
-  the registration contract.
-- No global registry or mutable shared lookup table is introduced.
+The V3 provider is adapted only for the duration of compilation:
 
-The callable's CMeta effects/properties remain descriptive metadata. SCXML
-marks the containing native executable as stateful and fallible because an
-adapter callable may perform host work or reject invocation.
+```text
+scxml_cmeta_custom_action_v2
+        |
+        +--> cmeta_function_desc validation
+        +--> cmeta_function_abi_desc validation
+        +--> exact callable bind/signature validation
+        |
+        v
+FunctionDesc parameter names/types
+        |
+        v
+XML attribute -> parameter expression programs
+        |
+        v
+immutable Program
+  - bound callable
+  - compiled argument expressions
+  - concrete parameter types
+```
+
+The compile-scoped compatibility rows are freed before
+`scxml_compile_cmeta_v3()` returns. Runtime execution never walks the
+FunctionDesc, ABI descriptor or registration table.
+
+## CFlow projection boundary
+
+Salts 1.8.3 exposes `cflow_function_projection_admit()` for reflected
+functions mapped to specific CFlow dataflow operators. That API currently
+admits proven operator shapes such as value transforms; an SCXML executable
+action is not implicitly a MAP/FILTER/REDUCE operator.
+
+TurboSCXML therefore does **not** invent a fake CFlow operator mapping merely
+to claim projection use. FunctionDesc-first semantic admission and exact
+callable execution are landed first. A later slice may store a CFlow execution
+projection when Salts exposes an action-compatible admitted shape. CFlow
+remains independent of XML and SCXML metadata.
+
+## Ownership and lifetime
+
+- FunctionDesc/ABI descriptors and callable code are borrowed from their
+  provider through Program lifetime.
+- Provider rows and XML-name strings are borrowed only during compilation.
+- The Program copies the bound callable and owns compiled argument programs.
+- Argument/return scratch is stack-local, bounded and never retained by
+  TurboSCXML.
+- A module/plugin provider must remain loaded until every Program and active
+  Session using its descriptors/callable has quiesced and been destroyed.
 
 ## Validation
 
-Compilation rejects:
+V3 compilation rejects before Program publication:
 
-- invalid V2 ABI/shape or count/pointer combinations;
-- empty or duplicate action keys;
-- invalid/unbound callables or generator protocols;
-- unsupported parameter/return descriptors;
-- duplicate/empty parameter names or parameter count mismatch;
-- unregistered foreign executable elements;
-- child nodes and attributes not declared by the registration.
+- invalid row size, namespace/local-name or duplicate action key;
+- invalid FunctionDesc or ABI descriptor;
+- ABI/function semantic mismatch;
+- unbound/unsupported callable protocol;
+- callable/function return or parameter type mismatch;
+- unknown, OUT or INOUT parameter direction;
+- duplicate/empty reflected parameter names;
+- unsupported scalar shape;
+- missing, extra, qualified or empty XML argument attributes.
 
 ## Verification
 
-Tests cover a successful scalar call, staged expression evaluation, use inside
-`if`/`foreach`/`finalize`, unregistered elements, malformed arguments and child
-content, and duplicate registrations. The complete preset regression preserves
-the existing executable-content and lifecycle behavior.
+Tests cover:
+
+- a successful ordinary FunctionDesc-first custom action without duplicated
+  parameter metadata;
+- compiled expression evaluation and normal Program execution;
+- OUT-direction rejection;
+- reflected/callable type mismatch rejection;
+- ABI/function mismatch rejection;
+- the existing V1/V2 compatibility path and full SCXML regression suite.

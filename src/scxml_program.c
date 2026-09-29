@@ -54,6 +54,25 @@ scxml_cmeta_default_compile_options_v2(const cmeta_data_desc *root) {
     return options;
 }
 
+scxml_cmeta_compile_options_v3
+scxml_cmeta_default_compile_options_v3(const cmeta_data_desc *root) {
+    const scxml_cmeta_compile_options_v1 base =
+        scxml_cmeta_default_compile_options(root);
+    const scxml_cmeta_compile_options_v3 options = {
+        .abi_version = SCXML_CMETA_COMPILE_OPTIONS_ABI_V3,
+        .struct_size = sizeof(scxml_cmeta_compile_options_v3),
+        .root = base.root,
+        .max_source_bytes = base.max_source_bytes,
+        .max_instructions = base.max_instructions,
+        .max_operands = base.max_operands,
+        .max_expression_depth = base.max_expression_depth,
+        .max_path_depth = base.max_path_depth,
+        .max_literal_bytes = base.max_literal_bytes,
+        .max_string_bytes = base.max_string_bytes,
+        .max_iterations = base.max_iterations};
+    return options;
+}
+
 scxml_quickjs_compile_options_v1
 scxml_quickjs_default_compile_options(const cmeta_data_desc *root) {
     return scxml_quickjs_default_compile_options_impl(root);
@@ -1121,6 +1140,186 @@ scxml_status scxml_compile_cmeta_v2(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
         options->actions, options->action_count, NULL, diagnostic);
+}
+
+
+static bool custom_action_function_row_valid(
+    const scxml_cmeta_custom_action_v2 *action,
+    const scxml_cmeta_custom_action_v2 *prior_actions,
+    size_t prior_count,
+    cmeta_callable *out_bound) {
+    cmeta_callable bound;
+    const cmeta_sig_desc *signature;
+    size_t parameter;
+    size_t prior;
+
+    if (action == NULL || action->struct_size < sizeof(*action) ||
+        action->namespace_uri == NULL || action->namespace_uri_size == 0u ||
+        action->local_name == NULL || action->local_name_size == 0u ||
+        !cmeta_function_desc_valid(action->function) ||
+        !cmeta_function_abi_desc_valid(action->abi) ||
+        action->abi->function == NULL ||
+        !cmeta_function_desc_equal(action->function, action->abi->function) ||
+        !cmeta_callable_bind(action->callable, &bound) ||
+        (signature = cmeta_callable_signature(bound)) == NULL ||
+        signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
+        signature->param_count != action->function->param_count ||
+        action->abi->param_count != action->function->param_count ||
+        bound.meta.effects != action->function->effects ||
+        bound.meta.properties != action->function->properties ||
+        !cmeta_type_equal(signature->return_type,
+                          action->function->return_type) ||
+        !cmeta_abi_carrier_matches_type(
+            action->abi->return_carrier, action->function->return_type) ||
+        !custom_action_scalar_type_supported(action->function->return_type))
+        return false;
+
+    for (parameter = 0u; parameter < action->function->param_count;
+         ++parameter) {
+        const cmeta_param_desc *param =
+            cmeta_function_param(action->function, parameter);
+        if (param == NULL || param->name == NULL || param->name[0] == '\0' ||
+            (param->flags & CMETA_PARAM_DIRECTION_MASK) != CMETA_PARAM_IN ||
+            !custom_action_scalar_type_supported(param->type) ||
+            !cmeta_type_equal(param->type, signature->params[parameter]) ||
+            !cmeta_abi_carrier_matches_type(
+                cmeta_function_param_abi(action->abi, parameter),
+                param->type))
+            return false;
+        for (prior = 0u; prior < parameter; ++prior) {
+            const cmeta_param_desc *earlier =
+                cmeta_function_param(action->function, prior);
+            if (earlier != NULL && strcmp(param->name, earlier->name) == 0)
+                return false;
+        }
+    }
+
+    for (prior = 0u; prior < prior_count; ++prior) {
+        const scxml_cmeta_custom_action_v2 *other = &prior_actions[prior];
+        if (other->namespace_uri_size == action->namespace_uri_size &&
+            other->local_name_size == action->local_name_size &&
+            memcmp(other->namespace_uri, action->namespace_uri,
+                   action->namespace_uri_size) == 0 &&
+            memcmp(other->local_name, action->local_name,
+                   action->local_name_size) == 0)
+            return false;
+    }
+
+    if (out_bound != NULL) *out_bound = bound;
+    return true;
+}
+
+scxml_status scxml_compile_cmeta_v3(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v3 *options,
+    scxml_diagnostic *diagnostic) {
+    scxml_expr_limits expression_limits;
+    scxml_cmeta_custom_action_v1 *adapted = NULL;
+    const char **parameter_names = NULL;
+    size_t total_parameters = 0u;
+    size_t parameter_cursor = 0u;
+    size_t index;
+    scxml_status status = SCXML_INVALID_ARGUMENT;
+
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_COMPILE_OPTIONS_ABI_V3 ||
+        options->struct_size < sizeof(*options) ||
+        !cmeta_data_desc_valid(options->root) ||
+        options->root->kind != CMETA_DATA_STRUCT ||
+        options->root->storage_type == NULL ||
+        !cmeta_type_desc_valid(options->root->storage_type) ||
+        !cmeta_state_type_supported(options->root->storage_type) ||
+        (options->action_count != 0u && options->actions == NULL)) {
+        goto invalid;
+    }
+
+    expression_limits = (scxml_expr_limits){
+        options->max_source_bytes, options->max_instructions,
+        options->max_operands, options->max_expression_depth,
+        options->max_path_depth, options->max_literal_bytes,
+        options->max_string_bytes};
+    if (!scxml_expr_limits_valid(&expression_limits) ||
+        options->max_iterations == 0u)
+        goto invalid;
+
+    for (index = 0u; index < options->action_count; ++index) {
+        const scxml_cmeta_custom_action_v2 *action = &options->actions[index];
+        if (!custom_action_function_row_valid(
+                action, options->actions, index, NULL) ||
+            action->function->param_count > SIZE_MAX - total_parameters)
+            goto invalid;
+        total_parameters += action->function->param_count;
+    }
+
+    if (options->action_count != 0u) {
+        adapted = (scxml_cmeta_custom_action_v1 *)calloc(
+            options->action_count, sizeof(*adapted));
+        if (adapted == NULL) {
+            status = SCXML_ALLOCATION_FAILED;
+            goto fail;
+        }
+    }
+    if (total_parameters != 0u) {
+        parameter_names = (const char **)calloc(
+            total_parameters, sizeof(*parameter_names));
+        if (parameter_names == NULL) {
+            status = SCXML_ALLOCATION_FAILED;
+            goto fail;
+        }
+    }
+
+    for (index = 0u; index < options->action_count; ++index) {
+        const scxml_cmeta_custom_action_v2 *action = &options->actions[index];
+        cmeta_callable bound;
+        size_t parameter;
+        if (!custom_action_function_row_valid(
+                action, options->actions, index, &bound))
+            goto invalid;
+        adapted[index] = (scxml_cmeta_custom_action_v1){
+            .namespace_uri = action->namespace_uri,
+            .namespace_uri_size = action->namespace_uri_size,
+            .local_name = action->local_name,
+            .local_name_size = action->local_name_size,
+            .callable = bound,
+            .parameter_names = total_parameters != 0u
+                ? &parameter_names[parameter_cursor] : NULL,
+            .parameter_count = action->function->param_count};
+        for (parameter = 0u; parameter < action->function->param_count;
+             ++parameter) {
+            parameter_names[parameter_cursor++] =
+                cmeta_function_param(action->function, parameter)->name;
+        }
+    }
+
+    status = compile_scxml_model(
+        out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
+        options->root, &expression_limits, options->max_iterations,
+        adapted, options->action_count, NULL, diagnostic);
+    goto cleanup;
+
+invalid:
+    if (diagnostic != NULL) {
+        memset(diagnostic, 0, sizeof(*diagnostic));
+        diagnostic->status = SCXML_INVALID_ARGUMENT;
+        (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                       "%s", "invalid FunctionDesc-first CMeta compile provider");
+    }
+    status = SCXML_INVALID_ARGUMENT;
+    goto cleanup;
+
+fail:
+    if (diagnostic != NULL) {
+        memset(diagnostic, 0, sizeof(*diagnostic));
+        diagnostic->status = status;
+        (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                       "%s", "unable to allocate FunctionDesc custom action adapter");
+    }
+
+cleanup:
+    free(parameter_names);
+    free(adapted);
+    return status;
 }
 
 scxml_status scxml_program_compile_quickjs_model(
