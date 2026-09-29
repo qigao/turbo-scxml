@@ -3471,6 +3471,66 @@ spec("CCXML session") {
             ccxml_program_destroy(&program);
         }
 
+        it("discards a dialog-manager reservation when returned-ID writeback is refused") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            provider_probe upstream = {.quiescent = true};
+            datamodel_probe datamodel = {.reject_prepare = true};
+            dialog_manager_document_probe documents = {0};
+            dialog_manager_event_probe events = {0};
+            vxml_dialog_manager manager = {0};
+            vxml_dialog_manager_config_v1 manager_config =
+                vxml_dialog_manager_default_config_v1();
+            vxml_dialog_manager_stats manager_stats = {0};
+            ccxml_session_config session_config;
+            ccxml_event event = alerting_event();
+
+            manager_config.capacity = 1u;
+            manager_config.upstream = &provider_adapter;
+            manager_config.upstream_user = &upstream;
+            manager_config.documents = &dialog_manager_document_adapter;
+            manager_config.document_user = &documents;
+            manager_config.events = &dialog_manager_event_sink;
+            manager_config.event_user = &events;
+            check_equal(
+                vxml_dialog_manager_init(&manager, &manager_config),
+                VXML_DIALOG_MANAGER_OK);
+
+            check_equal(
+                compile_program(
+                    &program,
+                    "<dialogprepare dialogid='dialog.prepared' "
+                    "src=\"'app.vxml'\"/>"),
+                CCXML_OK);
+            session_config = (ccxml_session_config){
+                .program = &program,
+                .telephony = vxml_dialog_manager_ccxml_adapter(),
+                .telephony_user =
+                    vxml_dialog_manager_ccxml_user(&manager),
+                .datamodel = &datamodel_adapter,
+                .datamodel_user = &datamodel};
+            check_equal(
+                ccxml_session_init(&session, &session_config),
+                CCXML_OK);
+
+            check_equal(
+                ccxml_session_dispatch(&session, &event),
+                CCXML_ADAPTER_ERROR);
+            check_true(vxml_dialog_manager_get_stats(
+                &manager, &manager_stats));
+            check_equal(manager_stats.discarded_operations, UINT64_C(1));
+            check_equal(manager_stats.active, (size_t)0u);
+            check_equal(documents.open_calls, (size_t)0u);
+            check_equal(events.count, (size_t)0u);
+
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            check_true(vxml_dialog_manager_is_quiescent(&manager));
+            check_equal(
+                vxml_dialog_manager_destroy(&manager),
+                VXML_DIALOG_MANAGER_OK);
+            ccxml_program_destroy(&program);
+        }
+
         it("rolls back the provider reservation when writeback is refused") {
             ccxml_program program = {0};
             ccxml_session session = {0};
