@@ -2,7 +2,7 @@
 #define TURBO_VOICEXML_CHTTP_RESOURCE_H
 
 #include <scxml/chttp_resource.h>
-#include <voicexml/dialog_manager.h>
+#include <voicexml/resource.h>
 
 #include <stdbool.h>
 #include <stddef.h>
