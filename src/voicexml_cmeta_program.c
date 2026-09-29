@@ -1243,6 +1243,10 @@ static bool cmeta_allocate_rows(
     profile->location_candidate_count = candidate_count;
     profile->max_string_bytes = options->max_string_bytes;
     profile->max_conditional_depth = options->max_conditional_depth;
+    if (measurement->external_data_count != 0u) {
+        profile->max_data_bind_depth = options->max_data_bind_depth;
+        profile->max_data_bind_items = options->max_data_bind_items;
+    }
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
             options->semantic_data_count * sizeof(*profile->semantic_data));
