@@ -10,12 +10,15 @@
 
 typedef enum vxml_action_kind {
     VXML_ACTION_EXIT = 1,
-    VXML_ACTION_GOTO
+    VXML_ACTION_GOTO,
+    VXML_ACTION_GOTO_EXTERNAL
 } vxml_action_kind;
 
 typedef struct vxml_action_row {
     vxml_action_kind kind;
     size_t target_form;
+    const char *target_uri;
+    size_t target_uri_size;
 } vxml_action_row;
 
 typedef struct vxml_block_row {
@@ -49,6 +52,8 @@ struct vxml_session_impl {
     const vxml_program_impl *program;
     vxml_session_state state;
     vxml_status error;
+    const char *navigation_uri;
+    size_t navigation_uri_size;
     void *profile_data;
 };
 
@@ -73,5 +78,7 @@ struct vxml_program_impl {
 vxml_status vxml_session_init_profile(
     vxml_session *session, const vxml_program *program, const void *options);
 vxml_status vxml_session_start_literal(vxml_session_impl *impl);
+vxml_status vxml_session_start_literal_at(
+    vxml_session_impl *impl, size_t form_index);
 
 #endif /* TURBO_VOICEXML_INTERNAL_H */
