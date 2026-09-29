@@ -129,7 +129,7 @@ typedef struct vxml_dialog_manager_stats {
     size_t reserved;
     size_t pending;
     size_t prepared;
-    size_t terminal_pending;
+    size_t event_pending;
     uint64_t accepted_operations;
     uint64_t discarded_operations;
     uint64_t rejected_full;
