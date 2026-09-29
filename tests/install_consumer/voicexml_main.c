@@ -5,9 +5,13 @@
 int main(void) {
     static const char document[] =
         "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-        "<form id='main'><block><exit/></block></form></vxml>";
+        "<form id='main'><block>"
+        "<goto next='next.vxml#target'/>"
+        "</block></form></vxml>";
+    static const char expected[] = "next.vxml#target";
     vxml_program program = {0};
     vxml_session session = {0};
+    vxml_navigation_target target = {0};
     int result = 1;
 
     if (vxml_compile(document, strlen(document), NULL, &program, NULL) !=
@@ -15,9 +19,15 @@ int main(void) {
         goto cleanup;
     if (vxml_session_init(&session, &program) != VXML_OK)
         goto cleanup;
-    if (vxml_session_start(&session) != VXML_OK)
+    if (vxml_session_start_at_form(
+            &session, "main", sizeof("main") - 1u) != VXML_OK)
         goto cleanup;
-    if (vxml_session_get_state(&session) != VXML_SESSION_EXITED)
+    if (vxml_session_get_state(&session) != VXML_SESSION_NAVIGATING)
+        goto cleanup;
+    if (vxml_session_navigation(&session, &target) != VXML_OK)
+        goto cleanup;
+    if (target.uri_size != sizeof(expected) - 1u ||
+        memcmp(target.uri, expected, target.uri_size) != 0)
         goto cleanup;
     result = 0;
 
