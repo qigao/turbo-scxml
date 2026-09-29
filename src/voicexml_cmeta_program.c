@@ -1471,7 +1471,7 @@ static vxml_status cmeta_compile_external_data(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
     if (status != VXML_OK) return status;
-    if (!cmeta_ascii_ncname(decoded_name.view)) {
+    if (!cmeta_is_ncname(decoded_name.view)) {
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(name_attribute),
@@ -1548,8 +1548,7 @@ static vxml_status cmeta_compile_external_data(
     }
     requirements = data_bind_native_plan_requirements(out->plan);
     if (requirements == NULL ||
-        requirements->workspace_alignment == 0u ||
-        requirements->decode_bytes == 0u) {
+        requirements->workspace_alignment == 0u) {
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(node),
