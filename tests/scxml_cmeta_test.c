@@ -6092,8 +6092,20 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(scxml_compile_cmeta_v3(
                         &program, source, strlen(source), NULL,
                         &options, &diagnostic),
-                    SCXML_INVALID_ARGUMENT);
-        check_null(program.impl);
+                    SCXML_OK);
+        scxml_program_destroy(&program);
+
+        {
+            cmeta_function_desc mismatched_abi_function =
+                scxml_test_custom_action_function;
+            mismatched_abi_function.name = "different_semantic_function";
+            invalid_abi.function = &mismatched_abi_function;
+            check_equal(scxml_compile_cmeta_v3(
+                            &program, source, strlen(source), NULL,
+                            &options, &diagnostic),
+                        SCXML_INVALID_ARGUMENT);
+            check_null(program.impl);
+        }
     }
 
     it("invokes a registered foreign executable element through CMeta") {
