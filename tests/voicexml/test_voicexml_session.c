@@ -263,6 +263,93 @@ spec("VoiceXML session") {
             vxml_program_destroy(&program);
         }
 
+        it("yields a borrowed external goto target without performing document I/O") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block>"
+                "<goto next='dialogs/next.vxml#target'/>"
+                "</block></form></vxml>";
+            static const char expected[] = "dialogs/next.vxml#target";
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_navigation_target target = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            check_equal(vxml_session_init(&session, &program), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_NAVIGATING);
+            check_equal(
+                vxml_session_navigation(&session, &target), VXML_OK);
+            check_equal(target.uri_size, sizeof(expected) - 1u);
+            check_equal(target.uri, expected);
+            check_equal(
+                vxml_session_start(&session),
+                VXML_INVALID_STATE);
+            check_equal(vxml_session_close(&session), VXML_OK);
+            check_equal(
+                vxml_session_navigation(&session, &target),
+                VXML_CLOSED);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("starts a literal session at one named form for external fragment handoff") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><exit/></block></form>"
+                "<form id='second'><block>"
+                "<goto next='next.vxml'/>"
+                "</block></form></vxml>";
+            static const char expected[] = "next.vxml";
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_navigation_target target = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            check_equal(vxml_session_init(&session, &program), VXML_OK);
+            check_equal(
+                vxml_session_start_at_form(
+                    &session, "second", sizeof("second") - 1u),
+                VXML_OK);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_NAVIGATING);
+            check_equal(
+                vxml_session_navigation(&session, &target), VXML_OK);
+            check_equal(target.uri, expected);
+            check_equal(target.uri_size, sizeof(expected) - 1u);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("fails a start-at-form request when the compiled form ID is absent") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><exit/></block></form></vxml>";
+            vxml_program program = {0};
+            vxml_session session = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            check_equal(vxml_session_init(&session, &program), VXML_OK);
+            check_equal(
+                vxml_session_start_at_form(
+                    &session, "missing", sizeof("missing") - 1u),
+                VXML_INVALID_STRUCTURE);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_FAILED);
+            check_equal(
+                vxml_session_error(&session),
+                VXML_INVALID_STRUCTURE);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
         it("fails closed when a compiled goto graph is corrupted into a cycle") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
