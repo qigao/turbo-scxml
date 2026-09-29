@@ -109,8 +109,10 @@ static scxml_status compile_scxml_model(
     scxml_data_model data_model, const cmeta_data_desc *cmeta_root,
     const scxml_expr_limits *expression_limits,
     size_t cmeta_max_iterations,
-    const scxml_cmeta_custom_action_v1 *custom_actions,
-    size_t custom_action_count,
+    const scxml_cmeta_custom_action_v1 *legacy_custom_actions,
+    size_t legacy_custom_action_count,
+    const scxml_cmeta_custom_action_v2 *function_custom_actions,
+    size_t function_custom_action_count,
     size_t data_bind_max_depth, size_t data_bind_max_items,
     const scxml_quickjs_compile_options_v1 *quickjs_options,
     scxml_diagnostic *diagnostic) {
@@ -154,8 +156,11 @@ static scxml_status compile_scxml_model(
     build.diagnostic = diagnostic;
     build.data_model = data_model;
     build.cmeta_root = cmeta_root;
-    build.custom_action_registry = custom_actions;
-    build.custom_action_registry_count = custom_action_count;
+    build.legacy_custom_action_registry = legacy_custom_actions;
+    build.legacy_custom_action_registry_count = legacy_custom_action_count;
+    build.function_custom_action_registry = function_custom_actions;
+    build.function_custom_action_registry_count =
+        function_custom_action_count;
     build.max_iterations = cmeta_max_iterations;
     build.data_bind_max_depth = data_bind_max_depth;
     build.data_bind_max_items = data_bind_max_items;
@@ -874,6 +879,8 @@ static scxml_status compile_scxml_model(
     impl->custom_action_arguments = build.custom_action_arguments;
     impl->custom_action_argument_count =
         build.custom_action_argument_index;
+    impl->max_custom_action_arguments =
+        build.max_custom_action_arguments;
     impl->root_script_count = build.root_script_count;
     impl->supplemental_scope = build.supplemental_scope;
     impl->log_storage = build.log_storage;
@@ -1027,7 +1034,7 @@ scxml_status scxml_compile(
     scxml_diagnostic *diagnostic) {
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_NULL, NULL, NULL,
-        0u, NULL, 0u, 0u, 0u, NULL, diagnostic);
+        0u, NULL, 0u, NULL, 0u, 0u, 0u, NULL, diagnostic);
 }
 
 scxml_status scxml_compile_cmeta(
@@ -1076,7 +1083,7 @@ scxml_status scxml_compile_cmeta(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, max_iterations,
-        NULL, 0u, 0u, 0u, NULL, diagnostic);
+        NULL, 0u, NULL, 0u, 0u, 0u, NULL, diagnostic);
 }
 
 static bool custom_action_scalar_type_supported(
@@ -1105,6 +1112,7 @@ static bool custom_action_table_valid(
             (signature = cmeta_callable_signature(bound)) == NULL ||
             signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
             signature->param_count != action->parameter_count ||
+            action->parameter_count > SCXML_CUSTOM_ACTION_MAX_PARAMETERS ||
             !custom_action_scalar_type_supported(signature->return_type))
             return false;
         for (parameter = 0u;
@@ -1174,7 +1182,8 @@ scxml_status scxml_compile_cmeta_v2(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        options->actions, options->action_count, 0u, 0u, NULL, diagnostic);
+        options->actions, options->action_count, NULL, 0u,
+        0u, 0u, NULL, diagnostic);
 }
 
 
@@ -1191,6 +1200,8 @@ static bool custom_action_function_row_valid(
     if (action == NULL || action->struct_size < sizeof(*action) ||
         action->namespace_uri == NULL || action->namespace_uri_size == 0u ||
         action->local_name == NULL || action->local_name_size == 0u ||
+        action->function == NULL ||
+        action->function->param_count > SCXML_CUSTOM_ACTION_MAX_PARAMETERS ||
         cflow_function_action_projection_admit(
             action->function, action->abi, action->callable, &projection) !=
             CFLOW_FUNCTION_PROJECTION_OK ||
@@ -1237,12 +1248,7 @@ static scxml_status compile_cmeta_function_desc(
     size_t data_bind_max_depth, size_t data_bind_max_items,
     scxml_diagnostic *diagnostic) {
     scxml_expr_limits expression_limits;
-    scxml_cmeta_custom_action_v1 *adapted = NULL;
-    const char **parameter_names = NULL;
-    size_t total_parameters = 0u;
-    size_t parameter_cursor = 0u;
     size_t index;
-    scxml_status status = SCXML_INVALID_ARGUMENT;
 
     if (options == NULL ||
         options->abi_version != SCXML_CMETA_COMPILE_OPTIONS_ABI_V3 ||
@@ -1268,58 +1274,15 @@ static scxml_status compile_cmeta_function_desc(
     for (index = 0u; index < options->action_count; ++index) {
         const scxml_cmeta_custom_action_v2 *action = &options->actions[index];
         if (!custom_action_function_row_valid(
-                action, options->actions, index, NULL) ||
-            action->function->param_count > SIZE_MAX - total_parameters)
+                action, options->actions, index, NULL))
             goto invalid;
-        total_parameters += action->function->param_count;
     }
 
-    if (options->action_count != 0u) {
-        adapted = (scxml_cmeta_custom_action_v1 *)calloc(
-            options->action_count, sizeof(*adapted));
-        if (adapted == NULL) {
-            status = SCXML_ALLOCATION_FAILED;
-            goto fail;
-        }
-    }
-    if (total_parameters != 0u) {
-        parameter_names = (const char **)calloc(
-            total_parameters, sizeof(*parameter_names));
-        if (parameter_names == NULL) {
-            status = SCXML_ALLOCATION_FAILED;
-            goto fail;
-        }
-    }
-
-    for (index = 0u; index < options->action_count; ++index) {
-        const scxml_cmeta_custom_action_v2 *action = &options->actions[index];
-        cmeta_callable bound;
-        size_t parameter;
-        if (!custom_action_function_row_valid(
-                action, options->actions, index, &bound))
-            goto invalid;
-        adapted[index] = (scxml_cmeta_custom_action_v1){
-            .namespace_uri = action->namespace_uri,
-            .namespace_uri_size = action->namespace_uri_size,
-            .local_name = action->local_name,
-            .local_name_size = action->local_name_size,
-            .callable = bound,
-            .parameter_names = total_parameters != 0u
-                ? &parameter_names[parameter_cursor] : NULL,
-            .parameter_count = action->function->param_count};
-        for (parameter = 0u; parameter < action->function->param_count;
-             ++parameter) {
-            parameter_names[parameter_cursor++] =
-                cmeta_function_param(action->function, parameter)->name;
-        }
-    }
-
-    status = compile_scxml_model(
+    return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        adapted, options->action_count,
+        NULL, 0u, options->actions, options->action_count,
         data_bind_max_depth, data_bind_max_items, NULL, diagnostic);
-    goto cleanup;
 
 invalid:
     if (diagnostic != NULL) {
@@ -1328,21 +1291,7 @@ invalid:
         (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
                        "%s", "invalid FunctionDesc-first CMeta compile provider");
     }
-    status = SCXML_INVALID_ARGUMENT;
-    goto cleanup;
-
-fail:
-    if (diagnostic != NULL) {
-        memset(diagnostic, 0, sizeof(*diagnostic));
-        diagnostic->status = status;
-        (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
-                       "%s", "unable to allocate FunctionDesc custom action adapter");
-    }
-
-cleanup:
-    free(parameter_names);
-    free(adapted);
-    return status;
+    return SCXML_INVALID_ARGUMENT;
 }
 
 scxml_status scxml_compile_cmeta_v3(
@@ -1409,7 +1358,7 @@ scxml_status scxml_program_compile_quickjs_model(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        NULL, 0u, 0u, 0u, options, diagnostic);
+        NULL, 0u, NULL, 0u, 0u, 0u, options, diagnostic);
 }
 
 scxml_status scxml_compile_quickjs(
