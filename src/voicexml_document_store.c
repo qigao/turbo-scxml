@@ -18,6 +18,13 @@ typedef struct vxml_document_entry {
     vxml_program program;
 } vxml_document_entry;
 
+typedef struct vxml_document_borrow {
+    bool active;
+    uint32_t generation;
+    size_t entry_index;
+    uint32_t entry_generation;
+} vxml_document_borrow;
+
 typedef struct vxml_document_store_impl {
     char *application_uri;
     size_t application_uri_size;
@@ -35,6 +42,7 @@ typedef struct vxml_document_store_impl {
     vxml_dialog_document_adapter_v1 documents;
     void *document_user;
     vxml_document_entry *entries;
+    vxml_document_borrow *borrows;
 } vxml_document_store_impl;
 
 typedef struct uri_parts {
@@ -440,16 +448,66 @@ static bool make_room(
     }
 }
 
+static vxml_document_borrow *borrow_from_ref(
+    vxml_document_store_impl *impl,
+    vxml_document_ref ref) {
+    vxml_document_borrow *borrow;
+    if (impl == NULL ||
+        ref.borrow_slot == 0u ||
+        ref.borrow_slot > impl->capacity ||
+        ref.borrow_generation == 0u)
+        return NULL;
+    borrow = &impl->borrows[ref.borrow_slot - 1u];
+    return borrow->active &&
+           borrow->generation == ref.borrow_generation &&
+           borrow->entry_index + 1u == ref.slot &&
+           borrow->entry_generation == ref.generation
+        ? borrow : NULL;
+}
+
 static vxml_document_entry *entry_from_ref(
     vxml_document_store_impl *impl,
     vxml_document_ref ref) {
+    vxml_document_borrow *borrow = borrow_from_ref(impl, ref);
     vxml_document_entry *entry;
-    if (impl == NULL || ref.slot == 0u ||
+    if (borrow == NULL || ref.slot == 0u ||
         ref.slot > impl->capacity || ref.generation == 0u)
         return NULL;
     entry = &impl->entries[ref.slot - 1u];
-    return entry->occupied && entry->generation == ref.generation
+    return entry->occupied &&
+           entry->generation == ref.generation &&
+           borrow->entry_index == (size_t)(ref.slot - 1u)
         ? entry : NULL;
+}
+
+static vxml_document_store_status allocate_borrow(
+    vxml_document_store_impl *impl,
+    vxml_document_entry *entry,
+    vxml_document_ref *out_ref) {
+    size_t i;
+    size_t entry_index;
+    if (impl == NULL || entry == NULL || out_ref == NULL ||
+        !entry->occupied)
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    entry_index = (size_t)(entry - impl->entries);
+    for (i = 0u; i < impl->capacity; ++i) {
+        vxml_document_borrow *borrow = &impl->borrows[i];
+        if (borrow->active)
+            continue;
+        borrow->generation = next_generation(borrow->generation);
+        borrow->active = true;
+        borrow->entry_index = entry_index;
+        borrow->entry_generation = entry->generation;
+        ++entry->pins;
+        ++impl->active_borrows;
+        *out_ref = (vxml_document_ref){
+            .slot = (uint32_t)entry_index + 1u,
+            .generation = entry->generation,
+            .borrow_slot = (uint32_t)i + 1u,
+            .borrow_generation = borrow->generation};
+        return VXML_DOCUMENT_STORE_OK;
+    }
+    return VXML_DOCUMENT_STORE_FULL;
 }
 
 const char *vxml_document_store_status_string(
@@ -526,7 +584,11 @@ vxml_document_store_status vxml_document_store_init(
     }
     impl->entries = (vxml_document_entry *)calloc(
         config->capacity, sizeof(*impl->entries));
-    if (impl->entries == NULL) {
+    impl->borrows = (vxml_document_borrow *)calloc(
+        config->capacity, sizeof(*impl->borrows));
+    if (impl->entries == NULL || impl->borrows == NULL) {
+        free(impl->borrows);
+        free(impl->entries);
         free(normalized);
         free(impl);
         return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
@@ -603,7 +665,7 @@ vxml_document_store_status vxml_document_store_resolve(
     candidate = (char *)malloc(impl->max_uri_bytes + 1u);
     normalized = (char *)malloc(impl->max_uri_bytes + 1u);
     if (candidate == NULL || normalized == NULL) {
-        status = VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        status = VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
         goto done;
     }
 
@@ -701,12 +763,16 @@ vxml_document_store_status vxml_document_store_acquire(
 
     entry = find_entry(impl, canonical, canonical_size);
     if (entry != NULL) {
-        ++entry->pins;
-        ++impl->active_borrows;
+        vxml_document_store_status borrow_status =
+            allocate_borrow(impl, entry, out_ref);
+        if (borrow_status != VXML_DOCUMENT_STORE_OK) {
+            free(canonical);
+            error_set(out_error, borrow_status,
+                      VXML_DIALOG_MANAGER_OK, VXML_OK);
+            return borrow_status;
+        }
         entry->last_used = ++impl->clock;
         ++impl->hits;
-        out_ref->slot = (uint32_t)(entry - impl->entries) + 1u;
-        out_ref->generation = entry->generation;
         free(canonical);
         return VXML_DOCUMENT_STORE_OK;
     }
@@ -792,7 +858,7 @@ vxml_document_store_status vxml_document_store_acquire(
     slot_index = (size_t)(slot - impl->entries);
     slot->generation = next_generation(slot->generation);
     slot->occupied = true;
-    slot->pins = 1u;
+    slot->pins = 0u;
     slot->last_used = ++impl->clock;
     slot->allocation = allocation;
     slot->allocation_size = allocation_size;
@@ -802,9 +868,18 @@ vxml_document_store_status vxml_document_store_acquire(
     slot->source_size = source_size;
     slot->program = program;
     impl->cached_bytes += allocation_size;
-    ++impl->active_borrows;
-    out_ref->slot = (uint32_t)slot_index + 1u;
-    out_ref->generation = slot->generation;
+    {
+        const vxml_document_store_status borrow_status =
+            allocate_borrow(impl, slot, out_ref);
+        if (borrow_status != VXML_DOCUMENT_STORE_OK) {
+            entry_evict(impl, slot);
+            free(canonical);
+            error_set(out_error, borrow_status,
+                      VXML_DIALOG_MANAGER_OK, VXML_OK);
+            return borrow_status;
+        }
+    }
+    (void)slot_index;
     free(canonical);
     return VXML_DOCUMENT_STORE_OK;
 }
@@ -839,13 +914,17 @@ vxml_document_store_status vxml_document_store_release(
     vxml_document_entry *entry;
     if (impl == NULL || ref == NULL)
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
-    entry = entry_from_ref(impl, *ref);
-    if (entry == NULL || entry->pins == 0u)
-        return VXML_DOCUMENT_STORE_STALE;
-    --entry->pins;
-    if (impl->active_borrows != 0u)
-        --impl->active_borrows;
-    entry->last_used = ++impl->clock;
+    {
+        vxml_document_borrow *borrow = borrow_from_ref(impl, *ref);
+        entry = entry_from_ref(impl, *ref);
+        if (borrow == NULL || entry == NULL || entry->pins == 0u)
+            return VXML_DOCUMENT_STORE_STALE;
+        borrow->active = false;
+        --entry->pins;
+        if (impl->active_borrows != 0u)
+            --impl->active_borrows;
+        entry->last_used = ++impl->clock;
+    }
     *ref = (vxml_document_ref){0};
     return VXML_DOCUMENT_STORE_OK;
 }
@@ -907,6 +986,7 @@ vxml_document_store_status vxml_document_store_destroy(
     for (i = 0u; i < impl->capacity; ++i)
         if (impl->entries[i].occupied)
             entry_evict(impl, &impl->entries[i]);
+    free(impl->borrows);
     free(impl->entries);
     free(impl->application_uri);
     free(impl);
