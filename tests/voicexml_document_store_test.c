@@ -183,6 +183,15 @@ spec("VoiceXML bounded document store") {
         check_equal(fragment, "local");
 
         check_equal(
+            resolve_uri(
+                &store,
+                "https://voice.example",
+                "root.vxml",
+                uri, fragment, &resolved),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(uri, "https://voice.example/root.vxml");
+
+        check_equal(
             vxml_document_store_destroy(&store),
             VXML_DOCUMENT_STORE_OK);
     }
@@ -243,6 +252,54 @@ spec("VoiceXML bounded document store") {
         check_equal(stats.hits, UINT64_C(1));
         check_equal(stats.misses, UINT64_C(1));
         check_equal(stats.entries, (size_t)1u);
+
+        check_equal(
+            vxml_document_store_release(&store, &second),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("invalidates one released borrow without consuming a peer borrow") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_store store = {0};
+        vxml_document_ref first = {0};
+        vxml_document_ref second = {0};
+        vxml_document_ref stale_copy;
+        vxml_document_view view = {0};
+        vxml_document_store_stats stats = {0};
+        static const char uri[] = "https://voice.example/shared.vxml";
+
+        init_store(&store, &probe, 2u, 2048u);
+        check_equal(
+            vxml_document_store_acquire(
+                &store, uri, sizeof(uri) - 1u, &first, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store, uri, sizeof(uri) - 1u, &second, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        stale_copy = first;
+
+        check_equal(
+            vxml_document_store_release(&store, &first),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_view(&store, stale_copy, &view),
+            VXML_DOCUMENT_STORE_STALE);
+        check_equal(
+            vxml_document_store_release(&store, &stale_copy),
+            VXML_DOCUMENT_STORE_STALE);
+        check_equal(
+            vxml_document_store_view(&store, second, &view),
+            VXML_DOCUMENT_STORE_OK);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)1u);
 
         check_equal(
             vxml_document_store_release(&store, &second),
