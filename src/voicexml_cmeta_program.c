@@ -1403,6 +1403,172 @@ static const cmeta_data_field_desc *cmeta_root_field(
     return NULL;
 }
 
+static vxml_status cmeta_map_databind_compile_status(
+    DataBindStatus status) {
+    switch (status) {
+    case DATA_BIND_OK:
+        return VXML_OK;
+    case DATA_BIND_ERR_OOM:
+        return VXML_ALLOCATION_FAILED;
+    case DATA_BIND_ERR_LIMIT:
+    case DATA_BIND_ERR_BUFFER_TOO_SMALL:
+        return VXML_LIMIT_EXCEEDED;
+    case DATA_BIND_ERR_SCHEMA:
+    case DATA_BIND_ERR_TYPE_MISMATCH:
+    case DATA_BIND_ERR_TYPE_NOT_FOUND:
+    case DATA_BIND_ERR_INVALID_ARG:
+        return VXML_INVALID_CONTRACT;
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+}
+
+static bool cmeta_document_name_conflict(
+    salts_xml_node root, salts_xml_node current,
+    salts_xml_string_view decoded_name) {
+    size_t index;
+    for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(root, index);
+        salts_xml_attribute name;
+        if (child.impl == current.impl ||
+            (!cmeta_node_named(child, "var") &&
+             !cmeta_node_named(child, "data")))
+            continue;
+        name = cmeta_attribute(child, "name");
+        if (name.impl != NULL &&
+            cmeta_decoded_views_equal(
+                salts_xml_attribute_value(name), decoded_name))
+            return true;
+    }
+    return false;
+}
+
+static vxml_status cmeta_compile_external_data(
+    cmeta_program_builder *builder,
+    salts_xml_node root,
+    salts_xml_node node,
+    vxml_cmeta_external_data_row *out) {
+    const salts_xml_attribute name_attribute = cmeta_attribute(node, "name");
+    const salts_xml_attribute src_attribute = cmeta_attribute(node, "src");
+    cmeta_decoded_value decoded_name = {0};
+    size_t field_index = 0u;
+    const cmeta_data_field_desc *field;
+    DataBindNativeOptions bind_options = DATA_BIND_NATIVE_OPTIONS_INIT;
+    DataBindNativeDiagnostic bind_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindStatus bind_status;
+    size_t probe_bytes = 0u;
+    void *probe_workspace = NULL;
+    const DataBindNativeRequirements *requirements;
+    vxml_status status;
+
+    memset(out, 0, sizeof(*out));
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded_name);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded_name.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name must be a decoded XML NCName");
+        goto done;
+    }
+    if (cmeta_document_name_conflict(root, node, decoded_name.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML document data/var names must be unique");
+        goto done;
+    }
+    field = cmeta_root_field(
+        builder->profile->root, decoded_name.view, &field_index);
+    if (field == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name has no matching application-root field");
+        goto done;
+    }
+    if (!cmeta_data_value_move_supported(field->value)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data destination does not support atomic semantic move");
+        goto done;
+    }
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(src_attribute),
+        salts_xml_attribute_location(src_attribute),
+        &out->uri, &out->uri_size);
+    if (status != VXML_OK) goto done;
+
+    bind_status = data_bind_native_probe_workspace_size(
+        builder->options->max_data_bind_depth, &probe_bytes);
+    if (bind_status != DATA_BIND_OK) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            cmeta_map_databind_compile_status(bind_status),
+            salts_xml_node_location(node),
+            "VoiceXML data DataBind probe workspace admission failed");
+        goto done;
+    }
+    probe_workspace = vxml_malloc(probe_bytes);
+    if (probe_workspace == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(node),
+            "VoiceXML data DataBind probe workspace allocation failed");
+        goto done;
+    }
+    bind_options.workspace = probe_workspace;
+    bind_options.workspace_bytes = probe_bytes;
+    bind_options.max_depth = builder->options->max_data_bind_depth;
+    bind_options.max_items = builder->options->max_data_bind_items;
+    bind_options.max_owned_bytes = 0u;
+    bind_status = data_bind_native_plan_compile(
+        &bind_options, field->value, &out->plan, &bind_diagnostic);
+    if (bind_status != DATA_BIND_OK || out->plan == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            cmeta_map_databind_compile_status(bind_status),
+            salts_xml_node_location(node),
+            "VoiceXML data destination is not admitted by DataBind");
+        goto done;
+    }
+    requirements = data_bind_native_plan_requirements(out->plan);
+    if (requirements == NULL ||
+        requirements->workspace_alignment == 0u ||
+        requirements->decode_bytes == 0u) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(node),
+            "VoiceXML data DataBind plan has invalid requirements");
+        goto done;
+    }
+    out->field_offset = field->offset;
+    out->field_data = field->value;
+    out->decode_workspace_bytes = requirements->decode_bytes;
+    out->workspace_alignment = requirements->workspace_alignment;
+    status = VXML_OK;
+
+done:
+    vxml_free(probe_workspace);
+    cmeta_decoded_value_destroy(&decoded_name);
+    if (status != VXML_OK) {
+        data_bind_native_plan_free(out->plan);
+        memset(out, 0, sizeof(*out));
+    }
+    (void)field_index;
+    return status;
+}
+
 static bool cmeta_ascii_ncname(salts_xml_string_view name) {
     return cmeta_is_ncname(name);
 }
@@ -1639,6 +1805,20 @@ static vxml_status cmeta_build_schemas(
         const salts_xml_node child =
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "data")) {
+            if (builder->external_data_index >=
+                builder->profile->external_data_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML external data row count changed between passes");
+            status = cmeta_compile_external_data(
+                builder, root, child,
+                &builder->profile->external_data[
+                    builder->external_data_index++]);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute name_attribute =
                 cmeta_attribute(child, "name");
@@ -2538,7 +2718,8 @@ static vxml_status cmeta_write_program(
         status = cmeta_lower_program(
             &builder, salts_xml_document_root(&document));
     if (status == VXML_OK &&
-        (builder.form_index != measurement->form_count ||
+        (builder.external_data_index != measurement->external_data_count ||
+         builder.form_index != measurement->form_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
          builder.action_index != measurement->action_count ||
