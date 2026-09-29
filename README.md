@@ -123,7 +123,7 @@ Requirements:
 - CMake 3.20+
 - Ninja
 - a C11-capable compiler
-- installed `Salts.Native 1.8.3` SDK
+- installed `Salts.Native 1.8.4` SDK
 - installed `SaltsUtils.Native 4.1.3` SDK
 - standalone CHTTP only when an optional CHTTP adapter is enabled
 - Visual Studio 2022 developer environment on Windows
