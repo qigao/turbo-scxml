@@ -226,6 +226,99 @@ spec("VoiceXML program compiler") {
         }
     }
 
+    group("literal goto") {
+        it("lowers a local form fragment to an immutable form index") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><goto next='#second'/></block></form>"
+                "<form id='second'><block><exit/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text(source, NULL, &program, &diagnostic),
+                VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->form_count, (size_t)2u);
+                check_equal(impl->action_count, (size_t)2u);
+                check_equal(impl->actions[0].kind, VXML_ACTION_GOTO);
+                check_equal(impl->actions[0].target_form, (size_t)1u);
+                check_equal(impl->actions[1].kind, VXML_ACTION_EXIT);
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("resolves backward form references without runtime name lookup") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><exit/></block></form>"
+                "<form id='second'><block><goto next='#first'/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text(source, NULL, &program, NULL), VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->actions[1].kind, VXML_ACTION_GOTO);
+                check_equal(impl->actions[1].target_form, (size_t)0u);
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("rejects missing empty external and unknown goto targets") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto/></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='#'/></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='other.vxml#b'/></block></form>"
+                "</vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='#missing'/></block></form>"
+                "</vxml>"};
+            const vxml_status expected[] = {
+                VXML_INVALID_STRUCTURE,
+                VXML_INVALID_STRUCTURE,
+                VXML_UNSUPPORTED_FEATURE,
+                VXML_INVALID_STRUCTURE};
+            size_t index;
+
+            for (index = 0u; index < 4u; ++index)
+                check_empty_failure(
+                    sources[index], expected[index], NULL, 1u);
+        }
+
+        it("rejects self and multi-form literal goto cycles before publication") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='#a'/></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='#b'/></block></form>"
+                "<form id='b'><block><goto next='#a'/></block></form>"
+                "</vxml>"};
+            size_t index;
+            for (index = 0u; index < 2u; ++index)
+                check_empty_failure(
+                    sources[index], VXML_INVALID_STRUCTURE, NULL, 1u);
+        }
+
+        it("rejects multiple transfer actions in one literal block") {
+            check_empty_failure(
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block><goto next='#b'/><exit/></block></form>"
+                "<form id='b'><block/></form></vxml>",
+                VXML_INVALID_STRUCTURE, NULL, 1u);
+        }
+    }
+
     group("document validation") {
         it("rejects missing or wrong VoiceXML namespaces") {
             const char *sources[] = {
