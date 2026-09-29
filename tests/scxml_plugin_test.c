@@ -323,5 +323,204 @@ spec("TurboSCXML Plugin bridge") {
             salts_plugin_registry_destroy(&registry),
             SALTS_PLUGIN_OK);
     }
+
+    it("bridges a Plugin Event I/O Interface export with a lease-safe adapter") {
+        salts_plugin_registry registry = {0};
+        const salts_plugin_registry_config registry_config = {
+            .capacity = 1u};
+        salts_plugin_ref ref = {0};
+        salts_plugin_lifecycle_info lifecycle = {0};
+        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        scxml_plugin_event_io_provider provider = {0};
+        scxml_plugin_event_io_provider mismatch_provider = {0};
+        scxml_plugin_provider_v1 binding =
+            SCXML_PLUGIN_PROVIDER_V1_INIT;
+        const scxml_event_io_adapter *adapter;
+        scxml_send_request request = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        bool quiescent = false;
+
+        check_equal(
+            salts_plugin_registry_init(&registry, &registry_config),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_load(
+                &registry, plugin_fixture_path(), &ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_start(&registry, ref),
+            SALTS_PLUGIN_OK);
+
+        binding.plugin = ref;
+        binding.export_id = "test.scxml.provider.event-io";
+        binding.contract_id = "test.scxml.event-io";
+        binding.contract_version = 1u;
+        binding.required_capabilities = SCXML_EVENT_IO_CAP_SEND;
+
+        check_equal(
+            scxml_plugin_event_io_provider_open(
+                &provider, &registry, &binding, &plugin_status),
+            SCXML_PLUGIN_OK);
+        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        adapter = scxml_plugin_event_io_provider_adapter(&provider);
+        check_not_null(adapter);
+        check_true(
+            (adapter->capabilities & SCXML_EVENT_IO_CAP_SEND) != 0u);
+        check_equal(
+            adapter->prepare_send(
+                scxml_plugin_event_io_provider_user(&provider),
+                &request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_not_null(error);
+
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)1u);
+
+        /*
+         * Descriptor mismatch must be tested while the plugin is STARTED.
+         * Once request_stop() transitions it to STOPPING, Plugin correctly
+         * rejects new lease admission with SALTS_PLUGIN_INVALID_STATE before
+         * export/interface admission is reached.
+         */
+        binding.export_id = "test.scxml.provider.invoke";
+        binding.contract_id = "test.scxml.invoke";
+        binding.required_capabilities = SCXML_INVOKE_CAP_START;
+        check_equal(
+            scxml_plugin_event_io_provider_open(
+                &mismatch_provider, &registry, &binding, &plugin_status),
+            SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
+        check_equal(
+            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+        check_null(
+            scxml_plugin_event_io_provider_adapter(&mismatch_provider));
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)1u);
+
+        check_equal(
+            salts_plugin_registry_request_stop(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_false(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, ref),
+            SALTS_PLUGIN_BUSY);
+
+        check_equal(
+            scxml_plugin_event_io_provider_destroy(
+                &provider, &plugin_status),
+            SCXML_PLUGIN_OK);
+        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        check_null(scxml_plugin_event_io_provider_adapter(&provider));
+
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0u);
+
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_destroy(&registry),
+            SALTS_PLUGIN_OK);
+    }
+
+    it("bridges a Plugin Invoke Interface export and rejects capability mismatch") {
+        salts_plugin_registry registry = {0};
+        const salts_plugin_registry_config registry_config = {
+            .capacity = 1u};
+        salts_plugin_ref ref = {0};
+        salts_plugin_lifecycle_info lifecycle = {0};
+        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        scxml_plugin_invoke_provider provider = {0};
+        scxml_plugin_provider_v1 binding =
+            SCXML_PLUGIN_PROVIDER_V1_INIT;
+        const scxml_invoke_adapter *adapter;
+        scxml_invoke_start_request request = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        bool quiescent = false;
+
+        check_equal(
+            salts_plugin_registry_init(&registry, &registry_config),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_load(
+                &registry, plugin_fixture_path(), &ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_start(&registry, ref),
+            SALTS_PLUGIN_OK);
+
+        binding.plugin = ref;
+        binding.export_id = "test.scxml.provider.invoke";
+        binding.contract_id = "test.scxml.invoke";
+        binding.contract_version = 1u;
+        binding.required_capabilities = SCXML_INVOKE_CAP_START;
+
+        check_equal(
+            scxml_plugin_invoke_provider_open(
+                &provider, &registry, &binding, &plugin_status),
+            SCXML_PLUGIN_OK);
+        adapter = scxml_plugin_invoke_provider_adapter(&provider);
+        check_not_null(adapter);
+        check_true(
+            (adapter->capabilities & SCXML_INVOKE_CAP_START) != 0u);
+        check_equal(
+            adapter->prepare_start(
+                scxml_plugin_invoke_provider_user(&provider),
+                &request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(
+            scxml_plugin_invoke_provider_destroy(
+                &provider, &plugin_status),
+            SCXML_PLUGIN_OK);
+
+        binding.required_capabilities =
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_FORWARD;
+        check_equal(
+            scxml_plugin_invoke_provider_open(
+                &provider, &registry, &binding, &plugin_status),
+            SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
+        check_equal(
+            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0u);
+
+        check_equal(
+            salts_plugin_registry_request_stop(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_destroy(&registry),
+            SALTS_PLUGIN_OK);
+    }
+
 }
 

@@ -157,7 +157,8 @@ add_library(turbo_scxml STATIC
   src/scxml_scope.c
   src/scxml_foreach.c
   src/scxml_xml_decode.c
-  src/scxml_quickjs.c)
+  src/scxml_quickjs.c
+  src/scxml_provider.c)
 add_library(TurboSCXML::SCXML ALIAS turbo_scxml)
 
 set_target_properties(turbo_scxml PROPERTIES
@@ -495,7 +496,9 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 install(
-  FILES include/scxml/scxml.h
+  FILES
+    include/scxml/scxml.h
+    include/scxml/provider.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 if(TURBOSCXML_ENABLE_PLUGIN)
   install(

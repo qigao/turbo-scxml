@@ -26,6 +26,18 @@ typedef struct scxml_plugin_program_impl {
     size_t lease_count;
 } scxml_plugin_program_impl;
 
+typedef struct scxml_plugin_event_io_provider_impl {
+    salts_plugin_registry *registry;
+    salts_plugin_lease lease;
+    scxml_event_io_adapter_bridge bridge;
+} scxml_plugin_event_io_provider_impl;
+
+typedef struct scxml_plugin_invoke_provider_impl {
+    salts_plugin_registry *registry;
+    salts_plugin_lease lease;
+    scxml_invoke_adapter_bridge bridge;
+} scxml_plugin_invoke_provider_impl;
+
 static bool plugin_ref_equal(
     salts_plugin_ref left, salts_plugin_ref right) {
     return left.slot == right.slot &&
@@ -200,6 +212,56 @@ static salts_plugin_status release_leases(
     return first;
 }
 
+static bool plugin_provider_binding_valid(
+    const scxml_plugin_provider_v1 *binding) {
+    return binding != NULL &&
+           binding->struct_size >= sizeof(*binding) &&
+           salts_plugin_ref_valid(binding->plugin) &&
+           binding->export_id != NULL &&
+           binding->export_id[0] != '\0' &&
+           binding->contract_id != NULL &&
+           binding->contract_id[0] != '\0';
+}
+
+static salts_plugin_status acquire_interface_export(
+    salts_plugin_registry *registry,
+    const scxml_plugin_provider_v1 *binding,
+    const cmeta_interface_desc *expected,
+    salts_plugin_lease *out_lease,
+    const salts_plugin_export **out_entry) {
+    salts_plugin_lease lease = {0};
+    const salts_plugin_manifest *manifest = NULL;
+    const salts_plugin_export *entry = NULL;
+    salts_plugin_status status;
+    if (registry == NULL || !plugin_provider_binding_valid(binding) ||
+        !cmeta_interface_desc_valid(expected) ||
+        out_lease == NULL || out_entry == NULL)
+        return SALTS_PLUGIN_INVALID_ARGUMENT;
+    *out_lease = (salts_plugin_lease){0};
+    *out_entry = NULL;
+    status = salts_plugin_registry_acquire(
+        registry, binding->plugin, &lease, &manifest);
+    if (status != SALTS_PLUGIN_OK)
+        return status;
+    status = salts_plugin_manifest_find_export(
+        manifest, binding->export_id, &entry);
+    if (status == SALTS_PLUGIN_OK)
+        status = salts_plugin_export_require_interface(
+            entry, binding->contract_id,
+            binding->contract_version,
+            binding->required_capabilities,
+            expected);
+    if (status != SALTS_PLUGIN_OK) {
+        const salts_plugin_status release_status =
+            salts_plugin_registry_release(registry, &lease);
+        return release_status == SALTS_PLUGIN_OK
+            ? status : release_status;
+    }
+    *out_lease = lease;
+    *out_entry = entry;
+    return SALTS_PLUGIN_OK;
+}
+
 const char *scxml_plugin_status_string(
     scxml_plugin_status status) {
     switch (status) {
@@ -218,6 +280,212 @@ const char *scxml_plugin_status_string(
     default:
         return "unknown";
     }
+}
+
+scxml_plugin_status scxml_plugin_event_io_provider_open(
+    scxml_plugin_event_io_provider *out,
+    salts_plugin_registry *registry,
+    const scxml_plugin_provider_v1 *binding,
+    salts_plugin_status *out_plugin_status) {
+    scxml_plugin_event_io_provider_impl *impl;
+    salts_plugin_lease lease = {0};
+    const salts_plugin_export *entry = NULL;
+    const scxml_event_io_provider *provider;
+    salts_plugin_status plugin_status;
+
+    if (out_plugin_status != NULL)
+        *out_plugin_status = SALTS_PLUGIN_OK;
+    if (out == NULL || out->impl != NULL ||
+        registry == NULL || !plugin_provider_binding_valid(binding))
+        return SCXML_PLUGIN_INVALID_ARGUMENT;
+
+    plugin_status = acquire_interface_export(
+        registry, binding, scxml_event_io_provider_interface(),
+        &lease, &entry);
+    if (plugin_status != SALTS_PLUGIN_OK) {
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status;
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+
+    provider = entry != NULL
+        ? (const scxml_event_io_provider *)entry->value.interface.value
+        : NULL;
+    if (!scxml_event_io_provider_valid(provider) ||
+        !scxml_event_io_provider_has(
+            provider, binding->required_capabilities)) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
+                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+
+    impl = (scxml_plugin_event_io_provider_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status;
+        return SCXML_PLUGIN_ALLOCATION_FAILED;
+    }
+    if (!scxml_event_io_adapter_bridge_init(&impl->bridge, provider)) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
+                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+        free(impl);
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+    impl->registry = registry;
+    impl->lease = lease;
+    out->impl = impl;
+    return SCXML_PLUGIN_OK;
+}
+
+const scxml_event_io_adapter *scxml_plugin_event_io_provider_adapter(
+    const scxml_plugin_event_io_provider *provider) {
+    const scxml_plugin_event_io_provider_impl *impl =
+        provider != NULL
+            ? (const scxml_plugin_event_io_provider_impl *)provider->impl
+            : NULL;
+    return impl != NULL
+        ? scxml_event_io_adapter_bridge_get(&impl->bridge)
+        : NULL;
+}
+
+void *scxml_plugin_event_io_provider_user(
+    scxml_plugin_event_io_provider *provider) {
+    scxml_plugin_event_io_provider_impl *impl =
+        provider != NULL
+            ? (scxml_plugin_event_io_provider_impl *)provider->impl
+            : NULL;
+    return impl != NULL
+        ? scxml_event_io_adapter_bridge_user(&impl->bridge)
+        : NULL;
+}
+
+scxml_plugin_status scxml_plugin_event_io_provider_destroy(
+    scxml_plugin_event_io_provider *provider,
+    salts_plugin_status *out_plugin_status) {
+    scxml_plugin_event_io_provider_impl *impl;
+    salts_plugin_status status;
+    if (out_plugin_status != NULL)
+        *out_plugin_status = SALTS_PLUGIN_OK;
+    if (provider == NULL || provider->impl == NULL)
+        return SCXML_PLUGIN_INVALID_ARGUMENT;
+    impl = (scxml_plugin_event_io_provider_impl *)provider->impl;
+    status = salts_plugin_registry_release(
+        impl->registry, &impl->lease);
+    if (out_plugin_status != NULL)
+        *out_plugin_status = status;
+    if (status != SALTS_PLUGIN_OK)
+        return SCXML_PLUGIN_PLUGIN_ERROR;
+    free(impl);
+    provider->impl = NULL;
+    return SCXML_PLUGIN_OK;
+}
+
+scxml_plugin_status scxml_plugin_invoke_provider_open(
+    scxml_plugin_invoke_provider *out,
+    salts_plugin_registry *registry,
+    const scxml_plugin_provider_v1 *binding,
+    salts_plugin_status *out_plugin_status) {
+    scxml_plugin_invoke_provider_impl *impl;
+    salts_plugin_lease lease = {0};
+    const salts_plugin_export *entry = NULL;
+    const scxml_invoke_provider *provider;
+    salts_plugin_status plugin_status;
+
+    if (out_plugin_status != NULL)
+        *out_plugin_status = SALTS_PLUGIN_OK;
+    if (out == NULL || out->impl != NULL ||
+        registry == NULL || !plugin_provider_binding_valid(binding))
+        return SCXML_PLUGIN_INVALID_ARGUMENT;
+
+    plugin_status = acquire_interface_export(
+        registry, binding, scxml_invoke_provider_interface(),
+        &lease, &entry);
+    if (plugin_status != SALTS_PLUGIN_OK) {
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status;
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+
+    provider = entry != NULL
+        ? (const scxml_invoke_provider *)entry->value.interface.value
+        : NULL;
+    if (!scxml_invoke_provider_valid(provider) ||
+        !scxml_invoke_provider_has(
+            provider, binding->required_capabilities)) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
+                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+
+    impl = (scxml_plugin_invoke_provider_impl *)calloc(1u, sizeof(*impl));
+    if (impl == NULL) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status;
+        return SCXML_PLUGIN_ALLOCATION_FAILED;
+    }
+    if (!scxml_invoke_adapter_bridge_init(&impl->bridge, provider)) {
+        plugin_status = salts_plugin_registry_release(registry, &lease);
+        if (out_plugin_status != NULL)
+            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
+                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+        free(impl);
+        return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
+    }
+    impl->registry = registry;
+    impl->lease = lease;
+    out->impl = impl;
+    return SCXML_PLUGIN_OK;
+}
+
+const scxml_invoke_adapter *scxml_plugin_invoke_provider_adapter(
+    const scxml_plugin_invoke_provider *provider) {
+    const scxml_plugin_invoke_provider_impl *impl =
+        provider != NULL
+            ? (const scxml_plugin_invoke_provider_impl *)provider->impl
+            : NULL;
+    return impl != NULL
+        ? scxml_invoke_adapter_bridge_get(&impl->bridge)
+        : NULL;
+}
+
+void *scxml_plugin_invoke_provider_user(
+    scxml_plugin_invoke_provider *provider) {
+    scxml_plugin_invoke_provider_impl *impl =
+        provider != NULL
+            ? (scxml_plugin_invoke_provider_impl *)provider->impl
+            : NULL;
+    return impl != NULL
+        ? scxml_invoke_adapter_bridge_user(&impl->bridge)
+        : NULL;
+}
+
+scxml_plugin_status scxml_plugin_invoke_provider_destroy(
+    scxml_plugin_invoke_provider *provider,
+    salts_plugin_status *out_plugin_status) {
+    scxml_plugin_invoke_provider_impl *impl;
+    salts_plugin_status status;
+    if (out_plugin_status != NULL)
+        *out_plugin_status = SALTS_PLUGIN_OK;
+    if (provider == NULL || provider->impl == NULL)
+        return SCXML_PLUGIN_INVALID_ARGUMENT;
+    impl = (scxml_plugin_invoke_provider_impl *)provider->impl;
+    status = salts_plugin_registry_release(
+        impl->registry, &impl->lease);
+    if (out_plugin_status != NULL)
+        *out_plugin_status = status;
+    if (status != SALTS_PLUGIN_OK)
+        return SCXML_PLUGIN_PLUGIN_ERROR;
+    free(impl);
+    provider->impl = NULL;
+    return SCXML_PLUGIN_OK;
 }
 
 scxml_plugin_status scxml_plugin_compile_cmeta_v1(

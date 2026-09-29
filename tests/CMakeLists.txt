@@ -217,6 +217,10 @@ turboscxml_add_test(
   scxml_cmeta_test
   scxml_cmeta_test.c)
 
+turboscxml_add_test(
+  scxml_provider_test
+  scxml_provider_test.c)
+
 if(TURBOSCXML_ENABLE_PLUGIN)
   add_library(scxml_plugin_fixture MODULE
     scxml_plugin_fixture.c)
@@ -226,6 +230,7 @@ if(TURBOSCXML_ENABLE_PLUGIN)
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF)
   target_link_libraries(scxml_plugin_fixture PRIVATE
+    TurboSCXML::SCXML
     Salts::PluginABI)
 
   add_executable(scxml_plugin_test
