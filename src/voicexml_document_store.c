@@ -459,6 +459,8 @@ const char *vxml_document_store_status_string(
         return "ok";
     case VXML_DOCUMENT_STORE_INVALID_ARGUMENT:
         return "invalid_argument";
+    case VXML_DOCUMENT_STORE_ALLOCATION_FAILED:
+        return "allocation_failed";
     case VXML_DOCUMENT_STORE_INVALID_URI:
         return "invalid_uri";
     case VXML_DOCUMENT_STORE_LIMIT_EXCEEDED:
@@ -471,6 +473,8 @@ const char *vxml_document_store_status_string(
         return "compile_error";
     case VXML_DOCUMENT_STORE_STALE:
         return "stale";
+    case VXML_DOCUMENT_STORE_BUSY:
+        return "busy";
     default:
         return "unknown";
     }
@@ -487,7 +491,9 @@ vxml_document_store_status vxml_document_store_init(
         config->abi_version != VXML_DOCUMENT_STORE_CONFIG_ABI_V1 ||
         config->struct_size < sizeof(*config) ||
         config->capacity == 0u ||
+        config->capacity > UINT32_MAX ||
         config->max_uri_bytes == 0u ||
+        config->max_uri_bytes == SIZE_MAX ||
         config->max_document_bytes == 0u ||
         config->max_cache_bytes == 0u ||
         config->application_uri == NULL ||
@@ -503,7 +509,7 @@ vxml_document_store_status vxml_document_store_init(
 
     normalized = (char *)malloc(config->max_uri_bytes + 1u);
     if (normalized == NULL)
-        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
     if (!normalize_absolute_uri(
             config->application_uri,
             config->application_uri_size,
@@ -516,14 +522,14 @@ vxml_document_store_status vxml_document_store_init(
     impl = (vxml_document_store_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
         free(normalized);
-        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
     }
     impl->entries = (vxml_document_entry *)calloc(
         config->capacity, sizeof(*impl->entries));
     if (impl->entries == NULL) {
         free(normalized);
         free(impl);
-        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
     }
     impl->application_uri = normalized;
     impl->application_uri_size = normalized_size;
@@ -655,6 +661,7 @@ vxml_document_store_status vxml_document_store_acquire(
     vxml_dialog_document document = {0};
     vxml_dialog_manager_status resource_status;
     size_t allocation_size;
+    size_t source_size;
     char *allocation = NULL;
     unsigned char *source_copy;
     vxml_program program = {0};
@@ -670,9 +677,18 @@ vxml_document_store_status vxml_document_store_acquire(
         document_uri_size > impl->max_uri_bytes)
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
 
+    if (impl->active_borrows >= impl->capacity) {
+        error_set(out_error, VXML_DOCUMENT_STORE_FULL,
+                  VXML_DIALOG_MANAGER_OK, VXML_OK);
+        return VXML_DOCUMENT_STORE_FULL;
+    }
+
     canonical = (char *)malloc(impl->max_uri_bytes + 1u);
-    if (canonical == NULL)
-        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (canonical == NULL) {
+        error_set(out_error, VXML_DOCUMENT_STORE_ALLOCATION_FAILED,
+                  VXML_DIALOG_MANAGER_OK, VXML_OK);
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
+    }
     if (!normalize_absolute_uri(
             document_uri, document_uri_size,
             canonical, impl->max_uri_bytes + 1u,
@@ -725,8 +741,9 @@ vxml_document_store_status vxml_document_store_acquire(
         return VXML_DOCUMENT_STORE_LIMIT_EXCEEDED;
     }
 
+    source_size = document.size;
     if (!checked_add(canonical_size, 1u, &allocation_size) ||
-        !checked_add(allocation_size, document.size, &allocation_size) ||
+        !checked_add(allocation_size, source_size, &allocation_size) ||
         !checked_add(allocation_size, 1u, &allocation_size) ||
         allocation_size > impl->max_cache_bytes) {
         impl->documents.close(impl->document_user, &document);
@@ -740,20 +757,20 @@ vxml_document_store_status vxml_document_store_acquire(
     if (allocation == NULL) {
         impl->documents.close(impl->document_user, &document);
         free(canonical);
-        error_set(out_error, VXML_DOCUMENT_STORE_LIMIT_EXCEEDED,
+        error_set(out_error, VXML_DOCUMENT_STORE_ALLOCATION_FAILED,
                   VXML_DIALOG_MANAGER_OK, VXML_OK);
-        return VXML_DOCUMENT_STORE_LIMIT_EXCEEDED;
+        return VXML_DOCUMENT_STORE_ALLOCATION_FAILED;
     }
     memcpy(allocation, canonical, canonical_size);
     allocation[canonical_size] = '\0';
     source_copy = (unsigned char *)(allocation + canonical_size + 1u);
-    if (document.size != 0u)
-        memcpy(source_copy, document.data, document.size);
-    source_copy[document.size] = '\0';
+    if (source_size != 0u)
+        memcpy(source_copy, document.data, source_size);
+    source_copy[source_size] = '\0';
     impl->documents.close(impl->document_user, &document);
 
     voice_status = vxml_compile(
-        source_copy, document.size,
+        source_copy, source_size,
         &impl->voice_limits, &program, &diagnostic);
     if (voice_status != VXML_OK) {
         free(allocation);
@@ -782,7 +799,7 @@ vxml_document_store_status vxml_document_store_acquire(
     slot->uri = allocation;
     slot->uri_size = canonical_size;
     slot->source = source_copy;
-    slot->source_size = document.size;
+    slot->source_size = source_size;
     slot->program = program;
     impl->cached_bytes += allocation_size;
     ++impl->active_borrows;
@@ -873,7 +890,7 @@ vxml_document_store_status vxml_document_store_clear(
         }
         entry_evict(impl, &impl->entries[i]);
     }
-    return busy ? VXML_DOCUMENT_STORE_FULL : VXML_DOCUMENT_STORE_OK;
+    return busy ? VXML_DOCUMENT_STORE_BUSY : VXML_DOCUMENT_STORE_OK;
 }
 
 vxml_document_store_status vxml_document_store_destroy(
@@ -886,7 +903,7 @@ vxml_document_store_status vxml_document_store_destroy(
     if (impl == NULL)
         return VXML_DOCUMENT_STORE_OK;
     if (impl->active_borrows != 0u)
-        return VXML_DOCUMENT_STORE_FULL;
+        return VXML_DOCUMENT_STORE_BUSY;
     for (i = 0u; i < impl->capacity; ++i)
         if (impl->entries[i].occupied)
             entry_evict(impl, &impl->entries[i]);
