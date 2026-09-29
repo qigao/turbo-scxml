@@ -10,6 +10,8 @@ option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
   "Require the installed quickjs-sandbox profile" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN
   "Require and exercise the installed Plugin component" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER
+  "Require and exercise the installed VoiceXMLDialogManager component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING
   "Require the installed package to omit the Plugin component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY
@@ -126,6 +128,9 @@ endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS Plugin)
 endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLDialogManager)
+endif()
 if(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING AND
    TURBOSCXML_INSTALL_COMPONENTS)
   find_package(TurboSCXML CONFIG REQUIRED
@@ -240,6 +245,38 @@ else()
   target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
   target_link_libraries(
     turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+
+  if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
+    if(NOT TARGET TurboSCXML::VoiceXMLDialogManager)
+      message(FATAL_ERROR
+        "Expected installed TurboSCXML::VoiceXMLDialogManager")
+    endif()
+    get_target_property(
+      TURBOSCXML_DIALOG_MANAGER_LINKS
+      TurboSCXML::VoiceXMLDialogManager INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_DIALOG_MANAGER_LINKS STREQUAL
+       "TurboSCXML::VoiceXML;TurboSCXML::CCXML")
+      message(FATAL_ERROR
+        "Unexpected VoiceXMLDialogManager link closure: "
+        "${TURBOSCXML_DIALOG_MANAGER_LINKS}")
+    endif()
+
+    add_executable(
+      turboscxml_dialog_manager_install_consumer dialog_manager_main.c)
+    target_compile_features(
+      turboscxml_dialog_manager_install_consumer PRIVATE c_std_11)
+    target_link_libraries(
+      turboscxml_dialog_manager_install_consumer
+      PRIVATE TurboSCXML::VoiceXMLDialogManager)
+
+    add_executable(
+      turboscxml_dialog_manager_install_consumer_cpp dialog_manager_main.cpp)
+    target_compile_features(
+      turboscxml_dialog_manager_install_consumer_cpp PRIVATE cxx_std_17)
+    target_link_libraries(
+      turboscxml_dialog_manager_install_consumer_cpp
+      PRIVATE TurboSCXML::VoiceXMLDialogManager)
+  endif()
 
   add_executable(turboscxml_provider_install_consumer provider_main.c)
   target_compile_features(
