@@ -401,3 +401,194 @@ void *scxml_invoke_adapter_bridge_user(
     scxml_invoke_adapter_bridge *bridge) {
     return bridge;
 }
+
+
+static scxml_resource_status data_resource_provider_open(
+    void *self, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_data_resource_v2 *out) {
+    scxml_data_resource_provider_bridge *bridge =
+        (scxml_data_resource_provider_bridge *)self;
+    if (bridge == NULL || bridge->adapter.open == NULL)
+        return SCXML_RESOURCE_FAILED;
+    return bridge->adapter.open(
+        bridge->adapter_user, uri, uri_size, max_bytes, out);
+}
+
+static void data_resource_provider_close(
+    void *self, scxml_data_resource_v2 *resource) {
+    scxml_data_resource_provider_bridge *bridge =
+        (scxml_data_resource_provider_bridge *)self;
+    if (bridge != NULL && bridge->adapter.close != NULL)
+        bridge->adapter.close(bridge->adapter_user, resource);
+}
+
+bool scxml_data_resource_provider_bridge_init(
+    scxml_data_resource_provider_bridge *bridge,
+    const scxml_data_resource_adapter_v2 *adapter,
+    void *adapter_user) {
+    if (bridge == NULL || adapter == NULL ||
+        adapter->abi_version != SCXML_DATA_RESOURCE_ADAPTER_ABI_V2 ||
+        adapter->struct_size != sizeof(*adapter) ||
+        adapter->open == NULL || adapter->close == NULL)
+        return false;
+    memset(bridge, 0, sizeof(*bridge));
+    bridge->adapter = *adapter;
+    bridge->adapter_user = adapter_user;
+    bridge->vtable = (scxml_data_resource_provider_vtable){
+        .implementation = "scxml_data_resource_adapter_v2",
+        .capabilities = 0u,
+        .open = data_resource_provider_open,
+        .close = data_resource_provider_close};
+    bridge->provider =
+        scxml_data_resource_provider_bind(bridge, &bridge->vtable);
+    return scxml_data_resource_provider_valid(&bridge->provider);
+}
+
+scxml_data_resource_provider *scxml_data_resource_provider_bridge_get(
+    scxml_data_resource_provider_bridge *bridge) {
+    return bridge != NULL &&
+           scxml_data_resource_provider_valid(&bridge->provider)
+        ? &bridge->provider : NULL;
+}
+
+static scxml_resource_status data_resource_adapter_open(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_data_resource_v2 *out) {
+    scxml_data_resource_adapter_bridge *bridge =
+        (scxml_data_resource_adapter_bridge *)user;
+    if (bridge == NULL ||
+        !scxml_data_resource_provider_valid(&bridge->provider))
+        return SCXML_RESOURCE_FAILED;
+    return scxml_data_resource_provider_open(
+        &bridge->provider, uri, uri_size, max_bytes, out);
+}
+
+static void data_resource_adapter_close(
+    void *user, scxml_data_resource_v2 *resource) {
+    scxml_data_resource_adapter_bridge *bridge =
+        (scxml_data_resource_adapter_bridge *)user;
+    if (bridge != NULL &&
+        scxml_data_resource_provider_valid(&bridge->provider))
+        scxml_data_resource_provider_close(&bridge->provider, resource);
+}
+
+bool scxml_data_resource_adapter_bridge_init(
+    scxml_data_resource_adapter_bridge *bridge,
+    const scxml_data_resource_provider *provider) {
+    if (bridge == NULL ||
+        !scxml_data_resource_provider_valid(provider))
+        return false;
+    memset(bridge, 0, sizeof(*bridge));
+    bridge->provider = *provider;
+    bridge->adapter = (scxml_data_resource_adapter_v2){
+        .abi_version = SCXML_DATA_RESOURCE_ADAPTER_ABI_V2,
+        .struct_size = sizeof(scxml_data_resource_adapter_v2),
+        .open = data_resource_adapter_open,
+        .close = data_resource_adapter_close};
+    return true;
+}
+
+const scxml_data_resource_adapter_v2 *scxml_data_resource_adapter_bridge_get(
+    const scxml_data_resource_adapter_bridge *bridge) {
+    return bridge != NULL ? &bridge->adapter : NULL;
+}
+
+void *scxml_data_resource_adapter_bridge_user(
+    scxml_data_resource_adapter_bridge *bridge) {
+    return bridge;
+}
+
+static scxml_resource_status text_resource_provider_open(
+    void *self, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_text_resource *out) {
+    scxml_text_resource_provider_bridge *bridge =
+        (scxml_text_resource_provider_bridge *)self;
+    if (bridge == NULL || bridge->adapter.open == NULL)
+        return SCXML_RESOURCE_FAILED;
+    return bridge->adapter.open(
+        bridge->adapter_user, uri, uri_size, max_bytes, out);
+}
+
+static void text_resource_provider_close(
+    void *self, scxml_text_resource *resource) {
+    scxml_text_resource_provider_bridge *bridge =
+        (scxml_text_resource_provider_bridge *)self;
+    if (bridge != NULL && bridge->adapter.close != NULL)
+        bridge->adapter.close(bridge->adapter_user, resource);
+}
+
+bool scxml_text_resource_provider_bridge_init(
+    scxml_text_resource_provider_bridge *bridge,
+    const scxml_text_resource_adapter_v1 *adapter,
+    void *adapter_user) {
+    if (bridge == NULL || adapter == NULL ||
+        adapter->abi_version != SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 ||
+        adapter->struct_size != sizeof(*adapter) ||
+        adapter->open == NULL || adapter->close == NULL)
+        return false;
+    memset(bridge, 0, sizeof(*bridge));
+    bridge->adapter = *adapter;
+    bridge->adapter_user = adapter_user;
+    bridge->vtable = (scxml_text_resource_provider_vtable){
+        .implementation = "scxml_text_resource_adapter_v1",
+        .capabilities = 0u,
+        .open = text_resource_provider_open,
+        .close = text_resource_provider_close};
+    bridge->provider =
+        scxml_text_resource_provider_bind(bridge, &bridge->vtable);
+    return scxml_text_resource_provider_valid(&bridge->provider);
+}
+
+scxml_text_resource_provider *scxml_text_resource_provider_bridge_get(
+    scxml_text_resource_provider_bridge *bridge) {
+    return bridge != NULL &&
+           scxml_text_resource_provider_valid(&bridge->provider)
+        ? &bridge->provider : NULL;
+}
+
+static scxml_resource_status text_resource_adapter_open(
+    void *user, const char *uri, size_t uri_size,
+    size_t max_bytes, scxml_text_resource *out) {
+    scxml_text_resource_adapter_bridge *bridge =
+        (scxml_text_resource_adapter_bridge *)user;
+    if (bridge == NULL ||
+        !scxml_text_resource_provider_valid(&bridge->provider))
+        return SCXML_RESOURCE_FAILED;
+    return scxml_text_resource_provider_open(
+        &bridge->provider, uri, uri_size, max_bytes, out);
+}
+
+static void text_resource_adapter_close(
+    void *user, scxml_text_resource *resource) {
+    scxml_text_resource_adapter_bridge *bridge =
+        (scxml_text_resource_adapter_bridge *)user;
+    if (bridge != NULL &&
+        scxml_text_resource_provider_valid(&bridge->provider))
+        scxml_text_resource_provider_close(&bridge->provider, resource);
+}
+
+bool scxml_text_resource_adapter_bridge_init(
+    scxml_text_resource_adapter_bridge *bridge,
+    const scxml_text_resource_provider *provider) {
+    if (bridge == NULL ||
+        !scxml_text_resource_provider_valid(provider))
+        return false;
+    memset(bridge, 0, sizeof(*bridge));
+    bridge->provider = *provider;
+    bridge->adapter = (scxml_text_resource_adapter_v1){
+        .abi_version = SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1,
+        .struct_size = sizeof(scxml_text_resource_adapter_v1),
+        .open = text_resource_adapter_open,
+        .close = text_resource_adapter_close};
+    return true;
+}
+
+const scxml_text_resource_adapter_v1 *scxml_text_resource_adapter_bridge_get(
+    const scxml_text_resource_adapter_bridge *bridge) {
+    return bridge != NULL ? &bridge->adapter : NULL;
+}
+
+void *scxml_text_resource_adapter_bridge_user(
+    scxml_text_resource_adapter_bridge *bridge) {
+    return bridge;
+}
