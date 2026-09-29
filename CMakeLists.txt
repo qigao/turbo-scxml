@@ -43,7 +43,7 @@ endif()
 
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_package(Salts 1.8.4 EXACT CONFIG REQUIRED
+find_package(Salts CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -60,7 +60,7 @@ endif()
 
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_package(SaltsUtils 4.1.5 EXACT CONFIG REQUIRED
+find_package(SaltsUtils CONFIG REQUIRED
   PATHS "${SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -105,7 +105,7 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE OR
 
   unset(Chttp_DIR CACHE)
   unset(Chttp_DIR)
-  find_package(Chttp 1.1.5 EXACT CONFIG REQUIRED
+  find_package(Chttp CONFIG REQUIRED
     PATHS "${CHTTP_ROOT_PATH}"
     NO_DEFAULT_PATH)
 
