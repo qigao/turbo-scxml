@@ -74,6 +74,10 @@ Struct(scxml_nested_data,
     (scxml_owned_text, invoke_id)
 );
 
+Struct(scxml_databind_nested_data,
+    (int, value)
+);
+
 Enum(scxml_public_source,
     (SCXML_PUBLIC_SOURCE_GOOD, 1, "good"),
     (SCXML_PUBLIC_SOURCE_FAIL, 2, "fail")
@@ -90,7 +94,8 @@ Struct(scxml_public_data,
     (scxml_owned_text, custom_id),
     (scxml_owned_text, readonly_id),
     (scxml_owned_text, failing_id),
-    (scxml_nested_data, nested)
+    (scxml_nested_data, nested),
+    (scxml_databind_nested_data, databind_nested)
 );
 
 static const cmeta_type_identity public_data_identity =
@@ -481,6 +486,41 @@ static const cmeta_data_desc nested_data_desc = {
     .shape = &nested_data_shape
 };
 
+static const cmeta_type_traits databind_nested_data_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
+static const cmeta_type_desc databind_nested_data_type = {
+    .name = "scxml_databind_nested_data",
+    .size = sizeof(scxml_databind_nested_data),
+    .align = _Alignof(scxml_databind_nested_data),
+    .kind = CMETA_T_OBJECT,
+    .traits = &databind_nested_data_traits
+};
+
+static const cmeta_data_field_desc databind_nested_data_fields[] = {
+    {"test.scxml.databind.nested.value", "value",
+     offsetof(scxml_databind_nested_data, value), &cmeta_data_int}
+};
+
+static const cmeta_data_struct_shape databind_nested_data_shape = {
+    .layout = StructMeta(scxml_databind_nested_data),
+    .fields = databind_nested_data_fields,
+    .field_count =
+        sizeof(databind_nested_data_fields) /
+        sizeof(databind_nested_data_fields[0])
+};
+
+static const cmeta_data_desc databind_nested_data_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.databind.nested.schema",
+    .display_name = "SCXML DataBind nested data",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &databind_nested_data_type,
+    .shape = &databind_nested_data_shape
+};
+
 static const cmeta_data_field_desc public_data_fields[] = {
     {"test.scxml.public.data.enabled", "enabled",
      offsetof(scxml_public_data, enabled), &cmeta_data_bool},
@@ -503,7 +543,9 @@ static const cmeta_data_field_desc public_data_fields[] = {
     {"test.scxml.public.data.failing_id", "failing_id",
      offsetof(scxml_public_data, failing_id), &failing_text_desc},
     {"test.scxml.public.data.nested", "nested",
-     offsetof(scxml_public_data, nested), &nested_data_desc}
+     offsetof(scxml_public_data, nested), &nested_data_desc},
+    {"test.scxml.public.data.databind_nested", "databind_nested",
+     offsetof(scxml_public_data, databind_nested), &databind_nested_data_desc}
 };
 
 static const cmeta_data_struct_shape public_data_shape = {
@@ -5307,7 +5349,7 @@ spec("TurboSCXML public CMeta data model") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' initial='done'>"
-            "<datamodel><data id='nested' src='mem:nested'/></datamodel>"
+            "<datamodel><data id='databind_nested' src='mem:nested'/></datamodel>"
             "<final id='done'/></scxml>";
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
@@ -5327,7 +5369,7 @@ spec("TurboSCXML public CMeta data model") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' initial='done'>"
-            "<datamodel><data id='nested' src='mem:nested'/></datamodel>"
+            "<datamodel><data id='databind_nested' src='mem:nested'/></datamodel>"
             "<final id='done'/></scxml>";
         const scxml_public_data initial = {0};
         raw_data_resource_probe probe = {
