@@ -5394,22 +5394,25 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("loads early XML string data through DataBind without reparsing the SCXML document") {
+    it("routes malformed external XML through DataBind without reparsing the SCXML document") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
-            "datamodel='cmeta' binding='early' initial='active'>"
-            "<datamodel><data id='send_id' src='mem:count'/></datamodel>"
-            "<state id='active'><transition target='done'/></state>"
-            "<final id='done'/></scxml>";
-        static const char external_xml[] = "<send_id>seven</send_id>";
+            "datamodel='cmeta' initial='active'>"
+            "<datamodel><data id='count' src='mem:count'/></datamodel>"
+            "<state id='active'><transition event='error.execution' "
+            "cond='count == 3' target='done'/><transition event='*' "
+            "target='failed'/></state><final id='done'/>"
+            "<state id='failed'/></scxml>";
+        static const char external_xml[] = "<count>";
         const scxml_public_data initial = {
-            false, 0, SCXML_PUBLIC_SOURCE_GOOD};
+            false, 3, SCXML_PUBLIC_SOURCE_GOOD};
         raw_data_resource_probe probe = {
             .data = external_xml,
             .size = sizeof(external_xml) - 1u,
             .format = DATA_BIND_FORMAT_XML};
         scxml_program program = {0};
         scxml_diagnostic diagnostic = {0};
+        scxml_data_resource_diagnostic resource_diagnostic = {0};
         scxml_session session = {0};
         cflow_executor executor = {0};
         cflow_statechart_instance_stats stats = {0};
@@ -5417,7 +5420,7 @@ spec("TurboSCXML public CMeta data model") {
             .program = &program,
             .executor = &executor,
             .external_event_capacity = 1u,
-            .internal_event_capacity = 1u,
+            .internal_event_capacity = 2u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
         const scxml_cmeta_session_options_v5 data = {
@@ -5441,6 +5444,15 @@ spec("TurboSCXML public CMeta data model") {
         check_true(scxml_session_get_stats(&session, &stats));
         check_true(stats.done);
         check_false(stats.errored);
+        check_true(scxml_session_copy_data_resource_diagnostic(
+            &session, &resource_diagnostic));
+        check_equal(resource_diagnostic.stage,
+                    SCXML_DATA_RESOURCE_DIAGNOSTIC_FORMAT_OPEN);
+        check_true(resource_diagnostic.has_format);
+        check_equal(resource_diagnostic.format, DATA_BIND_FORMAT_XML);
+        check_equal(resource_diagnostic.uri, "mem:count");
+        check_true(resource_diagnostic.data_bind_status != DATA_BIND_OK);
+        check_true(resource_diagnostic.message[0] != '\0');
         check_equal(probe.open_calls, (size_t)1u);
         check_equal(probe.close_calls, (size_t)1u);
         check_equal(scxml_session_destroy(&session),
