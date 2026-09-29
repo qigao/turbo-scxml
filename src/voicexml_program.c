@@ -1130,6 +1130,8 @@ vxml_status vxml_compile(const void *bytes, size_t size,
         salts_xml_document_root(&document), &measurement,
         &active_limits, diagnostic);
     if (status != VXML_OK) goto cleanup;
+    status = resolve_gotos(&measurement, diagnostic);
+    if (status != VXML_OK) goto cleanup;
     if (!measure_allocation(
             &measurement, &forms_offset, &blocks_offset, &actions_offset,
             &storage_offset, &allocation_size)) {
@@ -1162,6 +1164,7 @@ vxml_status vxml_compile(const void *bytes, size_t size,
     if (writer.form_index != measurement.form_count ||
         writer.block_index != measurement.block_count ||
         writer.action_index != measurement.action_count ||
+        writer.goto_index != measurement.goto_count ||
         writer.storage_index != measurement.name_bytes) {
         status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
@@ -1169,6 +1172,11 @@ vxml_status vxml_compile(const void *bytes, size_t size,
             "VoiceXML document changed between measurement and build");
         goto cleanup;
     }
+    status = validate_literal_goto_graph(
+        impl,
+        salts_xml_node_location(salts_xml_document_root(&document)),
+        diagnostic);
+    if (status != VXML_OK) goto cleanup;
     out->impl = impl;
     impl = NULL;
     status = VXML_OK;
