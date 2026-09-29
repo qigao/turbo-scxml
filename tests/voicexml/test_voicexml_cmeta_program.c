@@ -286,6 +286,25 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("rejects data in VoiceXML 2.0 documents") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            data_compile_options();
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, &diagnostic),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+        check_equal(diagnostic.status, VXML_UNSUPPORTED_FEATURE);
+    }
+
     it("requires explicit external-data limits when a data element is present") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
