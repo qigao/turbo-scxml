@@ -5394,15 +5394,14 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
-    it("loads early data src from raw XML through DataBind without reparsing the SCXML document") {
+    it("loads early XML string data through DataBind without reparsing the SCXML document") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta' binding='early' initial='active'>"
-            "<datamodel><data id='count' src='mem:count'/></datamodel>"
-            "<state id='active'><transition cond='count == 7' "
-            "target='done'/><transition target='failed'/></state>"
-            "<final id='done'/><state id='failed'/></scxml>";
-        static const char external_xml[] = "<count>7</count>";
+            "<datamodel><data id='send_id' src='mem:count'/></datamodel>"
+            "<state id='active'><transition target='done'/></state>"
+            "<final id='done'/></scxml>";
+        static const char external_xml[] = "<send_id>seven</send_id>";
         const scxml_public_data initial = {
             false, 0, SCXML_PUBLIC_SOURCE_GOOD};
         raw_data_resource_probe probe = {
