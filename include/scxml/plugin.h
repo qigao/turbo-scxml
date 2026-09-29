@@ -2,6 +2,7 @@
 #define TURBO_SCXML_PLUGIN_H
 
 #include <scxml/scxml.h>
+#include <scxml/provider.h>
 #include <salts/plugin.h>
 
 #include <stddef.h>
@@ -72,7 +73,65 @@ typedef struct scxml_plugin_program {
     void *impl;
 } scxml_plugin_program;
 
+/**
+ * Generic Plugin Interface binding identity used by provider bridges.
+ *
+ * The referenced plugin must already be STARTED. The bridge acquires one lease
+ * and keeps it live until its destroy function succeeds.
+ */
+typedef struct scxml_plugin_provider_v1 {
+    size_t struct_size;
+    salts_plugin_ref plugin;
+    const char *export_id;
+    const char *contract_id;
+    uint32_t contract_version;
+    uint64_t required_capabilities;
+} scxml_plugin_provider_v1;
+
+#define SCXML_PLUGIN_PROVIDER_V1_INIT \
+    {sizeof(scxml_plugin_provider_v1), {0u, 0u}, NULL, NULL, 0u, 0u}
+
+typedef struct scxml_plugin_event_io_provider {
+    void *impl;
+} scxml_plugin_event_io_provider;
+
+typedef struct scxml_plugin_invoke_provider {
+    void *impl;
+} scxml_plugin_invoke_provider;
+
 const char *scxml_plugin_status_string(scxml_plugin_status status);
+
+scxml_plugin_status scxml_plugin_event_io_provider_open(
+    scxml_plugin_event_io_provider *out,
+    salts_plugin_registry *registry,
+    const scxml_plugin_provider_v1 *binding,
+    salts_plugin_status *out_plugin_status);
+
+const scxml_event_io_adapter *scxml_plugin_event_io_provider_adapter(
+    const scxml_plugin_event_io_provider *provider);
+
+void *scxml_plugin_event_io_provider_user(
+    scxml_plugin_event_io_provider *provider);
+
+scxml_plugin_status scxml_plugin_event_io_provider_destroy(
+    scxml_plugin_event_io_provider *provider,
+    salts_plugin_status *out_plugin_status);
+
+scxml_plugin_status scxml_plugin_invoke_provider_open(
+    scxml_plugin_invoke_provider *out,
+    salts_plugin_registry *registry,
+    const scxml_plugin_provider_v1 *binding,
+    salts_plugin_status *out_plugin_status);
+
+const scxml_invoke_adapter *scxml_plugin_invoke_provider_adapter(
+    const scxml_plugin_invoke_provider *provider);
+
+void *scxml_plugin_invoke_provider_user(
+    scxml_plugin_invoke_provider *provider);
+
+scxml_plugin_status scxml_plugin_invoke_provider_destroy(
+    scxml_plugin_invoke_provider *provider,
+    salts_plugin_status *out_plugin_status);
 
 /**
  * Compile one CMeta SCXML Program from static and Plugin Function actions.
