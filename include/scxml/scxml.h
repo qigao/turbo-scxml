@@ -306,12 +306,11 @@ typedef struct scxml_cmeta_session_options_v3 {
 } scxml_cmeta_session_options_v3;
 
 /**
- * Canonical DataBind-backed CMeta session provider with external resources.
+ * Compatibility CMeta session provider for CSerde-returning resources.
  *
- * `data_bind_workspace_bytes` bounds the caller-owned DataBind native
- * workspace. `max_data_items` bounds the whole native descriptor/value graph,
- * `max_data_owned_bytes` bounds aggregate owned STRING/BYTES payload, and
- * `max_data_buffer_bytes` bounds any one owned value.
+ * The decode path is DataBind-backed and preserves the published V4 ABI, but
+ * new resource providers should use V5 so CSerde does not cross the host
+ * acquisition boundary.
  */
 typedef struct scxml_cmeta_session_options_v4 {
     uint32_t abi_version;
