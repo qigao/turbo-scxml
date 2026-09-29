@@ -249,22 +249,11 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
 endif()
 
 if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
-  include(CheckCXXSourceCompiles)
-  set(_TURBOSCXML_REQUIRED_INCLUDES ${CMAKE_REQUIRED_INCLUDES})
-  set(_TURBOSCXML_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES})
-  set(CMAKE_REQUIRED_INCLUDES
-    "${CMAKE_CURRENT_SOURCE_DIR}/include;${SALTS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include;${SALTS_UTILS_ROOT_PATH}/include/query_vm")
-  unset(CMAKE_REQUIRED_LIBRARIES)
-  check_cxx_source_compiles(
-    "#include <voicexml/cmeta.h>\nint main() { vxml_program p{}; return p.impl == nullptr ? 0 : 1; }"
-    TURBOSCXML_VOICEXML_CMETA_CXX_HEADER_OK)
-  set(CMAKE_REQUIRED_INCLUDES ${_TURBOSCXML_REQUIRED_INCLUDES})
-  set(CMAKE_REQUIRED_LIBRARIES ${_TURBOSCXML_REQUIRED_LIBRARIES})
-  unset(_TURBOSCXML_REQUIRED_INCLUDES)
-  unset(_TURBOSCXML_REQUIRED_LIBRARIES)
-  if(NOT TURBOSCXML_VOICEXML_CMETA_CXX_HEADER_OK)
-    message(FATAL_ERROR "VoiceXML CMeta header must compile as C++")
-  endif()
+  add_library(turboscxml_voicexml_cmeta_header_cpp_test OBJECT
+    tests/voicexml_cmeta_header_cpp_test.cpp)
+  target_compile_features(turboscxml_voicexml_cmeta_header_cpp_test PRIVATE cxx_std_11)
+  target_link_libraries(turboscxml_voicexml_cmeta_header_cpp_test
+    PRIVATE TurboSCXML::VoiceXMLCMeta)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
