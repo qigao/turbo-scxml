@@ -4,6 +4,8 @@ project(TurboSCXMLInstallConsumer LANGUAGES C CXX)
 
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE
   "Require and exercise the installed CHttpResource component" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE
+  "Require and exercise the installed VoiceXMLCHttpResource component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO
   "Require and exercise the installed CHttpEventIO component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
@@ -65,6 +67,7 @@ endif()
 
 if(TURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS AND
    (TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE OR
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS))
   message(FATAL_ERROR
@@ -73,6 +76,7 @@ endif()
 
 if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ISOLATION AND
    (TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE OR
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS))
   message(FATAL_ERROR
@@ -80,6 +84,7 @@ if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ISOLATION AND
 endif()
 
 if((TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE OR
+    TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE OR
     TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO) AND
    TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
   message(FATAL_ERROR
@@ -118,6 +123,9 @@ elseif(NOT TURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CHttpResource)
+endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLCHttpResource)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CHttpEventIO)
@@ -342,6 +350,38 @@ else()
   endif()
 endif()
 
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE)
+  if(NOT TARGET TurboSCXML::VoiceXMLCHttpResource)
+    message(FATAL_ERROR
+      "Expected installed TurboSCXML::VoiceXMLCHttpResource")
+  endif()
+  get_target_property(
+    TURBOSCXML_VOICEXML_CHTTP_LINKS
+    TurboSCXML::VoiceXMLCHttpResource INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_VOICEXML_CHTTP_LINKS STREQUAL
+     "TurboSCXML::VoiceXMLDialogManager;TurboSCXML::CHttpResource")
+    message(FATAL_ERROR
+      "Unexpected VoiceXMLCHttpResource link closure: "
+      "${TURBOSCXML_VOICEXML_CHTTP_LINKS}")
+  endif()
+
+  add_executable(
+    turboscxml_voicexml_chttp_install_consumer voicexml_chttp_main.c)
+  target_compile_features(
+    turboscxml_voicexml_chttp_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_voicexml_chttp_install_consumer
+    PRIVATE TurboSCXML::VoiceXMLCHttpResource)
+
+  add_executable(
+    turboscxml_voicexml_chttp_install_consumer_cpp voicexml_chttp_main.cpp)
+  target_compile_features(
+    turboscxml_voicexml_chttp_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_voicexml_chttp_install_consumer_cpp
+    PRIVATE TurboSCXML::VoiceXMLCHttpResource)
+endif()
+
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE)
   if(NOT TARGET TurboSCXML::CHttpResource)
     message(FATAL_ERROR "Expected installed TurboSCXML::CHttpResource")
@@ -383,10 +423,13 @@ if(NOT TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY AND
    NOT TURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS AND
    NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS AND
    NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE AND
+   NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE AND
    NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO AND
    (TARGET TurboSCXML::CHttpResource OR
+    TARGET TurboSCXML::VoiceXMLCHttpResource OR
     TARGET TurboSCXML::CHttpEventIO OR
     EXISTS "${TURBOSCXML_ROOT_PATH}/include/scxml/chttp_resource.h" OR
+    EXISTS "${TURBOSCXML_ROOT_PATH}/include/voicexml/chttp_resource.h" OR
     EXISTS "${TURBOSCXML_ROOT_PATH}/include/scxml/chttp_event_io.h"))
   message(FATAL_ERROR
     "Core-only install unexpectedly exposes a CHTTP component")
