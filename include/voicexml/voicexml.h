@@ -107,10 +107,12 @@ vxml_status vxml_session_init(vxml_session *session,
 vxml_status vxml_session_start(vxml_session *session);
 
 /**
- * Start a literal-profile session at one compiled form ID.
+ * Start a supported runtime profile at one compiled form ID.
  *
- * The ID is borrowed only for this call. Missing IDs fail the session with
- * VXML_INVALID_STRUCTURE. Non-literal profiles return VXML_INVALID_CONTRACT.
+ * The ID is borrowed only for this call. Literal and built-in CMeta profiles
+ * enter the selected immutable form. Missing IDs fail the session with
+ * VXML_INVALID_STRUCTURE; profiles without named-form entry support return
+ * VXML_INVALID_CONTRACT.
  */
 vxml_status vxml_session_start_at_form(
     vxml_session *session,
