@@ -1,4 +1,5 @@
 #include <salts/plugin.h>
+#include <salts/thread.h>
 
 #include <string.h>
 
