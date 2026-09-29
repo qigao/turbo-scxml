@@ -54,9 +54,9 @@ static const cmeta_function_abi_desc scxml_test_custom_action_abi = {
 
 typed_any_raw(
     CMETA_EFFECT_IO, CMETA_PROP_DETERMINISTIC,
-    int, scxml_test_custom_action_pair,
-    (int first, int second)) {
-    const int total = first + second;
+    long, scxml_test_custom_action_pair,
+    (long first, long second)) {
+    const long total = first + second;
     atomic_store_explicit(
         &custom_action_observed, total, memory_order_relaxed);
     return total;
@@ -66,13 +66,13 @@ static const cmeta_param_desc scxml_test_custom_action_pair_params[] = {
     {
         .size = sizeof(cmeta_param_desc),
         .name = "first",
-        .type = &cmeta_type_int,
+        .type = &cmeta_type_long,
         .flags = CMETA_PARAM_IN
     },
     {
         .size = sizeof(cmeta_param_desc),
         .name = "second",
-        .type = &cmeta_type_int,
+        .type = &cmeta_type_long,
         .flags = CMETA_PARAM_IN
     }
 };
@@ -80,7 +80,7 @@ static const cmeta_param_desc scxml_test_custom_action_pair_params[] = {
 static const cmeta_function_desc scxml_test_custom_action_pair_function = {
     .size = sizeof(cmeta_function_desc),
     .name = "scxml_test_custom_action_pair",
-    .return_type = &cmeta_type_int,
+    .return_type = &cmeta_type_long,
     .params = scxml_test_custom_action_pair_params,
     .param_count = 2u,
     .effects = CMETA_EFFECT_IO,
