@@ -6697,6 +6697,79 @@ spec("TurboSCXML public CMeta data model") {
         scxml_program_destroy(&program);
     }
 
+    it("rejects FunctionDesc arity outside the current CMeta VALUE callable universe before publication") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry>"
+            "<a:record3 first='count' second='1' third='2'/>"
+            "</onentry></state></scxml>";
+        const cmeta_param_desc params[] = {
+            {
+                .size = sizeof(cmeta_param_desc),
+                .name = "first",
+                .type = &cmeta_type_int,
+                .flags = CMETA_PARAM_IN
+            },
+            {
+                .size = sizeof(cmeta_param_desc),
+                .name = "second",
+                .type = &cmeta_type_int,
+                .flags = CMETA_PARAM_IN
+            },
+            {
+                .size = sizeof(cmeta_param_desc),
+                .name = "third",
+                .type = &cmeta_type_int,
+                .flags = CMETA_PARAM_IN
+            }
+        };
+        const cmeta_function_desc function = {
+            .size = sizeof(cmeta_function_desc),
+            .name = "scxml_test_custom_action_three",
+            .return_type = &cmeta_type_int,
+            .params = params,
+            .param_count = 3u,
+            .effects = CMETA_EFFECT_IO,
+            .properties = CMETA_PROP_DETERMINISTIC
+        };
+        const cmeta_abi_carrier param_abi[] = {
+            CMETA_ABI_SCALAR,
+            CMETA_ABI_SCALAR,
+            CMETA_ABI_SCALAR
+        };
+        const cmeta_function_abi_desc abi = {
+            .size = sizeof(cmeta_function_abi_desc),
+            .function = &function,
+            .return_carrier = CMETA_ABI_SCALAR,
+            .param_carriers = param_abi,
+            .param_count = 3u
+        };
+        const scxml_cmeta_custom_action_v2 action = {
+            .struct_size = sizeof(scxml_cmeta_custom_action_v2),
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record3",
+            .local_name_size = sizeof("record3") - 1u,
+            .function = &function,
+            .abi = &abi,
+            .callable = scxml_test_custom_action
+        };
+        scxml_cmeta_compile_options_v3 options =
+            scxml_cmeta_default_compile_options_v3(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+
+        options.actions = &action;
+        options.action_count = 1u;
+        check_equal(
+            scxml_compile_cmeta_v3(
+                &program, source, sizeof(source) - 1u,
+                NULL, &options, &diagnostic),
+            SCXML_INVALID_ARGUMENT);
+        check_null(program.impl);
+    }
+
     it("rejects FunctionDesc-first semantic or ABI mismatch before publication") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
