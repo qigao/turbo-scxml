@@ -595,12 +595,334 @@ static vxml_cmeta_session_options_v1 data_session_options(
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 field_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_fields = 8u;
+    options.max_grammar_bytes = 256u;
+    return options;
+}
+
+typedef struct cmeta_collect_probe {
+    vxml_status prepare_status;
+    size_t prepare_calls;
+    size_t commit_calls;
+    size_t discard_calls;
+    size_t cancel_calls;
+    bool reserved;
+    bool active;
+    uint64_t generation;
+    char field[32];
+    char grammar_type[64];
+    char grammar_src[64];
+} cmeta_collect_probe;
+
+static void cmeta_collect_commit(void *user) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commit_calls;
+    probe->reserved = false;
+    probe->active = true;
+}
+
+static void cmeta_collect_discard(void *user) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discard_calls;
+    probe->reserved = false;
+}
+
+static vxml_status cmeta_collect_prepare(
+    void *user,
+    const vxml_cmeta_collect_request_v1 *request,
+    vxml_cmeta_collect_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_COLLECT_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->field.data == NULL ||
+        request->field.size >= sizeof(probe->field) ||
+        request->grammar_type.data == NULL ||
+        request->grammar_type.size >= sizeof(probe->grammar_type) ||
+        request->grammar_src.data == NULL ||
+        request->grammar_src.size >= sizeof(probe->grammar_src))
+        return VXML_INVALID_CONTRACT;
+    ++probe->prepare_calls;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    if (probe->prepare_status != VXML_OK)
+        return probe->prepare_status;
+    if (probe->reserved || probe->active)
+        return VXML_INVALID_STATE;
+    memcpy(probe->field, request->field.data, request->field.size);
+    probe->field[request->field.size] = '\0';
+    memcpy(probe->grammar_type,
+           request->grammar_type.data, request->grammar_type.size);
+    probe->grammar_type[request->grammar_type.size] = '\0';
+    memcpy(probe->grammar_src,
+           request->grammar_src.data, request->grammar_src.size);
+    probe->grammar_src[request->grammar_src.size] = '\0';
+    probe->generation = request->generation;
+    probe->reserved = true;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){
+        .commit = cmeta_collect_commit,
+        .discard = cmeta_collect_discard,
+        .user = probe};
+    return VXML_OK;
+}
+
+static void cmeta_collect_cancel(void *user, uint64_t generation) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (probe == NULL) return;
+    ++probe->cancel_calls;
+    if (probe->generation == generation)
+        probe->active = false;
+}
+
+static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
+    uint64_t capabilities) {
+    return (vxml_cmeta_collect_adapter_v1){
+        .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_collect_adapter_v1),
+        .capabilities = capabilities,
+        .prepare = cmeta_collect_prepare,
+        .cancel = cmeta_collect_cancel};
+}
+
+static vxml_cmeta_session_options_v1 field_session_options(
+    const vxml_cmeta_session_root *root,
+    const vxml_cmeta_collect_adapter_v1 *adapter,
+    cmeta_collect_probe *probe) {
+    vxml_cmeta_session_options_v1 options = session_options(root);
+    options.collect = adapter;
+    options.collect_user = probe;
+    return options;
+}
+
 static bool value_view_is_clear(vxml_cmeta_value_view value) {
     return value.kind == VXML_CMETA_VALUE_UNDEFINED &&
         value.data.string.data == NULL && value.data.string.size == 0u;
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects fields in document order and manages transactional collect admission") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='order'>"
+            "<field name='value'><grammar type='application/srgs+xml' "
+            "src='value.grxml'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' "
+            "src='other.grxml'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.flag = true};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request),
+                    VXML_OK);
+        check_equal(request.abi_version,
+                    VXML_CMETA_COLLECT_REQUEST_ABI_V1);
+        check_true(request.generation != 0u);
+        check_equal(request.required_capabilities,
+                    VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        check_equal(request.field.size, sizeof("value") - 1u);
+        check_equal(memcmp(request.field.data, "value",
+                           request.field.size), 0);
+        check_equal(request.grammar_type.size,
+                    sizeof("application/srgs+xml") - 1u);
+        check_equal(memcmp(request.grammar_type.data,
+                           "application/srgs+xml",
+                           request.grammar_type.size), 0);
+        check_equal(request.grammar_src.size,
+                    sizeof("value.grxml") - 1u);
+        check_equal(memcmp(request.grammar_src.data,
+                           "value.grxml", request.grammar_src.size), 0);
+
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_true(probe.reserved);
+        check_equal(probe.field, "value");
+        check_equal(probe.grammar_type, "application/srgs+xml");
+        check_equal(probe.grammar_src, "value.grxml");
+        check_equal(probe.generation, request.generation);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_INVALID_STATE);
+
+        check_equal(vxml_session_cmeta_collect_discard(&session),
+                    VXML_OK);
+        check_equal(probe.discard_calls, (size_t)1u);
+        check_false(probe.reserved);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        check_equal(probe.commit_calls, (size_t)1u);
+        check_true(probe.active);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_INVALID_STATE);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)1u);
+        check_false(probe.active);
+        vxml_program_destroy(&program);
+    }
+
+    it("skips a prefilled first field and selects the next undefined field") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='b'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.value = 7, .other = 0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request),
+                    VXML_OK);
+        check_equal(request.field.size, sizeof("other") - 1u);
+        check_equal(memcmp(request.field.data, "other",
+                           request.field.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("skips a false-cond field before selecting the next field") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value' cond='false'><grammar "
+            "type='application/srgs+xml' src='a'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='b'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request),
+                    VXML_OK);
+        check_equal(request.field.size, sizeof("other") - 1u);
+        check_equal(memcmp(request.field.data, "other",
+                           request.field.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects collect capability mismatch before calling the provider") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(0u);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_equal(probe.prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("loads JSON external data into the CMeta root before form execution") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
