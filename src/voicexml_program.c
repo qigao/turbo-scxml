@@ -13,6 +13,13 @@ typedef struct vxml_decoded_id {
     size_t size;
 } vxml_decoded_id;
 
+typedef struct vxml_decoded_goto {
+    char *target;
+    size_t target_size;
+    size_t target_form;
+    salts_xml_location location;
+} vxml_decoded_goto;
+
 typedef struct vxml_measurement {
     size_t form_count;
     size_t block_count;
@@ -21,6 +28,9 @@ typedef struct vxml_measurement {
     vxml_decoded_id *ids;
     size_t id_count;
     size_t id_capacity;
+    vxml_decoded_goto *gotos;
+    size_t goto_count;
+    size_t goto_capacity;
 } vxml_measurement;
 
 typedef struct vxml_writer {
@@ -29,6 +39,7 @@ typedef struct vxml_writer {
     size_t form_index;
     size_t block_index;
     size_t action_index;
+    size_t goto_index;
     size_t storage_index;
 } vxml_writer;
 
@@ -383,7 +394,8 @@ static bool node_is_known_profile_element(salts_xml_node node) {
            (view_equal(local_name, "vxml") ||
             view_equal(local_name, "form") ||
             view_equal(local_name, "block") ||
-            view_equal(local_name, "exit"));
+            view_equal(local_name, "exit") ||
+            view_equal(local_name, "goto"));
 }
 
 static salts_xml_attribute unqualified_attribute(
@@ -426,7 +438,10 @@ static void measurement_destroy(vxml_measurement *measurement) {
     if (measurement == NULL) return;
     for (index = 0u; index < measurement->id_count; ++index)
         vxml_free(measurement->ids[index].data);
+    for (index = 0u; index < measurement->goto_count; ++index)
+        vxml_free(measurement->gotos[index].target);
     vxml_free(measurement->ids);
+    vxml_free(measurement->gotos);
     memset(measurement, 0, sizeof(*measurement));
 }
 
