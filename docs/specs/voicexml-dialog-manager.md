@@ -15,10 +15,11 @@ CCXML session
   -> upstream CCXML telephony provider for non-dialog operations
 ```
 
-The manager owns copied source/media/connection bytes, compiled VoiceXML
-programs, VoiceXML sessions, and registry rows. It borrows the upstream
-telephony adapter/user, document adapter/user, and Event sink/user until
-manager destruction.
+The manager owns copied source/media/connection bytes, VoiceXML sessions, and
+registry rows. V1 also owns compiled VoiceXML Programs. V2/V3 instead retain
+generation-safe borrows from `VoiceXMLDocumentStore`, which remains
+caller-owned. The manager borrows the upstream telephony adapter/user and Event
+sink/user until manager destruction.
 
 ## Ticket protocol
 
@@ -52,6 +53,50 @@ A FULL Event sink publishes nothing and leaves the terminal Event pending. A
 later `run_ready()` retries only publication; it does not reopen/recompile the
 document.
 
+## Configuration revisions
+
+- **V1** — document-provider based. The manager opens, compiles, and owns one
+  Program per active row.
+- **V2** — DocumentStore based. Programs are immutable cached borrows; initial
+  source fragments and external goto remain fail-closed.
+- **V3** — navigation-enabled DocumentStore mode. It adds a hard
+  `max_navigation_hops` bound, accepts initial source fragments, and consumes
+  `VXML_SESSION_NAVIGATING` handoffs.
+
+V1 and V2 retain their published behavior when V3 is introduced.
+
+## V3 external navigation
+
+External goto remains transport-independent:
+
+```text
+current cached document + Program
+    |
+    | VoiceXML core yields NAVIGATING + borrowed target
+    v
+DialogManager V3
+    |
+    +-- resolve target relative to current document URI
+    +-- acquire/view next DocumentStore ref
+    +-- destroy old VoiceXML session
+    +-- release old document ref
+    +-- initialize next session
+    +-- optional fragment -> vxml_session_start_at_form()
+    |
+    v
+continue until EXITED or another bounded handoff
+```
+
+The next document is acquired before the old borrow is released, so a failed
+resolution/acquisition never leaves the row without an owned Program. Each
+successful handoff increments one row-local counter. When
+`max_navigation_hops` is reached, the manager publishes
+`error.dialog.start` with `VXML_LIMIT_EXCEEDED` and cleanup follows the same
+row terminal path.
+
+`dialog.started` is published once for the CCXML dialog after the complete
+synchronous navigation chain settles, not once per leaf document.
+
 The non-media VoiceXML core exits synchronously, so a successful start produces
 `dialog.started` followed by `dialog.exit`. The state machine leaves an
 explicit RUNNING state for later asynchronous VoiceXML slices.
@@ -79,7 +124,8 @@ The config explicitly bounds:
 - connection-ID bytes;
 - generated dialog-ID bytes;
 - acquired VoiceXML document bytes;
-- VoiceXML compiler limits.
+- VoiceXML compiler limits;
+- V3 external navigation hops.
 
 Registry exhaustion returns `SCXML_ADAPTER_FULL`. No operation silently
 allocates an unbounded queue or starts a hidden worker.
@@ -102,7 +148,7 @@ Quiescence requires both an empty manager registry and upstream
 ## Future growth
 
 Prompt/collect/media providers reuse the CMeta Interface composition model from
-`scxml-cmeta-provider-interfaces.md`. #48 may add a CHTTP-backed document
-provider without changing this manager ABI. Future asynchronous completions
-must carry dialog generation/tokens through a bounded ingress before they are
-allowed to mutate a row.
+`scxml-cmeta-provider-interfaces.md`. `VoiceXMLCHttpResource` supplies one
+optional transport-backed document provider below DocumentStore. Future
+asynchronous completions must carry dialog generation/tokens through a bounded
+ingress before they are allowed to mutate a row.
