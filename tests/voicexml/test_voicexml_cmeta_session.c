@@ -610,6 +610,7 @@ spec("VoiceXML CMeta session execution") {
             data_session_options(&root, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
+        vxml_cmeta_name_view exit_name = {0};
         vxml_cmeta_value_view value = {0};
 
         check_equal(vxml_compile_cmeta(
@@ -631,8 +632,10 @@ spec("VoiceXML CMeta session execution") {
 
         check_equal(vxml_session_start(&session), VXML_OK);
         check_equal(vxml_session_cmeta_exit_at(
-                        &session, 0u, NULL, &value),
+                        &session, 0u, &exit_name, &value),
                     VXML_OK);
+        check_null(exit_name.data);
+        check_equal(exit_name.size, (size_t)0u);
         check_equal(value.kind, VXML_CMETA_VALUE_SINT);
         check_equal(value.data.sint, (int64_t)7);
 
