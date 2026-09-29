@@ -14,6 +14,8 @@ option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN
   "Require and exercise the installed Plugin component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER
   "Require and exercise the installed VoiceXMLDialogManager component" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE
+  "Require and exercise the installed VoiceXMLDocumentStore component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING
   "Require the installed package to omit the Plugin component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY
@@ -139,6 +141,9 @@ endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLDialogManager)
 endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLDocumentStore)
+endif()
 if(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING AND
    TURBOSCXML_INSTALL_COMPONENTS)
   find_package(TurboSCXML CONFIG REQUIRED
@@ -253,6 +258,38 @@ else()
   target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
   target_link_libraries(
     turboscxml_install_consumer PRIVATE TurboSCXML::SCXML)
+
+  if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE)
+    if(NOT TARGET TurboSCXML::VoiceXMLDocumentStore)
+      message(FATAL_ERROR
+        "Expected installed TurboSCXML::VoiceXMLDocumentStore")
+    endif()
+    get_target_property(
+      TURBOSCXML_DOCUMENT_STORE_LINKS
+      TurboSCXML::VoiceXMLDocumentStore INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_DOCUMENT_STORE_LINKS STREQUAL
+       "TurboSCXML::VoiceXMLDialogManager")
+      message(FATAL_ERROR
+        "Unexpected VoiceXMLDocumentStore link closure: "
+        "${TURBOSCXML_DOCUMENT_STORE_LINKS}")
+    endif()
+
+    add_executable(
+      turboscxml_document_store_install_consumer document_store_main.c)
+    target_compile_features(
+      turboscxml_document_store_install_consumer PRIVATE c_std_11)
+    target_link_libraries(
+      turboscxml_document_store_install_consumer
+      PRIVATE TurboSCXML::VoiceXMLDocumentStore)
+
+    add_executable(
+      turboscxml_document_store_install_consumer_cpp document_store_main.cpp)
+    target_compile_features(
+      turboscxml_document_store_install_consumer_cpp PRIVATE cxx_std_17)
+    target_link_libraries(
+      turboscxml_document_store_install_consumer_cpp
+      PRIVATE TurboSCXML::VoiceXMLDocumentStore)
+  endif()
 
   if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
     if(NOT TARGET TurboSCXML::VoiceXMLDialogManager)
