@@ -758,24 +758,33 @@ static scxml_expr_status assign_databind_failure(
         0u, message);
 }
 
-scxml_expr_status scxml_assign_apply_external(
+scxml_expr_status scxml_assign_apply_external_diagnostic(
     const scxml_assign_program *program,
     cserde_reader *reader,
     const DataBindNativeOptions *options,
     size_t max_buffer_bytes,
     void *decode_storage, size_t decode_storage_size,
     void *staged_root,
-    scxml_expr_diagnostic *diagnostic) {
+    scxml_expr_diagnostic *diagnostic,
+    DataBindNativeDiagnostic *out_bind_diagnostic) {
     const scxml_assign_program_impl *impl = program != NULL
         ? (const scxml_assign_program_impl *)program->impl : NULL;
     const cmeta_type_desc *type;
     unsigned char *destination;
     DataBindNativeDiagnostic bind_diagnostic =
         DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindNativeDiagnostic failure_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindNativeDiagnostic clear_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     DataBindStatus bind_status;
     cserde_token trailing;
     cserde_status reader_status;
     bool trivial;
+
+    if (out_bind_diagnostic != NULL)
+        *out_bind_diagnostic =
+            (DataBindNativeDiagnostic)DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     if (impl == NULL || reader == NULL || options == NULL ||
         decode_storage == NULL || staged_root == NULL ||
         max_buffer_bytes == 0u ||
@@ -804,29 +813,48 @@ scxml_expr_status scxml_assign_apply_external(
         options, impl->destination, decode_storage, decode_storage_size,
         &bind_diagnostic);
     if (bind_status != DATA_BIND_OK) {
+        if (out_bind_diagnostic != NULL)
+            *out_bind_diagnostic = bind_diagnostic;
         memset(decode_storage, 0, type->size);
         return assign_databind_failure(
             bind_status, &bind_diagnostic, diagnostic);
     }
 
+    bind_diagnostic =
+        (DataBindNativeDiagnostic)DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     bind_status = data_bind_native_decode_bounded(
         options, impl->destination, reader, decode_storage,
         decode_storage_size, max_buffer_bytes, &bind_diagnostic);
     if (bind_status != DATA_BIND_OK) {
+        failure_diagnostic = bind_diagnostic;
         (void)data_bind_native_clear(
             options, impl->destination, decode_storage, decode_storage_size,
-            &bind_diagnostic);
+            &clear_diagnostic);
         memset(decode_storage, 0, type->size);
+        if (out_bind_diagnostic != NULL)
+            *out_bind_diagnostic = failure_diagnostic;
         return assign_databind_failure(
-            bind_status, &bind_diagnostic, diagnostic);
+            bind_status, &failure_diagnostic, diagnostic);
     }
 
     reader_status = cserde_reader_next(reader, &trailing);
     if (reader_status != CSERDE_DONE) {
         (void)data_bind_native_clear(
             options, impl->destination, decode_storage, decode_storage_size,
-            &bind_diagnostic);
+            &clear_diagnostic);
         memset(decode_storage, 0, type->size);
+        if (out_bind_diagnostic != NULL) {
+            out_bind_diagnostic->source_status = reader_status;
+            out_bind_diagnostic->error.code =
+                reader_status == CSERDE_LIMIT_EXCEEDED
+                    ? DATA_BIND_ERR_LIMIT : DATA_BIND_ERR_PARSE;
+            (void)snprintf(
+                out_bind_diagnostic->error.message,
+                sizeof(out_bind_diagnostic->error.message), "%s",
+                reader_status == CSERDE_OK
+                    ? "CMeta external data contains trailing tokens"
+                    : "CMeta external data reader failed after one value");
+        }
         return assign_report(
             diagnostic,
             reader_status == CSERDE_LIMIT_EXCEEDED
@@ -845,16 +873,33 @@ scxml_expr_status scxml_assign_apply_external(
         type->traits->move_construct(destination, decode_storage);
     }
 
-    bind_diagnostic = (DataBindNativeDiagnostic)
-        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    bind_diagnostic =
+        (DataBindNativeDiagnostic)DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
     bind_status = data_bind_native_clear(
         options, impl->destination, decode_storage, decode_storage_size,
         &bind_diagnostic);
     memset(decode_storage, 0, type->size);
-    if (bind_status != DATA_BIND_OK)
+    if (bind_status != DATA_BIND_OK) {
+        if (out_bind_diagnostic != NULL)
+            *out_bind_diagnostic = bind_diagnostic;
         return assign_databind_failure(
             bind_status, &bind_diagnostic, diagnostic);
+    }
     return assign_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
+}
+
+scxml_expr_status scxml_assign_apply_external(
+    const scxml_assign_program *program,
+    cserde_reader *reader,
+    const DataBindNativeOptions *options,
+    size_t max_buffer_bytes,
+    void *decode_storage, size_t decode_storage_size,
+    void *staged_root,
+    scxml_expr_diagnostic *diagnostic) {
+    return scxml_assign_apply_external_diagnostic(
+        program, reader, options, max_buffer_bytes,
+        decode_storage, decode_storage_size, staged_root,
+        diagnostic, NULL);
 }
 
 bool scxml_assign_destination_is_read_only_system(
