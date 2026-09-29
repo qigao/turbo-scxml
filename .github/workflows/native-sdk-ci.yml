@@ -11,6 +11,17 @@ on:
       - "vcpkg.json"
       - "CMakeUserPresets.json"
       - ".github/workflows/native-sdk-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
+      - "CMakeUserPresets.json"
+      - ".github/workflows/native-sdk-ci.yml"
 
 permissions:
   contents: read
@@ -51,14 +62,28 @@ jobs:
           set -euo pipefail
           config="$RUNNER_TEMP/turboscxml-nuget.config"
           packages="$RUNNER_TEMP/turboscxml-native-sdks"
+          project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile "$config" --packages "$packages"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="CHttp.Native" Version="*" />
+            </ItemGroup>
+          </Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
           sdk_root() {
             local package="$1"
             local rid="$2"
             local roots=()
-            mapfile -t roots < <(
+            local root
+            while IFS= read -r root; do
+              roots+=("$root")
+            done < <(
               find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
                 -path "*/sdk/$rid" -print
             )
@@ -129,10 +154,21 @@ jobs:
           $ErrorActionPreference = "Stop"
           $config = Join-Path $env:RUNNER_TEMP "turboscxml-nuget.config"
           $packages = Join-Path $env:RUNNER_TEMP "turboscxml-native-sdks"
+          $project = Join-Path $env:RUNNER_TEMP "turboscxml-native-dependencies.csproj"
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
-          dotnet restore cmake/ci/TurboSCXML.NativeDependencies.csproj --configfile $config --packages $packages
+          @'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+            <ItemGroup>
+              <PackageReference Include="Salts.Native" Version="*" />
+              <PackageReference Include="SaltsUtils.Native" Version="*" />
+              <PackageReference Include="CHttp.Native" Version="*" />
+            </ItemGroup>
+          </Project>
+          '@ | Set-Content -LiteralPath $project
+          dotnet restore $project --configfile $config --packages $packages --no-cache
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
           function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
             $packageRoot = Join-Path $packages $packageName
