@@ -2,9 +2,15 @@ name: Native SDK CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
-  workflow_dispatch:
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
+      - "CMakeUserPresets.json"
+      - ".github/workflows/native-sdk-ci.yml"
 
 permissions:
   contents: read
@@ -15,9 +21,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SALTS_SDK_VERSION: "1.2.0"
-  SALTS_UTILS_SDK_VERSION: "2.0.2"
-  CHTTP_SDK_VERSION: "1.0.0"
+  SALTS_SDK_VERSION: "1.8.3"
+  SALTS_UTILS_SDK_VERSION: "4.1.3"
+  CHTTP_SDK_VERSION: "1.1.4"
 
 jobs:
   linux:
