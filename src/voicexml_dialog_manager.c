@@ -976,7 +976,7 @@ bool vxml_dialog_manager_get_stats(
             break;
         case VXML_DIALOG_ROW_EVENT_PENDING:
             ++stats.active;
-            ++stats.terminal_pending;
+            ++stats.event_pending;
             break;
         }
     }
