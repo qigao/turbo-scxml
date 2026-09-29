@@ -375,6 +375,7 @@ static vxml_status admit_cmeta_datamodel(
 }
 
 typedef struct cmeta_program_measurement {
+    size_t external_data_count;
     size_t form_count;
     size_t block_count;
     size_t scope_count;
@@ -1065,6 +1066,7 @@ typedef struct cmeta_program_builder {
     vxml_cmeta_program_data *profile;
     const vxml_cmeta_compile_options_v1 *options;
     vxml_diagnostic *diagnostic;
+    size_t external_data_index;
     size_t form_index;
     size_t block_index;
     size_t declaration_index;
@@ -1102,6 +1104,9 @@ static const cmeta_scope_allocator cmeta_program_scope_allocator = {
 static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     size_t index;
     if (profile == NULL) return;
+    if (profile->external_data != NULL)
+        for (index = 0u; index < profile->external_data_count; ++index)
+            data_bind_native_plan_free(profile->external_data[index].plan);
     if (profile->expressions != NULL)
         for (index = 0u; index < profile->expression_count; ++index)
             vxml_cmeta_expr_program_destroy(
@@ -1109,6 +1114,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     if (profile->scopes != NULL)
         for (index = 0u; index < profile->scope_count; ++index)
             cmeta_scope_schema_destroy(&profile->scopes[index].schema);
+    vxml_free(profile->external_data);
     vxml_free(profile->location_candidates);
     vxml_free(profile->locations);
     vxml_free(profile->expressions);
@@ -1140,6 +1146,7 @@ static bool cmeta_allocate_rows(
     profile = (vxml_cmeta_program_data *)vxml_calloc(1u, sizeof(*profile));
     if (impl == NULL || profile == NULL) goto failure;
     profile->root = options->root;
+    profile->external_data_count = measurement->external_data_count;
     profile->semantic_data_count = options->semantic_data_count;
     profile->scope_count = measurement->scope_count;
     profile->document_scope = 0u;
@@ -1167,6 +1174,7 @@ static bool cmeta_allocate_rows(
             if (profile->member == NULL) goto failure; \
         } \
     } while (0)
+    CMETA_ALLOC_ROWS(external_data, measurement->external_data_count);
     CMETA_ALLOC_ROWS(scopes, measurement->scope_count);
     CMETA_ALLOC_ROWS(forms, measurement->form_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
