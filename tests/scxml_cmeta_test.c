@@ -5363,6 +5363,15 @@ spec("TurboSCXML public CMeta data model") {
                 &program, source, strlen(source), NULL, &options, &diagnostic),
             SCXML_LIMIT_EXCEEDED);
         check_null(program.impl);
+
+        memset(&diagnostic, 0, sizeof(diagnostic));
+        options.max_data_depth = 8u;
+        options.max_data_items = 1u;
+        check_equal(
+            scxml_compile_cmeta_v4(
+                &program, source, strlen(source), NULL, &options, &diagnostic),
+            SCXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
     }
 
     it("rejects runtime DataBind budgets smaller than the Program plan before I/O") {
