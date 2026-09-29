@@ -370,6 +370,56 @@ spec("VoiceXML dialog manager") {
         manager_close_destroy(&manager, &upstream);
     }
 
+    it("publishes error.dialog.start and releases the row when document acquisition fails") {
+        static const char source[] = "mem:voice";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-error";
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_DOCUMENT_ERROR};
+        event_probe events = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        const ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_dialog_manager_stats stats = {0};
+
+        check_equal(
+            manager_init(
+                &manager, 1u, &upstream, &documents, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(processed, (size_t)1u);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(documents.close_calls, (size_t)0u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(events.rows[0].voice_status, VXML_INVALID_STATE);
+        check_true(vxml_dialog_manager_get_stats(&manager, &stats));
+        check_equal(stats.active, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+    }
+
     it("reserves fixed capacity and discard makes the row reusable") {
         static const char source[] = "mem:voice";
         static const char media[] = "application/voicexml+xml";
