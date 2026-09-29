@@ -6,6 +6,7 @@
 typedef struct upstream_probe {
     size_t accept_calls;
     size_t close_calls;
+    bool reject_accept;
     bool quiescent;
 } upstream_probe;
 
@@ -23,6 +24,10 @@ static scxml_adapter_status upstream_prepare_accept(
     if (probe == NULL || out_ticket == NULL)
         return SCXML_ADAPTER_INVALID_CONTRACT;
     ++probe->accept_calls;
+    if (probe->reject_accept) {
+        if (out_error != NULL) *out_error = "upstream refused";
+        return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
     *out_ticket = (cflow_statechart_effect_ticket){
         .commit = noop_ticket,
         .discard = noop_ticket,
@@ -527,6 +532,37 @@ spec("VoiceXML dialog manager") {
         check_equal(documents.open_calls, (size_t)1u);
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[1].name, "dialog.exit");
+
+        manager_close_destroy(&manager, &upstream);
+    }
+
+    it("forwards upstream non-dialog refusal without manufacturing a ticket") {
+        upstream_probe upstream = {.reject_accept = true};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK};
+        event_probe events = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        const ccxml_accept_request accept = {
+            .connection_id = "call-refused",
+            .connection_id_size = sizeof("call-refused") - 1u};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+
+        check_equal(
+            manager_init(
+                &manager, 1u, &upstream, &documents, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_accept(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &accept, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(upstream.accept_calls, (size_t)1u);
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_not_null(error);
 
         manager_close_destroy(&manager, &upstream);
     }
