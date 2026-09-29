@@ -152,7 +152,7 @@ static scxml_plugin_lease_row *find_lease(
 
 static salts_plugin_status acquire_manifest(
     salts_plugin_registry *registry,
-    salts_plugin_lease_row *rows,
+    scxml_plugin_lease_row *rows,
     size_t *count,
     salts_plugin_ref ref,
     const salts_plugin_manifest **out_manifest) {
