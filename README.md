@@ -101,6 +101,8 @@ See [CMeta provider interfaces](docs/specs/scxml-cmeta-provider-interfaces.md).
 
 The non-media CCXML/VoiceXML lifecycle bridge is documented in [VoiceXML dialog manager](docs/specs/voicexml-dialog-manager.md).
 
+Multi-document URI resolution and the bounded immutable cache are documented in [VoiceXML document store](docs/specs/voicexml-document-store.md).
+
 The optional CHTTP document projection is documented in [VoiceXML CHTTP document resource](docs/specs/voicexml-chttp-resource.md).
 
 ## Repository ownership
@@ -133,6 +135,7 @@ TurboSCXML does not own:
 | `TurboSCXML::CCXML` | CCXML layer |
 | `TurboSCXML::VoiceXML` | bounded VoiceXML core profile |
 | `TurboSCXML::VoiceXMLDialogManager` | bounded CCXML dialogprepare/start/terminate bridge over the VoiceXML core |
+| `TurboSCXML::VoiceXMLDocumentStore` | bounded URI resolution + immutable VoiceXML document/program cache |
 | `TurboSCXML::VoiceXMLCHttpResource` | optional CHTTP-backed VoiceXML document provider bridge |
 | `TurboSCXML::VoiceXMLCMeta` | optional CMeta-backed VoiceXML data-model profile |
 | `TurboSCXML::CHttpResource` | optional host-authorized HTTP resource adapter |
@@ -144,6 +147,7 @@ The public C API is available through:
 #include <scxml/scxml.h>
 #include <scxml/provider.h> /* optional CMeta provider-interface surface */
 #include <voicexml/dialog_manager.h> /* optional CCXML/VoiceXML dialog lifecycle bridge */
+#include <voicexml/document_store.h> /* bounded multi-document URI/cache owner */
 #include <voicexml/chttp_resource.h> /* optional CHTTP document provider */
 ```
 
