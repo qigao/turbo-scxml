@@ -49,6 +49,22 @@ static bool session_data_options_valid(
         adapter->open != NULL && adapter->close != NULL;
 }
 
+static bool session_collect_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, collect_user) +
+        sizeof(options->collect_user);
+    const vxml_cmeta_collect_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size)
+        return false;
+    adapter = options->collect;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_COLLECT_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
 static const DataBindFormatProvider *data_format_provider(
     vxml_cmeta_data_format format) {
     switch (format) {
@@ -657,6 +673,19 @@ static void session_data_destroy(
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    if (session->collect_prepared) {
+        vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
+        session->collect_prepared = false;
+        session->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->collect_in_flight &&
+               session->collect_adapter != NULL) {
+        const uint64_t generation = session->collect_generation;
+        session->collect_in_flight = false;
+        session->collect_adapter->cancel(
+            session->collect_user, generation);
+    }
     exit_snapshot_destroy(&session->terminal_exit);
     exit_snapshot_destroy(&session->pending_exit);
     root_storage_destroy(&session->staged_root, program);
