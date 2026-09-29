@@ -17,6 +17,13 @@ extern "C" {
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V2 2u
 #define VXML_DIALOG_EVENT_SINK_ABI_V1 1u
 
+typedef enum vxml_dialog_event_sink_status {
+    VXML_DIALOG_EVENT_ACCEPTED = 0,
+    VXML_DIALOG_EVENT_FULL,
+    VXML_DIALOG_EVENT_CLOSED,
+    VXML_DIALOG_EVENT_INVALID_ARGUMENT
+} vxml_dialog_event_sink_status;
+
 /** Callback-scoped manager Event. Copy any retained bytes before returning. */
 typedef struct vxml_dialog_event_v1 {
     uint32_t abi_version;
