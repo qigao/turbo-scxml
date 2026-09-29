@@ -500,11 +500,22 @@ static bool cmeta_node_ignorable(salts_xml_node node) {
 
 static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
-        cmeta_node_named(node, "block") || cmeta_node_named(node, "var") ||
+        cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
+        cmeta_node_named(node, "grammar") || cmeta_node_named(node, "var") ||
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
         cmeta_node_named(node, "else") || cmeta_node_named(node, "exit");
+}
+
+static bool cmeta_field_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_grammar_bytes) +
+        sizeof(options->max_grammar_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_fields != 0u &&
+        options->max_grammar_bytes != 0u;
 }
 
 static bool cmeta_external_data_options_valid(
