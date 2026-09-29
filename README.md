@@ -138,7 +138,7 @@ SALTS_UTILS_ROOT
 CHTTP_ROOT   # only for CHTTP-enabled profiles
 ```
 
-`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.1.4` SDK when an HTTP adapter is enabled.
+`CHTTP_ROOT` names the installed standalone `CHttp.Native 1.1.5` SDK when an HTTP adapter is enabled.
 
 ### Windows Release
 
