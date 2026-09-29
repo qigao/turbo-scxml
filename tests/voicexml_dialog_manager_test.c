@@ -1020,4 +1020,453 @@ spec("VoiceXML dialog manager") {
                     VXML_DOCUMENT_STORE_OK);
     }
 
+
+    it("V3 follows relative external goto to a target fragment and reuses both cached programs") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml#target'/>"
+            "</block></form></vxml>";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='entry'><block>"
+            "<goto next='should-not-open.vxml'/>"
+            "</block></form>"
+            "<form id='target'><block><exit/></block></form>"
+            "</vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-nav";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = sizeof(entries) / sizeof(entries[0])};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 4u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)2u);
+        check_equal(documents.close_calls, (size_t)2u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        ticket = (cflow_statechart_effect_ticket){0};
+        dialog_id = (ccxml_string_view){0};
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)2u);
+        check_equal(events.count, (size_t)4u);
+        check_equal(events.rows[2].name, "dialog.started");
+        check_equal(events.rows[3].name, "dialog.exit");
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.hits, UINT64_C(2));
+        check_equal(stats.misses, UINT64_C(2));
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V3 honors an initial source fragment before any external navigation") {
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='entry'><block>"
+            "<goto next='should-not-open.vxml'/>"
+            "</block></form>"
+            "<form id='target'><block><exit/></block></form>"
+            "</vxml>";
+        static const navigation_document_entry entries[] = {
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/b.vxml#target";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-initial-fragment";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 1u};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(
+            navigation_store_init(&store, &documents, 2u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 4u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V3 publishes error.dialog.start when an external target form is missing") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml#missing'/>"
+            "</block></form></vxml>";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='target'><block><exit/></block></form>"
+            "</vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-missing-form";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 4u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(
+            events.rows[0].voice_status,
+            VXML_INVALID_STRUCTURE);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V3 publishes error.dialog.start when a navigated document cannot be acquired") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml'/>"
+            "</block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, NULL, VXML_DIALOG_MANAGER_DOCUMENT_ERROR}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-doc-error";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 4u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)2u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V3 bounds an external A-B-A navigation cycle by max_navigation_hops") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml'/>"
+            "</block></form></vxml>";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='a.vxml'/>"
+            "</block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-cycle";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 2u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)2u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(
+            events.rows[0].voice_status,
+            VXML_LIMIT_EXCEEDED);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_true(stats.hits >= UINT64_C(1));
+        check_equal(stats.misses, UINT64_C(2));
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V3 close releases the final navigated document while Event publication is backpressured") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char b_uri[] =
+            "https://voice.example/app/dialogs/b.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<goto next='b.vxml'/>"
+            "</block></form></vxml>";
+        static const char b_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block><exit/></block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {b_uri, b_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-close-nav";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        upstream_probe upstream = {0};
+        event_probe events = {.full = true};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v3(
+                &manager, 1u, 4u, &upstream, &store, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)1u);
+
+        vxml_dialog_manager_close(&manager);
+        upstream.quiescent = true;
+        check_true(vxml_dialog_manager_is_quiescent(&manager));
+        check_equal(
+            vxml_dialog_manager_destroy(&manager),
+            VXML_DIALOG_MANAGER_OK);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)0u);
+        check_equal(
+            vxml_document_store_clear(&store),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
 }
