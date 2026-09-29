@@ -337,22 +337,11 @@ static const cmeta_type_desc w3c_cmeta_state_type = {
     .kind = CMETA_T_OBJECT,
     .traits = &w3c_cmeta_state_traits,
     .identity = &w3c_cmeta_state_identity};
-static const cmeta_data_buffer_shape w3c_owned_string_shape = {
-    .ownership = CMETA_DATA_BUFFER_OWNED};
-static const cmeta_data_desc w3c_owned_string_desc = {
-    .struct_size = sizeof(cmeta_data_desc),
-    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
-    .stable_id = "test.scxml.w3c.owned-string",
-    .display_name = "W3C owned string",
-    .kind = CMETA_DATA_STRING,
-    .storage_type = &salts_tstr_cmeta_type,
-    .shape = &w3c_owned_string_shape,
-    .buffer_ops = &salts_tstr_cmeta_buffer_ops};
 static const cmeta_data_field_desc w3c_cmeta_state_fields[] = {
     {"test.scxml.w3c.state.invoke-id", "invoke_id",
-     offsetof(w3c_cmeta_state, invoke_id), &w3c_owned_string_desc},
+     offsetof(w3c_cmeta_state, invoke_id), SALTS_TSTR_CMETA_DATA_REF},
     {"test.scxml.w3c.state.send-id", "send_id",
-     offsetof(w3c_cmeta_state, send_id), &w3c_owned_string_desc},
+     offsetof(w3c_cmeta_state, send_id), SALTS_TSTR_CMETA_DATA_REF},
     {"test.scxml.w3c.state.sequence", "sequence",
      offsetof(w3c_cmeta_state, sequence), &cmeta_data_int},
     {"test.scxml.w3c.state.result", "result",
