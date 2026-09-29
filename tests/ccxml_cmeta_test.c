@@ -217,12 +217,6 @@ static cmeta_status text_init_zero(void *object) {
     return CMETA_OK;
 }
 
-static void text_move(void *destination, void *source) {
-    if (destination == NULL || source == NULL) return;
-    memcpy(destination, source, sizeof(test_text));
-    text_restore_zero(source);
-}
-
 static cmeta_status text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const test_text *text = (const test_text *)object;
