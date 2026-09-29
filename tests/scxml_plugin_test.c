@@ -255,5 +255,73 @@ spec("TurboSCXML Plugin bridge") {
             salts_plugin_registry_destroy(&registry),
             SALTS_PLUGIN_OK);
     }
+
+    it("fails closed when a Plugin ref became stale before compilation") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:p='urn:test:plugin' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry><p:check value='count'/></onentry>"
+            "</state></scxml>";
+        salts_plugin_registry registry = {0};
+        const salts_plugin_registry_config registry_config = {
+            .capacity = 1u};
+        salts_plugin_ref stale_ref = {0};
+        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        bool quiescent = false;
+        scxml_plugin_program program = {0};
+        scxml_cmeta_compile_options_v4 cmeta =
+            scxml_cmeta_default_compile_options_v4(&plugin_state_desc);
+        scxml_plugin_action_v1 action = {
+            .struct_size = sizeof(scxml_plugin_action_v1),
+            .export_id = "test.scxml.action.check",
+            .contract_id = "test.scxml.action",
+            .contract_version = 1u,
+            .required_capabilities = UINT64_C(1),
+            .namespace_uri = "urn:test:plugin",
+            .namespace_uri_size = sizeof("urn:test:plugin") - 1u,
+            .local_name = "check",
+            .local_name_size = sizeof("check") - 1u};
+        scxml_plugin_compile_options_v1 options =
+            SCXML_PLUGIN_COMPILE_OPTIONS_V1_INIT;
+
+        check_not_null(plugin_fixture_path());
+        check_equal(
+            salts_plugin_registry_init(&registry, &registry_config),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_load(
+                &registry, plugin_fixture_path(), &stale_ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_start(&registry, stale_ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_request_stop(&registry, stale_ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, stale_ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, stale_ref),
+            SALTS_PLUGIN_OK);
+
+        action.plugin = stale_ref;
+        options.registry = &registry;
+        options.cmeta = &cmeta;
+        options.plugin_actions = &action;
+        options.plugin_action_count = 1u;
+        check_equal(
+            scxml_plugin_compile_cmeta_v1(
+                &program, source, sizeof(source) - 1u,
+                NULL, &options, NULL, &plugin_status),
+            SCXML_PLUGIN_PLUGIN_ERROR);
+        check_equal(plugin_status, SALTS_PLUGIN_STALE);
+        check_null(scxml_plugin_program_core(&program));
+        check_equal(
+            salts_plugin_registry_destroy(&registry),
+            SALTS_PLUGIN_OK);
+    }
 }
 
