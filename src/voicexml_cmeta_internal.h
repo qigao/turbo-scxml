@@ -147,6 +147,8 @@ typedef struct vxml_cmeta_program_data {
     size_t expression_scratch_bytes;
     size_t max_string_bytes;
     size_t max_conditional_depth;
+    size_t max_data_bind_depth;
+    size_t max_data_bind_items;
 } vxml_cmeta_program_data;
 
 typedef struct vxml_cmeta_root_storage {
