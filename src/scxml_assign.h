@@ -74,6 +74,16 @@ bool scxml_assign_external_source(
     const char **out_uri, size_t *out_uri_size,
     const cmeta_data_desc **out_destination);
 
+scxml_expr_status scxml_assign_apply_external_diagnostic(
+    const scxml_assign_program *program,
+    cserde_reader *reader,
+    const DataBindNativeOptions *options,
+    size_t max_buffer_bytes,
+    void *decode_storage, size_t decode_storage_size,
+    void *staged_root,
+    scxml_expr_diagnostic *diagnostic,
+    DataBindNativeDiagnostic *out_bind_diagnostic);
+
 scxml_expr_status scxml_assign_apply_external(
     const scxml_assign_program *program,
     cserde_reader *reader,
