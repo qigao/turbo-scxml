@@ -22,6 +22,35 @@ typed_any_raw(
     return value;
 }
 
+static const cmeta_param_desc scxml_test_custom_action_params[] = {{
+    .size = sizeof(cmeta_param_desc),
+    .name = "value",
+    .type = &cmeta_type_int,
+    .flags = CMETA_PARAM_IN
+}};
+
+static const cmeta_function_desc scxml_test_custom_action_function = {
+    .size = sizeof(cmeta_function_desc),
+    .name = "scxml_test_custom_action",
+    .return_type = &cmeta_type_int,
+    .params = scxml_test_custom_action_params,
+    .param_count = 1u,
+    .effects = CMETA_EFFECT_IO,
+    .properties = CMETA_PROP_DETERMINISTIC
+};
+
+static const cmeta_abi_carrier scxml_test_custom_action_param_abi[] = {
+    CMETA_ABI_SCALAR
+};
+
+static const cmeta_function_abi_desc scxml_test_custom_action_abi = {
+    .size = sizeof(cmeta_function_abi_desc),
+    .function = &scxml_test_custom_action_function,
+    .return_carrier = CMETA_ABI_SCALAR,
+    .param_carriers = scxml_test_custom_action_param_abi,
+    .param_count = 1u
+};
+
 static bool scxml_test_reject_custom_action(
     const cmeta_callable *self, void *out,
     const void *const *arguments) {
@@ -5966,6 +5995,105 @@ spec("TurboSCXML public CMeta data model") {
                     CFLOW_STATECHART_INSTANCE_OK);
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
+    }
+
+    it("invokes FunctionDesc-first custom actions without duplicate parameter metadata") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<state id='active'><onentry>"
+            "<a:record value='count + 1'/>"
+            "</onentry><transition target='success'/></state>"
+            "<final id='success'/></scxml>";
+        const scxml_cmeta_custom_action_v2 actions[] = {{
+            .struct_size = sizeof(scxml_cmeta_custom_action_v2),
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .function = &scxml_test_custom_action_function,
+            .abi = &scxml_test_custom_action_abi,
+            .callable = scxml_test_custom_action
+        }};
+        scxml_cmeta_compile_options_v3 options =
+            scxml_cmeta_default_compile_options_v3(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        options.actions = actions;
+        options.action_count = sizeof(actions) / sizeof(actions[0]);
+        atomic_store_explicit(
+            &custom_action_observed, 0, memory_order_relaxed);
+        check_equal(scxml_compile_cmeta_v3(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(atomic_load_explicit(
+                        &custom_action_observed, memory_order_relaxed),
+                    8);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects FunctionDesc-first semantic or ABI mismatch before publication") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' datamodel='cmeta'>"
+            "<state id='active'><onentry>"
+            "<a:record value='count'/>"
+            "</onentry></state></scxml>";
+        cmeta_param_desc invalid_param = scxml_test_custom_action_params[0];
+        cmeta_function_desc invalid_function =
+            scxml_test_custom_action_function;
+        cmeta_function_abi_desc invalid_abi =
+            scxml_test_custom_action_abi;
+        scxml_cmeta_custom_action_v2 action = {
+            .struct_size = sizeof(scxml_cmeta_custom_action_v2),
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record",
+            .local_name_size = sizeof("record") - 1u,
+            .function = &invalid_function,
+            .abi = &invalid_abi,
+            .callable = scxml_test_custom_action
+        };
+        scxml_cmeta_compile_options_v3 options =
+            scxml_cmeta_default_compile_options_v3(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+
+        invalid_param.flags = CMETA_PARAM_OUT;
+        invalid_function.params = &invalid_param;
+        invalid_abi.function = &invalid_function;
+        options.actions = &action;
+        options.action_count = 1u;
+        check_equal(scxml_compile_cmeta_v3(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_INVALID_ARGUMENT);
+        check_null(program.impl);
+
+        invalid_param.flags = CMETA_PARAM_IN;
+        invalid_param.type = &cmeta_type_double;
+        check_equal(scxml_compile_cmeta_v3(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_INVALID_ARGUMENT);
+        check_null(program.impl);
+
+        invalid_param.type = &cmeta_type_int;
+        invalid_abi.function = &scxml_test_custom_action_function;
+        check_equal(scxml_compile_cmeta_v3(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_INVALID_ARGUMENT);
+        check_null(program.impl);
     }
 
     it("invokes a registered foreign executable element through CMeta") {
