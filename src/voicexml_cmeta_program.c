@@ -2992,6 +2992,11 @@ static vxml_status cmeta_lower_program(
             ++form_index;
         }
     }
+    if (field_index != builder->profile->field_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(root),
+            "VoiceXML field rows changed between compiler passes");
     return VXML_OK;
 }
 
