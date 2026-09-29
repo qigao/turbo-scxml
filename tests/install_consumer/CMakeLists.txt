@@ -8,6 +8,8 @@ option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO
   "Require and exercise the installed CHttpEventIO component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
   "Require the installed quickjs-sandbox profile" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN
+  "Require and exercise the installed Plugin component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY
   "Require and exercise only the installed VoiceXML component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY
@@ -118,6 +120,9 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS QuickJS)
+endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS Plugin)
 endif()
 if(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING AND
    TURBOSCXML_INSTALL_COMPONENTS)
@@ -239,6 +244,36 @@ else()
     target_compile_definitions(
       turboscxml_install_consumer PRIVATE
       TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)
+  endif()
+
+  if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
+    if(NOT TARGET TurboSCXML::Plugin)
+      message(FATAL_ERROR "Expected installed TurboSCXML::Plugin")
+    endif()
+    if(NOT TARGET Salts::Plugin)
+      message(FATAL_ERROR "Expected installed Salts::Plugin")
+    endif()
+    get_target_property(
+      TURBOSCXML_PLUGIN_LINKS
+      TurboSCXML::Plugin INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_PLUGIN_LINKS STREQUAL
+       "TurboSCXML::SCXML;Salts::Plugin")
+      message(FATAL_ERROR
+        "Unexpected Plugin link closure: ${TURBOSCXML_PLUGIN_LINKS}")
+    endif()
+
+    add_executable(turboscxml_plugin_install_consumer plugin_main.c)
+    target_compile_features(
+      turboscxml_plugin_install_consumer PRIVATE c_std_11)
+    target_link_libraries(
+      turboscxml_plugin_install_consumer PRIVATE TurboSCXML::Plugin)
+
+    add_executable(
+      turboscxml_plugin_install_consumer_cpp plugin_main.cpp)
+    target_compile_features(
+      turboscxml_plugin_install_consumer_cpp PRIVATE cxx_std_17)
+    target_link_libraries(
+      turboscxml_plugin_install_consumer_cpp PRIVATE TurboSCXML::Plugin)
   endif()
 endif()
 

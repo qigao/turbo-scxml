@@ -14,6 +14,8 @@ option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO
   "Build the optional CHTTP BasicHTTP Event I/O processor" OFF)
 option(TURBOSCXML_ENABLE_VOICEXML_CMETA
   "Build and install the optional VoiceXML CMeta profile" ON)
+option(TURBOSCXML_ENABLE_PLUGIN
+  "Build and install the optional Salts Plugin composition bridge" ON)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 
 if(ENABLE_SANITIZER_ADDRESS)
@@ -74,6 +76,11 @@ foreach(required_target IN ITEMS
       "Salts SDK does not provide required target: ${required_target}")
   endif()
 endforeach()
+
+if(TURBOSCXML_ENABLE_PLUGIN AND NOT TARGET Salts::Plugin)
+  message(FATAL_ERROR
+    "TURBOSCXML_ENABLE_PLUGIN requires Salts::Plugin")
+endif()
 
 foreach(required_target IN ITEMS
     Salts::XmlParser
@@ -186,6 +193,26 @@ target_compile_definitions(turbo_scxml
 if(TURBOSCXML_ENABLE_QUICKJS)
   find_package(qjs CONFIG REQUIRED)
   target_link_libraries(turbo_scxml PRIVATE qjs)
+endif()
+
+if(TURBOSCXML_ENABLE_PLUGIN)
+  add_library(turbo_scxml_plugin STATIC
+    src/scxml_plugin.c)
+  add_library(TurboSCXML::Plugin ALIAS turbo_scxml_plugin)
+  set_target_properties(turbo_scxml_plugin PROPERTIES
+    EXPORT_NAME Plugin
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_scxml_plugin PUBLIC c_std_11)
+  target_compile_options(turbo_scxml_plugin
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_scxml_plugin
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_scxml_plugin
+    PUBLIC TurboSCXML::SCXML Salts::Plugin)
 endif()
 
 add_library(turbo_ccxml STATIC
@@ -332,6 +359,17 @@ if(BUILD_TESTING)
       "TurboSCXML::SCXML dependency contract changed")
   endif()
 
+  if(TURBOSCXML_ENABLE_PLUGIN)
+    get_target_property(
+      TURBOSCXML_PLUGIN_PUBLIC_LINKS
+      turbo_scxml_plugin INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_PLUGIN_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::SCXML;Salts::Plugin")
+      message(FATAL_ERROR
+        "TurboSCXML::Plugin dependency contract changed")
+    endif()
+  endif()
+
   get_target_property(
     TURBOCCXML_PUBLIC_LINKS turbo_ccxml INTERFACE_LINK_LIBRARIES)
   set(TURBOCCXML_EXPECTED_LINKS
@@ -412,6 +450,14 @@ install(TARGETS turbo_scxml
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+if(TURBOSCXML_ENABLE_PLUGIN)
+  install(TARGETS turbo_scxml_plugin
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(TARGETS turbo_ccxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -451,6 +497,11 @@ endif()
 install(
   FILES include/scxml/scxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+if(TURBOSCXML_ENABLE_PLUGIN)
+  install(
+    FILES include/scxml/plugin.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+endif()
 install(
   FILES include/ccxml/ccxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
@@ -473,6 +524,8 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
 
+set(TURBOSCXML_PACKAGE_HAS_PLUGIN
+  ${TURBOSCXML_ENABLE_PLUGIN})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
 set(TURBOSCXML_PACKAGE_HAS_QUICKJS
