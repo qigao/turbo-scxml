@@ -25,7 +25,7 @@ TurboSCXML does not create a second state-machine runtime beside CFlow.
 TurboSCXML reuses the Salts execution and type foundations:
 
 - **CFlow** for Machine/Statechart semantics and execution.
-- **CMeta** for typed data-model integration.
+- **CMeta** for typed data-model and provider-interface reflection.
 - **CSerde** for the canonical token stream used at resource boundaries.
 - **DataBind** from SaltsUtils for bounded CMeta-native data binding.
 - **Core** for common systems support.
@@ -85,6 +85,20 @@ parser/DOM or a second native data-binding model.
 
 See [SCXML XML parsing and DataBind boundary](docs/specs/scxml-xml-databind-boundary.md).
 
+### Provider reflection and Plugin composition
+
+Stateful Event I/O, Invoke and resource providers keep the existing bounded
+adapter ABI used by sessions, while canonical provider identity is expressed as
+CMeta Interface `{self,vtable}` contracts. Existing static adapters can be
+projected into those interfaces, and Interface implementations can be bridged
+back into the same session-facing adapters.
+
+The optional `TurboSCXML::Plugin` component admits matching Salts Plugin
+Interface exports while retaining a DSO lease for the complete provider-wrapper
+lifetime. It does not add a second provider registry or execution model.
+
+See [CMeta provider interfaces](docs/specs/scxml-cmeta-provider-interfaces.md).
+
 ## Repository ownership
 
 TurboSCXML owns:
@@ -110,7 +124,8 @@ TurboSCXML does not own:
 
 | CMake target | Responsibility |
 | --- | --- |
-| `TurboSCXML::SCXML` | SCXML compiler/session/runtime facade over CFlow Statechart |
+| `TurboSCXML::SCXML` | SCXML compiler/session/runtime facade over CFlow Statechart, including CMeta provider bridges |
+| `TurboSCXML::Plugin` | optional lease-safe Salts Plugin Function/Interface composition bridge |
 | `TurboSCXML::CCXML` | CCXML layer |
 | `TurboSCXML::VoiceXML` | bounded VoiceXML core profile |
 | `TurboSCXML::VoiceXMLCMeta` | optional CMeta-backed VoiceXML data-model profile |
@@ -121,6 +136,7 @@ The public C API is available through:
 
 ```c
 #include <scxml/scxml.h>
+#include <scxml/provider.h> /* optional CMeta provider-interface surface */
 ```
 
 Functions and types use the `scxml_*` naming convention.
