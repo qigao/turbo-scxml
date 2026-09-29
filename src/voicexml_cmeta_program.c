@@ -2922,6 +2922,7 @@ static vxml_status cmeta_lower_program(
     cmeta_program_builder *builder, salts_xml_node root) {
     size_t declaration_index = 0u;
     size_t form_index = 0u;
+    size_t field_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -2961,6 +2962,27 @@ static vxml_status cmeta_lower_program(
                             declaration_index++],
                         scopes, 2u);
                     if (status != VXML_OK) return status;
+                } else if (cmeta_node_named(item, "field")) {
+                    vxml_cmeta_field_row *field;
+                    const salts_xml_attribute cond =
+                        cmeta_attribute(item, "cond");
+                    if (field_index >= builder->profile->field_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML field rows changed during lowering");
+                    field = &builder->profile->fields[field_index++];
+                    if (field->form != form_index)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML field form ownership changed during lowering");
+                    if (cond.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, cond, scopes, 2u, true,
+                            &field->condition);
+                        if (status != VXML_OK) return status;
+                    }
                 } else if (cmeta_node_named(item, "block")) {
                     status = cmeta_lower_block_actions(
                         builder, item, block_index++);
@@ -3020,6 +3042,7 @@ static vxml_status cmeta_write_program(
     if (status == VXML_OK &&
         (builder.external_data_index != measurement->external_data_count ||
          builder.form_index != measurement->form_count ||
+         builder.field_index != measurement->field_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
          builder.action_index != measurement->action_count ||
