@@ -83,6 +83,21 @@ static void text_restore_zero(void *object) {
     }
 }
 
+static cmeta_status text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    memset(object, 0, sizeof(expression_text));
+    return CMETA_OK;
+}
+
+static void text_move(void *destination, void *source) {
+    expression_text *out = (expression_text *)destination;
+    expression_text *in = (expression_text *)source;
+    if (out == NULL || in == NULL || out == in) return;
+    *out = *in;
+    in->data = NULL;
+    in->size = 0u;
+}
+
 static cmeta_status text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const expression_text *text = (const expression_text *)object;
@@ -159,7 +174,9 @@ static const cmeta_data_buffer_ops text_ops = {
     .is_zero = text_is_zero,
     .assign = text_assign,
     .restore_zero = text_restore_zero,
-    .read = text_read};
+    .read = text_read,
+    .init_zero = text_init_zero,
+    .move = text_move};
 static const cmeta_data_desc text_data = {
     .struct_size = sizeof(cmeta_data_desc),
     .abi_version = CMETA_DATA_DESC_ABI_VERSION,
@@ -180,7 +197,9 @@ static const cmeta_data_buffer_ops owned_text_ops = {
     .is_zero = text_is_zero,
     .assign = text_assign,
     .restore_zero = text_restore_zero,
-    .read = text_read};
+    .read = text_read,
+    .init_zero = text_init_zero,
+    .move = text_move};
 static const cmeta_data_desc owned_text_data = {
     .struct_size = sizeof(cmeta_data_desc),
     .abi_version = CMETA_DATA_DESC_ABI_VERSION,
@@ -199,7 +218,9 @@ static const cmeta_data_buffer_ops scratch_reusing_text_ops = {
     .is_zero = text_is_zero,
     .assign = text_assign,
     .restore_zero = text_restore_zero,
-    .read = scratch_reusing_text_read};
+    .read = scratch_reusing_text_read,
+    .init_zero = text_init_zero,
+    .move = text_move};
 static const cmeta_data_desc scratch_reusing_text_data = {
     .struct_size = sizeof(cmeta_data_desc),
     .abi_version = CMETA_DATA_DESC_ABI_VERSION,
