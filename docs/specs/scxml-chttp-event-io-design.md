@@ -389,7 +389,7 @@ HTTP results are deterministic:
   target dependencies.
 - `TurboSCXML::CHttpEventIO` exists only when
   `TURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON`; configuration then requires the
-  installed standalone CHTTP package from `HTTP_SERVICES_ROOT`, with `CHttp::Client` and `CHttp::Server`; Salts/SaltsUtils remain resolved from their own matching roots.
+  installed standalone CHTTP package from `CHTTP_ROOT`, with `CHttp::Client` and `CHttp::Server`; Salts/SaltsUtils remain resolved from their own matching roots.
 - The implementation targets CHTTP HTTP/1 over `tcp://`. The resolver rejects
   `https:` until the selected CHTTP SDK exposes and verifies HTTPS. It must not
   translate HTTPS to plaintext.
@@ -418,7 +418,7 @@ HTTP results are deterministic:
 - **MED — fact:** CHTTP separates connection URI, authority, and origin-form
   target. The resolver is mandatory, preventing accidental URL parsing,
   authorization bypass, and SSRF-prone pass-through.
-- **MED — fact:** feature-ON configuration requires the standalone CHTTP package at the explicitly selected `HTTP_SERVICES_ROOT`. CMake requires `CHttp::Client` and `CHttp::Server` and does not fall back to the retired `Salts::CHTTP` ownership model.
+- **MED — fact:** feature-ON configuration requires the standalone CHTTP package at the explicitly selected `CHTTP_ROOT`. CMake requires `CHttp::Client` and `CHttp::Server` and does not fall back to the retired `Salts::CHTTP` ownership model.
 
 ## Verification
 
