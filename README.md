@@ -140,6 +140,19 @@ CHTTP_ROOT   # only for CHTTP-enabled profiles
 
 `CHTTP_ROOT` names the installed standalone `CHttp.Native` SDK when an HTTP adapter is enabled.
 
+### Platform qualification
+
+The single `Native SDK CI` workflow consumes the current published native SDK graph without retained dependency versions.
+
+| Platform | Qualification |
+| --- | --- |
+| Windows x64 | Release build, full CTest, install, and installed C/C++ consumers |
+| Linux x64 | Release build, full CTest, install, and installed C/C++ consumers |
+| macOS (runner architecture) | Release build, full CTest, install, and installed C/C++ consumers |
+| Android arm64-v8a, API 26+ | Release cross-build, install, and installed C/C++ consumer build; target execution is not performed on the Linux host runner |
+
+Other Android ABI presets remain available for local/experimental builds but are not CI-qualified.
+
 ### Windows Release
 
 ```powershell
