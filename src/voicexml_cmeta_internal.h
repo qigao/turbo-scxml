@@ -5,6 +5,8 @@
 #include "voicexml_cmeta_expr.h"
 #include "voicexml_internal.h"
 
+#include <data_bind_native.h>
+
 #define VXML_CMETA_NO_INDEX ((size_t)-1)
 
 typedef enum vxml_cmeta_scope_kind {
@@ -84,6 +86,18 @@ typedef struct vxml_cmeta_branch_row {
     salts_xml_location location;
 } vxml_cmeta_branch_row;
 
+typedef struct vxml_cmeta_external_data_row {
+    const char *name;
+    size_t name_size;
+    const char *uri;
+    size_t uri_size;
+    size_t field_offset;
+    const cmeta_data_desc *field_data;
+    DataBindNativePlan *plan;
+    size_t decode_workspace_bytes;
+    size_t workspace_alignment;
+} vxml_cmeta_external_data_row;
+
 typedef struct vxml_cmeta_action_row {
     vxml_cmeta_action_kind kind;
     salts_xml_location location;
@@ -115,6 +129,8 @@ typedef struct vxml_cmeta_program_data {
     size_t declaration_count;
     size_t first_document_declaration;
     size_t document_declaration_count;
+    vxml_cmeta_external_data_row *external_data;
+    size_t external_data_count;
     vxml_cmeta_action_row *actions;
     size_t action_count;
     vxml_cmeta_branch_row *branches;
@@ -180,6 +196,12 @@ typedef struct vxml_cmeta_session_data {
     size_t expression_scratch_bytes;
     unsigned char *read_scratch;
     size_t read_scratch_bytes;
+    unsigned char *data_workspace_allocation;
+    unsigned char *data_workspace;
+    size_t data_workspace_bytes;
+    unsigned char *data_value_allocation;
+    unsigned char *data_value;
+    size_t data_value_bytes;
     vxml_cmeta_expr_runtime_scope *runtime_scopes;
     size_t runtime_scope_capacity;
     vxml_cmeta_exec_frame *exec_frames;
