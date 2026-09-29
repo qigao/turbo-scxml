@@ -23,6 +23,7 @@ extern "C" {
 #define SCXML_EVENT_ENVELOPE_ABI 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 2u
+#define SCXML_CMETA_COMPILE_OPTIONS_ABI_V3 3u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
@@ -107,6 +108,25 @@ typedef struct scxml_cmeta_custom_action_v1 {
 } scxml_cmeta_custom_action_v1;
 
 /**
+ * FunctionDesc-first custom executable element registration.
+ *
+ * XML identity remains TurboSCXML-owned. Function parameter names, types,
+ * directions, effects and properties come only from `function`; `abi`
+ * supplies the exact native ABI sidecar and `callable` is the admitted
+ * executable representation. All descriptor/code pointers remain borrowed
+ * through program destruction.
+ */
+typedef struct scxml_cmeta_custom_action_v2 {
+    const char *namespace_uri;
+    size_t namespace_uri_size;
+    const char *local_name;
+    size_t local_name_size;
+    const cmeta_function_desc *function;
+    const cmeta_function_abi_desc *abi;
+    cmeta_callable callable;
+} scxml_cmeta_custom_action_v2;
+
+/**
  * CMeta compile provider with a bounded, compile-scoped custom action table.
  * Rows and strings are borrowed only until compilation returns. Bound callable
  * values are copied into the resulting program.
@@ -126,6 +146,23 @@ typedef struct scxml_cmeta_compile_options_v2 {
     const scxml_cmeta_custom_action_v1 *actions;
     size_t action_count;
 } scxml_cmeta_compile_options_v2;
+
+/** CMeta compile provider using FunctionDesc-first custom actions. */
+typedef struct scxml_cmeta_compile_options_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const cmeta_data_desc *root;
+    size_t max_source_bytes;
+    size_t max_instructions;
+    size_t max_operands;
+    size_t max_expression_depth;
+    size_t max_path_depth;
+    size_t max_literal_bytes;
+    size_t max_string_bytes;
+    size_t max_iterations;
+    const scxml_cmeta_custom_action_v2 *actions;
+    size_t action_count;
+} scxml_cmeta_compile_options_v3;
 
 /**
  * Versioned per-session state provider for a CMeta-compiled program.
