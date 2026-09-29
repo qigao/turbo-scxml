@@ -63,11 +63,33 @@ TurboSCXML
 
 CFlow must remain independent of XML and SCXML.
 
+### XML document vs typed-data boundary
+
+Language documents and external typed data intentionally use separate paths:
+
+```text
+SCXML / CCXML / VoiceXML bytes
+  -> Salts XmlParser
+  -> TurboSCXML W3C semantic compiler
+
+<data src> resource bytes
+  -> explicit DataBind format provider
+  -> CSerde
+  -> precompiled DataBindNativePlan
+  -> CMeta-native session state
+```
+
+An XML-formatted external data resource uses the DataBind XML provider; it is
+not reparsed as an SCXML document. TurboSCXML does not maintain a second XML
+parser/DOM or a second native data-binding model.
+
+See [SCXML XML parsing and DataBind boundary](docs/specs/scxml-xml-databind-boundary.md).
+
 ## Repository ownership
 
 TurboSCXML owns:
 
-- SCXML parsing/compilation semantics;
+- SCXML language semantic compilation over Salts XmlParser syntax views;
 - SCXML session lifecycle;
 - host-event/invocation adapter contracts;
 - CMeta data-model adaptation;
