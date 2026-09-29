@@ -62,10 +62,16 @@ functions mapped to specific CFlow dataflow operators. That API currently
 admits proven operator shapes such as value transforms; an SCXML executable
 action is not implicitly a MAP/FILTER/REDUCE operator.
 
-TurboSCXML therefore does **not** invent a fake CFlow operator mapping merely
-to claim projection use. FunctionDesc-first semantic admission and exact
-callable execution are landed first. A later slice may store a CFlow execution
-projection when Salts exposes an action-compatible admitted shape. CFlow
+TurboSCXML does **not** invent a fake CFlow operator mapping. The canonical
+V3 path admits each reflected executable through
+`cflow_function_action_projection_admit()`, which proves FunctionDesc,
+FunctionAbi, exact callable, type, effect, and property consistency without
+assigning a Graph operator. TurboSCXML then applies its narrower XML profile:
+unique named IN scalar parameters whose attributes compile to immutable
+argument-expression programs.
+
+Only the already-bound callable is copied into the immutable Program runtime
+artifact; steady-state execution performs no FunctionDesc/ABI lookup. CFlow
 remains independent of XML and SCXML metadata.
 
 ## Ownership and lifetime
