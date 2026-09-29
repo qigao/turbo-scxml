@@ -113,6 +113,11 @@ target_link_libraries(voicexml_program_test PRIVATE
   TurboSCXML::VoiceXML Salts::TinyTest)
 add_test(NAME voicexml_program_test COMMAND voicexml_program_test)
 
+turboscxml_add_test(
+  voicexml_document_store_test
+  voicexml_document_store_test.c
+  LIBS TurboSCXML::VoiceXMLDocumentStore)
+
 add_executable(voicexml_dialog_manager_test
   voicexml_dialog_manager_test.c)
 target_compile_features(voicexml_dialog_manager_test PRIVATE c_std_11)
