@@ -258,6 +258,27 @@ target_include_directories(turbo_voicexml
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_voicexml PUBLIC Salts::XmlParser)
 
+add_library(turbo_voicexml_document_store STATIC
+  src/voicexml_document_store.c)
+add_library(TurboSCXML::VoiceXMLDocumentStore ALIAS
+  turbo_voicexml_document_store)
+set_target_properties(turbo_voicexml_document_store PROPERTIES
+  EXPORT_NAME VoiceXMLDocumentStore
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_voicexml_document_store PUBLIC c_std_11)
+target_compile_options(turbo_voicexml_document_store
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_voicexml_document_store
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turbo_voicexml_document_store
+  PUBLIC
+    TurboSCXML::VoiceXML
+    TurboSCXML::CCXML)
+
 add_library(turbo_voicexml_dialog_manager STATIC
   src/voicexml_dialog_manager.c)
 add_library(TurboSCXML::VoiceXMLDialogManager ALIAS
@@ -277,26 +298,8 @@ target_include_directories(turbo_voicexml_dialog_manager
 target_link_libraries(turbo_voicexml_dialog_manager
   PUBLIC
     TurboSCXML::VoiceXML
-    TurboSCXML::CCXML)
-
-add_library(turbo_voicexml_document_store STATIC
-  src/voicexml_document_store.c)
-add_library(TurboSCXML::VoiceXMLDocumentStore ALIAS
-  turbo_voicexml_document_store)
-set_target_properties(turbo_voicexml_document_store PROPERTIES
-  EXPORT_NAME VoiceXMLDocumentStore
-  VERSION ${PROJECT_VERSION}
-  SOVERSION ${PROJECT_VERSION_MAJOR})
-target_compile_features(turbo_voicexml_document_store PUBLIC c_std_11)
-target_compile_options(turbo_voicexml_document_store
-  PUBLIC
-    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
-target_include_directories(turbo_voicexml_document_store
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(turbo_voicexml_document_store
-  PUBLIC TurboSCXML::VoiceXMLDialogManager)
+    TurboSCXML::CCXML
+    TurboSCXML::VoiceXMLDocumentStore)
 
 if(BUILD_TESTING)
   target_compile_definitions(turbo_voicexml PRIVATE
@@ -446,7 +449,7 @@ if(BUILD_TESTING)
     TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS
     turbo_voicexml_document_store INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXMLDialogManager")
+     "TurboSCXML::VoiceXML;TurboSCXML::CCXML")
     message(FATAL_ERROR
       "TurboSCXML::VoiceXMLDocumentStore dependency contract changed")
   endif()
@@ -455,7 +458,7 @@ if(BUILD_TESTING)
     TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS
     turbo_voicexml_dialog_manager INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;TurboSCXML::CCXML")
+     "TurboSCXML::VoiceXML;TurboSCXML::CCXML;TurboSCXML::VoiceXMLDocumentStore")
     message(FATAL_ERROR
       "TurboSCXML::VoiceXMLDialogManager dependency contract changed")
   endif()
