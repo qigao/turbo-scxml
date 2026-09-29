@@ -781,9 +781,22 @@ static vxml_dialog_manager_status acquire_store_document(
         return VXML_DIALOG_MANAGER_OK;
     }
     if (resolved.fragment_size != 0u) {
-        (void)queue_event(
-            row, failure_event, VXML_UNSUPPORTED_FEATURE);
-        return VXML_DIALOG_MANAGER_OK;
+        if (!impl->navigation_enabled) {
+            (void)queue_event(
+                row, failure_event, VXML_UNSUPPORTED_FEATURE);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        if (!row_copy(
+                row->start_fragment, impl->max_source_bytes,
+                resolved.fragment, resolved.fragment_size,
+                &row->start_fragment_size)) {
+            (void)queue_event(
+                row, failure_event, VXML_LIMIT_EXCEEDED);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+    } else {
+        row->start_fragment_size = 0u;
+        row->start_fragment[0] = '\0';
     }
 
     store_status = vxml_document_store_acquire(
