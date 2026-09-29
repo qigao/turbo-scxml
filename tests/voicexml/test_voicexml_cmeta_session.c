@@ -143,6 +143,12 @@ static void session_text_restore_zero(void *object) {
     text->size = 0u;
     text->resource = NULL;
 }
+static cmeta_status session_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    session_text_restore_zero(object);
+    return CMETA_OK;
+}
+
 static cmeta_status session_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const vxml_cmeta_session_text *text =
@@ -165,7 +171,9 @@ static const cmeta_data_buffer_ops session_text_ops = {
     .is_zero = session_text_is_zero,
     .assign = session_text_assign,
     .restore_zero = session_text_restore_zero,
-    .read = session_text_read
+    .read = session_text_read,
+    .init_zero = session_text_init_zero,
+    .move = session_text_move
 };
 static const cmeta_data_desc session_text_data = {
     .struct_size = sizeof(cmeta_data_desc),
