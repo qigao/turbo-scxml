@@ -338,6 +338,27 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
       CHttp::Client
     PRIVATE
       Salts::Core)
+
+  add_library(turbo_voicexml_chttp_resource STATIC
+    src/voicexml_chttp_resource.c)
+  add_library(TurboSCXML::VoiceXMLCHttpResource ALIAS
+    turbo_voicexml_chttp_resource)
+  set_target_properties(turbo_voicexml_chttp_resource PROPERTIES
+    EXPORT_NAME VoiceXMLCHttpResource
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_voicexml_chttp_resource PUBLIC c_std_11)
+  target_compile_options(turbo_voicexml_chttp_resource
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_voicexml_chttp_resource
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_voicexml_chttp_resource
+    PUBLIC
+      TurboSCXML::VoiceXMLDialogManager
+      TurboSCXML::CHttpResource)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
@@ -440,6 +461,15 @@ if(BUILD_TESTING)
 
   if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
     get_target_property(
+      TURBOVOICEXML_CHTTP_PUBLIC_LINKS
+      turbo_voicexml_chttp_resource INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOVOICEXML_CHTTP_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::VoiceXMLDialogManager;TurboSCXML::CHttpResource")
+      message(FATAL_ERROR
+        "TurboSCXML::VoiceXMLCHttpResource dependency contract changed")
+    endif()
+
+    get_target_property(
       TURBOSCXML_CHTTP_PUBLIC_LINKS
       turbo_scxml_chttp_resource INTERFACE_LINK_LIBRARIES)
     set(TURBOSCXML_CHTTP_EXPECTED_LINKS
@@ -517,6 +547,12 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
+  install(TARGETS turbo_voicexml_chttp_resource
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
   install(TARGETS turbo_scxml_chttp_resource
     EXPORT TurboSCXMLTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -559,6 +595,9 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   install(
     FILES include/scxml/chttp_resource.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+  install(
+    FILES include/voicexml/chttp_resource.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 endif()
 if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
   install(
@@ -569,6 +608,8 @@ endif()
 set(TURBOSCXML_PACKAGE_HAS_PLUGIN
   ${TURBOSCXML_ENABLE_PLUGIN})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
+  ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
+set(TURBOSCXML_PACKAGE_HAS_VOICEXML_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
 set(TURBOSCXML_PACKAGE_HAS_QUICKJS
   ${TURBOSCXML_ENABLE_QUICKJS})
