@@ -279,6 +279,25 @@ target_link_libraries(turbo_voicexml_dialog_manager
     TurboSCXML::VoiceXML
     TurboSCXML::CCXML)
 
+add_library(turbo_voicexml_document_store STATIC
+  src/voicexml_document_store.c)
+add_library(TurboSCXML::VoiceXMLDocumentStore ALIAS
+  turbo_voicexml_document_store)
+set_target_properties(turbo_voicexml_document_store PROPERTIES
+  EXPORT_NAME VoiceXMLDocumentStore
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_voicexml_document_store PUBLIC c_std_11)
+target_compile_options(turbo_voicexml_document_store
+  PUBLIC
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+target_include_directories(turbo_voicexml_document_store
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(turbo_voicexml_document_store
+  PUBLIC TurboSCXML::VoiceXMLDialogManager)
+
 if(BUILD_TESTING)
   target_compile_definitions(turbo_voicexml PRIVATE
     TURBOSCXML_VOICEXML_TESTING=1)
@@ -424,6 +443,15 @@ if(BUILD_TESTING)
   endif()
 
   get_target_property(
+    TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS
+    turbo_voicexml_document_store INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS STREQUAL
+     "TurboSCXML::VoiceXMLDialogManager")
+    message(FATAL_ERROR
+      "TurboSCXML::VoiceXMLDocumentStore dependency contract changed")
+  endif()
+
+  get_target_property(
     TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS
     turbo_voicexml_dialog_manager INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS STREQUAL
@@ -526,6 +554,12 @@ install(TARGETS turbo_ccxml
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(TARGETS turbo_voicexml_document_store
+  EXPORT TurboSCXMLTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(TARGETS turbo_voicexml_dialog_manager
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -585,6 +619,7 @@ install(
   FILES
     include/voicexml/voicexml.h
     include/voicexml/dialog_manager.h
+    include/voicexml/document_store.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
   install(
