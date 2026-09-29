@@ -100,7 +100,7 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE OR
 
   unset(Chttp_DIR CACHE)
   unset(Chttp_DIR)
-  find_package(Chttp 1.1.4 EXACT CONFIG REQUIRED
+  find_package(Chttp 1.1.5 EXACT CONFIG REQUIRED
     PATHS "${CHTTP_ROOT_PATH}"
     NO_DEFAULT_PATH)
 
