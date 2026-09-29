@@ -387,6 +387,8 @@ typedef struct scxml_build {
     size_t data_binding_capacity;
     size_t foreach_capacity;
     size_t max_iterations;
+    size_t data_bind_max_depth;
+    size_t data_bind_max_items;
     size_t log_storage_capacity;
     size_t effect_storage_capacity;
     size_t guard_capacity;
@@ -417,6 +419,7 @@ typedef struct scxml_build {
     size_t top_level_data_initializer_count;
     uint32_t requirements;
     bool late_binding;
+    bool precompile_data_bind_plans;
     bool quickjs_profile;
     scxml_quickjs_compile_options_v1 quickjs_options;
     cflow_event_id execution_error_event;
