@@ -753,9 +753,11 @@ static scxml_expr_status assign_databind_failure(
         diagnostic,
         status == DATA_BIND_ERR_LIMIT
             ? SCXML_EXPR_LIMIT_EXCEEDED
-            : status == DATA_BIND_ERR_INVALID_ARG
-                  ? SCXML_EXPR_INVALID_ARGUMENT
-                  : SCXML_EXPR_EVALUATION_ERROR,
+            : status == DATA_BIND_ERR_OOM
+                  ? SCXML_EXPR_ALLOCATION_FAILED
+                  : status == DATA_BIND_ERR_INVALID_ARG
+                        ? SCXML_EXPR_INVALID_ARGUMENT
+                        : SCXML_EXPR_EVALUATION_ERROR,
         0u, message);
 }
 
