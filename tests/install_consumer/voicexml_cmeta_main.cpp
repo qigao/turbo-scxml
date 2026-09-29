@@ -4,6 +4,12 @@
 #include <type_traits>
 
 static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
+    "collect request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
+    "collect adapter must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_data_resource_v1>::value,
     "external data resource must remain C-compatible");
 static_assert(
@@ -23,6 +29,8 @@ int main() {
     const cmeta_type_desc *peer_type =
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
+    vxml_cmeta_collect_request_v1 collect_request{};
+    vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
     vxml_cmeta_compile_options_v1 compile_options{};
@@ -35,6 +43,11 @@ int main() {
     vxml_cmeta_value_view exit_value{};
     int result = 1;
 
+    collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
+    collect_adapter.struct_size = sizeof(collect_adapter);
+    if (collect_request.abi_version != 0u ||
+        collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
+        return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
     data_adapter.struct_size = sizeof(data_adapter);
     if (data_resource.format != static_cast<vxml_cmeta_data_format>(0) ||
