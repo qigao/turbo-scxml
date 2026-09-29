@@ -1857,6 +1857,62 @@ vxml_status vxml_cmeta_session_init_profile(
         status = VXML_ALLOCATION_FAILED;
         goto failure;
     }
+    if (program->external_data_count != 0u) {
+        size_t workspace_alignment = 1u;
+        size_t value_alignment = 1u;
+        size_t workspace_allocation_bytes;
+        size_t value_allocation_bytes;
+        if (!session_data_options_valid(options) ||
+            !measure_external_data_scratch(
+                program,
+                &profile->data_workspace_bytes,
+                &workspace_alignment,
+                &profile->data_value_bytes,
+                &value_alignment)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        workspace_allocation_bytes = profile->data_workspace_bytes;
+        value_allocation_bytes = profile->data_value_bytes;
+        if ((workspace_alignment > 1u &&
+             !checked_add(
+                 &workspace_allocation_bytes,
+                 workspace_alignment - 1u)) ||
+            (value_alignment > 1u &&
+             !checked_add(
+                 &value_allocation_bytes,
+                 value_alignment - 1u))) {
+            status = VXML_LIMIT_EXCEEDED;
+            goto failure;
+        }
+        if (workspace_allocation_bytes != 0u) {
+            profile->data_workspace_allocation =
+                (unsigned char *)vxml_malloc(
+                    workspace_allocation_bytes);
+            if (profile->data_workspace_allocation == NULL ||
+                !align_buffer(
+                    profile->data_workspace_allocation,
+                    workspace_allocation_bytes,
+                    workspace_alignment,
+                    profile->data_workspace_bytes,
+                    &profile->data_workspace)) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+        }
+        profile->data_value_allocation =
+            (unsigned char *)vxml_malloc(value_allocation_bytes);
+        if (profile->data_value_allocation == NULL ||
+            !align_buffer(
+                profile->data_value_allocation,
+                value_allocation_bytes,
+                value_alignment,
+                profile->data_value_bytes,
+                &profile->data_value)) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+    }
     profile->runtime_scope_capacity = 3u;
     profile->runtime_scopes = (vxml_cmeta_expr_runtime_scope *)vxml_calloc(
         profile->runtime_scope_capacity, sizeof(*profile->runtime_scopes));
@@ -1885,6 +1941,8 @@ vxml_status vxml_cmeta_session_init_profile(
     }
     status = root_storage_copy_initial(
         &profile->committed_root, program, options->initial_root, undefined);
+    if (status != VXML_OK) goto failure;
+    status = load_external_data(profile, program, options);
     if (status != VXML_OK) goto failure;
     vxml_free(undefined);
     session->profile_data = profile;
