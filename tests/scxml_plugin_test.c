@@ -397,6 +397,21 @@ spec("TurboSCXML Plugin bridge") {
         check_equal(plugin_status, SALTS_PLUGIN_OK);
         check_null(scxml_plugin_event_io_provider_adapter(&provider));
 
+        binding.export_id = "test.scxml.provider.invoke";
+        binding.contract_id = "test.scxml.invoke";
+        binding.required_capabilities = SCXML_INVOKE_CAP_START;
+        check_equal(
+            scxml_plugin_event_io_provider_open(
+                &provider, &registry, &binding, &plugin_status),
+            SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
+        check_equal(
+            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0u);
+
         check_equal(
             salts_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
