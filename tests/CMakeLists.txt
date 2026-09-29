@@ -217,6 +217,33 @@ turboscxml_add_test(
   scxml_cmeta_test
   scxml_cmeta_test.c)
 
+if(TURBOSCXML_ENABLE_PLUGIN)
+  add_library(scxml_plugin_fixture MODULE
+    scxml_plugin_fixture.c)
+  target_compile_features(scxml_plugin_fixture PRIVATE c_std_11)
+  set_target_properties(scxml_plugin_fixture PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_link_libraries(scxml_plugin_fixture PRIVATE
+    Salts::PluginABI)
+
+  add_executable(scxml_plugin_test
+    scxml_plugin_test.c)
+  target_compile_features(scxml_plugin_test PRIVATE c_std_11)
+  set_target_properties(scxml_plugin_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_link_libraries(scxml_plugin_test PRIVATE
+    TurboSCXML::Plugin
+    Salts::TinyTest)
+  add_dependencies(scxml_plugin_test scxml_plugin_fixture)
+  add_test(
+    NAME scxml_plugin_test
+    COMMAND scxml_plugin_test $<TARGET_FILE:scxml_plugin_fixture>)
+endif()
+
 turboscxml_add_test(
   scxml_sequence_test
   scxml_sequence_test.c
