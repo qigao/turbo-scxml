@@ -380,6 +380,7 @@ static vxml_status admit_cmeta_datamodel(
 typedef struct cmeta_program_measurement {
     size_t external_data_count;
     size_t form_count;
+    size_t field_count;
     size_t block_count;
     size_t scope_count;
     size_t declaration_count;
@@ -1162,6 +1163,7 @@ typedef struct cmeta_program_builder {
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
     size_t form_index;
+    size_t field_index;
     size_t block_index;
     size_t declaration_index;
     size_t action_index;
@@ -1215,6 +1217,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->branches);
     vxml_free(profile->actions);
     vxml_free(profile->declarations);
+    vxml_free(profile->fields);
     vxml_free(profile->blocks);
     vxml_free(profile->forms);
     vxml_free(profile->scopes);
@@ -1245,6 +1248,7 @@ static bool cmeta_allocate_rows(
     profile->scope_count = measurement->scope_count;
     profile->document_scope = 0u;
     profile->form_count = measurement->form_count;
+    profile->field_count = measurement->field_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
     profile->action_count = measurement->action_count;
@@ -1275,6 +1279,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(external_data, measurement->external_data_count);
     CMETA_ALLOC_ROWS(scopes, measurement->scope_count);
     CMETA_ALLOC_ROWS(forms, measurement->form_count);
+    CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
     CMETA_ALLOC_ROWS(actions, measurement->action_count);
