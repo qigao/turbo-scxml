@@ -26,6 +26,7 @@ extern "C" {
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_COMPILE_OPTIONS_ABI_V3 3u
+#define SCXML_CMETA_COMPILE_OPTIONS_ABI_V4 4u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
@@ -41,6 +42,8 @@ extern "C" {
 #define SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 1u
 #define SCXML_CMETA_DEFAULT_MAX_ITERATIONS 65536u
+#define SCXML_CMETA_DEFAULT_MAX_DATA_DEPTH 32u
+#define SCXML_CMETA_DEFAULT_MAX_DATA_ITEMS 4096u
 
 #ifndef SCXML_PAYLOAD_MAX_ENTRIES
 #define SCXML_PAYLOAD_MAX_ENTRIES 64u
@@ -180,6 +183,33 @@ typedef struct scxml_cmeta_compile_options_v3 {
     const scxml_cmeta_custom_action_v2 *actions;
     size_t action_count;
 } scxml_cmeta_compile_options_v3;
+
+/**
+ * Canonical CMeta compile provider with pre-admitted external-data binding.
+ *
+ * V3 FunctionDesc-first action semantics are preserved. max_data_depth and
+ * max_data_items are compile-time admission ceilings for every <data src>
+ * destination. TurboSCXML compiles one immutable DataBindNativePlan per
+ * external initializer into the resulting Program; runtime sessions only
+ * supply mutable workspace and payload/resource byte budgets.
+ */
+typedef struct scxml_cmeta_compile_options_v4 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const cmeta_data_desc *root;
+    size_t max_source_bytes;
+    size_t max_instructions;
+    size_t max_operands;
+    size_t max_expression_depth;
+    size_t max_path_depth;
+    size_t max_literal_bytes;
+    size_t max_string_bytes;
+    size_t max_iterations;
+    const scxml_cmeta_custom_action_v2 *actions;
+    size_t action_count;
+    size_t max_data_depth;
+    size_t max_data_items;
+} scxml_cmeta_compile_options_v4;
 
 /**
  * Versioned per-session state provider for a CMeta-compiled program.
@@ -839,6 +869,10 @@ scxml_cmeta_default_compile_options_v2(const cmeta_data_desc *root);
 scxml_cmeta_compile_options_v3
 scxml_cmeta_default_compile_options_v3(const cmeta_data_desc *root);
 
+/** Return V4 defaults with immutable DataBind native-plan admission enabled. */
+scxml_cmeta_compile_options_v4
+scxml_cmeta_default_compile_options_v4(const cmeta_data_desc *root);
+
 /** Return bounded QuickJS profile defaults with a borrowed CMeta root. */
 scxml_quickjs_compile_options_v1
 scxml_quickjs_default_compile_options(const cmeta_data_desc *root);
@@ -886,6 +920,18 @@ scxml_status scxml_compile_cmeta_v3(
     size_t input_size,
     const scxml_limits *limits,
     const scxml_cmeta_compile_options_v3 *options,
+    scxml_diagnostic *diagnostic);
+
+/**
+ * Compile exact CMeta with FunctionDesc actions and immutable external-data
+ * native plans. This is the canonical compile surface for new callers.
+ */
+scxml_status scxml_compile_cmeta_v4(
+    scxml_program *out,
+    const char *input,
+    size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v4 *options,
     scxml_diagnostic *diagnostic);
 
 /**
