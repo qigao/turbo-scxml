@@ -45,6 +45,8 @@ typedef vxml_status (*vxml_profile_session_init_fn)(
     vxml_session_impl *session, const void *options);
 typedef vxml_status (*vxml_profile_session_start_fn)(
     vxml_session_impl *session);
+typedef vxml_status (*vxml_profile_session_start_at_fn)(
+    vxml_session_impl *session, size_t form_index);
 typedef void (*vxml_profile_session_destroy_fn)(vxml_session_impl *session);
 typedef void (*vxml_profile_program_destroy_fn)(vxml_program_impl *program);
 
@@ -71,6 +73,7 @@ struct vxml_program_impl {
     void *profile_data;
     vxml_profile_session_init_fn profile_session_init;
     vxml_profile_session_start_fn profile_session_start;
+    vxml_profile_session_start_at_fn profile_session_start_at;
     vxml_profile_session_destroy_fn profile_session_destroy;
     vxml_profile_program_destroy_fn profile_program_destroy;
 };
