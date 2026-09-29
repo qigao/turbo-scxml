@@ -75,6 +75,29 @@ scxml_cmeta_default_compile_options_v3(const cmeta_data_desc *root) {
     return options;
 }
 
+scxml_cmeta_compile_options_v4
+scxml_cmeta_default_compile_options_v4(const cmeta_data_desc *root) {
+    const scxml_cmeta_compile_options_v3 base =
+        scxml_cmeta_default_compile_options_v3(root);
+    const scxml_cmeta_compile_options_v4 options = {
+        .abi_version = SCXML_CMETA_COMPILE_OPTIONS_ABI_V4,
+        .struct_size = sizeof(scxml_cmeta_compile_options_v4),
+        .root = base.root,
+        .max_source_bytes = base.max_source_bytes,
+        .max_instructions = base.max_instructions,
+        .max_operands = base.max_operands,
+        .max_expression_depth = base.max_expression_depth,
+        .max_path_depth = base.max_path_depth,
+        .max_literal_bytes = base.max_literal_bytes,
+        .max_string_bytes = base.max_string_bytes,
+        .max_iterations = base.max_iterations,
+        .actions = base.actions,
+        .action_count = base.action_count,
+        .max_data_depth = SCXML_CMETA_DEFAULT_MAX_DATA_DEPTH,
+        .max_data_items = SCXML_CMETA_DEFAULT_MAX_DATA_ITEMS};
+    return options;
+}
+
 scxml_quickjs_compile_options_v1
 scxml_quickjs_default_compile_options(const cmeta_data_desc *root) {
     return scxml_quickjs_default_compile_options_impl(root);
@@ -88,6 +111,7 @@ static scxml_status compile_scxml_model(
     size_t cmeta_max_iterations,
     const scxml_cmeta_custom_action_v1 *custom_actions,
     size_t custom_action_count,
+    size_t data_bind_max_depth, size_t data_bind_max_items,
     const scxml_quickjs_compile_options_v1 *quickjs_options,
     scxml_diagnostic *diagnostic) {
     scxml_limits limits = limits_or_null != NULL
@@ -133,6 +157,10 @@ static scxml_status compile_scxml_model(
     build.custom_action_registry = custom_actions;
     build.custom_action_registry_count = custom_action_count;
     build.max_iterations = cmeta_max_iterations;
+    build.data_bind_max_depth = data_bind_max_depth;
+    build.data_bind_max_items = data_bind_max_items;
+    build.precompile_data_bind_plans =
+        data_bind_max_depth != 0u && data_bind_max_items != 0u;
     build.quickjs_profile = quickjs_options != NULL;
     if (quickjs_options != NULL)
         build.quickjs_options = *quickjs_options;
@@ -994,7 +1022,7 @@ scxml_status scxml_compile(
     scxml_diagnostic *diagnostic) {
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_NULL, NULL, NULL,
-        0u, NULL, 0u, NULL, diagnostic);
+        0u, NULL, 0u, 0u, 0u, NULL, diagnostic);
 }
 
 scxml_status scxml_compile_cmeta(
@@ -1043,7 +1071,7 @@ scxml_status scxml_compile_cmeta(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, max_iterations,
-        NULL, 0u, NULL, diagnostic);
+        NULL, 0u, 0u, 0u, NULL, diagnostic);
 }
 
 static bool custom_action_scalar_type_supported(
@@ -1141,7 +1169,7 @@ scxml_status scxml_compile_cmeta_v2(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        options->actions, options->action_count, NULL, diagnostic);
+        options->actions, options->action_count, 0u, 0u, NULL, diagnostic);
 }
 
 
@@ -1196,10 +1224,12 @@ static bool custom_action_function_row_valid(
     return true;
 }
 
-scxml_status scxml_compile_cmeta_v3(
+
+static scxml_status compile_cmeta_function_desc(
     scxml_program *out, const char *input, size_t input_size,
     const scxml_limits *limits,
     const scxml_cmeta_compile_options_v3 *options,
+    size_t data_bind_max_depth, size_t data_bind_max_items,
     scxml_diagnostic *diagnostic) {
     scxml_expr_limits expression_limits;
     scxml_cmeta_custom_action_v1 *adapted = NULL;
@@ -1282,7 +1312,8 @@ scxml_status scxml_compile_cmeta_v3(
     status = compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        adapted, options->action_count, NULL, diagnostic);
+        adapted, options->action_count,
+        data_bind_max_depth, data_bind_max_items, NULL, diagnostic);
     goto cleanup;
 
 invalid:
@@ -1309,6 +1340,54 @@ cleanup:
     return status;
 }
 
+scxml_status scxml_compile_cmeta_v3(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v3 *options,
+    scxml_diagnostic *diagnostic) {
+    return compile_cmeta_function_desc(
+        out, input, input_size, limits, options, 0u, 0u, diagnostic);
+}
+
+scxml_status scxml_compile_cmeta_v4(
+    scxml_program *out, const char *input, size_t input_size,
+    const scxml_limits *limits,
+    const scxml_cmeta_compile_options_v4 *options,
+    scxml_diagnostic *diagnostic) {
+    scxml_cmeta_compile_options_v3 base;
+    if (options == NULL ||
+        options->abi_version != SCXML_CMETA_COMPILE_OPTIONS_ABI_V4 ||
+        options->struct_size < sizeof(*options) ||
+        options->max_data_depth == 0u ||
+        options->max_data_items == 0u) {
+        if (diagnostic != NULL) {
+            memset(diagnostic, 0, sizeof(*diagnostic));
+            diagnostic->status = SCXML_INVALID_ARGUMENT;
+            (void)snprintf(
+                diagnostic->message, sizeof(diagnostic->message), "%s",
+                "invalid precompiled-DataBind CMeta compile provider");
+        }
+        return SCXML_INVALID_ARGUMENT;
+    }
+    base = (scxml_cmeta_compile_options_v3){
+        .abi_version = SCXML_CMETA_COMPILE_OPTIONS_ABI_V3,
+        .struct_size = sizeof(base),
+        .root = options->root,
+        .max_source_bytes = options->max_source_bytes,
+        .max_instructions = options->max_instructions,
+        .max_operands = options->max_operands,
+        .max_expression_depth = options->max_expression_depth,
+        .max_path_depth = options->max_path_depth,
+        .max_literal_bytes = options->max_literal_bytes,
+        .max_string_bytes = options->max_string_bytes,
+        .max_iterations = options->max_iterations,
+        .actions = options->actions,
+        .action_count = options->action_count};
+    return compile_cmeta_function_desc(
+        out, input, input_size, limits, &base,
+        options->max_data_depth, options->max_data_items, diagnostic);
+}
+
 scxml_status scxml_program_compile_quickjs_model(
     scxml_program *out, const char *input, size_t input_size,
     const scxml_limits *limits,
@@ -1325,7 +1404,7 @@ scxml_status scxml_program_compile_quickjs_model(
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,
-        NULL, 0u, options, diagnostic);
+        NULL, 0u, 0u, 0u, options, diagnostic);
 }
 
 scxml_status scxml_compile_quickjs(
