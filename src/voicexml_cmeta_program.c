@@ -1032,6 +1032,7 @@ static vxml_status cmeta_measure_program(
     salts_xml_node root;
     size_t index;
     bool saw_form = false;
+    bool version_21 = false;
     vxml_status status = VXML_OK;
     memset(measurement, 0, sizeof(*measurement));
     measurement->scope_count = 1u;
@@ -1063,6 +1064,9 @@ static vxml_status cmeta_measure_program(
                     ? salts_xml_attribute_location(version)
                     : salts_xml_node_location(root),
                 "VoiceXML version must be 2.0 or 2.1");
+        if (status == VXML_OK)
+            version_21 = cmeta_decoded_equal(
+                salts_xml_attribute_value(version), "2.1");
     }
     if (status != VXML_OK) {
         salts_xml_document_destroy(&document);
@@ -1072,6 +1076,13 @@ static vxml_status cmeta_measure_program(
         const salts_xml_node child = salts_xml_node_child_at(root, index);
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "data")) {
+            if (!version_21) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML data requires version 2.1");
+                break;
+            }
             if (saw_form) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
