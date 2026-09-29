@@ -210,6 +210,13 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
       TurboSCXML::_CMetaRuntime
       Salts::XmlParser
       Salts::CMeta
+      Salts::CSerde
+      Salts::DataBindCore
+      Salts::DataBind
+      Salts::DataBindJsonAdapter
+      Salts::DataBindYamlAdapter
+      Salts::DataBindCsvAdapter
+      Salts::DataBindXmlAdapter
       Salts::QueryVM)
     if(NOT TARGET ${TURBOSCXML_EXPECTED_TARGET})
       message(FATAL_ERROR
@@ -217,7 +224,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
     endif()
   endforeach()
   foreach(TURBOSCXML_FORBIDDEN_TARGET IN ITEMS
-      Salts::CFlow Salts::CSerde Salts::DataBind)
+      Salts::CFlow)
     if(TARGET ${TURBOSCXML_FORBIDDEN_TARGET})
       message(FATAL_ERROR
         "VoiceXMLCMeta unexpectedly discovered ${TURBOSCXML_FORBIDDEN_TARGET}")
@@ -227,7 +234,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
     TURBOSCXML_VOICEXML_CMETA_LINKS
     TurboSCXML::VoiceXMLCMeta INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOSCXML_VOICEXML_CMETA_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBindCore>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
     message(FATAL_ERROR
       "Unexpected VoiceXMLCMeta link closure: "
       "${TURBOSCXML_VOICEXML_CMETA_LINKS}")
