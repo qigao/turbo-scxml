@@ -63,8 +63,14 @@ typedef enum vxml_session_state {
     VXML_SESSION_RUNNING,
     VXML_SESSION_EXITED,
     VXML_SESSION_FAILED,
-    VXML_SESSION_CLOSED
+    VXML_SESSION_CLOSED,
+    VXML_SESSION_NAVIGATING
 } vxml_session_state;
+
+typedef struct vxml_navigation_target {
+    const char *uri;
+    size_t uri_size;
+} vxml_navigation_target;
 
 /**
  * Caller-allocated, single-owner, non-copyable session handle. Move only by
@@ -99,6 +105,27 @@ void vxml_program_destroy(vxml_program *program);
 vxml_status vxml_session_init(vxml_session *session,
                               const vxml_program *program);
 vxml_status vxml_session_start(vxml_session *session);
+
+/**
+ * Start a literal-profile session at one compiled form ID.
+ *
+ * The ID is borrowed only for this call. Missing IDs fail the session with
+ * VXML_INVALID_STRUCTURE. Non-literal profiles return VXML_INVALID_CONTRACT.
+ */
+vxml_status vxml_session_start_at_form(
+    vxml_session *session,
+    const char *form_id,
+    size_t form_id_size);
+
+/**
+ * Borrow the external goto target while state is VXML_SESSION_NAVIGATING.
+ *
+ * The returned Program-owned view remains valid until close/destruction.
+ */
+vxml_status vxml_session_navigation(
+    const vxml_session *session,
+    vxml_navigation_target *out_target);
+
 vxml_session_state vxml_session_get_state(const vxml_session *session);
 vxml_status vxml_session_error(const vxml_session *session);
 vxml_status vxml_session_close(vxml_session *session);
