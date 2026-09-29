@@ -202,6 +202,18 @@ static void owned_text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(scxml_owned_text));
 }
 
+static cmeta_status owned_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    owned_text_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void owned_text_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(scxml_owned_text));
+    owned_text_restore_zero(source);
+}
+
 static cmeta_status owned_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const scxml_owned_text *text = (const scxml_owned_text *)object;
@@ -225,7 +237,9 @@ static const cmeta_data_buffer_ops owned_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = owned_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc owned_text_desc = {
@@ -266,6 +280,18 @@ static void borrowed_text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(scxml_borrowed_text));
 }
 
+static cmeta_status borrowed_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    borrowed_text_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void borrowed_text_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(scxml_borrowed_text));
+    borrowed_text_restore_zero(source);
+}
+
 static cmeta_status borrowed_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const scxml_borrowed_text *text = (const scxml_borrowed_text *)object;
@@ -288,7 +314,9 @@ static const cmeta_data_buffer_ops borrowed_text_ops = {
     .is_zero = borrowed_text_is_zero,
     .assign = borrowed_text_assign,
     .restore_zero = borrowed_text_restore_zero,
-    .read = borrowed_text_read
+    .read = borrowed_text_read,
+    .init_zero = borrowed_text_init_zero,
+    .move = borrowed_text_move
 };
 
 static const cmeta_data_desc borrowed_text_desc = {
@@ -310,7 +338,9 @@ static const cmeta_data_buffer_ops custom_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = owned_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc custom_text_desc = {
@@ -331,7 +361,9 @@ static const cmeta_data_buffer_ops readonly_text_ops = {
     .ownership = CMETA_DATA_BUFFER_OWNED,
     .is_zero = owned_text_is_zero,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc readonly_text_desc = {
@@ -361,7 +393,9 @@ static const cmeta_data_buffer_ops failing_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = failing_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc failing_text_desc = {
