@@ -99,6 +99,8 @@ lifetime. It does not add a second provider registry or execution model.
 
 See [CMeta provider interfaces](docs/specs/scxml-cmeta-provider-interfaces.md).
 
+The non-media CCXML/VoiceXML lifecycle bridge is documented in [VoiceXML dialog manager](docs/specs/voicexml-dialog-manager.md).
+
 ## Repository ownership
 
 TurboSCXML owns:
@@ -128,6 +130,7 @@ TurboSCXML does not own:
 | `TurboSCXML::Plugin` | optional lease-safe Salts Plugin Function/Interface composition bridge |
 | `TurboSCXML::CCXML` | CCXML layer |
 | `TurboSCXML::VoiceXML` | bounded VoiceXML core profile |
+| `TurboSCXML::VoiceXMLDialogManager` | bounded CCXML dialogprepare/start/terminate bridge over the VoiceXML core |
 | `TurboSCXML::VoiceXMLCMeta` | optional CMeta-backed VoiceXML data-model profile |
 | `TurboSCXML::CHttpResource` | optional host-authorized HTTP resource adapter |
 | `TurboSCXML::CHttpEventIO` | optional BasicHTTP Event I/O processor |
@@ -137,6 +140,7 @@ The public C API is available through:
 ```c
 #include <scxml/scxml.h>
 #include <scxml/provider.h> /* optional CMeta provider-interface surface */
+#include <voicexml/dialog_manager.h> /* optional CCXML/VoiceXML dialog lifecycle bridge */
 ```
 
 Functions and types use the `scxml_*` naming convention.
