@@ -837,23 +837,182 @@ static vxml_dialog_manager_status load_document_program(
         : compile_document(row, failure_event);
 }
 
+static vxml_status start_current_session(
+    vxml_dialog_row *row,
+    const char *fragment,
+    size_t fragment_size) {
+    vxml_status status;
+    if (row == NULL || row->program_view == NULL)
+        return VXML_INVALID_ARGUMENT;
+    status = vxml_session_init(&row->session, row->program_view);
+    if (status != VXML_OK)
+        return status;
+    row->session_live = true;
+    return fragment_size != 0u
+        ? vxml_session_start_at_form(
+              &row->session, fragment, fragment_size)
+        : vxml_session_start(&row->session);
+}
+
+static vxml_dialog_manager_status follow_external_navigation(
+    vxml_dialog_row *row) {
+    vxml_dialog_manager_impl *impl;
+    if (row == NULL || row->owner == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    impl = row->owner;
+
+    while (row->session_live &&
+           vxml_session_get_state(&row->session) ==
+               VXML_SESSION_NAVIGATING) {
+        vxml_navigation_target target = {0};
+        vxml_document_view current_view = {0};
+        vxml_document_view next_view = {0};
+        vxml_document_ref next_ref = {0};
+        vxml_document_store_error error = {0};
+        vxml_resolved_uri_v1 resolved;
+        vxml_document_store_status store_status;
+        vxml_status voice_status;
+
+        if (!impl->navigation_enabled ||
+            !impl->store_backed ||
+            impl->document_store == NULL ||
+            !row->document_ref_live) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_UNSUPPORTED_FEATURE);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        if (row->navigation_hops >= impl->max_navigation_hops) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_LIMIT_EXCEEDED);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        voice_status = vxml_session_navigation(
+            &row->session, &target);
+        if (voice_status != VXML_OK) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                voice_status);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        store_status = vxml_document_store_view(
+            impl->document_store,
+            row->document_ref,
+            &current_view);
+        if (store_status != VXML_DOCUMENT_STORE_OK ||
+            current_view.document_uri == NULL ||
+            current_view.program == NULL) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_INVALID_STATE);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+
+        resolved = (vxml_resolved_uri_v1){
+            .abi_version = 1u,
+            .struct_size = sizeof(vxml_resolved_uri_v1),
+            .document_uri = impl->resolve_uri_scratch,
+            .document_uri_capacity = impl->max_source_bytes + 1u,
+            .fragment = impl->resolve_fragment_scratch,
+            .fragment_capacity = impl->max_source_bytes + 1u};
+        store_status = vxml_document_store_resolve(
+            impl->document_store,
+            current_view.document_uri,
+            current_view.document_uri_size,
+            target.uri,
+            target.uri_size,
+            &resolved);
+        if (store_status != VXML_DOCUMENT_STORE_OK) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                store_failure_voice_status(store_status, NULL));
+            return VXML_DIALOG_MANAGER_OK;
+        }
+
+        store_status = vxml_document_store_acquire(
+            impl->document_store,
+            resolved.document_uri,
+            resolved.document_uri_size,
+            &next_ref,
+            &error);
+        if (store_status != VXML_DOCUMENT_STORE_OK) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                store_failure_voice_status(store_status, &error));
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        store_status = vxml_document_store_view(
+            impl->document_store, next_ref, &next_view);
+        if (store_status != VXML_DOCUMENT_STORE_OK ||
+            next_view.program == NULL) {
+            (void)vxml_document_store_release(
+                impl->document_store, &next_ref);
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_INVALID_STATE);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+
+        vxml_session_destroy(&row->session);
+        row->session_live = false;
+        store_status = vxml_document_store_release(
+            impl->document_store, &row->document_ref);
+        if (store_status != VXML_DOCUMENT_STORE_OK) {
+            (void)vxml_document_store_release(
+                impl->document_store, &next_ref);
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_INVALID_STATE);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        row->document_ref_live = false;
+        row->document_ref = next_ref;
+        row->document_ref_live = true;
+        row->program_view = next_view.program;
+        ++row->navigation_hops;
+
+        voice_status = start_current_session(
+            row,
+            resolved.fragment,
+            resolved.fragment_size);
+        if (voice_status != VXML_OK) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                voice_status);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+    }
+    return queue_event(
+        row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
+}
+
 static vxml_dialog_manager_status start_session(
     vxml_dialog_row *row) {
     vxml_status status;
+    size_t fragment_size;
     if (row == NULL || row->program_view == NULL)
         return VXML_DIALOG_MANAGER_INVALID_STATE;
-    status = vxml_session_init(&row->session, row->program_view);
+
+    fragment_size = row->start_fragment_size;
+    status = start_current_session(
+        row,
+        row->start_fragment,
+        fragment_size);
+    row->start_fragment_size = 0u;
+    if (row->start_fragment != NULL)
+        row->start_fragment[0] = '\0';
+
     if (status != VXML_OK) {
-        (void)queue_event(row, VXML_DIALOG_EVENT_ERROR_START, status);
+        (void)queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START, status);
         return VXML_DIALOG_MANAGER_OK;
     }
-    row->session_live = true;
-    status = vxml_session_start(&row->session);
-    if (status != VXML_OK) {
-        (void)queue_event(row, VXML_DIALOG_EVENT_ERROR_START, status);
-        return VXML_DIALOG_MANAGER_OK;
-    }
-    return queue_event(row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
+    if (vxml_session_get_state(&row->session) ==
+        VXML_SESSION_NAVIGATING)
+        return follow_external_navigation(row);
+    return queue_event(
+        row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
 }
 
 static vxml_dialog_manager_status progress_row(
