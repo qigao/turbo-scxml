@@ -39,17 +39,17 @@ static void capture_scxml_log(const salts_log_entry_t *entry,
     }
     index = capture->count++;
     capture->levels[index] = entry->level;
-    component_size = entry->component != NULL ? strlen(entry->component) : 0u;
+    component_size = entry->component.len;
     if (component_size >= SCXML_LOG_COMPONENT_CAPACITY)
         component_size = SCXML_LOG_COMPONENT_CAPACITY - 1u;
-    if (component_size != 0u)
-        memcpy(capture->components[index], entry->component, component_size);
+    if (component_size != 0u && entry->component.data != NULL)
+        memcpy(capture->components[index], entry->component.data, component_size);
     capture->components[index][component_size] = '\0';
-    message_size = entry->message_len;
+    message_size = entry->message.len;
     if (message_size >= SCXML_LOG_MESSAGE_CAPACITY)
         message_size = SCXML_LOG_MESSAGE_CAPACITY - 1u;
-    if (message_size != 0u)
-        memcpy(capture->messages[index], entry->message, message_size);
+    if (message_size != 0u && entry->message.data != NULL)
+        memcpy(capture->messages[index], entry->message.data, message_size);
     capture->messages[index][message_size] = '\0';
 }
 
