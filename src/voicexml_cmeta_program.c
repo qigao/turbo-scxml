@@ -500,9 +500,22 @@ static bool cmeta_node_ignorable(salts_xml_node node) {
 static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "var") ||
+        cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
         cmeta_node_named(node, "else") || cmeta_node_named(node, "exit");
+}
+
+static bool cmeta_external_data_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_data_bind_items) +
+        sizeof(options->max_data_bind_items);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_external_data_resources != 0u &&
+        options->max_data_uri_bytes != 0u &&
+        options->max_data_bind_depth != 0u &&
+        options->max_data_bind_items != 0u;
 }
 
 static bool cmeta_measure_increment(size_t *value) {
@@ -955,8 +968,62 @@ static vxml_status cmeta_measure_form(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_data(
+    salts_xml_node node,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "src"};
+    const salts_xml_attribute name = cmeta_attribute(node, "name");
+    const salts_xml_attribute src = cmeta_attribute(node, "src");
+    vxml_status status = cmeta_validate_attributes(
+        node, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(node, diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL || src.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML data requires name and src");
+    if (!cmeta_external_data_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(node),
+            "VoiceXML external data requires enabled DataBind limits");
+    if (measurement->external_data_count >=
+            options->max_external_data_resources ||
+        !cmeta_measure_increment(&measurement->external_data_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML external data resource count exceeds limit");
+    status = cmeta_measure_name(name, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_measure_name(src, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    {
+        size_t decoded_size = 0u;
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(src), NULL, 0u, &decoded_size))
+            return cmeta_program_fail(
+                diagnostic, VXML_XML_ERROR,
+                salts_xml_attribute_location(src),
+                "VoiceXML data src contains an invalid XML reference");
+        if (decoded_size == 0u ||
+            decoded_size > options->max_data_uri_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(src),
+                "VoiceXML data src exceeds max_data_uri_bytes");
+    }
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_program(
     const char *bytes, size_t size, const vxml_limits *limits,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic) {
     salts_xml_document document = {0};
@@ -1004,6 +1071,19 @@ static vxml_status cmeta_measure_program(
     for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(root, index);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "data")) {
+            if (saw_form) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "document data must precede forms");
+                break;
+            }
+            status = cmeta_measure_data(
+                child, options, measurement, limits, diagnostic);
+            if (status != VXML_OK) break;
+            continue;
+        }
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
@@ -2509,7 +2589,7 @@ vxml_status vxml_compile_cmeta(
         (const char *)bytes, size, &active_limits, diagnostic);
     if (status != VXML_OK) return status;
     status = cmeta_measure_program(
-        (const char *)bytes, size, &active_limits,
+        (const char *)bytes, size, &active_limits, options,
         &measurement, diagnostic);
     if (status != VXML_OK) return status;
     return cmeta_write_program(
