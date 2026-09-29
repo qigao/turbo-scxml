@@ -993,10 +993,11 @@ static vxml_status initialize_declarations(
     return VXML_OK;
 }
 
-static vxml_status initialize_first_form(
+static vxml_status initialize_form(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_form_row *form) {
+    const vxml_cmeta_form_row *form,
+    size_t form_index) {
     const size_t document_scopes[1] = {program->document_scope};
     const size_t form_scopes[2] = {form->scope, program->document_scope};
     size_t block_offset;
@@ -1016,7 +1017,8 @@ static vxml_status initialize_first_form(
         const size_t block_scopes[3] = {
             block->scope, form->scope, program->document_scope};
         unsigned char *form_declared;
-        if (block->form != 0u || block->scope >= program->scope_count ||
+        if (block->form != form_index ||
+            block->scope >= program->scope_count ||
             block->form_item_slot >=
                 program->scopes[form->scope].schema.slot_count)
             return VXML_INVALID_STRUCTURE;
@@ -1625,7 +1627,8 @@ failure:
     return status;
 }
 
-vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
+vxml_status vxml_cmeta_session_start_profile_at(
+    vxml_session_impl *session, size_t form_index) {
     const vxml_cmeta_program_data *program;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_form_row *form;
@@ -1638,18 +1641,19 @@ vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
     program = (const vxml_cmeta_program_data *)session->program->profile_data;
     profile = (vxml_cmeta_session_data *)session->profile_data;
     if (program->form_count == 0u || program->forms == NULL ||
+        form_index >= program->form_count ||
         program->block_count == 0u || program->blocks == NULL)
         return session_fail(session, VXML_INVALID_STRUCTURE);
-    form = &program->forms[0];
+    form = &program->forms[form_index];
     if (program->document_scope >= program->scope_count ||
         form->scope >= program->scope_count ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count))
         return session_fail(session, VXML_INVALID_STRUCTURE);
-    profile->active_form = 0u;
+    profile->active_form = form_index;
     if (!transaction_begin(profile, program))
         return session_fail(session, VXML_ALLOCATION_FAILED);
-    status = initialize_first_form(profile, program, form);
+    status = initialize_form(profile, program, form, form_index);
     if (status != VXML_OK) {
         transaction_reset(profile, program);
         return session_fail(session, status);
@@ -1722,6 +1726,10 @@ vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
         }
         exit_snapshot_destroy(&profile->pending_exit);
     }
+}
+
+vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
+    return vxml_cmeta_session_start_profile_at(session, 0u);
 }
 
 void vxml_cmeta_session_destroy_profile(vxml_session_impl *session) {

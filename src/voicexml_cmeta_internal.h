@@ -192,6 +192,8 @@ typedef struct vxml_cmeta_session_data {
 vxml_status vxml_cmeta_session_init_profile(
     vxml_session_impl *session, const void *options);
 vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session);
+vxml_status vxml_cmeta_session_start_profile_at(
+    vxml_session_impl *session, size_t form_index);
 void vxml_cmeta_session_destroy_profile(vxml_session_impl *session);
 void vxml_cmeta_program_destroy_profile(vxml_program_impl *program);
 
