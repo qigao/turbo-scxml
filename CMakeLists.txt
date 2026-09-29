@@ -166,9 +166,9 @@ target_link_libraries(turbo_scxml
     Salts::CMeta
     Salts::CSerde
     Salts::XmlParser
+    Salts::DataBind
   PRIVATE
     Salts::Core
-    Salts::DataBind
     Salts::QueryVM
     TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
@@ -313,7 +313,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBind;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
   endif()
