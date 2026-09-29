@@ -799,6 +799,48 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("discards a prepared collect reservation when the session is destroyed") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_true(probe.reserved);
+        check_equal(probe.discard_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        check_false(probe.reserved);
+        check_equal(probe.discard_calls, (size_t)1u);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        vxml_program_destroy(&program);
+    }
+
     it("skips a prefilled first field and selects the next undefined field") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
