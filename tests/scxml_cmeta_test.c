@@ -1325,17 +1325,13 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='custom_id'/></state></scxml>";
-        static const char readonly[] =
-            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
-            "datamodel='cmeta'><state id='worker'><invoke "
-            "idlocation='readonly_id'/></state></scxml>";
         static const char system[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='_sessionid'/></state></scxml>";
         const char *invalid[] = {
             empty, malformed, missing, non_string, borrowed, custom,
-            readonly, system};
+            system};
         size_t index;
 
         for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]);
@@ -1346,6 +1342,26 @@ spec("TurboSCXML public CMeta data model") {
                         SCXML_INVALID_STRUCTURE);
             check_null(program.impl);
         }
+    }
+
+    it("admits a valid readonly string descriptor but preserves write rejection") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='worker'><invoke "
+            "idlocation='readonly_id'/></state></scxml>";
+        static const unsigned char value[] = "id";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_owned_text storage = {0};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_equal(
+            cmeta_data_buffer_assign(
+                &readonly_text_desc, &storage, value, sizeof(value) - 1u,
+                sizeof(value) - 1u),
+            CMETA_TRAIT_MISSING);
+        check_true(owned_text_is_zero(&storage));
+        scxml_program_destroy(&program);
     }
 
     it("rejects invoke id and idlocation conflicts before profile checks") {
