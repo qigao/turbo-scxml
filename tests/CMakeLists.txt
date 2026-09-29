@@ -221,6 +221,12 @@ turboscxml_add_test(
   scxml_provider_test
   scxml_provider_test.c)
 
+add_test(
+  NAME scxml_architecture_runtime_contract
+  COMMAND "${CMAKE_COMMAND}"
+    -DTURBOSCXML_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/architecture_runtime_contract.cmake")
+
 if(TURBOSCXML_ENABLE_PLUGIN)
   add_library(scxml_plugin_fixture MODULE
     scxml_plugin_fixture.c)
