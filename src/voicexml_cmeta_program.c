@@ -54,10 +54,13 @@ static bool cmeta_root_supported(const cmeta_data_desc *root) {
 }
 
 static bool compile_options_valid(const vxml_cmeta_compile_options_v1 *options) {
+    const size_t v1_prefix_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_conditional_depth) +
+        sizeof(options->max_conditional_depth);
     size_t index;
     if (options == NULL ||
         options->abi_version != VXML_CMETA_COMPILE_OPTIONS_ABI_V1 ||
-        options->struct_size < sizeof(*options) ||
+        options->struct_size < v1_prefix_size ||
         !cmeta_root_supported(options->root) ||
         options->semantic_data_count >
             SIZE_MAX / sizeof(*options->semantic_data) ||
