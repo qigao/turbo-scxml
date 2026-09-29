@@ -74,6 +74,10 @@ Struct(scxml_nested_data,
     (scxml_owned_text, invoke_id)
 );
 
+Struct(scxml_databind_nested_data,
+    (int, value)
+);
+
 Enum(scxml_public_source,
     (SCXML_PUBLIC_SOURCE_GOOD, 1, "good"),
     (SCXML_PUBLIC_SOURCE_FAIL, 2, "fail")
@@ -90,7 +94,8 @@ Struct(scxml_public_data,
     (scxml_owned_text, custom_id),
     (scxml_owned_text, readonly_id),
     (scxml_owned_text, failing_id),
-    (scxml_nested_data, nested)
+    (scxml_nested_data, nested),
+    (scxml_databind_nested_data, databind_nested)
 );
 
 static const cmeta_type_identity public_data_identity =
@@ -481,6 +486,41 @@ static const cmeta_data_desc nested_data_desc = {
     .shape = &nested_data_shape
 };
 
+static const cmeta_type_traits databind_nested_data_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
+static const cmeta_type_desc databind_nested_data_type = {
+    .name = "scxml_databind_nested_data",
+    .size = sizeof(scxml_databind_nested_data),
+    .align = _Alignof(scxml_databind_nested_data),
+    .kind = CMETA_T_OBJECT,
+    .traits = &databind_nested_data_traits
+};
+
+static const cmeta_data_field_desc databind_nested_data_fields[] = {
+    {"test.scxml.databind.nested.value", "value",
+     offsetof(scxml_databind_nested_data, value), &cmeta_data_int}
+};
+
+static const cmeta_data_struct_shape databind_nested_data_shape = {
+    .layout = StructMeta(scxml_databind_nested_data),
+    .fields = databind_nested_data_fields,
+    .field_count =
+        sizeof(databind_nested_data_fields) /
+        sizeof(databind_nested_data_fields[0])
+};
+
+static const cmeta_data_desc databind_nested_data_desc = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.scxml.databind.nested.schema",
+    .display_name = "SCXML DataBind nested data",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &databind_nested_data_type,
+    .shape = &databind_nested_data_shape
+};
+
 static const cmeta_data_field_desc public_data_fields[] = {
     {"test.scxml.public.data.enabled", "enabled",
      offsetof(scxml_public_data, enabled), &cmeta_data_bool},
@@ -503,7 +543,9 @@ static const cmeta_data_field_desc public_data_fields[] = {
     {"test.scxml.public.data.failing_id", "failing_id",
      offsetof(scxml_public_data, failing_id), &failing_text_desc},
     {"test.scxml.public.data.nested", "nested",
-     offsetof(scxml_public_data, nested), &nested_data_desc}
+     offsetof(scxml_public_data, nested), &nested_data_desc},
+    {"test.scxml.public.data.databind_nested", "databind_nested",
+     offsetof(scxml_public_data, databind_nested), &databind_nested_data_desc}
 };
 
 static const cmeta_data_struct_shape public_data_shape = {
@@ -529,6 +571,17 @@ static scxml_status compile_cmeta(
     const scxml_cmeta_compile_options_v1 options =
         scxml_cmeta_default_compile_options(&public_data_desc);
     return scxml_compile_cmeta(
+        program, source, strlen(source), NULL, &options, diagnostic);
+}
+
+static scxml_status compile_cmeta_v4(
+    const char *source, scxml_program *program,
+    scxml_diagnostic *diagnostic) {
+    scxml_cmeta_compile_options_v4 options =
+        scxml_cmeta_default_compile_options_v4(&public_data_desc);
+    options.max_data_depth = 8u;
+    options.max_data_items = 64u;
+    return scxml_compile_cmeta_v4(
         program, source, strlen(source), NULL, &options, diagnostic);
 }
 
@@ -5276,7 +5329,7 @@ spec("TurboSCXML public CMeta data model") {
             .max_data_buffer_bytes = 1024u,
             .max_data_resource_bytes = 1024u};
 
-        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_equal(compile_cmeta_v4(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
         check_equal(scxml_session_init_cmeta_v5(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
@@ -5288,6 +5341,80 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(probe.close_calls, (size_t)1u);
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
+    it("rejects external DataBind plans beyond compile-time descriptor bounds") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='done'>"
+            "<datamodel><data id='databind_nested' src='mem:nested'/></datamodel>"
+            "<final id='done'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_cmeta_compile_options_v4 options =
+            scxml_cmeta_default_compile_options_v4(&public_data_desc);
+        options.max_data_depth = 1u;
+        options.max_data_items = 64u;
+
+        check_equal(
+            scxml_compile_cmeta_v4(
+                &program, source, strlen(source), NULL, &options, &diagnostic),
+            SCXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
+
+        memset(&diagnostic, 0, sizeof(diagnostic));
+        options.max_data_depth = 8u;
+        options.max_data_items = 1u;
+        check_equal(
+            scxml_compile_cmeta_v4(
+                &program, source, strlen(source), NULL, &options, &diagnostic),
+            SCXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
+    }
+
+    it("rejects runtime DataBind budgets smaller than the Program plan before I/O") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta' initial='done'>"
+            "<datamodel><data id='databind_nested' src='mem:nested'/></datamodel>"
+            "<final id='done'/></scxml>";
+        const scxml_public_data initial = {0};
+        raw_data_resource_probe probe = {
+            .data = "{}",
+            .size = sizeof("{}") - 1u,
+            .format = DATA_BIND_FORMAT_JSON};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        const scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 1u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u};
+        const scxml_cmeta_session_options_v5 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V5,
+            .struct_size = sizeof(data),
+            .initial_state = &initial,
+            .data_resources = &raw_data_resource_adapter,
+            .data_resource_user = &probe,
+            .data_bind_workspace_bytes = 16384u,
+            .max_data_depth = 1u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
+            .max_data_buffer_bytes = 1024u,
+            .max_data_resource_bytes = 1024u};
+
+        check_equal(compile_cmeta_v4(source, &program, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(
+            scxml_session_init_cmeta_v5(&session, &config, &data),
+            CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT);
+        check_equal(probe.open_calls, (size_t)0u);
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
     }

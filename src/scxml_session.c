@@ -324,6 +324,7 @@ static cflow_statechart_instance_status retain_data_resource_options(
     for (assignment = 0u;
          assignment < session->program->assignment_count; ++assignment) {
         const cmeta_data_desc *destination = NULL;
+        const DataBindNativeRequirements *plan_requirements = NULL;
         const char *uri = NULL;
         size_t uri_size = 0u;
         DataBindNativeRequirements requirements =
@@ -336,6 +337,24 @@ static cflow_statechart_instance_status retain_data_resource_options(
                 &session->program->assignments[assignment], &uri, &uri_size,
                 &destination))
             continue;
+        if (scxml_assign_external_plan_requirements(
+                &session->program->assignments[assignment],
+                &plan_requirements)) {
+            size_t required_workspace;
+            if (plan_requirements == NULL ||
+                plan_requirements->workspace_alignment == 0u ||
+                options->max_data_depth <
+                    plan_requirements->descriptor_depth ||
+                options->max_data_items <
+                    plan_requirements->descriptor_nodes ||
+                !scxml_analyze_checked_add(
+                    plan_requirements->decode_bytes,
+                    plan_requirements->workspace_alignment - 1u,
+                    &required_workspace) ||
+                options->data_bind_workspace_bytes < required_workspace)
+                return CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+            continue;
+        }
         bind_status = data_bind_native_measure(
             &session->data_bind_options, destination,
             &requirements, &bind_diagnostic);

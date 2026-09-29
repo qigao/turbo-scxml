@@ -1462,11 +1462,19 @@ static scxml_status emit_data_initializer(
         status = decode_cmeta_attribute_source(
             build, source, "data src", &resource_source, &resource_size);
         if (status == SCXML_OK) {
-            expression_status = scxml_assign_compile_external(
-                &build->assignments[build->assignment_index],
-                location_source, location_size, resource_source,
-                resource_size, build->cmeta_root,
-                &build->expression_limits, &diagnostic);
+            expression_status = build->precompile_data_bind_plans
+                ? scxml_assign_compile_external_plan(
+                      &build->assignments[build->assignment_index],
+                      location_source, location_size, resource_source,
+                      resource_size, build->cmeta_root,
+                      &build->expression_limits,
+                      build->data_bind_max_depth,
+                      build->data_bind_max_items, &diagnostic)
+                : scxml_assign_compile_external(
+                      &build->assignments[build->assignment_index],
+                      location_source, location_size, resource_source,
+                      resource_size, build->cmeta_root,
+                      &build->expression_limits, &diagnostic);
         } else {
             free(location_source);
             return status;

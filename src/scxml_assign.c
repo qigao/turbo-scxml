@@ -36,6 +36,7 @@ typedef struct scxml_assign_program_impl {
     size_t literal_byte_count;
     char *external_uri;
     size_t external_uri_size;
+    DataBindNativePlan *external_plan;
 } scxml_assign_program_impl;
 
 static scxml_expr_status assign_report(
@@ -752,10 +753,95 @@ static scxml_expr_status assign_databind_failure(
         diagnostic,
         status == DATA_BIND_ERR_LIMIT
             ? SCXML_EXPR_LIMIT_EXCEEDED
-            : status == DATA_BIND_ERR_INVALID_ARG
-                  ? SCXML_EXPR_INVALID_ARGUMENT
-                  : SCXML_EXPR_EVALUATION_ERROR,
+            : status == DATA_BIND_ERR_OOM
+                  ? SCXML_EXPR_ALLOCATION_FAILED
+                  : status == DATA_BIND_ERR_INVALID_ARG
+                        ? SCXML_EXPR_INVALID_ARGUMENT
+                        : SCXML_EXPR_EVALUATION_ERROR,
         0u, message);
+}
+
+scxml_expr_status scxml_assign_compile_external_plan(
+    scxml_assign_program *out,
+    const char *location, size_t location_size,
+    const char *uri, size_t uri_size,
+    const cmeta_data_desc *root,
+    const scxml_expr_limits *limits,
+    size_t max_data_depth, size_t max_data_items,
+    scxml_expr_diagnostic *diagnostic) {
+    scxml_assign_program_impl *impl;
+    DataBindNativeOptions options = DATA_BIND_NATIVE_OPTIONS_INIT;
+    DataBindNativeDiagnostic native_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindStatus bind_status;
+    size_t workspace_bytes = 0u;
+    void *workspace = NULL;
+    scxml_expr_status status;
+
+    if (max_data_depth == 0u || max_data_items == 0u)
+        return assign_report(
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
+            "DataBind native plan admission bounds must be positive");
+    status = scxml_assign_compile_external(
+        out, location, location_size, uri, uri_size, root, limits, diagnostic);
+    if (status != SCXML_EXPR_OK) return status;
+    impl = (scxml_assign_program_impl *)out->impl;
+    if (impl == NULL || impl->destination == NULL) {
+        scxml_assign_program_destroy(out);
+        return assign_report(
+            diagnostic, SCXML_EXPR_INVALID_ARGUMENT, 0u,
+            "external assignment destination is unavailable for DataBind admission");
+    }
+
+    bind_status = data_bind_native_probe_workspace_size(
+        max_data_depth, &workspace_bytes);
+    if (bind_status != DATA_BIND_OK || workspace_bytes == 0u) {
+        scxml_assign_program_destroy(out);
+        return assign_report(
+            diagnostic,
+            bind_status == DATA_BIND_ERR_LIMIT
+                ? SCXML_EXPR_LIMIT_EXCEEDED
+                : SCXML_EXPR_INVALID_ARGUMENT,
+            0u, "DataBind native plan probe workspace is invalid");
+    }
+    workspace = malloc(workspace_bytes);
+    if (workspace == NULL) {
+        scxml_assign_program_destroy(out);
+        return assign_report(
+            diagnostic, SCXML_EXPR_ALLOCATION_FAILED, 0u,
+            "DataBind native plan probe workspace allocation failed");
+    }
+    options.workspace = workspace;
+    options.workspace_bytes = workspace_bytes;
+    options.max_depth = max_data_depth;
+    options.max_items = max_data_items;
+    options.max_owned_bytes = SIZE_MAX;
+    bind_status = data_bind_native_plan_compile(
+        &options, impl->destination, &impl->external_plan,
+        &native_diagnostic);
+    free(workspace);
+    if (bind_status != DATA_BIND_OK) {
+        scxml_assign_program_destroy(out);
+        return assign_databind_failure(
+            bind_status, &native_diagnostic, diagnostic);
+    }
+    return assign_report(diagnostic, SCXML_EXPR_OK, 0u, NULL);
+}
+
+bool scxml_assign_external_plan_requirements(
+    const scxml_assign_program *program,
+    const DataBindNativeRequirements **out_requirements) {
+    const scxml_assign_program_impl *impl = program != NULL
+        ? (const scxml_assign_program_impl *)program->impl : NULL;
+    const DataBindNativeRequirements *requirements;
+    if (impl == NULL || out_requirements == NULL ||
+        impl->source_kind != SCXML_ASSIGN_SOURCE_EXTERNAL ||
+        impl->external_plan == NULL)
+        return false;
+    requirements = data_bind_native_plan_requirements(impl->external_plan);
+    if (requirements == NULL) return false;
+    *out_requirements = requirements;
+    return true;
 }
 
 scxml_expr_status scxml_assign_apply_external_diagnostic(
@@ -809,9 +895,13 @@ scxml_expr_status scxml_assign_apply_external_diagnostic(
                              "CMeta external data replacement traits are invalid");
 
     memset(decode_storage, 0, type->size);
-    bind_status = data_bind_native_init(
-        options, impl->destination, decode_storage, decode_storage_size,
-        &bind_diagnostic);
+    bind_status = impl->external_plan != NULL
+        ? data_bind_native_plan_init(
+              impl->external_plan, options, decode_storage,
+              decode_storage_size, &bind_diagnostic)
+        : data_bind_native_init(
+              options, impl->destination, decode_storage,
+              decode_storage_size, &bind_diagnostic);
     if (bind_status != DATA_BIND_OK) {
         if (out_bind_diagnostic != NULL)
             *out_bind_diagnostic = bind_diagnostic;
@@ -822,14 +912,23 @@ scxml_expr_status scxml_assign_apply_external_diagnostic(
 
     bind_diagnostic =
         (DataBindNativeDiagnostic)DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
-    bind_status = data_bind_native_decode_bounded(
-        options, impl->destination, reader, decode_storage,
-        decode_storage_size, max_buffer_bytes, &bind_diagnostic);
+    bind_status = impl->external_plan != NULL
+        ? data_bind_native_plan_decode_bounded(
+              impl->external_plan, options, reader, decode_storage,
+              decode_storage_size, max_buffer_bytes, &bind_diagnostic)
+        : data_bind_native_decode_bounded(
+              options, impl->destination, reader, decode_storage,
+              decode_storage_size, max_buffer_bytes, &bind_diagnostic);
     if (bind_status != DATA_BIND_OK) {
         failure_diagnostic = bind_diagnostic;
-        (void)data_bind_native_clear(
-            options, impl->destination, decode_storage, decode_storage_size,
-            &clear_diagnostic);
+        if (impl->external_plan != NULL)
+            (void)data_bind_native_plan_clear(
+                impl->external_plan, options, decode_storage,
+                decode_storage_size, &clear_diagnostic);
+        else
+            (void)data_bind_native_clear(
+                options, impl->destination, decode_storage,
+                decode_storage_size, &clear_diagnostic);
         memset(decode_storage, 0, type->size);
         if (out_bind_diagnostic != NULL)
             *out_bind_diagnostic = failure_diagnostic;
@@ -839,9 +938,14 @@ scxml_expr_status scxml_assign_apply_external_diagnostic(
 
     reader_status = cserde_reader_next(reader, &trailing);
     if (reader_status != CSERDE_DONE) {
-        (void)data_bind_native_clear(
-            options, impl->destination, decode_storage, decode_storage_size,
-            &clear_diagnostic);
+        if (impl->external_plan != NULL)
+            (void)data_bind_native_plan_clear(
+                impl->external_plan, options, decode_storage,
+                decode_storage_size, &clear_diagnostic);
+        else
+            (void)data_bind_native_clear(
+                options, impl->destination, decode_storage,
+                decode_storage_size, &clear_diagnostic);
         memset(decode_storage, 0, type->size);
         if (out_bind_diagnostic != NULL) {
             out_bind_diagnostic->source_status = reader_status;
@@ -875,9 +979,13 @@ scxml_expr_status scxml_assign_apply_external_diagnostic(
 
     bind_diagnostic =
         (DataBindNativeDiagnostic)DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
-    bind_status = data_bind_native_clear(
-        options, impl->destination, decode_storage, decode_storage_size,
-        &bind_diagnostic);
+    bind_status = impl->external_plan != NULL
+        ? data_bind_native_plan_clear(
+              impl->external_plan, options, decode_storage,
+              decode_storage_size, &bind_diagnostic)
+        : data_bind_native_clear(
+              options, impl->destination, decode_storage,
+              decode_storage_size, &bind_diagnostic);
     memset(decode_storage, 0, type->size);
     if (bind_status != DATA_BIND_OK) {
         if (out_bind_diagnostic != NULL)
@@ -945,6 +1053,7 @@ void scxml_assign_program_destroy(
     if (program == NULL || program->impl == NULL) return;
     impl = (scxml_assign_program_impl *)program->impl;
     scxml_expr_program_destroy(&impl->expression);
+    data_bind_native_plan_free(impl->external_plan);
     free(impl->literal_bytes);
     free(impl->external_uri);
     free(impl);
