@@ -511,12 +511,335 @@ static bool scope_text(
     return true;
 }
 
+typedef struct cmeta_data_resource_probe {
+    vxml_status open_status;
+    const char *expected_uri;
+    size_t expected_uri_size;
+    const char *payload;
+    size_t payload_size;
+    vxml_cmeta_data_format format;
+    bool ignore_max_bytes;
+    size_t open_calls;
+    size_t close_calls;
+} cmeta_data_resource_probe;
+
+static vxml_status cmeta_data_resource_open(
+    void *user,
+    const char *uri, size_t uri_size,
+    size_t max_bytes,
+    vxml_cmeta_data_resource_v1 *out) {
+    static const char default_uri[] = "config.json";
+    cmeta_data_resource_probe *probe =
+        (cmeta_data_resource_probe *)user;
+    const char *expected_uri;
+    size_t expected_uri_size;
+    if (probe == NULL || out == NULL || uri == NULL)
+        return VXML_INVALID_ARGUMENT;
+    expected_uri = probe->expected_uri != NULL
+        ? probe->expected_uri : default_uri;
+    expected_uri_size = probe->expected_uri != NULL
+        ? probe->expected_uri_size : sizeof(default_uri) - 1u;
+    if (uri_size != expected_uri_size ||
+        memcmp(uri, expected_uri, uri_size) != 0)
+        return VXML_INVALID_ARGUMENT;
+    ++probe->open_calls;
+    memset(out, 0, sizeof(*out));
+    if (probe->open_status != VXML_OK)
+        return probe->open_status;
+    if (!probe->ignore_max_bytes &&
+        probe->payload_size > max_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    out->data = probe->payload;
+    out->size = probe->payload_size;
+    out->format = probe->format;
+    out->lease = probe;
+    return VXML_OK;
+}
+
+static void cmeta_data_resource_close(
+    void *user, vxml_cmeta_data_resource_v1 *resource) {
+    cmeta_data_resource_probe *probe =
+        (cmeta_data_resource_probe *)user;
+    if (probe != NULL && resource != NULL &&
+        resource->lease == probe)
+        ++probe->close_calls;
+    if (resource != NULL)
+        memset(resource, 0, sizeof(*resource));
+}
+
+static const vxml_cmeta_data_resource_adapter_v1
+cmeta_data_resource_adapter = {
+    .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1),
+    .open = cmeta_data_resource_open,
+    .close = cmeta_data_resource_close};
+
+static vxml_cmeta_compile_options_v1 data_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_external_data_resources = 4u;
+    options.max_data_uri_bytes = 128u;
+    options.max_data_bind_depth = 16u;
+    options.max_data_bind_items = 128u;
+    return options;
+}
+
+static vxml_cmeta_session_options_v1 data_session_options(
+    const vxml_cmeta_session_root *root,
+    cmeta_data_resource_probe *probe) {
+    vxml_cmeta_session_options_v1 options =
+        session_options(root);
+    options.data_resources = &cmeta_data_resource_adapter;
+    options.data_resource_user = probe;
+    options.max_data_bytes = 1024u;
+    options.max_data_owned_bytes = 1024u;
+    return options;
+}
+
 static bool value_view_is_clear(vxml_cmeta_value_view value) {
     return value.kind == VXML_CMETA_VALUE_UNDEFINED &&
         value.data.string.data == NULL && value.data.string.size == 0u;
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("loads JSON external data into the CMeta root before form execution") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_name_view exit_name = {0};
+        vxml_cmeta_value_view value = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(root.value, 1);
+        check_equal(vxml_session_cmeta_read(
+                        &session, "value", sizeof("value") - 1u,
+                        &value),
+                    VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, (int64_t)7);
+
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_exit_at(
+                        &session, 0u, &exit_name, &value),
+                    VXML_OK);
+        check_null(exit_name.data);
+        check_equal(exit_name.size, (size_t)0u);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, (int64_t)7);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("loads XML external data through the DataBind XML provider") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='text' src='config.xml'/>"
+            "<form><block><exit expr='text'/></block></form></vxml>";
+        static const char uri[] = "config.xml";
+        static const char payload[] = "<value>hello</value>";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .expected_uri = uri,
+            .expected_uri_size = sizeof(uri) - 1u,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_XML};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_value_view value = {0};
+
+        reset_session_text_probe();
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(vxml_session_cmeta_read(
+                        &session, "text", sizeof("text") - 1u, &value),
+                    VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value.data.string.size, (size_t)5u);
+        check_equal(
+            memcmp(value.data.string.data, "hello", 5u), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+    }
+
+    it("closes a lease when an external data format is unsupported") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 4};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = (vxml_cmeta_data_format)99};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {(void *)(uintptr_t)1u};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_null(session.impl);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(root.value, 4);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("closes an oversized provider lease before rejecting the body") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block/></form></vxml>";
+        static const char payload[] = "12345";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 6};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON,
+            .ignore_max_bytes = true};
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {(void *)(uintptr_t)1u};
+        options.max_data_bytes = 4u;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_LIMIT_EXCEEDED);
+        check_null(session.impl);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(root.value, 6);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("closes an external data lease when DataBind parsing fails") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        static const char payload[] = "{";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 5};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {(void *)(uintptr_t)1u};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_true(vxml_session_init_cmeta(
+                       &session, &program, &options) != VXML_OK);
+        check_null(session.impl);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(root.value, 5);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("does not manufacture a lease when the external data provider refuses") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 9};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_INVALID_STATE,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {(void *)(uintptr_t)1u};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_INVALID_STATE);
+        check_null(session.impl);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)0u);
+        check_equal(root.value, 9);
+
+        vxml_program_destroy(&program);
+    }
+
     it("reads an application scalar and clears output in a wrong state") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -2823,7 +3146,8 @@ spec("VoiceXML CMeta session execution") {
         options.abi_version = 0u;
         check_session_init_rejected(&program, &options, VXML_INVALID_CONTRACT);
         options = session_options(&root);
-        options.struct_size = sizeof(options) - 1u;
+        options.struct_size =
+            offsetof(vxml_cmeta_session_options_v1, max_execution_steps);
         check_session_init_rejected(&program, &options, VXML_INVALID_CONTRACT);
         options = session_options(&root);
         options.max_transaction_bytes = 0u;

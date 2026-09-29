@@ -37,12 +37,20 @@ int main(void) {
     };
     vxml_program program = {0};
     vxml_session session = {0};
+    vxml_cmeta_data_resource_v1 data_resource = {0};
+    vxml_cmeta_data_resource_adapter_v1 data_adapter = {
+        .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1)};
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
     vxml_cmeta_value_view exit_value = {0};
     int result = 1;
 
+    if (data_adapter.abi_version !=
+            VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 ||
+        data_resource.format != 0)
+        return 5;
     if (layout_type ==
             turboscxml_install_cmeta_peer_value_descriptor()->storage_type ||
         !cmeta_type_equal(

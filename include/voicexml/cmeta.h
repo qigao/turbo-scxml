@@ -15,6 +15,7 @@ extern "C" {
 
 #define VXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
+#define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -57,6 +58,12 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_scope_slots;
     size_t max_scope_storage_bytes;
     size_t max_conditional_depth;
+
+    /* Optional append-only external-data admission tail. Zero disables <data>. */
+    size_t max_external_data_resources;
+    size_t max_data_uri_bytes;
+    size_t max_data_bind_depth;
+    size_t max_data_bind_items;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -67,7 +74,40 @@ typedef struct vxml_cmeta_session_options_v1 {
     size_t initially_undefined_count;
     size_t max_transaction_bytes;
     size_t max_execution_steps;
+
+    /* Optional append-only runtime data-resource tail. */
+    const struct vxml_cmeta_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t max_data_bytes;
+    size_t max_data_owned_bytes;
 } vxml_cmeta_session_options_v1;
+
+typedef enum vxml_cmeta_data_format {
+    VXML_CMETA_DATA_JSON = 1,
+    VXML_CMETA_DATA_YAML,
+    VXML_CMETA_DATA_CSV,
+    VXML_CMETA_DATA_XML
+} vxml_cmeta_data_format;
+
+typedef struct vxml_cmeta_data_resource_v1 {
+    const void *data;
+    size_t size;
+    vxml_cmeta_data_format format;
+    void *lease;
+} vxml_cmeta_data_resource_v1;
+
+typedef struct vxml_cmeta_data_resource_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_status (*open)(
+        void *user,
+        const char *uri, size_t uri_size,
+        size_t max_bytes,
+        vxml_cmeta_data_resource_v1 *out);
+    void (*close)(
+        void *user,
+        vxml_cmeta_data_resource_v1 *resource);
+} vxml_cmeta_data_resource_adapter_v1;
 
 typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_EMPTY = 0,

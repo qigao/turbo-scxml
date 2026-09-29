@@ -326,7 +326,15 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(turbo_voicexml_cmeta
     PUBLIC TurboSCXML::VoiceXML Salts::CMeta
-    PRIVATE Salts::QueryVM TurboSCXML::_CMetaRuntime)
+    PRIVATE
+      Salts::DataBindCore
+      Salts::DataBind
+      Salts::DataBindJsonAdapter
+      Salts::DataBindYamlAdapter
+      Salts::DataBindCsvAdapter
+      Salts::DataBindXmlAdapter
+      Salts::QueryVM
+      TurboSCXML::_CMetaRuntime)
 endif()
 
 if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
@@ -472,7 +480,7 @@ if(BUILD_TESTING)
       TURBOVOICEXML_CMETA_PUBLIC_LINKS
       turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
-       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBindCore>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
       message(FATAL_ERROR
         "TurboSCXML::VoiceXMLCMeta dependency contract changed")
     endif()
