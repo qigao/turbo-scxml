@@ -916,7 +916,19 @@ static bool measure_allocation(
 }
 
 static void write_exit(vxml_writer *writer) {
-    writer->impl->actions[writer->action_index++].kind = VXML_ACTION_EXIT;
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    action->kind = VXML_ACTION_EXIT;
+    action->target_form = SIZE_MAX;
+}
+
+static void write_goto(vxml_writer *writer) {
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    const vxml_decoded_goto target =
+        writer->measurement->gotos[writer->goto_index++];
+    action->kind = VXML_ACTION_GOTO;
+    action->target_form = target.target_form;
 }
 
 static void write_block(vxml_writer *writer, salts_xml_node node) {
@@ -925,8 +937,12 @@ static void write_block(vxml_writer *writer, salts_xml_node node) {
     row->first_action = writer->action_index;
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
-            write_exit(writer);
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT) {
+            if (view_equal(salts_xml_node_local_name(child), "goto"))
+                write_goto(writer);
+            else
+                write_exit(writer);
+        }
     }
     row->action_count = writer->action_index - row->first_action;
 }
@@ -959,6 +975,75 @@ static void write_document(vxml_writer *writer, salts_xml_node root) {
         if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
             write_form(writer, child);
     }
+}
+
+static bool form_first_action(
+    const vxml_program_impl *impl,
+    size_t form_index,
+    const vxml_action_row **out_action) {
+    const vxml_form_row *form;
+    size_t block_index;
+    if (out_action == NULL || impl == NULL ||
+        form_index >= impl->form_count)
+        return false;
+    *out_action = NULL;
+    form = &impl->forms[form_index];
+    if (form->block_count == 0u ||
+        form->first_block > impl->block_count ||
+        form->block_count > impl->block_count - form->first_block)
+        return false;
+    for (block_index = form->first_block;
+         block_index < form->first_block + form->block_count;
+         ++block_index) {
+        const vxml_block_row *block = &impl->blocks[block_index];
+        if (block->action_count > 1u ||
+            block->first_action > impl->action_count ||
+            block->action_count >
+                impl->action_count - block->first_action)
+            return false;
+        if (block->action_count != 0u) {
+            *out_action = &impl->actions[block->first_action];
+            return true;
+        }
+    }
+    return true;
+}
+
+static vxml_status validate_literal_goto_graph(
+    const vxml_program_impl *impl,
+    salts_xml_location location,
+    vxml_diagnostic *diagnostic) {
+    size_t start;
+    if (impl == NULL || impl->forms == NULL ||
+        impl->form_count == 0u)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE, location,
+            "VoiceXML literal Program has no forms");
+    for (start = 0u; start < impl->form_count; ++start) {
+        size_t current = start;
+        size_t transitions = 0u;
+        for (;;) {
+            const vxml_action_row *action = NULL;
+            if (!form_first_action(impl, current, &action))
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal Program structure is invalid");
+            if (action == NULL || action->kind == VXML_ACTION_EXIT)
+                break;
+            if (action->kind != VXML_ACTION_GOTO ||
+                action->target_form >= impl->form_count)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal goto target is invalid");
+            current = action->target_form;
+            ++transitions;
+            if (transitions > impl->form_count)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal goto cycle is not supported");
+        }
+    }
+    return VXML_OK;
 }
 
 static vxml_status map_xml_status(salts_xml_status status) {
