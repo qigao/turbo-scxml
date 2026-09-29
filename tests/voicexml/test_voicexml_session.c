@@ -243,6 +243,58 @@ spec("VoiceXML session") {
         }
     }
 
+        it("follows a finite forward and backward form goto chain") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><goto next='#third'/></block></form>"
+                "<form id='second'><block><exit/></block></form>"
+                "<form id='third'><block><goto next='#second'/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_session session = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            check_equal(vxml_session_init(&session, &program), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+            check_equal(vxml_session_error(&session), VXML_OK);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
+        it("fails closed when a compiled goto graph is corrupted into a cycle") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block><goto next='#second'/></block></form>"
+                "<form id='second'><block><exit/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+            vxml_session session = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            impl = (vxml_program_impl *)program.impl;
+            check_not_null(impl);
+            if (impl != NULL) {
+                impl->actions[1].kind = VXML_ACTION_GOTO;
+                impl->actions[1].target_form = 0u;
+                check_equal(vxml_session_init(&session, &program), VXML_OK);
+                check_equal(
+                    vxml_session_start(&session),
+                    VXML_INVALID_STRUCTURE);
+                check_equal(
+                    vxml_session_get_state(&session),
+                    VXML_SESSION_FAILED);
+                check_equal(
+                    vxml_session_error(&session),
+                    VXML_INVALID_STRUCTURE);
+            }
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
     group("terminal lifecycle") {
         it("rejects repeated start without changing an exited session") {
             static const char source[] =

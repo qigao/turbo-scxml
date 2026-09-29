@@ -13,6 +13,13 @@ typedef struct vxml_decoded_id {
     size_t size;
 } vxml_decoded_id;
 
+typedef struct vxml_decoded_goto {
+    char *target;
+    size_t target_size;
+    size_t target_form;
+    salts_xml_location location;
+} vxml_decoded_goto;
+
 typedef struct vxml_measurement {
     size_t form_count;
     size_t block_count;
@@ -21,6 +28,9 @@ typedef struct vxml_measurement {
     vxml_decoded_id *ids;
     size_t id_count;
     size_t id_capacity;
+    vxml_decoded_goto *gotos;
+    size_t goto_count;
+    size_t goto_capacity;
 } vxml_measurement;
 
 typedef struct vxml_writer {
@@ -29,6 +39,7 @@ typedef struct vxml_writer {
     size_t form_index;
     size_t block_index;
     size_t action_index;
+    size_t goto_index;
     size_t storage_index;
 } vxml_writer;
 
@@ -383,7 +394,8 @@ static bool node_is_known_profile_element(salts_xml_node node) {
            (view_equal(local_name, "vxml") ||
             view_equal(local_name, "form") ||
             view_equal(local_name, "block") ||
-            view_equal(local_name, "exit"));
+            view_equal(local_name, "exit") ||
+            view_equal(local_name, "goto"));
 }
 
 static salts_xml_attribute unqualified_attribute(
@@ -426,7 +438,10 @@ static void measurement_destroy(vxml_measurement *measurement) {
     if (measurement == NULL) return;
     for (index = 0u; index < measurement->id_count; ++index)
         vxml_free(measurement->ids[index].data);
+    for (index = 0u; index < measurement->goto_count; ++index)
+        vxml_free(measurement->gotos[index].target);
     vxml_free(measurement->ids);
+    vxml_free(measurement->gotos);
     memset(measurement, 0, sizeof(*measurement));
 }
 
@@ -524,6 +539,136 @@ static vxml_status append_id(
     return VXML_OK;
 }
 
+static vxml_status append_goto(
+    vxml_measurement *measurement, salts_xml_attribute attribute,
+    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    vxml_decoded_goto entry = {0};
+    const salts_xml_string_view raw =
+        salts_xml_attribute_value(attribute);
+    size_t decoded_size = 0u;
+    size_t allocation_size;
+    if (attribute.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML goto requires next");
+    if (!decode_entities(raw, NULL, 0u, &decoded_size) ||
+        !checked_add(decoded_size, 1u, &allocation_size))
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next has an invalid XML entity reference");
+    if (decoded_size > limits->max_name_bytes)
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next exceeds max_name_bytes");
+    entry.target = (char *)vxml_malloc(allocation_size);
+    if (entry.target == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto target decoding allocation failed");
+    if (!decode_entities(
+            raw, entry.target, decoded_size, &decoded_size)) {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto target decoding changed between passes");
+    }
+    entry.target[decoded_size] = '\0';
+    entry.location = salts_xml_attribute_location(attribute);
+    if (decoded_size == 0u || entry.target[0] != '#') {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(attribute),
+            "external VoiceXML goto is not supported in the literal profile");
+    }
+    if (decoded_size == 1u ||
+        !is_ncname(entry.target + 1u, decoded_size - 1u)) {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next must be one nonempty local form fragment");
+    }
+    memmove(entry.target, entry.target + 1u, decoded_size - 1u);
+    entry.target_size = decoded_size - 1u;
+    entry.target[entry.target_size] = '\0';
+    entry.target_form = SIZE_MAX;
+
+    if (measurement->goto_count == measurement->goto_capacity) {
+        size_t capacity = measurement->goto_capacity == 0u
+            ? 4u : measurement->goto_capacity * 2u;
+        vxml_decoded_goto *gotos;
+        if (capacity < measurement->goto_capacity ||
+            capacity > limits->max_actions)
+            capacity = limits->max_actions;
+        if (capacity <= measurement->goto_capacity ||
+            !checked_multiply(capacity, sizeof(*gotos), &allocation_size)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                entry.location,
+                "VoiceXML temporary goto table size overflow");
+        }
+        gotos = (vxml_decoded_goto *)vxml_realloc(
+            measurement->gotos, allocation_size);
+        if (gotos == NULL) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_ALLOCATION_FAILED,
+                entry.location,
+                "VoiceXML temporary goto table allocation failed");
+        }
+        measurement->gotos = gotos;
+        measurement->goto_capacity = capacity;
+    }
+    measurement->gotos[measurement->goto_count++] = entry;
+    return VXML_OK;
+}
+
+static vxml_status resolve_gotos(
+    vxml_measurement *measurement,
+    vxml_diagnostic *diagnostic) {
+    size_t goto_index;
+    if (measurement == NULL ||
+        measurement->id_count != measurement->form_count)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML form metadata is inconsistent");
+    for (goto_index = 0u;
+         goto_index < measurement->goto_count;
+         ++goto_index) {
+        vxml_decoded_goto *entry =
+            &measurement->gotos[goto_index];
+        size_t form_index;
+        for (form_index = 0u;
+             form_index < measurement->id_count;
+             ++form_index) {
+            const vxml_decoded_id id =
+                measurement->ids[form_index];
+            if (id.data != NULL &&
+                id.size == entry->target_size &&
+                memcmp(
+                    id.data, entry->target,
+                    entry->target_size) == 0) {
+                entry->target_form = form_index;
+                break;
+            }
+        }
+        if (entry->target_form == SIZE_MAX)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                entry->location,
+                "VoiceXML goto target form does not exist");
+    }
+    return VXML_OK;
+}
+
 static vxml_status reject_non_element(
     salts_xml_node node, vxml_diagnostic *diagnostic) {
     return fail(
@@ -573,11 +718,42 @@ static vxml_status measure_exit(
     return VXML_OK;
 }
 
+static vxml_status measure_goto(
+    salts_xml_node node, vxml_measurement *measurement,
+    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    salts_xml_attribute next;
+    size_t index;
+    vxml_status status = validate_attributes(node, "next", diagnostic);
+    if (status != VXML_OK) return status;
+    next = unqualified_attribute(node, "next");
+    if (next.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML goto requires next");
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(node, index);
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+            return reject_unexpected_element(
+                child, diagnostic, "unsupported VoiceXML goto child element");
+        return reject_non_element(child, diagnostic);
+    }
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(measurement->action_count, 1u,
+                     &measurement->action_count))
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML action count exceeds max_actions");
+    return append_goto(measurement, next, limits, diagnostic);
+}
+
 static vxml_status measure_block(
     salts_xml_node node, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
-    size_t exits = 0u;
+    size_t actions = 0u;
     vxml_status status = validate_attributes(node, NULL, diagnostic);
     if (status != VXML_OK) return status;
     if (measurement->block_count >= limits->max_blocks ||
@@ -590,23 +766,26 @@ static vxml_status measure_block(
     }
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
+        const salts_xml_string_view local_name =
+            salts_xml_node_local_name(child);
         if (node_is_ignorable(child)) continue;
         if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
             return reject_non_element(child, diagnostic);
         if (!normalized_view_equal(
                 salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "exit")) {
+            (!view_equal(local_name, "exit") &&
+             !view_equal(local_name, "goto")))
             return reject_unexpected_element(
                 child, diagnostic, "unsupported VoiceXML block child element");
-        }
-        if (exits != 0u) {
+        if (actions != 0u)
             return fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "VoiceXML block accepts at most one exit child");
-        }
-        ++exits;
-        status = measure_exit(child, measurement, limits, diagnostic);
+                "VoiceXML literal block accepts at most one transfer action");
+        ++actions;
+        status = view_equal(local_name, "goto")
+            ? measure_goto(child, measurement, limits, diagnostic)
+            : measure_exit(child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -737,7 +916,19 @@ static bool measure_allocation(
 }
 
 static void write_exit(vxml_writer *writer) {
-    writer->impl->actions[writer->action_index++].kind = VXML_ACTION_EXIT;
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    action->kind = VXML_ACTION_EXIT;
+    action->target_form = SIZE_MAX;
+}
+
+static void write_goto(vxml_writer *writer) {
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    const vxml_decoded_goto target =
+        writer->measurement->gotos[writer->goto_index++];
+    action->kind = VXML_ACTION_GOTO;
+    action->target_form = target.target_form;
 }
 
 static void write_block(vxml_writer *writer, salts_xml_node node) {
@@ -746,8 +937,12 @@ static void write_block(vxml_writer *writer, salts_xml_node node) {
     row->first_action = writer->action_index;
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
-            write_exit(writer);
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT) {
+            if (view_equal(salts_xml_node_local_name(child), "goto"))
+                write_goto(writer);
+            else
+                write_exit(writer);
+        }
     }
     row->action_count = writer->action_index - row->first_action;
 }
@@ -780,6 +975,75 @@ static void write_document(vxml_writer *writer, salts_xml_node root) {
         if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
             write_form(writer, child);
     }
+}
+
+static bool form_first_action(
+    const vxml_program_impl *impl,
+    size_t form_index,
+    const vxml_action_row **out_action) {
+    const vxml_form_row *form;
+    size_t block_index;
+    if (out_action == NULL || impl == NULL ||
+        form_index >= impl->form_count)
+        return false;
+    *out_action = NULL;
+    form = &impl->forms[form_index];
+    if (form->block_count == 0u ||
+        form->first_block > impl->block_count ||
+        form->block_count > impl->block_count - form->first_block)
+        return false;
+    for (block_index = form->first_block;
+         block_index < form->first_block + form->block_count;
+         ++block_index) {
+        const vxml_block_row *block = &impl->blocks[block_index];
+        if (block->action_count > 1u ||
+            block->first_action > impl->action_count ||
+            block->action_count >
+                impl->action_count - block->first_action)
+            return false;
+        if (block->action_count != 0u) {
+            *out_action = &impl->actions[block->first_action];
+            return true;
+        }
+    }
+    return true;
+}
+
+static vxml_status validate_literal_goto_graph(
+    const vxml_program_impl *impl,
+    salts_xml_location location,
+    vxml_diagnostic *diagnostic) {
+    size_t start;
+    if (impl == NULL || impl->forms == NULL ||
+        impl->form_count == 0u)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE, location,
+            "VoiceXML literal Program has no forms");
+    for (start = 0u; start < impl->form_count; ++start) {
+        size_t current = start;
+        size_t transitions = 0u;
+        for (;;) {
+            const vxml_action_row *action = NULL;
+            if (!form_first_action(impl, current, &action))
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal Program structure is invalid");
+            if (action == NULL || action->kind == VXML_ACTION_EXIT)
+                break;
+            if (action->kind != VXML_ACTION_GOTO ||
+                action->target_form >= impl->form_count)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal goto target is invalid");
+            current = action->target_form;
+            ++transitions;
+            if (transitions > impl->form_count)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML literal goto cycle is not supported");
+        }
+    }
+    return VXML_OK;
 }
 
 static vxml_status map_xml_status(salts_xml_status status) {
@@ -866,6 +1130,8 @@ vxml_status vxml_compile(const void *bytes, size_t size,
         salts_xml_document_root(&document), &measurement,
         &active_limits, diagnostic);
     if (status != VXML_OK) goto cleanup;
+    status = resolve_gotos(&measurement, diagnostic);
+    if (status != VXML_OK) goto cleanup;
     if (!measure_allocation(
             &measurement, &forms_offset, &blocks_offset, &actions_offset,
             &storage_offset, &allocation_size)) {
@@ -898,6 +1164,7 @@ vxml_status vxml_compile(const void *bytes, size_t size,
     if (writer.form_index != measurement.form_count ||
         writer.block_index != measurement.block_count ||
         writer.action_index != measurement.action_count ||
+        writer.goto_index != measurement.goto_count ||
         writer.storage_index != measurement.name_bytes) {
         status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
@@ -905,6 +1172,11 @@ vxml_status vxml_compile(const void *bytes, size_t size,
             "VoiceXML document changed between measurement and build");
         goto cleanup;
     }
+    status = validate_literal_goto_graph(
+        impl,
+        salts_xml_node_location(salts_xml_document_root(&document)),
+        diagnostic);
+    if (status != VXML_OK) goto cleanup;
     out->impl = impl;
     impl = NULL;
     status = VXML_OK;
