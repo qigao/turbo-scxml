@@ -45,8 +45,9 @@ static void check_empty_failure_at(
     check_equal(diagnostic.location.column, expected_location.column);
 }
 
-static void check_byte_failure_at(
-    const char *source, size_t source_size, size_t expected_offset,
+static void check_byte_failure_location(
+    const char *source, size_t source_size,
+    salts_xml_location expected_location,
     const char *expected_message) {
     vxml_program program = {(void *)(uintptr_t)1u};
     vxml_diagnostic diagnostic = {0};
@@ -55,10 +56,40 @@ static void check_byte_failure_at(
                 VXML_XML_ERROR);
     check_null(program.impl);
     check_equal(diagnostic.status, VXML_XML_ERROR);
-    check_equal(diagnostic.location.byte_offset, expected_offset);
-    check_equal(diagnostic.location.line, (uint32_t)1u);
-    check_equal(diagnostic.location.column, (uint32_t)(expected_offset + 1u));
+    check_equal(
+        diagnostic.location.byte_offset, expected_location.byte_offset);
+    check_equal(diagnostic.location.line, expected_location.line);
+    check_equal(diagnostic.location.column, expected_location.column);
     check_not_null(strstr(diagnostic.message, expected_message));
+}
+
+static void check_byte_failure_at(
+    const char *source, size_t source_size, size_t expected_offset,
+    const char *expected_message) {
+    check_byte_failure_location(
+        source, source_size,
+        (salts_xml_location){
+            expected_offset, 1u, (uint32_t)(expected_offset + 1u)},
+        expected_message);
+}
+
+static void check_input_limit_failure_location(
+    const char *source, size_t max_input_bytes,
+    salts_xml_location expected_location) {
+    vxml_limits limits = vxml_default_limits();
+    vxml_program program = {(void *)(uintptr_t)1u};
+    vxml_diagnostic diagnostic = {0};
+
+    limits.xml.max_input_bytes = max_input_bytes;
+    check_equal(
+        compile_text(source, &limits, &program, &diagnostic),
+        VXML_LIMIT_EXCEEDED);
+    check_null(program.impl);
+    check_equal(diagnostic.status, VXML_LIMIT_EXCEEDED);
+    check_equal(
+        diagnostic.location.byte_offset, expected_location.byte_offset);
+    check_equal(diagnostic.location.line, expected_location.line);
+    check_equal(diagnostic.location.column, expected_location.column);
 }
 
 spec("VoiceXML program compiler") {
@@ -286,6 +317,31 @@ spec("VoiceXML program compiler") {
             check_byte_failure_at(
                 noncharacter_source, sizeof(noncharacter_source) - 1u,
                 sizeof("<?bad ") - 1u, "XML character");
+        }
+
+        it("normalizes XML line endings in preflight diagnostics") {
+            static const char lf_source[] = "x\n" "\x01";
+            static const char crlf_source[] = "x\r\n" "\x01";
+            static const char cr_source[] = "x\r" "\x01";
+
+            check_byte_failure_location(
+                lf_source, sizeof(lf_source) - 1u,
+                (salts_xml_location){2u, 2u, 1u}, "XML character");
+            check_byte_failure_location(
+                crlf_source, sizeof(crlf_source) - 1u,
+                (salts_xml_location){3u, 2u, 1u}, "XML character");
+            check_byte_failure_location(
+                cr_source, sizeof(cr_source) - 1u,
+                (salts_xml_location){2u, 2u, 1u}, "XML character");
+        }
+
+        it("normalizes XML line endings in input-limit diagnostics") {
+            check_input_limit_failure_location(
+                "x\nY", 2u, (salts_xml_location){2u, 2u, 1u});
+            check_input_limit_failure_location(
+                "x\r\nY", 3u, (salts_xml_location){3u, 2u, 1u});
+            check_input_limit_failure_location(
+                "x\rY", 2u, (salts_xml_location){2u, 2u, 1u});
         }
 
         it("maps unsupported XML declarations to unsupported feature") {
