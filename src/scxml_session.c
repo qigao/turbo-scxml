@@ -132,6 +132,8 @@ static void session_free_storage(scxml_session_impl *impl) {
     free(impl->system_name);
     free(impl->ioprocessor_storage);
     free(impl->payload_scratch);
+    free(impl->custom_action_values);
+    free(impl->custom_action_arguments);
     free(impl->data_bind_workspace);
     free(impl->data_decode_allocation);
     free(impl->supplemental_checkpoint_allocation);
@@ -931,6 +933,16 @@ static cflow_statechart_instance_status scxml_session_init_model(
         (scxml_payload_entry *)scxml_emit_allocate_rows(
             impl->payload_scratch_capacity,
             sizeof(*impl->payload_scratch));
+    impl->custom_action_scratch_capacity =
+        program->max_custom_action_arguments;
+    impl->custom_action_values =
+        (scxml_custom_action_scalar *)scxml_emit_allocate_rows(
+            impl->custom_action_scratch_capacity,
+            sizeof(*impl->custom_action_values));
+    impl->custom_action_arguments =
+        (const void **)scxml_emit_allocate_rows(
+            impl->custom_action_scratch_capacity,
+            sizeof(*impl->custom_action_arguments));
     impl->invocation_capacity = config->invocation_capacity;
     impl->invocation_rows = (scxml_invocation_row *)scxml_emit_allocate_rows(
         impl->invocation_capacity, sizeof(*impl->invocation_rows));
@@ -966,6 +978,9 @@ static cflow_statechart_instance_status scxml_session_init_model(
          impl->completion_projection_stable_ids == NULL) ||
         (impl->payload_scratch_capacity != 0u &&
          impl->payload_scratch == NULL) ||
+        (impl->custom_action_scratch_capacity != 0u &&
+         (impl->custom_action_values == NULL ||
+          impl->custom_action_arguments == NULL)) ||
         (impl->invocation_capacity != 0u &&
          impl->invocation_rows == NULL) ||
         (impl->invocation_effect_capacity != 0u &&

@@ -2028,23 +2028,22 @@ static scxml_syntax_attribute find_custom_action_attribute(
 
 static scxml_status emit_custom_action_step(
     scxml_build *build, scxml_syntax_node node) {
-    const scxml_cmeta_custom_action_v1 *registration =
-        scxml_analyze_find_custom_action(build, node);
+    scxml_custom_action_registration_view registration = {0};
     const size_t step_index = build->step_index;
     const size_t action_index = build->custom_action_index;
     scxml_custom_action_descriptor *descriptor;
     cmeta_callable bound;
     const cmeta_sig_desc *signature;
     size_t parameter;
-    if (registration == NULL ||
+    if (!scxml_analyze_find_custom_action(build, node, &registration) ||
         step_index >= build->step_capacity ||
         action_index >= build->custom_action_capacity ||
-        !cmeta_callable_bind(registration->callable, &bound) ||
+        !cmeta_callable_bind(registration.callable, &bound) ||
         (signature = cmeta_callable_signature(bound)) == NULL ||
-        registration->parameter_count != signature->param_count ||
+        registration.parameter_count != signature->param_count ||
         build->custom_action_argument_index >
             build->custom_action_argument_capacity ||
-        registration->parameter_count >
+        registration.parameter_count >
             build->custom_action_argument_capacity -
                 build->custom_action_argument_index)
         return scxml_analyze_fail(
@@ -2054,19 +2053,31 @@ static scxml_status emit_custom_action_step(
     descriptor = &build->custom_actions[action_index];
     descriptor->callable = bound;
     descriptor->argument_first = build->custom_action_argument_index;
-    descriptor->argument_count = registration->parameter_count;
-    for (parameter = 0u; parameter < registration->parameter_count;
+    descriptor->argument_count = registration.parameter_count;
+    if (descriptor->argument_count > build->max_custom_action_arguments)
+        build->max_custom_action_arguments = descriptor->argument_count;
+    for (parameter = 0u; parameter < registration.parameter_count;
          ++parameter) {
         scxml_custom_action_argument *argument =
             &build->custom_action_arguments[
                 build->custom_action_argument_index];
+        const char *parameter_name =
+            scxml_analyze_custom_action_parameter_name(
+                &registration, parameter);
+        const cmeta_param_desc *reflected_param =
+            registration.function != NULL
+                ? cmeta_function_param(registration.function, parameter)
+                : NULL;
+        const cmeta_type_desc *parameter_type =
+            reflected_param != NULL
+                ? reflected_param->type
+                : signature->params[parameter];
         const scxml_syntax_attribute attribute =
-            find_custom_action_attribute(
-                node, registration->parameter_names[parameter]);
+            find_custom_action_attribute(node, parameter_name);
         const scxml_expr_value_kind kind =
-            custom_action_value_kind(signature->params[parameter]);
+            custom_action_value_kind(parameter_type);
         scxml_status status;
-        argument->type = signature->params[parameter];
+        argument->type = parameter_type;
         status = scxml_emit_compile_cmeta_value_program(
             build, attribute, "custom action argument",
             &argument->expression, kind);

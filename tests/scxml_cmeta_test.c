@@ -51,6 +51,55 @@ static const cmeta_function_abi_desc scxml_test_custom_action_abi = {
     .param_count = 1u
 };
 
+
+typed_any_raw(
+    CMETA_EFFECT_IO, CMETA_PROP_DETERMINISTIC,
+    long, scxml_test_custom_action_pair,
+    (long first, long second)) {
+    const long total = first + second;
+    atomic_store_explicit(
+        &custom_action_observed, total, memory_order_relaxed);
+    return total;
+}
+
+static const cmeta_param_desc scxml_test_custom_action_pair_params[] = {
+    {
+        .size = sizeof(cmeta_param_desc),
+        .name = "first",
+        .type = &cmeta_type_long,
+        .flags = CMETA_PARAM_IN
+    },
+    {
+        .size = sizeof(cmeta_param_desc),
+        .name = "second",
+        .type = &cmeta_type_long,
+        .flags = CMETA_PARAM_IN
+    }
+};
+
+static const cmeta_function_desc scxml_test_custom_action_pair_function = {
+    .size = sizeof(cmeta_function_desc),
+    .name = "scxml_test_custom_action_pair",
+    .return_type = &cmeta_type_long,
+    .params = scxml_test_custom_action_pair_params,
+    .param_count = 2u,
+    .effects = CMETA_EFFECT_IO,
+    .properties = CMETA_PROP_DETERMINISTIC
+};
+
+static const cmeta_abi_carrier scxml_test_custom_action_pair_param_abi[] = {
+    CMETA_ABI_SCALAR,
+    CMETA_ABI_SCALAR
+};
+
+static const cmeta_function_abi_desc scxml_test_custom_action_pair_abi = {
+    .size = sizeof(cmeta_function_abi_desc),
+    .function = &scxml_test_custom_action_pair_function,
+    .return_carrier = CMETA_ABI_SCALAR,
+    .param_carriers = scxml_test_custom_action_pair_param_abi,
+    .param_count = 2u
+};
+
 static bool scxml_test_reject_custom_action(
     const cmeta_callable *self, void *out,
     const void *const *arguments) {
@@ -6517,6 +6566,67 @@ spec("TurboSCXML public CMeta data model") {
         check_equal(atomic_load_explicit(
                         &custom_action_observed, memory_order_relaxed),
                     8);
+        scxml_program_destroy(&program);
+    }
+
+    it("executes admitted binary FunctionDesc actions from measured session scratch") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "xmlns:a='urn:test:actions' version='1.0' "
+            "datamodel='cmeta' initial='active'>"
+            "<state id='active'><onentry>"
+            "<a:record2 first='count' second='3'/>"
+            "</onentry><transition target='success'/></state>"
+            "<final id='success'/></scxml>";
+        const scxml_cmeta_custom_action_v2 actions[] = {{
+            .struct_size = sizeof(scxml_cmeta_custom_action_v2),
+            .namespace_uri = "urn:test:actions",
+            .namespace_uri_size = sizeof("urn:test:actions") - 1u,
+            .local_name = "record2",
+            .local_name_size = sizeof("record2") - 1u,
+            .function = &scxml_test_custom_action_pair_function,
+            .abi = &scxml_test_custom_action_pair_abi,
+            .callable = scxml_test_custom_action_pair
+        }};
+        scxml_cmeta_compile_options_v3 options =
+            scxml_cmeta_default_compile_options_v3(&public_data_desc);
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats;
+
+        options.actions = actions;
+        options.action_count = sizeof(actions) / sizeof(actions[0]);
+        atomic_store_explicit(
+            &custom_action_observed, 0, memory_order_relaxed);
+        check_equal(scxml_compile_cmeta_v3(
+                        &program, source, strlen(source), NULL,
+                        &options, &diagnostic),
+                    SCXML_OK);
+        stats = run_to_idle(
+            &program,
+            (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD});
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(atomic_load_explicit(
+                        &custom_action_observed, memory_order_relaxed),
+                    10);
+        {
+            cflow_statechart_instance_status init_status;
+            cflow_statechart_instance_status destroy_status;
+            atomic_store_explicit(
+                &custom_action_observed, 0, memory_order_relaxed);
+            stats = run_direct_to_idle(
+                &program,
+                (scxml_public_data){true, 7, SCXML_PUBLIC_SOURCE_GOOD},
+                &init_status, &destroy_status);
+            check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+            check_equal(destroy_status, CFLOW_STATECHART_INSTANCE_OK);
+            check_true(stats.done);
+            check_false(stats.errored);
+            check_equal(atomic_load_explicit(
+                            &custom_action_observed, memory_order_relaxed),
+                        10);
+        }
         scxml_program_destroy(&program);
     }
 

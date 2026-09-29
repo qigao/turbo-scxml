@@ -3131,14 +3131,6 @@ static void settle_supplemental_block(
     session->supplemental_checkpoint_live = false;
 }
 
-typedef union scxml_custom_action_scalar {
-    bool boolean;
-    int integer;
-    long long_integer;
-    float real32;
-    double real64;
-} scxml_custom_action_scalar;
-
 static bool materialize_custom_action_argument(
     const scxml_custom_action_argument *argument,
     const void *state,
@@ -3185,16 +3177,29 @@ static bool materialize_custom_action_argument(
     return false;
 }
 
+#define SCXML_DIRECT_ACTION_SCRATCH_CAPACITY \
+    (sizeof(((cmeta_sig_desc *)0)->params) / \
+     sizeof(((cmeta_sig_desc *)0)->params[0]))
+
 static scxml_execute_outcome execute_custom_action(
-    const scxml_block *block, const scxml_step *step,
+    const scxml_block *block, scxml_session_impl *session,
+    const scxml_step *step,
     const cflow_statechart_executable_context *context,
     const void *state,
     const scxml_expr_system_values *system_values,
     const char **out_error) {
     const scxml_custom_action_descriptor *descriptor;
-    const cmeta_sig_desc *signature;
-    scxml_custom_action_scalar argument_storage[3] = {{0}};
-    const void *arguments[3] = {NULL, NULL, NULL};
+    scxml_custom_action_scalar direct_values[
+        SCXML_DIRECT_ACTION_SCRATCH_CAPACITY] = {{0}};
+    const void *direct_arguments[
+        SCXML_DIRECT_ACTION_SCRATCH_CAPACITY] = {NULL};
+    scxml_custom_action_scalar *values =
+        session != NULL ? session->custom_action_values : direct_values;
+    const void **arguments =
+        session != NULL ? session->custom_action_arguments : direct_arguments;
+    const size_t scratch_capacity =
+        session != NULL ? session->custom_action_scratch_capacity
+                        : SCXML_DIRECT_ACTION_SCRATCH_CAPACITY;
     scxml_custom_action_scalar result = {0};
     size_t index;
     if (block->custom_actions == NULL ||
@@ -3203,32 +3208,28 @@ static scxml_execute_outcome execute_custom_action(
         return SCXML_EXECUTE_FATAL;
     }
     descriptor = &block->custom_actions[step->custom_action];
-    signature = cmeta_callable_signature(descriptor->callable);
-    if (signature == NULL || signature->param_count > 3u ||
-        descriptor->argument_count != signature->param_count ||
-        descriptor->argument_first >
+    if (descriptor->argument_first >
             block->custom_action_argument_storage_count ||
         descriptor->argument_count >
             block->custom_action_argument_storage_count -
                 descriptor->argument_first ||
         (descriptor->argument_count != 0u &&
-         block->custom_action_arguments == NULL)) {
-        *out_error = "SCXML custom action signature is invalid";
+         block->custom_action_arguments == NULL) ||
+        descriptor->argument_count > scratch_capacity ||
+        (descriptor->argument_count != 0u &&
+         (values == NULL || arguments == NULL))) {
+        *out_error = "SCXML custom action plan is invalid";
         return SCXML_EXECUTE_FATAL;
     }
     for (index = 0u; index < descriptor->argument_count; ++index) {
         const scxml_custom_action_argument *argument =
             &block->custom_action_arguments[
                 descriptor->argument_first + index];
-        if (!cmeta_type_equal(argument->type, signature->params[index])) {
-            *out_error = "SCXML custom action argument type is invalid";
-            return SCXML_EXECUTE_FATAL;
-        }
         if (!materialize_custom_action_argument(
                 argument, state, context, system_values,
-                &argument_storage[index]))
+                &values[index]))
             return raise_block_execution_error(block, context, out_error);
-        arguments[index] = &argument_storage[index];
+        arguments[index] = &values[index];
     }
     if (!cmeta_callable_invoke(
             &descriptor->callable, &result, arguments))
@@ -3310,7 +3311,7 @@ static scxml_execute_outcome execute_scxml_range(
                 return raise_block_execution_error(block, context, out_error);
         } else if (step->kind == SCXML_STEP_CUSTOM_ACTION) {
             const scxml_execute_outcome outcome = execute_custom_action(
-                block, step, context,
+                block, session, step, context,
                 mutable_state_read(mutable_state, context),
                 system_values, out_error);
             if (outcome != SCXML_EXECUTE_CONTINUE) return outcome;

@@ -78,6 +78,25 @@ typedef enum scxml_step_kind {
     SCXML_STEP_CUSTOM_ACTION
 } scxml_step_kind;
 
+typedef struct scxml_custom_action_registration_view {
+    const char *namespace_uri;
+    size_t namespace_uri_size;
+    const char *local_name;
+    size_t local_name_size;
+    cmeta_callable callable;
+    const cmeta_function_desc *function;
+    const char *const *legacy_parameter_names;
+    size_t parameter_count;
+} scxml_custom_action_registration_view;
+
+typedef union scxml_custom_action_scalar {
+    bool boolean;
+    int integer;
+    long long_integer;
+    float real32;
+    double real64;
+} scxml_custom_action_scalar;
+
 typedef struct scxml_custom_action_argument {
     scxml_expr_program expression;
     const cmeta_type_desc *type;
@@ -321,8 +340,10 @@ typedef struct scxml_build {
     scxml_diagnostic *diagnostic;
     scxml_data_model data_model;
     const cmeta_data_desc *cmeta_root;
-    const scxml_cmeta_custom_action_v1 *custom_action_registry;
-    size_t custom_action_registry_count;
+    const scxml_cmeta_custom_action_v1 *legacy_custom_action_registry;
+    size_t legacy_custom_action_registry_count;
+    const scxml_cmeta_custom_action_v2 *function_custom_action_registry;
+    size_t function_custom_action_registry_count;
     scxml_expr_limits expression_limits;
     cflow_statechart_state *states;
     cflow_statechart_transition *transitions;
@@ -413,6 +434,7 @@ typedef struct scxml_build {
     size_t custom_action_capacity;
     size_t custom_action_argument_index;
     size_t custom_action_argument_capacity;
+    size_t max_custom_action_arguments;
     size_t late_initializer_index;
     size_t data_initializer_count;
     size_t top_level_data_initializer_first;
@@ -472,6 +494,7 @@ typedef struct scxml_program_impl {
     size_t custom_action_count;
     scxml_custom_action_argument *custom_action_arguments;
     size_t custom_action_argument_count;
+    size_t max_custom_action_arguments;
     size_t script_count;
     size_t root_script_count;
     scxml_scope_schema supplemental_scope;
@@ -732,6 +755,9 @@ struct scxml_session_impl {
     size_t external_metadata_capacity;
     scxml_payload_entry *payload_scratch;
     size_t payload_scratch_capacity;
+    scxml_custom_action_scalar *custom_action_values;
+    const void **custom_action_arguments;
+    size_t custom_action_scratch_capacity;
     uint64_t next_external_metadata_token;
     bool has_event_io;
     bool has_invoke;
