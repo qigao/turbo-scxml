@@ -1,4 +1,5 @@
 #include <scxml/chttp_resource.h>
+#include <http_server/http.h>
 
 #include "scxml_chttp_resource_internal.h"
 

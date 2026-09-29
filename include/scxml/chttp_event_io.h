@@ -1,7 +1,8 @@
 #ifndef SCXML_CHTTP_EVENT_IO_H
 #define SCXML_CHTTP_EVENT_IO_H
 
-#include <chttp/chttp.h>
+#include <http_client/http.h>
+#include <http_server/http.h>
 #include <scxml/scxml.h>
 
 #include <stddef.h>

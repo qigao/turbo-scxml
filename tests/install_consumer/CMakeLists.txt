@@ -179,7 +179,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
     endif()
   endforeach()
   foreach(TURBOSCXML_FORBIDDEN_TARGET IN ITEMS
-      Salts::CFlow Salts::CSerde Salts::CBind)
+      Salts::CFlow Salts::CSerde Salts::DataBind)
     if(TARGET ${TURBOSCXML_FORBIDDEN_TARGET})
       message(FATAL_ERROR
         "VoiceXMLCMeta unexpectedly discovered ${TURBOSCXML_FORBIDDEN_TARGET}")

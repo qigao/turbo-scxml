@@ -158,10 +158,16 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release" AND
       -InstallRoot
         "${PROJECT_SOURCE_DIR}/.superpowers/sdd/2026-09-06-voicexml-nonmedia-core-mvp/final-fix-package-installs"
       -RealSaltsRoot "$ENV{SALTS_ROOT}"
+      -RealSaltsUtilsRoot "$ENV{SALTS_UTILS_ROOT}"
+      -RealCHttpRoot "$ENV{CHTTP_ROOT}"
       -XmlOnlyFixture
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts"
+      -XmlOnlySaltsUtilsFixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts_utils"
       -CMetaFixture
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/cmeta_salts"
+      -CMetaSaltsUtilsFixture
+        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/cmeta_salts_utils"
       -VcpkgPrefix
         "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
       -CMakeCommand "${CMAKE_COMMAND}")
@@ -265,7 +271,7 @@ if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)
   turboscxml_add_test(
     scxml_chttp_resource_test
     scxml_chttp_resource_test.c
-    LIBS TurboSCXML::CHttpResource
+    LIBS TurboSCXML::CHttpResource CHttp::Server
     INCLUDES ${PROJECT_SOURCE_DIR}/src)
 endif()
 

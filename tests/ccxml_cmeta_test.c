@@ -211,6 +211,12 @@ static void text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(test_text));
 }
 
+static cmeta_status text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    text_restore_zero(object);
+    return CMETA_OK;
+}
+
 static cmeta_status text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const test_text *text = (const test_text *)object;
@@ -233,7 +239,9 @@ static const cmeta_data_buffer_ops text_ops = {
     .is_zero = text_is_zero,
     .assign = text_assign,
     .restore_zero = text_restore_zero,
-    .read = text_read};
+    .read = text_read,
+    .init_zero = text_init_zero,
+    .move = text_move};
 
 static const cmeta_data_desc text_desc = {
     .struct_size = sizeof(cmeta_data_desc),
@@ -256,7 +264,9 @@ static const cmeta_data_buffer_ops borrowed_text_ops = {
     .is_zero = text_is_zero,
     .assign = text_assign,
     .restore_zero = text_restore_zero,
-    .read = text_read};
+    .read = text_read,
+    .init_zero = text_init_zero,
+    .move = text_move};
 
 static const cmeta_data_desc borrowed_text_desc = {
     .struct_size = sizeof(cmeta_data_desc),

@@ -1,6 +1,6 @@
 #include "chttp_event_io_internal.h"
 
-#include <salts_vstr.h>
+#include <vstr.h>
 
 #include <math.h>
 #include <stdio.h>

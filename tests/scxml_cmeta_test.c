@@ -202,6 +202,18 @@ static void owned_text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(scxml_owned_text));
 }
 
+static cmeta_status owned_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    owned_text_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void owned_text_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(scxml_owned_text));
+    owned_text_restore_zero(source);
+}
+
 static cmeta_status owned_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const scxml_owned_text *text = (const scxml_owned_text *)object;
@@ -225,7 +237,9 @@ static const cmeta_data_buffer_ops owned_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = owned_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc owned_text_desc = {
@@ -266,6 +280,18 @@ static void borrowed_text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(scxml_borrowed_text));
 }
 
+static cmeta_status borrowed_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    borrowed_text_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void borrowed_text_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    memcpy(destination, source, sizeof(scxml_borrowed_text));
+    borrowed_text_restore_zero(source);
+}
+
 static cmeta_status borrowed_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const scxml_borrowed_text *text = (const scxml_borrowed_text *)object;
@@ -288,7 +314,9 @@ static const cmeta_data_buffer_ops borrowed_text_ops = {
     .is_zero = borrowed_text_is_zero,
     .assign = borrowed_text_assign,
     .restore_zero = borrowed_text_restore_zero,
-    .read = borrowed_text_read
+    .read = borrowed_text_read,
+    .init_zero = borrowed_text_init_zero,
+    .move = borrowed_text_move
 };
 
 static const cmeta_data_desc borrowed_text_desc = {
@@ -310,7 +338,9 @@ static const cmeta_data_buffer_ops custom_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = owned_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc custom_text_desc = {
@@ -324,14 +354,26 @@ static const cmeta_data_desc custom_text_desc = {
     .buffer_ops = &custom_text_ops
 };
 
+static cmeta_status readonly_text_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+    (void)object;
+    (void)data;
+    (void)size;
+    (void)max_bytes;
+    return CMETA_TRAIT_MISSING;
+}
+
 static const cmeta_data_buffer_ops readonly_text_ops = {
     .struct_size = sizeof(cmeta_data_buffer_ops),
     .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
     .storage_type = &owned_text_type,
     .ownership = CMETA_DATA_BUFFER_OWNED,
     .is_zero = owned_text_is_zero,
+    .assign = readonly_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc readonly_text_desc = {
@@ -361,7 +403,9 @@ static const cmeta_data_buffer_ops failing_text_ops = {
     .is_zero = owned_text_is_zero,
     .assign = failing_text_assign,
     .restore_zero = owned_text_restore_zero,
-    .read = owned_text_read
+    .read = owned_text_read,
+    .init_zero = owned_text_init_zero,
+    .move = owned_text_move
 };
 
 static const cmeta_data_desc failing_text_desc = {
@@ -1281,17 +1325,13 @@ spec("TurboSCXML public CMeta data model") {
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='custom_id'/></state></scxml>";
-        static const char readonly[] =
-            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
-            "datamodel='cmeta'><state id='worker'><invoke "
-            "idlocation='readonly_id'/></state></scxml>";
         static const char system[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
             "datamodel='cmeta'><state id='worker'><invoke "
             "idlocation='_sessionid'/></state></scxml>";
         const char *invalid[] = {
             empty, malformed, missing, non_string, borrowed, custom,
-            readonly, system};
+            system};
         size_t index;
 
         for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]);
@@ -1302,6 +1342,26 @@ spec("TurboSCXML public CMeta data model") {
                         SCXML_INVALID_STRUCTURE);
             check_null(program.impl);
         }
+    }
+
+    it("admits a valid readonly string descriptor but preserves write rejection") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><state id='worker'><invoke "
+            "idlocation='readonly_id'/></state></scxml>";
+        static const unsigned char value[] = "id";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_owned_text storage = {0};
+
+        check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
+        check_equal(
+            cmeta_data_buffer_assign(
+                &readonly_text_desc, &storage, value, sizeof(value) - 1u,
+                sizeof(value) - 1u),
+            CMETA_TRAIT_MISSING);
+        check_true(owned_text_is_zero(&storage));
+        scxml_program_destroy(&program);
     }
 
     it("rejects invoke id and idlocation conflicts before profile checks") {
@@ -5074,22 +5134,23 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 1u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .data_bind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(scxml_program_requirements(&program, &requirements));
         check_true((requirements & SCXML_REQUIREMENT_DATA_RESOURCE) != 0u);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5203,20 +5264,21 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 2u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .data_bind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5255,20 +5317,21 @@ spec("TurboSCXML public CMeta data model") {
             .internal_event_capacity = 2u,
             .completion_capacity = 1u,
             .microstep_limit = 16u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .data_bind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_session_get_stats(&session, &stats));
@@ -5313,20 +5376,21 @@ spec("TurboSCXML public CMeta data model") {
             .completion_capacity = 1u,
             .microstep_limit = 16u,
             .effect_capacity = 1u};
-        const scxml_cmeta_session_options_v3 data = {
-            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V3,
+        const scxml_cmeta_session_options_v4 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V4,
             .struct_size = sizeof(data),
             .initial_state = &initial,
             .data_resources = &data_resource_adapter,
             .data_resource_user = &probe,
-            .cbind_scratch_bytes = 256u,
+            .data_bind_workspace_bytes = 16384u,
             .max_data_depth = 8u,
-            .max_data_container_items = 16u,
+            .max_data_items = 64u,
+            .max_data_owned_bytes = 4096u,
             .max_data_buffer_bytes = 1024u};
 
         check_equal(compile_cmeta(source, &program, &diagnostic), SCXML_OK);
         check_true(cflow_executor_serial_init(&executor));
-        check_equal(scxml_session_init_cmeta_v3(&session, &config, &data),
+        check_equal(scxml_session_init_cmeta_v4(&session, &config, &data),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_program_event(

@@ -2416,7 +2416,8 @@ static scxml_expr_status apply_external_data_initializer(
         return SCXML_EXPR_EVALUATION_ERROR;
     }
     status = scxml_assign_apply_external(
-        assignment, &resource.reader, &session->cbind,
+        assignment, &resource.reader, &session->data_bind_options,
+        session->data_bind_max_buffer_bytes,
         session->data_decode_storage, session->data_decode_storage_size,
         state, diagnostic);
     session->data_resources.close(

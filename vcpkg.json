@@ -8,7 +8,7 @@
   ],
   "features": {
     "chttp": {
-      "description": "Enable the optional CHTTP resource adapter; its transport dependency closure is provided by Salts"
+      "description": "Enable the optional CHTTP adapters; the HTTP implementation is provided by the standalone installed CHTTP package"
     },
     "quickjs": {
       "description": "Bounded quickjs-sandbox SCXML data-model profile",
