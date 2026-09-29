@@ -16,12 +16,14 @@ extern "C" {
 typedef enum vxml_document_store_status {
     VXML_DOCUMENT_STORE_OK = 0,
     VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+    VXML_DOCUMENT_STORE_ALLOCATION_FAILED,
     VXML_DOCUMENT_STORE_INVALID_URI,
     VXML_DOCUMENT_STORE_LIMIT_EXCEEDED,
     VXML_DOCUMENT_STORE_FULL,
     VXML_DOCUMENT_STORE_RESOURCE_ERROR,
     VXML_DOCUMENT_STORE_COMPILE_ERROR,
-    VXML_DOCUMENT_STORE_STALE
+    VXML_DOCUMENT_STORE_STALE,
+    VXML_DOCUMENT_STORE_BUSY
 } vxml_document_store_status;
 
 /**
@@ -135,7 +137,7 @@ vxml_document_store_status vxml_document_store_resolve(
  * provider, copies source bytes, closes the provider exactly once, compiles
  * from owned bytes, and then publishes the entry atomically. If capacity or
  * byte budget requires eviction, only unpinned least-recently-used entries may
- * be evicted.
+ * be evicted. Total simultaneous live borrows are bounded by cache capacity.
  */
 vxml_document_store_status vxml_document_store_acquire(
     vxml_document_store *store,
@@ -160,8 +162,8 @@ bool vxml_document_store_get_stats(
     vxml_document_store_stats *out_stats);
 
 /**
- * Evict every unpinned entry. Returns BUSY-equivalent FULL while any borrow is
- * still live; the store remains valid for release/retry.
+ * Evict every unpinned entry. Returns BUSY while any borrow is still live;
+ * the store remains valid for release/retry.
  */
 vxml_document_store_status vxml_document_store_clear(
     vxml_document_store *store);
