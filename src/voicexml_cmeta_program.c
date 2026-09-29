@@ -1552,6 +1552,7 @@ static vxml_status cmeta_compile_external_data(
             "VoiceXML data DataBind plan has invalid requirements");
         goto done;
     }
+    out->field_index = field_index;
     out->field_offset = field->offset;
     out->field_data = field->value;
     out->decode_workspace_bytes = requirements->decode_bytes;
@@ -1565,7 +1566,6 @@ done:
         data_bind_native_plan_free(out->plan);
         memset(out, 0, sizeof(*out));
     }
-    (void)field_index;
     return status;
 }
 
