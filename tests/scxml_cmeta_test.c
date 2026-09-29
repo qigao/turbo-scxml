@@ -354,12 +354,22 @@ static const cmeta_data_desc custom_text_desc = {
     .buffer_ops = &custom_text_ops
 };
 
+static cmeta_status readonly_text_assign(
+    void *object, const unsigned char *data, size_t size, size_t max_bytes) {
+    (void)object;
+    (void)data;
+    (void)size;
+    (void)max_bytes;
+    return CMETA_TRAIT_MISSING;
+}
+
 static const cmeta_data_buffer_ops readonly_text_ops = {
     .struct_size = sizeof(cmeta_data_buffer_ops),
     .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
     .storage_type = &owned_text_type,
     .ownership = CMETA_DATA_BUFFER_OWNED,
     .is_zero = owned_text_is_zero,
+    .assign = readonly_text_assign,
     .restore_zero = owned_text_restore_zero,
     .read = owned_text_read,
     .init_zero = owned_text_init_zero,
