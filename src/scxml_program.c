@@ -1112,7 +1112,6 @@ static bool custom_action_table_valid(
             (signature = cmeta_callable_signature(bound)) == NULL ||
             signature->protocol != CMETA_FN_PROTOCOL_VALUE ||
             signature->param_count != action->parameter_count ||
-            action->parameter_count > SCXML_CUSTOM_ACTION_MAX_PARAMETERS ||
             !custom_action_scalar_type_supported(signature->return_type))
             return false;
         for (parameter = 0u;
@@ -1201,7 +1200,6 @@ static bool custom_action_function_row_valid(
         action->namespace_uri == NULL || action->namespace_uri_size == 0u ||
         action->local_name == NULL || action->local_name_size == 0u ||
         action->function == NULL ||
-        action->function->param_count > SCXML_CUSTOM_ACTION_MAX_PARAMETERS ||
         cflow_function_action_projection_admit(
             action->function, action->abi, action->callable, &projection) !=
             CFLOW_FUNCTION_PROJECTION_OK ||
