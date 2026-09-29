@@ -443,19 +443,10 @@ if(BUILD_TESTING)
   endif()
 
   get_target_property(
-    TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS
-    turbo_voicexml_document_store INTERFACE_LINK_LIBRARIES)
-  if(NOT TURBOVOICEXML_DOCUMENT_STORE_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXMLDialogManager")
-    message(FATAL_ERROR
-      "TurboSCXML::VoiceXMLDocumentStore dependency contract changed")
-  endif()
-
-  get_target_property(
     TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS
     turbo_voicexml_dialog_manager INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;TurboSCXML::CCXML")
+     "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>")
     message(FATAL_ERROR
       "TurboSCXML::VoiceXMLDialogManager dependency contract changed")
   endif()
