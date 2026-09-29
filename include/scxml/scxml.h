@@ -8,6 +8,7 @@
 #include <cmeta/data.h>
 #include <cmeta/function.h>
 #include <cserde/cserde.h>
+#include <data_bind.h>
 #include <xml_parser/xml_parser.h>
 
 #include <stdbool.h>
@@ -29,7 +30,9 @@ extern "C" {
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V2 2u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V3 3u
 #define SCXML_CMETA_SESSION_OPTIONS_ABI_V4 4u
+#define SCXML_CMETA_SESSION_OPTIONS_ABI_V5 5u
 #define SCXML_DATA_RESOURCE_ADAPTER_ABI_V1 1u
+#define SCXML_DATA_RESOURCE_ADAPTER_ABI_V2 2u
 #define SCXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 1u
 #define SCXML_QUICKJS_SESSION_OPTIONS_ABI_V1 1u
 #define SCXML_TEXT_RESOURCE_ADAPTER_ABI_V1 1u
@@ -248,6 +251,37 @@ typedef struct scxml_data_resource_adapter_v1 {
 } scxml_data_resource_adapter_v1;
 
 /**
+ * Adapter-owned bounded bytes for the canonical external-data boundary.
+ *
+ * format is an explicit DataBind format selected by resource policy. The byte
+ * view remains valid until the matching close; TurboSCXML opens the matching
+ * DataBind format provider and owns all parsing/native binding.
+ */
+typedef struct scxml_data_resource_v2 {
+    const char *data;
+    size_t size;
+    DataBindFormat format;
+    void *lease;
+} scxml_data_resource_v2;
+
+/**
+ * Canonical synchronous data-src acquisition boundary.
+ *
+ * The provider owns transport, authorization, redirects, deadlines and
+ * media-to-format policy. It returns bytes plus one explicit DataBind format;
+ * no CMeta descriptor or CSerde reader crosses this boundary. max_bytes is a
+ * hard caller limit and a successful open is paired with exactly one close.
+ */
+typedef struct scxml_data_resource_adapter_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    scxml_resource_status (*open)(
+        void *user, const char *uri, size_t uri_size,
+        size_t max_bytes, scxml_data_resource_v2 *out);
+    void (*close)(void *user, scxml_data_resource_v2 *resource);
+} scxml_data_resource_adapter_v2;
+
+/**
  * Versioned CMeta session provider with external data resources.
  *
  * V2 fields retain their semantics. This v3 record retains its published ABI
@@ -293,6 +327,31 @@ typedef struct scxml_cmeta_session_options_v4 {
     size_t max_data_owned_bytes;
     size_t max_data_buffer_bytes;
 } scxml_cmeta_session_options_v4;
+
+/**
+ * Canonical raw-resource + DataBind CMeta session provider.
+ *
+ * Resource acquisition is bounded separately from decoded native ownership.
+ * Providers return bytes and an explicit DataBindFormat; TurboSCXML selects
+ * the matching statically linked DataBind provider, then performs the same
+ * failure-atomic native bind used by V4. V4 remains compatibility-only for
+ * adapters that directly expose CSerde.
+ */
+typedef struct scxml_cmeta_session_options_v5 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const void *initial_state;
+    const scxml_cmeta_environment_override *environment_overrides;
+    size_t environment_override_count;
+    const scxml_data_resource_adapter_v2 *data_resources;
+    void *data_resource_user;
+    size_t data_bind_workspace_bytes;
+    size_t max_data_depth;
+    size_t max_data_items;
+    size_t max_data_owned_bytes;
+    size_t max_data_buffer_bytes;
+    size_t max_data_resource_bytes;
+} scxml_cmeta_session_options_v5;
 
 /** Adapter-owned immutable UTF-8 text returned during program admission. */
 typedef struct scxml_text_resource {
@@ -921,7 +980,17 @@ cflow_statechart_instance_status scxml_session_init_cmeta_v3(
     const scxml_session_config *config,
     const scxml_cmeta_session_options_v3 *options);
 
-/** Initialize a CMeta session using the canonical DataBind resource profile. */
+/**
+ * Initialize the canonical raw-resource + explicit-DataBind-format profile.
+ */
+cflow_statechart_instance_status scxml_session_init_cmeta_v5(
+    scxml_session *session,
+    const scxml_session_config *config,
+    const scxml_cmeta_session_options_v5 *options);
+
+/**
+ * Compatibility entry point for the legacy CSerde-returning resource adapter.
+ */
 cflow_statechart_instance_status scxml_session_init_cmeta_v4(
     scxml_session *session,
     const scxml_session_config *config,
