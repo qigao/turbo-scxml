@@ -9,6 +9,8 @@ static_assert(std::is_standard_layout<vxml_dialog_manager_config_v1>::value,
               "dialog manager v1 config must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_dialog_manager_config_v2>::value,
               "dialog manager v2 config must remain C-compatible");
+static_assert(std::is_standard_layout<vxml_dialog_manager_config_v3>::value,
+              "dialog manager v3 config must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_dialog_event_v1>::value,
               "dialog manager event must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_document_store>::value,
@@ -17,7 +19,10 @@ static_assert(std::is_standard_layout<vxml_document_store>::value,
 int main() {
     const auto v1 = vxml_dialog_manager_default_config_v1();
     const auto v2 = vxml_dialog_manager_default_config_v2();
+    const auto v3 = vxml_dialog_manager_default_config_v3();
     return v1.abi_version == VXML_DIALOG_MANAGER_CONFIG_ABI_V1 &&
-           v2.abi_version == VXML_DIALOG_MANAGER_CONFIG_ABI_V2
+           v2.abi_version == VXML_DIALOG_MANAGER_CONFIG_ABI_V2 &&
+           v3.abi_version == VXML_DIALOG_MANAGER_CONFIG_ABI_V3 &&
+           v3.max_navigation_hops != 0u
         ? 0 : 1;
 }
