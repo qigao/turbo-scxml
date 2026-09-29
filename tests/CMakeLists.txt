@@ -241,7 +241,10 @@ if(TURBOSCXML_ENABLE_PLUGIN)
   add_dependencies(scxml_plugin_test scxml_plugin_fixture)
   add_test(
     NAME scxml_plugin_test
-    COMMAND scxml_plugin_test $<TARGET_FILE:scxml_plugin_fixture>)
+    COMMAND scxml_plugin_test)
+  set_tests_properties(scxml_plugin_test PROPERTIES
+    ENVIRONMENT
+      "SCXML_PLUGIN_FIXTURE_PATH=$<TARGET_FILE:scxml_plugin_fixture>")
 endif()
 
 turboscxml_add_test(
