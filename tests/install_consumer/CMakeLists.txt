@@ -10,6 +10,8 @@ option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
   "Require the installed quickjs-sandbox profile" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN
   "Require and exercise the installed Plugin component" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING
+  "Require the installed package to omit the Plugin component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY
   "Require and exercise only the installed VoiceXML component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY
@@ -134,6 +136,19 @@ elseif(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING)
   find_package(TurboSCXML CONFIG REQUIRED
     PATHS "${TURBOSCXML_ROOT_PATH}"
     NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+endif()
+
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN AND
+   TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING)
+  message(FATAL_ERROR
+    "Plugin present and Plugin missing expectations are mutually exclusive")
+endif()
+
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING AND
+   (TurboSCXML_Plugin_FOUND OR TARGET TurboSCXML::Plugin OR
+    EXISTS "${TURBOSCXML_ROOT_PATH}/include/scxml/plugin.h"))
+  message(FATAL_ERROR
+    "Plugin-disabled package unexpectedly exposes TurboSCXML::Plugin")
 endif()
 
 if(TURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS AND
