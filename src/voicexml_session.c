@@ -15,35 +15,57 @@ static vxml_status fail_structure(vxml_session_impl *impl) {
 
 vxml_status vxml_session_start_literal(vxml_session_impl *impl) {
     const vxml_program_impl *program = impl->program;
-    const vxml_form_row *form;
-    size_t block_index;
+    size_t form_index = 0u;
+    size_t transitions = 0u;
 
-    if (program == NULL || program->forms == NULL || program->form_count == 0u)
-        return fail_structure(impl);
-    form = &program->forms[0];
-    if (form->block_count == 0u || program->blocks == NULL ||
-        !range_is_valid(form->first_block, form->block_count,
-                        program->block_count))
+    if (program == NULL || program->forms == NULL ||
+        program->form_count == 0u)
         return fail_structure(impl);
 
-    for (block_index = form->first_block;
-         block_index < form->first_block + form->block_count;
-         ++block_index) {
-        const vxml_block_row *block = &program->blocks[block_index];
-        if (block->action_count > 1u ||
-            !range_is_valid(block->first_action, block->action_count,
-                            program->action_count) ||
-            (block->action_count != 0u && program->actions == NULL))
+    for (;;) {
+        const vxml_form_row *form;
+        size_t block_index;
+        bool jumped = false;
+        if (form_index >= program->form_count)
             return fail_structure(impl);
-        if (block->action_count == 0u) continue;
-        if (program->actions[block->first_action].kind != VXML_ACTION_EXIT)
+        form = &program->forms[form_index];
+        if (form->block_count == 0u || program->blocks == NULL ||
+            !range_is_valid(form->first_block, form->block_count,
+                            program->block_count))
             return fail_structure(impl);
-        impl->state = VXML_SESSION_EXITED;
-        return VXML_OK;
+
+        for (block_index = form->first_block;
+             block_index < form->first_block + form->block_count;
+             ++block_index) {
+            const vxml_block_row *block = &program->blocks[block_index];
+            const vxml_action_row *action;
+            if (block->action_count > 1u ||
+                !range_is_valid(block->first_action, block->action_count,
+                                program->action_count) ||
+                (block->action_count != 0u && program->actions == NULL))
+                return fail_structure(impl);
+            if (block->action_count == 0u) continue;
+            action = &program->actions[block->first_action];
+            if (action->kind == VXML_ACTION_EXIT) {
+                impl->state = VXML_SESSION_EXITED;
+                return VXML_OK;
+            }
+            if (action->kind != VXML_ACTION_GOTO ||
+                action->target_form >= program->form_count)
+                return fail_structure(impl);
+            if (transitions >= program->form_count)
+                return fail_structure(impl);
+            ++transitions;
+            form_index = action->target_form;
+            jumped = true;
+            break;
+        }
+
+        if (!jumped) {
+            impl->state = VXML_SESSION_EXITED;
+            return VXML_OK;
+        }
     }
-
-    impl->state = VXML_SESSION_EXITED;
-    return VXML_OK;
 }
 
 vxml_status vxml_session_init(vxml_session *session,
