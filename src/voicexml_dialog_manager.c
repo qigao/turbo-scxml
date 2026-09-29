@@ -685,6 +685,23 @@ static vxml_dialog_manager_status publish_event(
     return VXML_DIALOG_MANAGER_OK;
 }
 
+static vxml_status document_store_failure_status(
+    vxml_document_store_status status,
+    const vxml_document_store_error *error) {
+    if (status == VXML_DOCUMENT_STORE_COMPILE_ERROR &&
+        error != NULL && error->voice_status != VXML_OK)
+        return error->voice_status;
+    if (status == VXML_DOCUMENT_STORE_LIMIT_EXCEEDED ||
+        status == VXML_DOCUMENT_STORE_FULL)
+        return VXML_LIMIT_EXCEEDED;
+    if (status == VXML_DOCUMENT_STORE_INVALID_URI ||
+        status == VXML_DOCUMENT_STORE_INVALID_ARGUMENT)
+        return VXML_INVALID_ARGUMENT;
+    if (status == VXML_DOCUMENT_STORE_ALLOCATION_FAILED)
+        return VXML_ALLOCATION_FAILED;
+    return VXML_INVALID_STATE;
+}
+
 static vxml_dialog_manager_status compile_document(
     vxml_dialog_row *row,
     vxml_dialog_event_kind failure_event) {
@@ -696,6 +713,37 @@ static vxml_dialog_manager_status compile_document(
     if (row == NULL || row->owner == NULL)
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
     impl = row->owner;
+    if (impl->use_document_store) {
+        vxml_document_store_error store_error = {0};
+        vxml_document_store_status store_status;
+        store_status = vxml_document_store_acquire_reference(
+            impl->document_store,
+            NULL, 0u,
+            row->source, row->source_size,
+            row->fragment, impl->max_fragment_bytes + 1u,
+            &row->fragment_size,
+            &row->document_ref,
+            &store_error);
+        if (store_status != VXML_DOCUMENT_STORE_OK) {
+            (void)queue_event(
+                row, failure_event,
+                document_store_failure_status(
+                    store_status, &store_error));
+            return VXML_DIALOG_MANAGER_OK;
+        }
+        row->document_ref_live = true;
+        if (row->fragment_size != 0u) {
+            (void)vxml_document_store_release(
+                impl->document_store, &row->document_ref);
+            row->document_ref_live = false;
+            row->fragment_size = 0u;
+            row->fragment[0] = '\0';
+            (void)queue_event(
+                row, failure_event, VXML_UNSUPPORTED_FEATURE);
+        }
+        return VXML_DIALOG_MANAGER_OK;
+    }
+
     resource_status = impl->documents.open(
         impl->document_user,
         row->source, row->source_size,
@@ -727,10 +775,24 @@ static vxml_dialog_manager_status compile_document(
 
 static vxml_dialog_manager_status start_session(
     vxml_dialog_row *row) {
+    const vxml_program *program = NULL;
+    vxml_document_view document_view = {0};
     vxml_status status;
-    if (row == NULL || !row->program_live)
+    if (row == NULL || row->owner == NULL)
         return VXML_DIALOG_MANAGER_INVALID_STATE;
-    status = vxml_session_init(&row->session, &row->program);
+    if (row->program_live) {
+        program = &row->program;
+    } else if (row->document_ref_live &&
+               row->owner->document_store != NULL &&
+               vxml_document_store_view(
+                   row->owner->document_store,
+                   row->document_ref,
+                   &document_view) == VXML_DOCUMENT_STORE_OK) {
+        program = document_view.program;
+    }
+    if (program == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_STATE;
+    status = vxml_session_init(&row->session, program);
     if (status != VXML_OK) {
         (void)queue_event(row, VXML_DIALOG_EVENT_ERROR_START, status);
         return VXML_DIALOG_MANAGER_OK;
