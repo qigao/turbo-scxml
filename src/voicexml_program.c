@@ -539,6 +539,136 @@ static vxml_status append_id(
     return VXML_OK;
 }
 
+static vxml_status append_goto(
+    vxml_measurement *measurement, salts_xml_attribute attribute,
+    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    vxml_decoded_goto entry = {0};
+    const salts_xml_string_view raw =
+        salts_xml_attribute_value(attribute);
+    size_t decoded_size = 0u;
+    size_t allocation_size;
+    if (attribute.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML goto requires next");
+    if (!decode_entities(raw, NULL, 0u, &decoded_size) ||
+        !checked_add(decoded_size, 1u, &allocation_size))
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next has an invalid XML entity reference");
+    if (decoded_size > limits->max_name_bytes)
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next exceeds max_name_bytes");
+    entry.target = (char *)vxml_malloc(allocation_size);
+    if (entry.target == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto target decoding allocation failed");
+    if (!decode_entities(
+            raw, entry.target, decoded_size, &decoded_size)) {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto target decoding changed between passes");
+    }
+    entry.target[decoded_size] = '\0';
+    entry.location = salts_xml_attribute_location(attribute);
+    if (decoded_size == 0u || entry.target[0] != '#') {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(attribute),
+            "external VoiceXML goto is not supported in the literal profile");
+    }
+    if (decoded_size == 1u ||
+        !is_ncname(entry.target + 1u, decoded_size - 1u)) {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML goto next must be one nonempty local form fragment");
+    }
+    memmove(entry.target, entry.target + 1u, decoded_size - 1u);
+    entry.target_size = decoded_size - 1u;
+    entry.target[entry.target_size] = '\0';
+    entry.target_form = SIZE_MAX;
+
+    if (measurement->goto_count == measurement->goto_capacity) {
+        size_t capacity = measurement->goto_capacity == 0u
+            ? 4u : measurement->goto_capacity * 2u;
+        vxml_decoded_goto *gotos;
+        if (capacity < measurement->goto_capacity ||
+            capacity > limits->max_actions)
+            capacity = limits->max_actions;
+        if (capacity <= measurement->goto_capacity ||
+            !checked_multiply(capacity, sizeof(*gotos), &allocation_size)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                entry.location,
+                "VoiceXML temporary goto table size overflow");
+        }
+        gotos = (vxml_decoded_goto *)vxml_realloc(
+            measurement->gotos, allocation_size);
+        if (gotos == NULL) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_ALLOCATION_FAILED,
+                entry.location,
+                "VoiceXML temporary goto table allocation failed");
+        }
+        measurement->gotos = gotos;
+        measurement->goto_capacity = capacity;
+    }
+    measurement->gotos[measurement->goto_count++] = entry;
+    return VXML_OK;
+}
+
+static vxml_status resolve_gotos(
+    vxml_measurement *measurement,
+    vxml_diagnostic *diagnostic) {
+    size_t goto_index;
+    if (measurement == NULL ||
+        measurement->id_count != measurement->form_count)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML form metadata is inconsistent");
+    for (goto_index = 0u;
+         goto_index < measurement->goto_count;
+         ++goto_index) {
+        vxml_decoded_goto *entry =
+            &measurement->gotos[goto_index];
+        size_t form_index;
+        for (form_index = 0u;
+             form_index < measurement->id_count;
+             ++form_index) {
+            const vxml_decoded_id id =
+                measurement->ids[form_index];
+            if (id.data != NULL &&
+                id.size == entry->target_size &&
+                memcmp(
+                    id.data, entry->target,
+                    entry->target_size) == 0) {
+                entry->target_form = form_index;
+                break;
+            }
+        }
+        if (entry->target_form == SIZE_MAX)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                entry->location,
+                "VoiceXML goto target form does not exist");
+    }
+    return VXML_OK;
+}
+
 static vxml_status reject_non_element(
     salts_xml_node node, vxml_diagnostic *diagnostic) {
     return fail(
