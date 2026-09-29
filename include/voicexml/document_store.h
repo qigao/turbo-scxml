@@ -45,10 +45,18 @@ typedef struct vxml_resolved_uri_v1 {
 
 #define VXML_RESOLVED_URI_V1_INIT     {1u, sizeof(vxml_resolved_uri_v1), NULL, 0u, 0u, NULL, 0u, 0u}
 
-/** Generation-safe borrowed cache reference. slot is 1-based. */
+/**
+ * Generation-safe borrowed cache reference.
+ *
+ * slot and borrow_slot are 1-based. Entry and borrow generations are both
+ * validated, so a copied/released stale ref cannot consume another borrow of
+ * the same cached document.
+ */
 typedef struct vxml_document_ref {
     uint32_t slot;
     uint32_t generation;
+    uint32_t borrow_slot;
+    uint32_t borrow_generation;
 } vxml_document_ref;
 
 typedef struct vxml_document_view {
@@ -84,7 +92,8 @@ typedef struct vxml_document_store_stats {
  * source bytes, and one compiled vxml_program.
  *
  * max_cache_bytes bounds copied URI+source bytes across all entries.
- * vxml_limits independently bounds compiled-program storage.
+ * vxml_limits independently bounds compiled-program storage. The owner is
+ * synchronous/single-owner; callers serialize all store operations.
  */
 typedef struct vxml_document_store_config_v1 {
     uint32_t abi_version;
