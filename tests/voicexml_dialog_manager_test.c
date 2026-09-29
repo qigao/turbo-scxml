@@ -1,4 +1,5 @@
 #include <voicexml/dialog_manager.h>
+#include <voicexml/document_store.h>
 #include <tinytest.h>
 
 #include <string.h>
@@ -57,6 +58,8 @@ typedef struct document_probe {
     size_t open_calls;
     size_t close_calls;
     vxml_dialog_manager_status status;
+    const char *expected_source;
+    size_t expected_source_size;
 } document_probe;
 
 static const char voice_document[] =
@@ -70,11 +73,18 @@ static vxml_dialog_manager_status document_open(
     size_t max_bytes,
     vxml_dialog_document *out_document) {
     document_probe *probe = (document_probe *)user;
-    static const char expected_source[] = "mem:voice";
+    static const char default_source[] = "mem:voice";
     static const char expected_media[] = "application/voicexml+xml";
-    if (probe == NULL || out_document == NULL ||
+    const char *expected_source;
+    size_t expected_source_size;
+    if (probe == NULL) return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    expected_source = probe->expected_source != NULL
+        ? probe->expected_source : default_source;
+    expected_source_size = probe->expected_source != NULL
+        ? probe->expected_source_size : sizeof(default_source) - 1u;
+    if (out_document == NULL ||
         source == NULL || media_type == NULL ||
-        source_size != sizeof(expected_source) - 1u ||
+        source_size != expected_source_size ||
         memcmp(source, expected_source, source_size) != 0 ||
         media_type_size != sizeof(expected_media) - 1u ||
         memcmp(media_type, expected_media, media_type_size) != 0)
@@ -172,6 +182,49 @@ static vxml_dialog_manager_status manager_init(
     config.events = &event_sink;
     config.event_user = events;
     return vxml_dialog_manager_init(manager, &config);
+}
+
+static vxml_document_store_status store_init(
+    vxml_document_store *store,
+    document_probe *documents,
+    size_t capacity) {
+    static const char application_uri[] =
+        "https://voice.example/app/root.vxml";
+    const vxml_document_store_config_v1 config = {
+        .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1,
+        .struct_size = sizeof(vxml_document_store_config_v1),
+        .application_uri = application_uri,
+        .application_uri_size = sizeof(application_uri) - 1u,
+        .capacity = capacity,
+        .max_uri_bytes = 256u,
+        .max_document_bytes = 512u,
+        .max_cache_bytes = 4096u,
+        .voice_limits = {
+            .xml = {0}
+        },
+        .documents = &document_adapter,
+        .document_user = documents};
+    vxml_document_store_config_v1 normalized = config;
+    normalized.voice_limits = vxml_default_limits();
+    return vxml_document_store_init(store, &normalized);
+}
+
+static vxml_dialog_manager_status manager_init_v2(
+    vxml_dialog_manager *manager,
+    size_t capacity,
+    upstream_probe *upstream,
+    vxml_document_store *store,
+    event_probe *events) {
+    vxml_dialog_manager_config_v2 config =
+        vxml_dialog_manager_default_config_v2();
+    config.capacity = capacity;
+    config.max_source_bytes = 256u;
+    config.upstream = &upstream_adapter;
+    config.upstream_user = upstream;
+    config.document_store = store;
+    config.events = &event_sink;
+    config.event_user = events;
+    return vxml_dialog_manager_init_v2(manager, &config);
 }
 
 static void manager_close_destroy(
@@ -608,4 +661,252 @@ spec("VoiceXML dialog manager") {
             vxml_dialog_manager_destroy(&manager),
             VXML_DIALOG_MANAGER_OK);
     }
+
+    it("V2 direct start reuses one cached immutable program across sequential dialogs") {
+        static const char expected_source[] =
+            "https://voice.example/app/dialogs/main.vxml";
+        static const char source[] = "dialogs/main.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-v2";
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK,
+            .expected_source = expected_source,
+            .expected_source_size = sizeof(expected_source) - 1u};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(store_init(&store, &documents, 2u),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(manager_init_v2(
+                        &manager, 2u, &upstream, &store, &events),
+                    VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(adapter->prepare_dialog_start(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &request, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(documents.close_calls, (size_t)1u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        ticket = (cflow_statechart_effect_ticket){0};
+        dialog_id = (ccxml_string_view){0};
+        check_equal(adapter->prepare_dialog_start(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &request, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.hits, UINT64_C(1));
+        check_equal(stats.misses, UINT64_C(1));
+        check_equal(stats.entries, (size_t)1u);
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V2 prepared dialog pins its cached program until prepared start exits") {
+        static const char expected_source[] =
+            "https://voice.example/app/dialogs/prepared.vxml";
+        static const char source[] = "dialogs/prepared.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-prepared-v2";
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK,
+            .expected_source = expected_source,
+            .expected_source_size = sizeof(expected_source) - 1u};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_prepare_request prepare = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u};
+        ccxml_prepared_dialog_start_request start = {0};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(store_init(&store, &documents, 2u),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(manager_init_v2(
+                        &manager, 1u, &upstream, &store, &events),
+                    VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(adapter->prepare_dialog_prepare(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &prepare, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "dialog.prepared");
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)1u);
+        check_equal(vxml_document_store_clear(&store),
+                    VXML_DOCUMENT_STORE_BUSY);
+
+        start.dialog_id = dialog_id.data;
+        start.dialog_id_size = dialog_id.size;
+        start.connection_id = connection;
+        start.connection_id_size = sizeof(connection) - 1u;
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(adapter->prepare_prepared_dialog_start(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &start, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(events.count, (size_t)3u);
+        check_equal(events.rows[1].name, "dialog.started");
+        check_equal(events.rows[2].name, "dialog.exit");
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)0u);
+        check_equal(vxml_document_store_clear(&store),
+                    VXML_DOCUMENT_STORE_OK);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V2 rejects a fragment source instead of silently entering the wrong form") {
+        static const char source[] = "dialogs/main.vxml#alternate";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-fragment";
+        upstream_probe upstream = {0};
+        document_probe documents = {.status = VXML_DIALOG_MANAGER_OK};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(store_init(&store, &documents, 1u),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(manager_init_v2(
+                        &manager, 1u, &upstream, &store, &events),
+                    VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(adapter->prepare_dialog_start(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &request, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(documents.open_calls, (size_t)0u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(events.rows[0].voice_status, VXML_UNSUPPORTED_FEATURE);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)0u);
+        check_equal(stats.misses, UINT64_C(0));
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V2 manager close releases a prepared DocumentStore borrow") {
+        static const char expected_source[] =
+            "https://voice.example/app/dialogs/held.vxml";
+        static const char source[] = "dialogs/held.vxml";
+        static const char media[] = "application/voicexml+xml";
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK,
+            .expected_source = expected_source,
+            .expected_source_size = sizeof(expected_source) - 1u};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_prepare_request prepare = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+        vxml_document_store_stats stats = {0};
+
+        check_equal(store_init(&store, &documents, 1u),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(manager_init_v2(
+                        &manager, 1u, &upstream, &store, &events),
+                    VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(adapter->prepare_dialog_prepare(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &prepare, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)1u);
+
+        vxml_dialog_manager_close(&manager);
+        upstream.quiescent = true;
+        check_true(vxml_dialog_manager_is_quiescent(&manager));
+        check_equal(vxml_dialog_manager_destroy(&manager),
+                    VXML_DIALOG_MANAGER_OK);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.active_borrows, (size_t)0u);
+        check_equal(vxml_document_store_clear(&store),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
 }
