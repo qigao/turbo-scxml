@@ -39,7 +39,7 @@ find_dependency(Salts 1.8.4 EXACT CONFIG REQUIRED
 
 unset(SaltsUtils_DIR CACHE)
 unset(SaltsUtils_DIR)
-find_dependency(SaltsUtils 4.1.3 EXACT CONFIG REQUIRED
+find_dependency(SaltsUtils 4.1.5 EXACT CONFIG REQUIRED
   PATHS "${SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -92,7 +92,7 @@ if(_TURBOSCXML_NEEDS_SCXML)
       ${_TURBOSCXML_MISSING_DATABIND_TARGETS})
     set(TurboSCXML_FOUND FALSE)
     set(TurboSCXML_NOT_FOUND_MESSAGE
-      "The SCXML component requires these targets from SaltsUtils 4.1.3: ${_TURBOSCXML_MISSING_DATABIND_TARGETS_TEXT}")
+      "The SCXML component requires these targets from SaltsUtils 4.1.5: ${_TURBOSCXML_MISSING_DATABIND_TARGETS_TEXT}")
     return()
   endif()
 endif()
