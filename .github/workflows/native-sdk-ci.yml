@@ -124,6 +124,37 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           ctest --test-dir build/ci --no-tests=error --output-on-failure
 
+      - name: Qualify Plugin-disabled core package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/ci-no-plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DBUILD_TESTING=ON \
+            -DTURBOSCXML_ENABLE_PLUGIN=OFF \
+            -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON \
+            -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF \
+            -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml-no-plugin"
+          cmake --build build/ci-no-plugin --parallel 2
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          ctest --test-dir build/ci-no-plugin --no-tests=error --output-on-failure
+          cmake --install build/ci-no-plugin
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml-no-plugin"
+          cmake -S tests/install_consumer -B build/consumer-no-plugin -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING=ON
+          cmake --build build/consumer-no-plugin --parallel 2
+
       - name: Install and verify installed consumers
         shell: bash
         run: |
