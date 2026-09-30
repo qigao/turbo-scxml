@@ -2660,6 +2660,7 @@ static vxml_status cmeta_compile_prompt_schema(
     out->count = count;
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
+    out->first_fallback = builder->prompt_fallback_index;
     out->bargein = bargein_attribute.impl == NULL ||
         cmeta_decoded_equal(
             salts_xml_attribute_value(bargein_attribute), "true");
@@ -2719,6 +2720,11 @@ static vxml_status cmeta_compile_prompt_schema(
                 cmeta_attribute(child, "src");
             const char *payload = NULL;
             size_t payload_size = 0u;
+            const size_t audio_segment_index =
+                builder->prompt_segment_index - out->first_segment;
+            size_t fallback_child_index;
+            size_t fallback_first;
+            size_t fallback_count = 0u;
             if (builder->prompt_segment_index >=
                 builder->profile->prompt_segment_count)
                 return cmeta_program_fail(
@@ -2743,6 +2749,112 @@ static vxml_status cmeta_compile_prompt_schema(
                 .media_type = {0}};
             out->required_capabilities |=
                 VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+
+            fallback_first =
+                builder->prompt_segment_index - out->first_segment;
+            for (fallback_child_index = 0u;
+                 fallback_child_index < salts_xml_node_child_count(child);
+                 ++fallback_child_index) {
+                const salts_xml_node fallback =
+                    salts_xml_node_child_at(child, fallback_child_index);
+                const salts_xml_node_kind fallback_kind =
+                    salts_xml_node_type(fallback);
+                if (fallback_kind == SALTS_XML_COMMENT ||
+                    fallback_kind == SALTS_XML_PROCESSING_INSTRUCTION)
+                    continue;
+                if (fallback_kind == SALTS_XML_TEXT) {
+                    const salts_xml_string_view text =
+                        salts_xml_node_text_view(fallback);
+                    const char *retained;
+                    if (cmeta_text_whitespace(text))
+                        continue;
+                    if (builder->prompt_segment_index >=
+                        builder->profile->prompt_segment_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML fallback segment rows changed");
+                    retained = cmeta_retain_view(builder, text);
+                    if (retained == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML retained fallback storage overflow");
+                    segment = &builder->profile->prompt_segments[
+                        builder->prompt_segment_index++];
+                    *segment = (vxml_cmeta_prompt_media_segment_v1){
+                        .kind = VXML_CMETA_PROMPT_MEDIA_TEXT,
+                        .payload = {retained, text.size},
+                        .media_type = {0}};
+                    out->required_capabilities |=
+                        VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+                    ++fallback_count;
+                    continue;
+                }
+                if (cmeta_static_ssml_subtree(fallback)) {
+                    char *serialized;
+                    const char *retained;
+                    size_t serialized_size = 0u;
+                    if (builder->prompt_segment_index >=
+                        builder->profile->prompt_segment_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML fallback segment rows changed");
+                    serialized = salts_xml_node_serialize(
+                        fallback, &serialized_size);
+                    if (serialized == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_ALLOCATION_FAILED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML fallback SSML serialization failed");
+                    retained = cmeta_retain_view(
+                        builder,
+                        (salts_xml_string_view){
+                            serialized, serialized_size});
+                    salts_xml_owned_string_free(serialized);
+                    if (retained == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML retained fallback SSML overflow");
+                    segment = &builder->profile->prompt_segments[
+                        builder->prompt_segment_index++];
+                    *segment = (vxml_cmeta_prompt_media_segment_v1){
+                        .kind = VXML_CMETA_PROMPT_MEDIA_SSML,
+                        .payload = {retained, serialized_size},
+                        .media_type = {
+                            "application/ssml+xml",
+                            sizeof("application/ssml+xml") - 1u}};
+                    out->required_capabilities |=
+                        VXML_CMETA_PROMPT_MEDIA_CAP_SSML;
+                    ++fallback_count;
+                    continue;
+                }
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(fallback),
+                    "VoiceXML audio fallback changed between passes");
+            }
+            if (fallback_count != 0u) {
+                vxml_cmeta_prompt_media_fallback_v1 *fallback_row;
+                if (builder->prompt_fallback_index >=
+                    builder->profile->prompt_fallback_count)
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(child),
+                        "VoiceXML fallback rows changed between passes");
+                fallback_row = &builder->profile->prompt_fallbacks[
+                    builder->prompt_fallback_index++];
+                *fallback_row =
+                    (vxml_cmeta_prompt_media_fallback_v1){
+                        .audio_segment_index = audio_segment_index,
+                        .first_fallback_segment = fallback_first,
+                        .fallback_segment_count = fallback_count};
+                out->required_capabilities |=
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH;
+            }
             continue;
         }
 
@@ -2824,6 +2936,8 @@ static vxml_status cmeta_compile_prompt_schema(
 
     out->segment_count =
         builder->prompt_segment_index - out->first_segment;
+    out->fallback_count =
+        builder->prompt_fallback_index - out->first_fallback;
     if (out->segment_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
