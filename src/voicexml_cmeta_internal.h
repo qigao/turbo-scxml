@@ -216,6 +216,10 @@ typedef struct vxml_cmeta_collect_mailbox {
     unsigned char *storage;
     size_t storage_bytes;
     size_t storage_alignment;
+    size_t storage_stride;
+    size_t *root_fields;
+    size_t slot_count;
+    size_t slot_capacity;
 } vxml_cmeta_collect_mailbox;
 
 typedef struct vxml_cmeta_session_data {
