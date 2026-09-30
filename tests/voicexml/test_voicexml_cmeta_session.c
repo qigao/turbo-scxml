@@ -1367,6 +1367,9 @@ spec("VoiceXML CMeta session execution") {
         vxml_session_destroy(&session);
         session = (vxml_session){0};
         options = initial_session_options(&root, &adapter, &probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
         check_equal(
             vxml_session_init_cmeta(&session, &program, &options),
             VXML_OK);
@@ -1383,6 +1386,9 @@ spec("VoiceXML CMeta session execution") {
         vxml_session_destroy(&session);
         session = (vxml_session){0};
         options = initial_session_options(&root, &adapter, &probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
         check_equal(
             vxml_session_init_cmeta(&session, &program, &options),
             VXML_OK);
