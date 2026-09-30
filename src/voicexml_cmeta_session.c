@@ -5019,6 +5019,8 @@ vxml_status vxml_session_cmeta_raise(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_subdialog != VXML_CMETA_NO_INDEX)
+        return VXML_INVALID_STATE;
     if (profile->active_initial != VXML_CMETA_NO_INDEX &&
         (profile->active_initial >= program->initial_count ||
          program->initials == NULL ||
