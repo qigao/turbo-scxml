@@ -1000,7 +1000,7 @@ spec("VoiceXML CMeta session execution") {
             "<grammar type='application/srgs+xml' src='a'/>"
             "<catch event='app.bad'>"
             "<assign name='other' expr='5'/>"
-            "<assign name='text' expr="'abc'"/>"
+            "<assign name='text' expr=\"'abc'\"/>"
             "</catch></field></form></vxml>";
         const vxml_cmeta_name_view undefined[] = {
             {"value", sizeof("value") - 1u}};
