@@ -15,7 +15,9 @@ typedef enum vxml_action_kind {
     VXML_ACTION_GOTO,
     VXML_ACTION_GOTO_EXTERNAL,
     VXML_ACTION_SUBMIT,
-    VXML_ACTION_SCRIPT_EXTERNAL
+    VXML_ACTION_SCRIPT_EXTERNAL,
+    VXML_ACTION_RETURN,
+    VXML_ACTION_DISCONNECT
 } vxml_action_kind;
 
 typedef struct vxml_action_row {
