@@ -2520,7 +2520,7 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
         &mailbox->generation, memory_order_relaxed);
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
-    if (completion->data != mailbox->data ||
+    if (!cmeta_data_desc_equal(completion->data, mailbox->data) ||
         !collect_fixed_scalar_data(completion->data))
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     type = completion->data->storage_type;
@@ -2543,7 +2543,7 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
     if (atomic_load_explicit(
             &mailbox->generation, memory_order_relaxed) !=
             completion->generation ||
-        mailbox->data != completion->data) {
+        !cmeta_data_desc_equal(mailbox->data, completion->data)) {
         atomic_store_explicit(
             &mailbox->state,
             VXML_CMETA_COLLECT_MAILBOX_EMPTY,
