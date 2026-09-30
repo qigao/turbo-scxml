@@ -18,6 +18,7 @@ extern "C" {
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
+#define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 
@@ -153,6 +154,23 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
     void (*cancel)(void *user, uint64_t generation);
 } vxml_cmeta_collect_adapter_v1;
 
+typedef enum vxml_cmeta_collect_ingress_result {
+    VXML_CMETA_COLLECT_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_COLLECT_INGRESS_FULL,
+    VXML_CMETA_COLLECT_INGRESS_CLOSED,
+    VXML_CMETA_COLLECT_INGRESS_STALE,
+    VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT,
+    VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT
+} vxml_cmeta_collect_ingress_result;
+
+typedef struct vxml_cmeta_collect_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    const cmeta_data_desc *data;
+    const void *value;
+} vxml_cmeta_collect_completion_v1;
+
 typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_EMPTY = 0,
     VXML_CMETA_EXIT_EXPRESSION,
@@ -191,6 +209,27 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session);
 
 /** Discard the currently prepared provider ticket and restore admission. */
 vxml_status vxml_session_cmeta_collect_discard(vxml_session *session);
+
+/**
+ * MPSC admission of one copied fixed-scalar completion.
+ *
+ * The session must outlive this call. Producers must stop before session
+ * destroy. The selected field descriptor must exactly match completion.data.
+ * BOOL/SINT/UINT/FLOAT native storage is copied into one fixed mailbox slot.
+ */
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_collect_completion_v1 *completion);
+
+/**
+ * Single-owner progress point. Applies at most one accepted completion through
+ * the CMeta transaction boundary and then returns to Directed FIA SELECT.
+ *
+ * No ready completion is not an error and reports *out_progressed == false.
+ */
+vxml_status vxml_session_cmeta_collect_run_ready(
+    vxml_session *session,
+    bool *out_progressed);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
