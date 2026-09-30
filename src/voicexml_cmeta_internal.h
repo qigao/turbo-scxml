@@ -296,6 +296,20 @@ typedef struct vxml_cmeta_collect_mailbox {
     size_t slot_capacity;
 } vxml_cmeta_collect_mailbox;
 
+typedef enum vxml_cmeta_prompt_media_mailbox_state {
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED = 0,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED
+} vxml_cmeta_prompt_media_mailbox_state;
+
+typedef struct vxml_cmeta_prompt_media_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    vxml_cmeta_prompt_media_outcome outcome;
+} vxml_cmeta_prompt_media_mailbox;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
@@ -331,6 +345,7 @@ typedef struct vxml_cmeta_session_data {
     uint64_t prompt_media_generation;
     bool prompt_media_prepared;
     bool prompt_media_in_flight;
+    vxml_cmeta_prompt_media_mailbox prompt_media_mailbox;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
