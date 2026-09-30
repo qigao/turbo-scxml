@@ -527,6 +527,16 @@ static bool cmeta_event_options_valid(
         options->max_event_name_bytes != 0u;
 }
 
+static bool cmeta_prompt_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_prompt_bytes) +
+        sizeof(options->max_prompt_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_prompts != 0u &&
+        options->max_prompt_bytes != 0u;
+}
+
 static bool cmeta_field_options_valid(
     const vxml_cmeta_compile_options_v1 *options) {
     const size_t tail_size =
@@ -1252,6 +1262,121 @@ static vxml_status cmeta_measure_block(
         block, block, measurement, diagnostic);
 }
 
+static vxml_status cmeta_parse_prompt_count(
+    salts_xml_attribute attribute,
+    unsigned *out_count,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    size_t cursor = 0u;
+    unsigned value = 0u;
+    if (out_count == NULL) return VXML_INVALID_ARGUMENT;
+    *out_count = 1u;
+    if (attribute.impl == NULL) return VXML_OK;
+    raw = salts_xml_attribute_value(attribute);
+    if (raw.size == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt count must be a positive integer");
+    while (cursor < raw.size) {
+        uint32_t cp;
+        unsigned digit;
+        if (!cmeta_next_decoded_codepoint(raw, &cursor, &cp) ||
+            cp < '0' || cp > '9')
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML prompt count must be a positive integer");
+        digit = (unsigned)(cp - '0');
+        if (value > (UINT_MAX - digit) / 10u)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML prompt count exceeds unsigned range");
+        value = value * 10u + digit;
+    }
+    if (value == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt count must be positive");
+    *out_count = value;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_measure_prompt(
+    salts_xml_node prompt,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"count", "cond"};
+    const salts_xml_attribute count = cmeta_attribute(prompt, "count");
+    const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
+    size_t child_index;
+    size_t text_bytes = 0u;
+    unsigned parsed_count = 1u;
+    vxml_status status = cmeta_validate_attributes(
+        prompt, allowed, 2u, diagnostic);
+    if (status != VXML_OK) return status;
+    if (!cmeta_prompt_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(prompt),
+            "VoiceXML prompts require enabled prompt limits");
+    status = cmeta_parse_prompt_count(
+        count, &parsed_count, diagnostic);
+    if (status != VXML_OK) return status;
+    (void)parsed_count;
+    if (measurement->prompt_count >= options->max_prompts ||
+        !cmeta_measure_increment(&measurement->prompt_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(prompt),
+            "VoiceXML prompt count exceeds max_prompts");
+    if (cond.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(cond),
+            "VoiceXML prompt condition count overflow");
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(prompt);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(prompt, child_index);
+        const salts_xml_node_kind kind = salts_xml_node_type(child);
+        if (kind == SALTS_XML_COMMENT ||
+            kind == SALTS_XML_PROCESSING_INSTRUCTION)
+            continue;
+        if (kind == SALTS_XML_TEXT) {
+            const salts_xml_string_view text =
+                salts_xml_node_text_view(child);
+            if (text.size > SIZE_MAX - text_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt text size overflow");
+            text_bytes += text.size;
+            continue;
+        }
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(child),
+            "VoiceXML prompt child markup is deferred to the media profile");
+    }
+    if (text_bytes == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(prompt),
+            "VoiceXML prompt requires literal text");
+    if (text_bytes > options->max_prompt_bytes)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(prompt),
+            "VoiceXML prompt text exceeds max_prompt_bytes");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_field(
     salts_xml_node field,
     const vxml_cmeta_compile_options_v1 *options,
@@ -1301,6 +1426,12 @@ static vxml_status cmeta_measure_field(
         size_t type_size = 0u;
         size_t src_size = 0u;
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "prompt")) {
+            status = cmeta_measure_prompt(
+                child, options, measurement, diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "catch") ||
             cmeta_node_named(child, "help") ||
             cmeta_node_named(child, "noinput") ||
