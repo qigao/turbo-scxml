@@ -22,7 +22,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_CLEAR,
     VXML_CMETA_ACTION_IF,
     VXML_CMETA_ACTION_EXIT,
-    VXML_CMETA_ACTION_THROW
+    VXML_CMETA_ACTION_THROW,
+    VXML_CMETA_ACTION_RETHROW
 } vxml_cmeta_action_kind;
 
 typedef struct vxml_cmeta_scope_row {
@@ -298,6 +299,7 @@ typedef struct vxml_cmeta_session_data {
     const char *thrown_event;
     size_t thrown_event_size;
     bool throw_requested;
+    bool rethrow_requested;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
