@@ -2445,6 +2445,7 @@ static vxml_status cmeta_measure_menu(
                     SIZE_MAX - (speech_size + 1u) ||
                 measurement->name_bytes + speech_size + 1u >
                     limits->max_name_bytes) {
+                vxml_free(normalized);
                 vxml_free(speech);
                 status = cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
