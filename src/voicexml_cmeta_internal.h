@@ -72,12 +72,11 @@ typedef enum vxml_cmeta_menu_choice_target_kind {
     VXML_CMETA_MENU_CHOICE_EVENT = 1
 } vxml_cmeta_menu_choice_target_kind;
 
-typedef struct vxml_cmeta_menu_choice_row {
-    vxml_cmeta_menu_choice_v1 view;
-    vxml_cmeta_menu_choice_target_kind target_kind;
+typedef struct vxml_cmeta_menu_choice_target_row {
+    vxml_cmeta_menu_choice_target_kind kind;
     const char *target;
     size_t target_size;
-} vxml_cmeta_menu_choice_row;
+} vxml_cmeta_menu_choice_target_row;
 
 typedef struct vxml_cmeta_menu_row {
     size_t form;
@@ -234,7 +233,8 @@ typedef struct vxml_cmeta_program_data {
     size_t form_count;
     vxml_cmeta_menu_row *menus;
     size_t menu_count;
-    vxml_cmeta_menu_choice_row *menu_choices;
+    vxml_cmeta_menu_choice_v1 *menu_choices;
+    vxml_cmeta_menu_choice_target_row *menu_choice_targets;
     size_t menu_choice_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
