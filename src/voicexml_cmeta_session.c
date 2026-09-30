@@ -2788,10 +2788,6 @@ static vxml_status collect_request_from_impl(
     vxml_cmeta_collect_request_v1 *out_request) {
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_session_data *profile;
-    const vxml_cmeta_field_row *field;
-    const vxml_cmeta_prompt_row *prompt = NULL;
-    unsigned prompt_count = 0u;
-    vxml_status status;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     *out_request = (vxml_cmeta_collect_request_v1){0};
     if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
@@ -2800,32 +2796,67 @@ static vxml_status collect_request_from_impl(
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
     profile = (const vxml_cmeta_session_data *)impl->profile_data;
-    if (profile->active_field == VXML_CMETA_NO_INDEX ||
-        profile->active_field >= program->field_count ||
-        program->fields == NULL ||
-        profile->collect_generation == 0u)
+    if (profile->collect_generation == 0u)
         return VXML_INVALID_STATE;
-    field = &program->fields[profile->active_field];
-    status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
-    if (status != VXML_OK) return status;
-    (void)prompt_count;
-    if (field->name == NULL || field->name_size == 0u ||
-        field->grammar_type == NULL || field->grammar_type_size == 0u ||
-        field->grammar_src == NULL || field->grammar_src_size == 0u)
-        return VXML_INVALID_STRUCTURE;
-    *out_request = (vxml_cmeta_collect_request_v1){
-        .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
-        .struct_size = sizeof(vxml_cmeta_collect_request_v1),
-        .generation = profile->collect_generation,
-        .required_capabilities = field->required_capabilities,
-        .field = {field->name, field->name_size},
-        .grammar_type = {field->grammar_type, field->grammar_type_size},
-        .grammar_src = {field->grammar_src, field->grammar_src_size},
-        .has_timeout = prompt != NULL ? prompt->has_timeout : false,
-        .timeout_us = prompt != NULL ? prompt->timeout_us : UINT64_C(0)
-    };
-    return VXML_OK;
+
+    if (profile->active_menu != VXML_CMETA_NO_INDEX) {
+        const vxml_cmeta_menu_row *menu;
+        if (profile->active_field != VXML_CMETA_NO_INDEX ||
+            profile->active_menu >= program->menu_count ||
+            program->menus == NULL ||
+            program->menu_choices == NULL)
+            return VXML_INVALID_STRUCTURE;
+        menu = &program->menus[profile->active_menu];
+        if (menu->form != profile->active_form ||
+            menu->choice_count == 0u ||
+            !range_valid(
+                menu->first_choice, menu->choice_count,
+                program->menu_choice_count))
+            return VXML_INVALID_STRUCTURE;
+        *out_request = (vxml_cmeta_collect_request_v1){
+            .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_request_v1),
+            .generation = profile->collect_generation,
+            .required_capabilities = VXML_CMETA_COLLECT_CAP_MENU_CHOICE,
+            .item_kind = VXML_CMETA_COLLECT_ITEM_MENU,
+            .menu_choices = &program->menu_choices[menu->first_choice],
+            .menu_choice_count = menu->choice_count
+        };
+        return VXML_OK;
+    }
+
+    {
+        const vxml_cmeta_field_row *field;
+        const vxml_cmeta_prompt_row *prompt = NULL;
+        unsigned prompt_count = 0u;
+        vxml_status status;
+        if (profile->active_field == VXML_CMETA_NO_INDEX ||
+            profile->active_field >= program->field_count ||
+            program->fields == NULL)
+            return VXML_INVALID_STATE;
+        field = &program->fields[profile->active_field];
+        status = selected_prompt_row(
+            impl, &field, &prompt, &prompt_count);
+        if (status != VXML_OK) return status;
+        (void)prompt_count;
+        if (field->name == NULL || field->name_size == 0u ||
+            field->grammar_type == NULL || field->grammar_type_size == 0u ||
+            field->grammar_src == NULL || field->grammar_src_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        *out_request = (vxml_cmeta_collect_request_v1){
+            .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_request_v1),
+            .generation = profile->collect_generation,
+            .required_capabilities = field->required_capabilities,
+            .field = {field->name, field->name_size},
+            .grammar_type = {field->grammar_type, field->grammar_type_size},
+            .grammar_src = {field->grammar_src, field->grammar_src_size},
+            .has_timeout = prompt != NULL ? prompt->has_timeout : false,
+            .timeout_us = prompt != NULL ? prompt->timeout_us : UINT64_C(0),
+            .item_kind = VXML_CMETA_COLLECT_ITEM_FIELD
+        };
+        return VXML_OK;
+    }
 }
 
 vxml_status vxml_session_cmeta_collect_request(
@@ -2864,7 +2895,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
         return VXML_INVALID_STATE;
     status = collect_request_from_impl(impl, &request);
     if (status != VXML_OK) return status;
-    {
+    if (request.item_kind == VXML_CMETA_COLLECT_ITEM_FIELD) {
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
         if (profile->active_field >= program->field_count ||
@@ -2872,6 +2903,8 @@ vxml_status vxml_session_cmeta_collect_prepare(
             !collect_fixed_scalar_data(
                 program->fields[profile->active_field].field_data))
             return VXML_UNSUPPORTED_FEATURE;
+    } else if (request.item_kind != VXML_CMETA_COLLECT_ITEM_MENU) {
+        return VXML_INVALID_STRUCTURE;
     }
     if ((profile->collect_adapter->capabilities &
          request.required_capabilities) !=
