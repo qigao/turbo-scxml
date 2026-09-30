@@ -81,6 +81,10 @@ vxml_status vxml_session_start_literal_at(
                     return fail_structure(impl);
                 impl->navigation_uri = action->target_uri;
                 impl->navigation_uri_size = action->target_uri_size;
+                impl->navigation_fetchaudio_uri =
+                    action->fetchaudio_uri;
+                impl->navigation_fetchaudio_uri_size =
+                    action->fetchaudio_uri_size;
                 impl->state = VXML_SESSION_NAVIGATING;
                 return VXML_OK;
             }
@@ -136,6 +140,12 @@ vxml_status vxml_session_init_profile(
     impl->error = VXML_OK;
     impl->navigation_uri = NULL;
     impl->navigation_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
     impl->profile_data = NULL;
     if (program_impl->profile_session_init != NULL) {
         status = program_impl->profile_session_init(impl, options);
@@ -202,13 +212,13 @@ vxml_status vxml_session_start_at_form(
     return vxml_session_start_literal_at(impl, form_index);
 }
 
-vxml_status vxml_session_navigation(
+vxml_status vxml_session_navigation_request(
     const vxml_session *session,
-    vxml_navigation_target *out_target) {
+    vxml_navigation_request_v1 *out_request) {
     const vxml_session_impl *impl;
-    if (session == NULL || out_target == NULL)
+    if (session == NULL || out_request == NULL)
         return VXML_INVALID_ARGUMENT;
-    *out_target = (vxml_navigation_target){0};
+    *out_request = (vxml_navigation_request_v1){0};
     impl = (const vxml_session_impl *)session->impl;
     if (impl == NULL) return VXML_INVALID_STATE;
     if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
@@ -217,8 +227,31 @@ vxml_status vxml_session_navigation(
     if (impl->navigation_uri == NULL ||
         impl->navigation_uri_size == 0u)
         return VXML_INVALID_CONTRACT;
-    out_target->uri = impl->navigation_uri;
-    out_target->uri_size = impl->navigation_uri_size;
+    if ((impl->navigation_fetchaudio_uri == NULL) !=
+        (impl->navigation_fetchaudio_uri_size == 0u))
+        return VXML_INVALID_CONTRACT;
+    *out_request = (vxml_navigation_request_v1){
+        .abi_version = VXML_NAVIGATION_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_navigation_request_v1),
+        .uri = impl->navigation_uri,
+        .uri_size = impl->navigation_uri_size,
+        .fetchaudio_uri = impl->navigation_fetchaudio_uri,
+        .fetchaudio_uri_size =
+            impl->navigation_fetchaudio_uri_size};
+    return VXML_OK;
+}
+
+vxml_status vxml_session_navigation(
+    const vxml_session *session,
+    vxml_navigation_target *out_target) {
+    vxml_navigation_request_v1 request = {0};
+    vxml_status status;
+    if (out_target == NULL) return VXML_INVALID_ARGUMENT;
+    *out_target = (vxml_navigation_target){0};
+    status = vxml_session_navigation_request(session, &request);
+    if (status != VXML_OK) return status;
+    out_target->uri = request.uri;
+    out_target->uri_size = request.uri_size;
     return VXML_OK;
 }
 
@@ -270,6 +303,8 @@ vxml_status vxml_session_close(vxml_session *session) {
             impl->program->profile_session_destroy(impl);
         impl->navigation_uri = NULL;
         impl->navigation_uri_size = 0u;
+        impl->navigation_fetchaudio_uri = NULL;
+        impl->navigation_fetchaudio_uri_size = 0u;
         impl->state = VXML_SESSION_CLOSED;
     }
     return VXML_OK;
