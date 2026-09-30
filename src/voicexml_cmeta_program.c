@@ -1480,8 +1480,12 @@ static vxml_status cmeta_measure_prompt(
                     diagnostic, VXML_XML_ERROR,
                     salts_xml_attribute_location(name),
                     "VoiceXML mark name has an invalid XML reference");
-            if (mark_name_bytes == 0u ||
-                mark_name_bytes > options->max_prompt_bytes)
+            if (mark_name_bytes == 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name),
+                    "VoiceXML mark name must not be empty");
+            if (mark_name_bytes > options->max_prompt_bytes)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_attribute_location(name),
