@@ -41,6 +41,9 @@ typedef struct vxml_document_store_impl {
     vxml_limits voice_limits;
     vxml_dialog_document_adapter_v1 documents;
     void *document_user;
+    vxml_fetch_audio_adapter_v1 fetch_audio;
+    void *fetch_audio_user;
+    bool fetch_audio_enabled;
     vxml_document_entry *entries;
     vxml_document_borrow *borrows;
 } vxml_document_store_impl;
@@ -550,10 +553,16 @@ vxml_document_store_status vxml_document_store_init(
     vxml_document_store_impl *impl;
     char *normalized;
     size_t normalized_size = 0u;
+    const size_t config_prefix =
+        offsetof(vxml_document_store_config_v1, document_user) +
+        sizeof(config->document_user);
+    const size_t fetch_audio_tail =
+        offsetof(vxml_document_store_config_v1, fetch_audio_user) +
+        sizeof(config->fetch_audio_user);
     if (store == NULL || store->impl != NULL ||
         config == NULL ||
         config->abi_version != VXML_DOCUMENT_STORE_CONFIG_ABI_V1 ||
-        config->struct_size < sizeof(*config) ||
+        config->struct_size < config_prefix ||
         config->capacity == 0u ||
         config->capacity > UINT32_MAX ||
         config->max_uri_bytes == 0u ||
@@ -571,6 +580,15 @@ vxml_document_store_status vxml_document_store_init(
             sizeof(config->documents->close) ||
         config->documents->open == NULL ||
         config->documents->close == NULL)
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (config->struct_size >= fetch_audio_tail &&
+        config->fetch_audio != NULL &&
+        (config->fetch_audio->abi_version !=
+             VXML_FETCH_AUDIO_ADAPTER_ABI_V1 ||
+         config->fetch_audio->struct_size <
+             offsetof(vxml_fetch_audio_adapter_v1, begin) +
+             sizeof(config->fetch_audio->begin) ||
+         config->fetch_audio->begin == NULL))
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
 
     normalized = (char *)malloc(config->max_uri_bytes + 1u);
@@ -615,6 +633,17 @@ vxml_document_store_status vxml_document_store_init(
             ? config->documents->struct_size
             : sizeof(impl->documents));
     impl->document_user = config->document_user;
+    if (config->struct_size >= fetch_audio_tail &&
+        config->fetch_audio != NULL) {
+        memset(&impl->fetch_audio, 0, sizeof(impl->fetch_audio));
+        memcpy(
+            &impl->fetch_audio, config->fetch_audio,
+            config->fetch_audio->struct_size < sizeof(impl->fetch_audio)
+                ? config->fetch_audio->struct_size
+                : sizeof(impl->fetch_audio));
+        impl->fetch_audio_user = config->fetch_audio_user;
+        impl->fetch_audio_enabled = true;
+    }
     store->impl = impl;
     return VXML_DOCUMENT_STORE_OK;
 }
@@ -745,6 +774,18 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
     vxml_status voice_status;
     vxml_document_entry *slot = NULL;
     size_t slot_index;
+    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
+    bool fetch_audio_started = false;
+    bool has_fetchaudio = false;
+    const size_t policy_prefix =
+        offsetof(vxml_document_fetch_policy_v1, timeout_us) +
+        sizeof(((vxml_document_fetch_policy_v1 *)0)->timeout_us);
+    const size_t fetchaudio_flag_tail =
+        offsetof(vxml_document_fetch_policy_v1, has_fetchaudio) +
+        sizeof(((vxml_document_fetch_policy_v1 *)0)->has_fetchaudio);
+    const size_t fetchaudio_tail =
+        offsetof(vxml_document_fetch_policy_v1, fetchaudio_minimum_us) +
+        sizeof(((vxml_document_fetch_policy_v1 *)0)->fetchaudio_minimum_us);
 
     if (out_ref != NULL) *out_ref = (vxml_document_ref){0};
     error_clear(out_error);
@@ -753,8 +794,33 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
         document_uri_size > impl->max_uri_bytes ||
         (policy != NULL &&
          (policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
-          policy->struct_size < sizeof(*policy))))
+          policy->struct_size < policy_prefix)))
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (policy != NULL &&
+        policy->struct_size >= fetchaudio_flag_tail)
+        has_fetchaudio = policy->has_fetchaudio;
+    if (has_fetchaudio &&
+        (policy->struct_size < fetchaudio_tail ||
+         policy->fetchaudio_uri == NULL ||
+         policy->fetchaudio_uri_size == 0u ||
+         policy->fetchaudio_uri_size > impl->max_uri_bytes ||
+         !uri_bytes_valid(
+             policy->fetchaudio_uri, policy->fetchaudio_uri_size))) {
+        error_set(out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                  VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    }
+    if (has_fetchaudio) {
+        uri_parts fetchaudio_parts;
+        if (!parse_absolute_uri(
+                policy->fetchaudio_uri,
+                policy->fetchaudio_uri_size,
+                &fetchaudio_parts)) {
+            error_set(out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                      VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        }
+    }
 
     if (impl->active_borrows >= impl->capacity) {
         error_set(out_error, VXML_DOCUMENT_STORE_FULL,
@@ -813,6 +879,65 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
                       VXML_DIALOG_MANAGER_DOCUMENT_ERROR, VXML_OK);
             return VXML_DOCUMENT_STORE_RESOURCE_ERROR;
         }
+    }
+
+    if (has_fetchaudio && impl->fetch_audio_enabled) {
+        const vxml_fetch_audio_request_v1 request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_fetch_audio_request_v1),
+            .uri = policy->fetchaudio_uri,
+            .uri_size = policy->fetchaudio_uri_size,
+            .has_delay = policy->has_fetchaudio_delay,
+            .delay_us = policy->fetchaudio_delay_us,
+            .has_minimum = policy->has_fetchaudio_minimum,
+            .minimum_us = policy->fetchaudio_minimum_us};
+        const vxml_fetch_audio_begin_result begin_result =
+            impl->fetch_audio.begin(
+                impl->fetch_audio_user,
+                &request,
+                &fetch_audio_ticket);
+        if (begin_result == VXML_FETCH_AUDIO_STARTED) {
+            if (fetch_audio_ticket.finish == NULL) {
+                free(canonical);
+                error_set(
+                    out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                    VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
+                return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+            }
+            fetch_audio_started = true;
+        } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
+            if (fetch_audio_ticket.finish != NULL ||
+                fetch_audio_ticket.user != NULL) {
+                if (fetch_audio_ticket.finish != NULL)
+                    fetch_audio_ticket.finish(fetch_audio_ticket.user);
+                free(canonical);
+                error_set(
+                    out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                    VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
+                return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+            }
+        } else {
+            if (fetch_audio_ticket.finish != NULL)
+                fetch_audio_ticket.finish(fetch_audio_ticket.user);
+            free(canonical);
+            error_set(
+                out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        }
+    }
+
+    if (policy != NULL && policy->has_timeout) {
+        const size_t policy_tail =
+            offsetof(vxml_dialog_document_adapter_v1, open_with_policy) +
+            sizeof(impl->documents.open_with_policy);
+        if (impl->documents.struct_size < policy_tail ||
+            impl->documents.open_with_policy == NULL) {
+            free(canonical);
+            error_set(out_error, VXML_DOCUMENT_STORE_RESOURCE_ERROR,
+                      VXML_DIALOG_MANAGER_DOCUMENT_ERROR, VXML_OK);
+            return VXML_DOCUMENT_STORE_RESOURCE_ERROR;
+        }
         resource_status = impl->documents.open_with_policy(
             impl->document_user,
             canonical, canonical_size,
@@ -829,6 +954,11 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
             sizeof("application/voicexml+xml") - 1u,
             impl->max_document_bytes,
             &document);
+    }
+    if (fetch_audio_started) {
+        fetch_audio_ticket.finish(fetch_audio_ticket.user);
+        fetch_audio_ticket = (vxml_fetch_audio_ticket_v1){0};
+        fetch_audio_started = false;
     }
     if (resource_status != VXML_DIALOG_MANAGER_OK) {
         free(canonical);

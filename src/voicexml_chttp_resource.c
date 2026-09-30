@@ -70,7 +70,9 @@ static vxml_dialog_manager_status document_open_with_policy(
         ? (vxml_chttp_resource_impl *)owner->impl : NULL;
     if (policy == NULL ||
         policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
-        policy->struct_size < sizeof(*policy))
+        policy->struct_size <
+            offsetof(vxml_document_fetch_policy_v1, timeout_us) +
+            sizeof(policy->timeout_us))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
     if (!policy->has_timeout)
         return document_open(
