@@ -748,7 +748,6 @@ spec("VoiceXML CMeta session execution") {
             event_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_value_view value = {0};
 
         options.initially_undefined = undefined;
         options.initially_undefined_count = 1u;
@@ -767,21 +766,22 @@ spec("VoiceXML CMeta session execution") {
                         "app.deep.more",
                         sizeof("app.deep.more") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
-        check_equal(value.data.sint, (int64_t)4);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            4);
 
         check_equal(vxml_session_cmeta_raise(
                         &session,
                         "app.other",
                         sizeof("app.other") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)3);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            3);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
@@ -809,7 +809,6 @@ spec("VoiceXML CMeta session execution") {
             event_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_value_view value = {0};
 
         options.initially_undefined = undefined;
         options.initially_undefined_count = 1u;
@@ -826,19 +825,21 @@ spec("VoiceXML CMeta session execution") {
                         &session, "app.retry",
                         sizeof("app.retry") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)1);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            1);
 
         check_equal(vxml_session_cmeta_raise(
                         &session, "app.retry",
                         sizeof("app.retry") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)2);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            2);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
@@ -867,7 +868,6 @@ spec("VoiceXML CMeta session execution") {
             event_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_value_view value = {0};
 
         options.initially_undefined = undefined;
         options.initially_undefined_count = 1u;
@@ -884,14 +884,15 @@ spec("VoiceXML CMeta session execution") {
                         sizeof("app.first") - 1u),
                     VXML_OK);
 
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)1);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "late", sizeof("late") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)2);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            1);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->late,
+            2);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
@@ -921,7 +922,6 @@ spec("VoiceXML CMeta session execution") {
             event_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_value_view value = {0};
 
         options.initially_undefined = undefined;
         options.initially_undefined_count = 1u;
@@ -937,14 +937,15 @@ spec("VoiceXML CMeta session execution") {
                         &session, "app.retry",
                         sizeof("app.retry") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)3);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "late", sizeof("late") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)2);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            3);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->late,
+            2);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
@@ -969,7 +970,6 @@ spec("VoiceXML CMeta session execution") {
             event_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_value_view value = {0};
 
         options.initially_undefined = undefined;
         options.initially_undefined_count = 1u;
@@ -984,10 +984,11 @@ spec("VoiceXML CMeta session execution") {
         check_equal(vxml_session_cmeta_raise(
                         &session, "help", sizeof("help") - 1u),
                     VXML_OK);
-        check_equal(vxml_session_cmeta_read(
-                        &session, "other", sizeof("other") - 1u, &value),
-                    VXML_OK);
-        check_equal(value.data.sint, (int64_t)7);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            7);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
@@ -1000,7 +1001,7 @@ spec("VoiceXML CMeta session execution") {
             "<grammar type='application/srgs+xml' src='a'/>"
             "<catch event='app.bad'>"
             "<assign name='other' expr='5'/>"
-            "<assign name='text' expr=\"'abc'\"/>"
+            "<assign name='text' expr='&quot;abc&quot;'/>"
             "</catch></field></form></vxml>";
         const vxml_cmeta_name_view undefined[] = {
             {"value", sizeof("value") - 1u}};
