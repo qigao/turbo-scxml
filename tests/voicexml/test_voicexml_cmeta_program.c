@@ -393,6 +393,10 @@ spec("VoiceXML CMeta program compiler") {
              "datamodel='cmeta'><menu><choice dtmf='1'/></menu></vxml>",
              VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu><choice dtmf='1' event='a'>"
+             "sports</choice></menu></vxml>",
+             VXML_UNSUPPORTED_FEATURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu dtmf='maybe'>"
              "<choice dtmf='1' event='a'/></menu></vxml>",
              VXML_INVALID_STRUCTURE}
