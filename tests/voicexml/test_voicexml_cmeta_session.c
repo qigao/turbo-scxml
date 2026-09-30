@@ -700,6 +700,110 @@ static vxml_cmeta_session_options_v1 field_session_options(
     return options;
 }
 
+typedef struct cmeta_prompt_media_probe {
+    vxml_status prepare_status;
+    size_t prepare_calls;
+    size_t commit_calls;
+    size_t discard_calls;
+    size_t cancel_calls;
+    bool reserved;
+    bool active;
+    uint64_t generation;
+    unsigned prompt_count;
+    unsigned selected_count;
+    vxml_cmeta_prompt_media_segment_kind kind;
+    char field[32];
+    char payload[256];
+} cmeta_prompt_media_probe;
+
+static void cmeta_prompt_media_commit(void *user) {
+    cmeta_prompt_media_probe *probe =
+        (cmeta_prompt_media_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commit_calls;
+    probe->reserved = false;
+    probe->active = true;
+}
+
+static void cmeta_prompt_media_discard(void *user) {
+    cmeta_prompt_media_probe *probe =
+        (cmeta_prompt_media_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discard_calls;
+    probe->reserved = false;
+}
+
+static vxml_status cmeta_prompt_media_prepare(
+    void *user,
+    const vxml_cmeta_prompt_media_request_v1 *request,
+    vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_prompt_media_probe *probe =
+        (cmeta_prompt_media_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->segment_count != 1u ||
+        request->field.data == NULL ||
+        request->field.size >= sizeof(probe->field) ||
+        request->segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT ||
+        request->segment.payload.data == NULL ||
+        request->segment.payload.size >= sizeof(probe->payload))
+        return VXML_INVALID_CONTRACT;
+    ++probe->prepare_calls;
+    *out_ticket = (vxml_cmeta_prompt_media_ticket_v1){0};
+    if (probe->prepare_status != VXML_OK)
+        return probe->prepare_status;
+    if (probe->reserved || probe->active)
+        return VXML_INVALID_STATE;
+    probe->generation = request->generation;
+    probe->prompt_count = request->prompt_count;
+    probe->selected_count = request->selected_count;
+    probe->kind = request->segment.kind;
+    memcpy(probe->field, request->field.data, request->field.size);
+    probe->field[request->field.size] = '\0';
+    memcpy(probe->payload,
+           request->segment.payload.data,
+           request->segment.payload.size);
+    probe->payload[request->segment.payload.size] = '\0';
+    probe->reserved = true;
+    *out_ticket = (vxml_cmeta_prompt_media_ticket_v1){
+        .commit = cmeta_prompt_media_commit,
+        .discard = cmeta_prompt_media_discard,
+        .user = probe};
+    return VXML_OK;
+}
+
+static void cmeta_prompt_media_cancel(
+    void *user, uint64_t generation) {
+    cmeta_prompt_media_probe *probe =
+        (cmeta_prompt_media_probe *)user;
+    if (probe == NULL) return;
+    ++probe->cancel_calls;
+    if (probe->generation == generation)
+        probe->active = false;
+}
+
+static vxml_cmeta_prompt_media_adapter_v1 cmeta_prompt_media_adapter(
+    uint64_t capabilities) {
+    return (vxml_cmeta_prompt_media_adapter_v1){
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_adapter_v1),
+        .capabilities = capabilities,
+        .prepare = cmeta_prompt_media_prepare,
+        .cancel = cmeta_prompt_media_cancel};
+}
+
+static void attach_prompt_media(
+    vxml_cmeta_session_options_v1 *options,
+    const vxml_cmeta_prompt_media_adapter_v1 *adapter,
+    cmeta_prompt_media_probe *probe) {
+    if (options == NULL) return;
+    options->prompt_media = adapter;
+    options->prompt_media_user = probe;
+}
+
 static vxml_cmeta_compile_options_v1 event_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_event_handlers = 16u;
@@ -755,6 +859,183 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("projects the tapered prompt into one transactional TEXT media segment") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt><prompt count='2'>second</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_request_v1 request = {0};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &request),
+                    VXML_OK);
+        check_equal(request.segment_count, (size_t)1u);
+        check_equal(request.segment.kind, VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(request.field.size, sizeof("value") - 1u);
+        check_equal(memcmp(request.field.data, "value",
+                           request.field.size), 0);
+        check_equal(request.segment.payload.size, sizeof("first") - 1u);
+        check_equal(memcmp(request.segment.payload.data, "first",
+                           request.segment.payload.size), 0);
+        check_equal(request.prompt_count, (unsigned)1u);
+        check_equal(request.selected_count, (unsigned)1u);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_true(media_probe.reserved);
+        check_equal(media_probe.field, "value");
+        check_equal(media_probe.payload, "first");
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_INVALID_STATE);
+
+        check_equal(vxml_session_cmeta_prompt_media_discard(
+                        &session), VXML_OK);
+        check_equal(media_probe.discard_calls, (size_t)1u);
+        check_false(media_probe.reserved);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_commit(
+                        &session), VXML_OK);
+        check_equal(media_probe.commit_calls, (size_t)1u);
+        check_true(media_probe.active);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+        check_false(media_probe.active);
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.segment_count, (size_t)1u);
+        check_equal(request.prompt_count, (unsigned)2u);
+        check_equal(request.selected_count, (unsigned)2u);
+        check_equal(request.segment.payload.size, sizeof("second") - 1u);
+        check_equal(memcmp(request.segment.payload.data, "second",
+                           request.segment.payload.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+    }
+
+    it("does not call the media provider for no prompt capability mismatch or refusal") {
+        static const char no_prompt_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        static const char prompt_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>hello</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_request_v1 request = {0};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        no_prompt_source, sizeof(no_prompt_source) - 1u,
+                        NULL, &compile, &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.segment_count, (size_t)0u);
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_INVALID_STATE);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        session = (vxml_session){0};
+        program = (vxml_program){0};
+        media_adapter.capabilities = 0u;
+        check_equal(vxml_compile_cmeta(
+                        prompt_source, sizeof(prompt_source) - 1u,
+                        NULL, &compile, &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_UNSUPPORTED_FEATURE);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        session = (vxml_session){0};
+        program = (vxml_program){0};
+        media_adapter.capabilities = VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+        media_probe.prepare_status = VXML_INVALID_STATE;
+        check_equal(vxml_compile_cmeta(
+                        prompt_source, sizeof(prompt_source) - 1u,
+                        NULL, &compile, &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_INVALID_STATE);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_equal(media_probe.commit_calls, (size_t)0u);
+        check_equal(media_probe.discard_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("selects tapered prompts from cumulative noinput and nomatch retry state") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
