@@ -3563,6 +3563,55 @@ static vxml_status cmeta_lower_block_actions(
     return VXML_OK;
 }
 
+static vxml_status cmeta_lower_catch(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    vxml_cmeta_event_scope_kind scope_kind,
+    size_t owner,
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    vxml_cmeta_event_handler_row *row;
+    const salts_xml_attribute event =
+        cmeta_attribute(node, "event");
+    const salts_xml_attribute count =
+        cmeta_attribute(node, "count");
+    size_t child_index;
+    vxml_status status;
+    if (builder->event_handler_index >=
+        builder->profile->event_handler_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML catch rows changed between compiler passes");
+    row = &builder->profile->event_handlers[
+        builder->event_handler_index++];
+    memset(row, 0, sizeof(*row));
+    row->scope_kind = scope_kind;
+    row->owner = owner;
+    row->count = 1u;
+    status = cmeta_retain_event_attribute(
+        builder, event, &row->event, &row->event_size);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_count_attribute(
+        count, &row->count, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    row->first_action = builder->action_index;
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(node);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, child_index);
+        if (cmeta_node_ignorable(child)) continue;
+        status = cmeta_lower_executable(
+            builder, child, execution_scope,
+            scopes, scope_count, row->first_action, 0u);
+        if (status != VXML_OK) return status;
+    }
+    row->action_end = builder->action_index;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_lower_program(
     cmeta_program_builder *builder, salts_xml_node root) {
     size_t declaration_index = 0u;
@@ -3576,6 +3625,16 @@ static vxml_status cmeta_lower_program(
         const salts_xml_node child =
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "catch")) {
+            const vxml_cmeta_expr_compile_scope scope = {
+                0u, &builder->profile->scopes[0].schema};
+            status = cmeta_lower_catch(
+                builder, child,
+                VXML_CMETA_EVENT_DOCUMENT, 0u,
+                0u, &scope, 1u);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "var")) {
             const vxml_cmeta_expr_compile_scope scope = {
                 0u, &builder->profile->scopes[0].schema};
@@ -3608,6 +3667,12 @@ static vxml_status cmeta_lower_program(
                             declaration_index++],
                         scopes, 2u);
                     if (status != VXML_OK) return status;
+                } else if (cmeta_node_named(item, "catch")) {
+                    status = cmeta_lower_catch(
+                        builder, item,
+                        VXML_CMETA_EVENT_FORM, form_index,
+                        form->scope, scopes, 2u);
+                    if (status != VXML_OK) return status;
                 } else if (cmeta_node_named(item, "field")) {
                     vxml_cmeta_field_row *field;
                     const salts_xml_attribute cond =
@@ -3617,8 +3682,10 @@ static vxml_status cmeta_lower_program(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
                             "VoiceXML field rows changed during lowering");
-                    field = &builder->profile->fields[field_index++];
-                    if (field->form != form_index)
+                    {
+                        const size_t current_field_index = field_index;
+                        field = &builder->profile->fields[field_index++];
+                        if (field->form != form_index)
                         return cmeta_program_fail(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
@@ -3656,6 +3723,24 @@ static vxml_status cmeta_lower_program(
                             builder, filled_node, form,
                             &builder->profile->filled[field->filled]);
                         if (status != VXML_OK) return status;
+                    }
+                    {
+                        size_t nested_index;
+                        for (nested_index = 0u;
+                             nested_index < salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(item, nested_index);
+                            if (!cmeta_node_named(nested, "catch"))
+                                continue;
+                            status = cmeta_lower_catch(
+                                builder, nested,
+                                VXML_CMETA_EVENT_FIELD,
+                                current_field_index,
+                                form->scope, scopes, 2u);
+                            if (status != VXML_OK) return status;
+                        }
+                    }
                     }
                 } else if (cmeta_node_named(item, "filled")) {
                     vxml_cmeta_filled_row *filled;
