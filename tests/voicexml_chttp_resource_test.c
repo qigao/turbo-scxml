@@ -211,6 +211,40 @@ spec("VoiceXML CHTTP document resource bridge") {
             SCXML_OK);
     }
 
+    it("fails closed when a per-request timeout cannot be honored") {
+        static const char source[] = "voice:main";
+        static const char media[] = "application/voicexml+xml";
+        voice_chttp_probe probe = default_probe();
+        scxml_chttp_resource base = {0};
+        vxml_chttp_resource voice = {0};
+        const vxml_dialog_document_adapter_v1 *adapter;
+        vxml_dialog_document document = {0};
+        vxml_document_fetch_policy_v1 policy =
+            VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+        scxml_resource_status status = SCXML_RESOURCE_OK;
+
+        policy.has_timeout = true;
+        policy.timeout_us = UINT64_C(250000);
+        init_bridge(&base, &voice, &probe);
+        adapter = vxml_chttp_resource_document_adapter(&voice);
+        check_not_null(adapter);
+        check_not_null(adapter->open_with_policy);
+        check_equal(
+            adapter->open_with_policy(
+                &voice, source, sizeof(source) - 1u,
+                media, sizeof(media) - 1u,
+                512u, &policy, &document),
+            VXML_DIALOG_MANAGER_DOCUMENT_ERROR);
+        check_equal(probe.resolve_calls, (size_t)0u);
+        check_equal(probe.get_calls, (size_t)0u);
+        check_null(document.lease);
+        check_true(vxml_chttp_resource_last_status(&voice, &status));
+        check_equal(status, SCXML_RESOURCE_FAILED);
+        check_equal(vxml_chttp_resource_destroy(&voice),
+                    VXML_CHTTP_RESOURCE_OK);
+        check_equal(scxml_chttp_resource_destroy(&base), SCXML_OK);
+    }
+
     it("preserves exact Content-Type mismatch as underlying invalid data") {
         static const char source[] = "voice:main";
         static const char media[] = "application/voicexml+xml";
