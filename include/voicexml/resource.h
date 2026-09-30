@@ -60,11 +60,18 @@ typedef struct vxml_document_fetch_policy_v1 {
     size_t struct_size;
     bool has_timeout;
     uint64_t timeout_us;
+
+    /*
+     * Optional append-only wait-audio hint for VoiceXML document fetches.
+     * Failure to retrieve/play this URI is non-fatal for the document fetch.
+     */
+    const char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
 } vxml_document_fetch_policy_v1;
 
 #define VXML_DOCUMENT_FETCH_POLICY_V1_INIT \
     {VXML_DOCUMENT_FETCH_POLICY_ABI_V1, \
-     sizeof(vxml_document_fetch_policy_v1), false, UINT64_C(0)}
+     sizeof(vxml_document_fetch_policy_v1), false, UINT64_C(0), NULL, 0u}
 
 /**
  * Synchronous bounded VoiceXML document acquisition boundary.
