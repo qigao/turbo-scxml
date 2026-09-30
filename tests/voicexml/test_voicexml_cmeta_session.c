@@ -616,6 +616,14 @@ static vxml_cmeta_compile_options_v1 initial_event_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 initial_prompt_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = initial_event_compile_options();
+    options.max_prompts = 16u;
+    options.max_prompt_bytes = 256u;
+    options.max_prompt_segments = 8u;
+    return options;
+}
+
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
@@ -2212,6 +2220,156 @@ spec("VoiceXML CMeta session execution") {
             VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
 
         probe.active = false;
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("reuses tapered prompt media for an active initial owner") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<initial name='welcome'>"
+            "<prompt>first</prompt>"
+            "<prompt count='2' bargein='true' bargeintype='speech'>"
+            "<mark name='retry'/>second</prompt>"
+            "<noinput><reprompt/></noinput>"
+            "</initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            initial_prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            initial_event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_view_v1 prompt = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 batch = {0};
+        vxml_cmeta_prompt_mark_view_v1 mark = {0};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome =
+                VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        bool reprompt = false;
+        bool progressed = false;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL,
+                        &compile, &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt),
+                    VXML_OK);
+        check_equal(prompt.field.size, sizeof("welcome") - 1u);
+        check_equal(memcmp(
+                        prompt.field.data, "welcome",
+                        sizeof("welcome") - 1u), 0);
+        check_equal(prompt.count, (unsigned)1u);
+        check_equal(prompt.prompt_count, (unsigned)1u);
+        check_equal(prompt.text.size, sizeof("first") - 1u);
+        check_equal(memcmp(
+                        prompt.text.data, "first",
+                        sizeof("first") - 1u), 0);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_take_reprompt(
+                        &session, &reprompt),
+                    VXML_OK);
+        check_true(reprompt);
+
+        prompt = (vxml_cmeta_prompt_view_v1){0};
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt),
+                    VXML_OK);
+        check_equal(prompt.field.size, sizeof("welcome") - 1u);
+        check_equal(memcmp(
+                        prompt.field.data, "welcome",
+                        sizeof("welcome") - 1u), 0);
+        check_equal(prompt.count, (unsigned)2u);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+
+        check_equal(vxml_session_cmeta_prompt_media_batch_request(
+                        &session, &batch),
+                    VXML_OK);
+        check_equal(batch.field.size, sizeof("welcome") - 1u);
+        check_equal(memcmp(
+                        batch.field.data, "welcome",
+                        sizeof("welcome") - 1u), 0);
+        check_equal(batch.prompt_count, (unsigned)2u);
+        check_equal(batch.selected_count, (unsigned)2u);
+        check_equal(batch.segment_count, (size_t)2u);
+        check_equal(batch.segments[0].kind,
+                    VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(batch.segments[1].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(batch.required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_commit(
+                        &session),
+                    VXML_OK);
+        check_equal(media_probe.batch_prepare_calls, (size_t)1u);
+        check_equal(media_probe.field, "welcome");
+        check_equal(vxml_session_cmeta_prompt_media_mark(
+                        &session, batch.generation, 0u),
+                    VXML_CMETA_PROMPT_MARK_ACCEPTED);
+
+        media_probe.active = false;
+        completion.generation = batch.generation;
+        check_equal(vxml_session_cmeta_prompt_media_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_prompt_media_run_ready(
+                        &session, &progressed, &outcome),
+                    VXML_OK);
+        check_true(progressed);
+        check_equal(outcome,
+                    VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED);
+        check_equal(vxml_session_cmeta_prompt_media_last_mark(
+                        &session, &mark),
+                    VXML_OK);
+        check_equal(mark.generation, batch.generation);
+        check_equal(mark.segment_index, (size_t)0u);
+        check_equal(mark.name.size, sizeof("retry") - 1u);
+        check_equal(memcmp(
+                        mark.name.data, "retry",
+                        sizeof("retry") - 1u), 0);
+
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
     }
