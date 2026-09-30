@@ -1301,7 +1301,9 @@ static vxml_status cmeta_measure_field(
         size_t src_size = 0u;
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "catch") ||
-            cmeta_node_named(child, "help")) {
+            cmeta_node_named(child, "help") ||
+            cmeta_node_named(child, "noinput") ||
+            cmeta_node_named(child, "nomatch")) {
             status = cmeta_measure_catch(
                 child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
@@ -1450,7 +1452,9 @@ static vxml_status cmeta_measure_form(
             continue;
         }
         if (cmeta_node_named(child, "catch") ||
-            cmeta_node_named(child, "help")) {
+            cmeta_node_named(child, "help") ||
+            cmeta_node_named(child, "noinput") ||
+            cmeta_node_named(child, "nomatch")) {
             const vxml_status catch_status = cmeta_measure_catch(
                 child, options, measurement, limits, diagnostic);
             if (catch_status != VXML_OK) return catch_status;
@@ -1647,7 +1651,9 @@ static vxml_status cmeta_measure_program(
             continue;
         }
         if (cmeta_node_named(child, "catch") ||
-            cmeta_node_named(child, "help")) {
+            cmeta_node_named(child, "help") ||
+            cmeta_node_named(child, "noinput") ||
+            cmeta_node_named(child, "nomatch")) {
             if (saw_form) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
@@ -3444,6 +3450,8 @@ static vxml_status cmeta_lower_simple_action(
         if (status != VXML_OK) return status;
     } else if (cmeta_node_named(node, "rethrow")) {
         action->kind = VXML_CMETA_ACTION_RETHROW;
+    } else if (cmeta_node_named(node, "reprompt")) {
+        action->kind = VXML_CMETA_ACTION_REPROMPT;
     } else {
         return cmeta_program_fail(
             builder->diagnostic, VXML_UNSUPPORTED_FEATURE,
@@ -3642,15 +3650,22 @@ static vxml_status cmeta_lower_catch(
     row->scope_kind = scope_kind;
     row->owner = owner;
     row->count = 1u;
-    if (cmeta_node_named(node, "help")) {
-        const salts_xml_string_view help_event = {"help", sizeof("help") - 1u};
-        row->event = cmeta_retain_view(builder, help_event);
-        row->event_size = sizeof("help") - 1u;
+    if (cmeta_node_named(node, "help") ||
+        cmeta_node_named(node, "noinput") ||
+        cmeta_node_named(node, "nomatch")) {
+        const salts_xml_string_view shorthand_event =
+            cmeta_node_named(node, "help")
+                ? (salts_xml_string_view){"help", sizeof("help") - 1u}
+                : cmeta_node_named(node, "noinput")
+                    ? (salts_xml_string_view){"noinput", sizeof("noinput") - 1u}
+                    : (salts_xml_string_view){"nomatch", sizeof("nomatch") - 1u};
+        row->event = cmeta_retain_view(builder, shorthand_event);
+        row->event_size = shorthand_event.size;
         if (row->event == NULL)
             return cmeta_program_fail(
                 builder->diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(node),
-                "VoiceXML help Event retention overflow");
+                "VoiceXML shorthand Event retention overflow");
     } else {
         status = cmeta_retain_event_attribute(
             builder, event, &row->event, &row->event_size);
@@ -3689,7 +3704,9 @@ static vxml_status cmeta_lower_program(
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "catch") ||
-            cmeta_node_named(child, "help")) {
+            cmeta_node_named(child, "help") ||
+            cmeta_node_named(child, "noinput") ||
+            cmeta_node_named(child, "nomatch")) {
             const vxml_cmeta_expr_compile_scope scope = {
                 0u, &builder->profile->scopes[0].schema};
             status = cmeta_lower_catch(
@@ -3732,7 +3749,9 @@ static vxml_status cmeta_lower_program(
                         scopes, 2u);
                     if (status != VXML_OK) return status;
                 } else if (cmeta_node_named(item, "catch") ||
-                           cmeta_node_named(item, "help")) {
+                           cmeta_node_named(item, "help") ||
+                           cmeta_node_named(item, "noinput") ||
+                           cmeta_node_named(item, "nomatch")) {
                     status = cmeta_lower_catch(
                         builder, item,
                         VXML_CMETA_EVENT_FORM, form_index,
@@ -3797,7 +3816,9 @@ static vxml_status cmeta_lower_program(
                             const salts_xml_node nested =
                                 salts_xml_node_child_at(item, nested_index);
                             if (!cmeta_node_named(nested, "catch") &&
-                                !cmeta_node_named(nested, "help"))
+                                !cmeta_node_named(nested, "help") &&
+                                !cmeta_node_named(nested, "noinput") &&
+                                !cmeta_node_named(nested, "nomatch"))
                                 continue;
                             status = cmeta_lower_catch(
                                 builder, nested,
