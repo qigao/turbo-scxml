@@ -707,6 +707,13 @@ static vxml_cmeta_compile_options_v1 event_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = event_compile_options();
+    options.max_prompts = 16u;
+    options.max_prompt_bytes = 256u;
+    return options;
+}
+
 static vxml_cmeta_session_options_v1 event_session_options(
     const vxml_cmeta_session_root *root,
     const vxml_cmeta_collect_adapter_v1 *adapter,
@@ -748,6 +755,210 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects tapered prompts from cumulative noinput and nomatch retry state") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt>"
+            "<prompt count='2'>second</prompt>"
+            "<prompt count='3' cond='flag'>third</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "<nomatch><reprompt/></nomatch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {.flag = true};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_view_v1 prompt = {0};
+        bool reprompt = false;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.count, (unsigned)1u);
+        check_equal(prompt.prompt_count, (unsigned)1u);
+        check_equal(prompt.text.size, sizeof("first") - 1u);
+        check_equal(memcmp(prompt.text.data, "first",
+                           prompt.text.size), 0);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.count, (unsigned)2u);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+        check_equal(memcmp(prompt.text.data, "second",
+                           prompt.text.size), 0);
+        check_equal(vxml_session_cmeta_take_reprompt(
+                        &session, &reprompt), VXML_OK);
+        check_true(reprompt);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+        check_equal(prompt.count, (unsigned)2u);
+
+        check_equal(vxml_session_cmeta_nomatch(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)3u);
+        check_equal(prompt.count, (unsigned)3u);
+        check_equal(memcmp(prompt.text.data, "third",
+                           prompt.text.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("skips false prompt conditions and keeps the first declaration-order tie") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt>"
+            "<prompt count='2'>tie-first</prompt>"
+            "<prompt count='2'>tie-second</prompt>"
+            "<prompt count='3' cond='flag'>third</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "<nomatch><reprompt/></nomatch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {.flag = false};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_view_v1 prompt = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+        check_equal(prompt.count, (unsigned)2u);
+        check_equal(prompt.text.size, sizeof("tie-first") - 1u);
+        check_equal(memcmp(prompt.text.data, "tie-first",
+                           prompt.text.size), 0);
+
+        check_equal(vxml_session_cmeta_nomatch(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)3u);
+        check_equal(prompt.count, (unsigned)2u);
+        check_equal(memcmp(prompt.text.data, "tie-first",
+                           prompt.text.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("returns to the first prompt after successful collect and filled clear reset") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt><prompt count='2'>retry</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "<filled><clear namelist='value'/></filled>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_view_v1 prompt = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        vxml_cmeta_collect_completion_v1 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v1),
+            .data = &cmeta_data_int};
+        int value = 7;
+        bool progressed = false;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+        check_equal(prompt.count, (unsigned)2u);
+
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(
+                        &session), VXML_OK);
+        completion.generation = request.generation;
+        completion.value = &value;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)1u);
+        check_equal(prompt.count, (unsigned)1u);
+        check_equal(memcmp(prompt.text.data, "first",
+                           prompt.text.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("tracks noinput and nomatch independently and publishes reprompt once") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
