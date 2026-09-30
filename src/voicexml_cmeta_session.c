@@ -68,13 +68,16 @@ static bool session_prompt_media_options_valid(
     const size_t tail_size =
         offsetof(vxml_cmeta_session_options_v1, prompt_media_user) +
         sizeof(options->prompt_media_user);
+    const size_t adapter_prefix_size =
+        offsetof(vxml_cmeta_prompt_media_adapter_v1, cancel) +
+        sizeof(((vxml_cmeta_prompt_media_adapter_v1 *)0)->cancel);
     const vxml_cmeta_prompt_media_adapter_v1 *adapter;
     if (options == NULL || options->struct_size < tail_size)
         return false;
     adapter = options->prompt_media;
     return adapter != NULL &&
         adapter->abi_version == VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 &&
-        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->struct_size >= adapter_prefix_size &&
         adapter->prepare != NULL &&
         adapter->cancel != NULL;
 }
