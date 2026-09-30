@@ -10,6 +10,15 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
     "collect adapter must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
+    "collect request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_ticket_v1>::value,
+    "collect ticket must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
+    "collect adapter must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_data_resource_v1>::value,
     "external data resource must remain C-compatible");
 static_assert(
@@ -31,6 +40,8 @@ int main() {
     const turboscxml_install_cmeta_root initial_root{5};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
+    vxml_cmeta_collect_request_v1 collect_request{};
+    vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
     vxml_cmeta_compile_options_v1 compile_options{};
@@ -46,6 +57,12 @@ int main() {
     collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
     collect_adapter.struct_size = sizeof(collect_adapter);
     if (collect_request.abi_version != 0u ||
+        collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
+        return 4;
+    collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
+    collect_adapter.struct_size = sizeof(collect_adapter);
+    collect_adapter.capabilities = VXML_CMETA_COLLECT_CAP_SRGS_XML;
+    if (collect_request.generation != 0u ||
         collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
         return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
