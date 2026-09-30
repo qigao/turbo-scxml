@@ -16,6 +16,8 @@ typedef struct vxml_decoded_id {
 typedef struct vxml_decoded_goto {
     char *target;
     size_t target_size;
+    char *fetchaudio;
+    size_t fetchaudio_size;
     size_t target_form;
     salts_xml_location location;
     bool external;
@@ -434,13 +436,42 @@ static vxml_status validate_attributes(
     return VXML_OK;
 }
 
+static vxml_status validate_goto_attributes(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    size_t index;
+    bool seen_next = false;
+    bool seen_fetchaudio = false;
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        bool *seen = NULL;
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(local, "next"))
+            seen = &seen_next;
+        else if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+                 view_equal(local, "fetchaudio"))
+            seen = &seen_fetchaudio;
+        if (seen == NULL || *seen)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML goto attribute");
+        *seen = true;
+    }
+    return VXML_OK;
+}
+
 static void measurement_destroy(vxml_measurement *measurement) {
     size_t index;
     if (measurement == NULL) return;
     for (index = 0u; index < measurement->id_count; ++index)
         vxml_free(measurement->ids[index].data);
-    for (index = 0u; index < measurement->goto_count; ++index)
+    for (index = 0u; index < measurement->goto_count; ++index) {
         vxml_free(measurement->gotos[index].target);
+        vxml_free(measurement->gotos[index].fetchaudio);
+    }
     vxml_free(measurement->ids);
     vxml_free(measurement->gotos);
     memset(measurement, 0, sizeof(*measurement));
