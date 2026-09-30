@@ -1833,6 +1833,55 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("rejects corrupted audio fallback metadata before provider publication") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><audio src='a.wav'>fallback</audio></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 batch = {0};
+        vxml_cmeta_program_data *compiled;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        compiled =
+            (vxml_cmeta_program_data *)(void *)program_data(&program);
+        check_not_null(compiled);
+        check_equal(compiled->prompt_fallback_count, (size_t)1u);
+        compiled->prompt_fallbacks[0].audio_segment_index =
+            compiled->prompts[0].segment_count;
+
+        check_equal(vxml_session_cmeta_prompt_media_batch_request(
+                        &session, &batch),
+                    VXML_INVALID_STRUCTURE);
+        check_equal(batch.segment_count, (size_t)0u);
+        check_equal(batch.fallback_count, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("propagates the timeout from the actually selected tapered prompt") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
