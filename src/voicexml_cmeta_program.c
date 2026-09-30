@@ -5082,11 +5082,41 @@ static vxml_status cmeta_build_schemas(
                             "VoiceXML initial/form-item rows changed between compiler passes");
                     initial = &builder->profile->initials[
                         builder->initial_index];
-                    initial->form = form_index;
                     status = cmeta_register_initial_item(
                         builder, form_scope, item,
                         builder->initial_index, initial);
                     if (status != VXML_OK) return status;
+                    initial->form = form_index;
+                    initial->first_prompt = builder->prompt_index;
+                    {
+                        size_t initial_child;
+                        for (initial_child = 0u;
+                             initial_child <
+                                 salts_xml_node_child_count(item);
+                             ++initial_child) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, initial_child);
+                            if (!cmeta_node_named(nested, "prompt"))
+                                continue;
+                            if (builder->prompt_index >=
+                                    builder->profile->prompt_count)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML initial prompt rows changed between compiler passes");
+                            status = cmeta_compile_prompt_schema(
+                                builder, nested,
+                                VXML_CMETA_PROMPT_OWNER_INITIAL,
+                                builder->initial_index,
+                                &builder->profile->prompts[
+                                    builder->prompt_index++]);
+                            if (status != VXML_OK) return status;
+                        }
+                    }
+                    initial->prompt_count =
+                        builder->prompt_index - initial->first_prompt;
                     order = &builder->profile->form_items[
                         builder->form_item_index++];
                     order->kind = VXML_CMETA_FORM_ITEM_INITIAL;
