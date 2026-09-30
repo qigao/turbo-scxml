@@ -8,6 +8,10 @@ static_assert(std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
               "collect request must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_completion_v1>::value,
               "collect completion must remain C-compatible");
+static_assert(std::is_standard_layout<vxml_cmeta_collect_result_slot_v1>::value,
+              "collect result slot must remain C-compatible");
+static_assert(std::is_standard_layout<vxml_cmeta_collect_completion_v2>::value,
+              "collect completion V2 must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
               "collect adapter must remain C-compatible");
 
