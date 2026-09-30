@@ -160,6 +160,13 @@ static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 subdialog_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_subdialogs = 4u;
+    options.max_subdialog_uri_bytes = 256u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_prompts = 8u;
@@ -2145,6 +2152,155 @@ spec("VoiceXML CMeta program compiler") {
         }
     }
 
+    it("compiles immutable static subdialog descriptors in form-item order") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='parent'>"
+            "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+            "<subdialog name='nested' src='child.vxml#entry' cond='flag'/>"
+            "<field name='flag'><grammar type='application/srgs+xml' src='f.grxml'/></field>"
+            "</form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            subdialog_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_form_row *form;
+        const vxml_cmeta_subdialog_row *subdialog;
+
+        options.max_fields = 8u;
+        options.max_grammar_bytes = 256u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->subdialog_count, (size_t)1u);
+        check_equal(profile->form_item_count, (size_t)3u);
+        form = &profile->forms[0];
+        check_equal(form->subdialog_count, (size_t)1u);
+        check_equal(form->item_count, (size_t)3u);
+        check_equal(
+            profile->form_items[form->first_item + 0u].kind,
+            VXML_CMETA_FORM_ITEM_FIELD);
+        check_equal(
+            profile->form_items[form->first_item + 1u].kind,
+            VXML_CMETA_FORM_ITEM_SUBDIALOG);
+        check_equal(
+            profile->form_items[form->first_item + 1u].index,
+            form->first_subdialog);
+        check_equal(
+            profile->form_items[form->first_item + 2u].kind,
+            VXML_CMETA_FORM_ITEM_FIELD);
+
+        subdialog = &profile->subdialogs[form->first_subdialog];
+        check_equal(subdialog->form, (size_t)0u);
+        check_equal(subdialog->root_field, (size_t)2u);
+        check_equal(subdialog->field_offset,
+                    offsetof(vxml_cmeta_program_root, nested));
+        check_true(subdialog->result_data == &program_nested_data);
+        check_equal(subdialog->name_size, sizeof("nested") - 1u);
+        check_equal(
+            memcmp(subdialog->name, "nested", subdialog->name_size), 0);
+        check_equal(
+            subdialog->src_size, sizeof("child.vxml#entry") - 1u);
+        check_equal(
+            memcmp(
+                subdialog->src, "child.vxml#entry",
+                subdialog->src_size), 0);
+        check_true(subdialog->condition != VXML_CMETA_NO_INDEX);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid static subdialog descriptors without approximation") {
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='value' src='child.vxml'/>"
+                "</form></vxml>",
+                VXML_SEMANTIC_ERROR
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested' srcexpr='value'/>"
+                "</form></vxml>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested' src='a' srcexpr='value'/>"
+                "</form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested' src='child.vxml' expr='value'/>"
+                "</form></vxml>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested'/>"
+                "</form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested' src='a'/>"
+                "<subdialog name='nested' src='b'/>"
+                "</form></vxml>",
+                VXML_INVALID_STRUCTURE
+            }
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            subdialog_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    cases[index].source, strlen(cases[index].source),
+                    NULL, &options, &program, &diagnostic),
+                cases[index].expected);
+            check_null(program.impl);
+            check_equal(diagnostic.status, cases[index].expected);
+        }
+
+        {
+            vxml_cmeta_compile_options_v1 short_uri =
+                subdialog_compile_options();
+            vxml_program program = {0};
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<subdialog name='nested' src='child.vxml'/>"
+                "</form></vxml>";
+            short_uri.max_subdialog_uri_bytes = 4u;
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &short_uri, &program, NULL),
+                VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+    }
+
     it("compiles form grammar and preserves FIELD INITIAL source order") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -2397,12 +2553,14 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 3u || index == 4u ||
-                    index == 5u ||
-                    index == 7u || index == 8u ||
-                    index == 13u
-                        ? VXML_INVALID_STRUCTURE
-                        : VXML_UNSUPPORTED_FEATURE;
+                    index == 16u
+                        ? VXML_INVALID_CONTRACT
+                        : index == 3u || index == 4u ||
+                          index == 5u ||
+                          index == 7u || index == 8u ||
+                          index == 13u
+                            ? VXML_INVALID_STRUCTURE
+                            : VXML_UNSUPPORTED_FEATURE;
                 check_equal(vxml_compile_cmeta(
                                 source, (size_t)written, NULL, &options,
                                 &program, &diagnostic),

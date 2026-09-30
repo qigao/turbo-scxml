@@ -247,6 +247,8 @@ int main() {
     compile_options.max_scope_slots = 32u;
     compile_options.max_scope_storage_bytes = 4096u;
     compile_options.max_conditional_depth = 8u;
+    compile_options.max_subdialogs = 1u;
+    compile_options.max_subdialog_uri_bytes = 128u;
     compile_options.max_event_handlers = 4u;
     compile_options.max_event_name_bytes = 64u;
     session_options.abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1;

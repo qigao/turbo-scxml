@@ -386,6 +386,7 @@ typedef struct cmeta_program_measurement {
     size_t menu_grammar_count;
     size_t field_count;
     size_t initial_count;
+    size_t subdialog_count;
     size_t form_item_count;
     size_t prompt_count;
     size_t prompt_segment_count;
@@ -551,6 +552,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "menu") || cmeta_node_named(node, "choice") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
         cmeta_node_named(node, "initial") ||
+        cmeta_node_named(node, "subdialog") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -615,6 +617,16 @@ static bool cmeta_initial_options_valid(
     return options != NULL && options->struct_size >= tail_size &&
         options->max_initials != 0u &&
         cmeta_field_options_valid(options);
+}
+
+static bool cmeta_subdialog_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_subdialog_uri_bytes) +
+        sizeof(options->max_subdialog_uri_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_subdialogs != 0u &&
+        options->max_subdialog_uri_bytes != 0u;
 }
 
 static bool cmeta_menu_target_options_valid(
@@ -2908,6 +2920,101 @@ static vxml_status cmeta_measure_initial(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_measure_subdialog(
+    salts_xml_node subdialog,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {
+        "name", "src", "srcexpr", "expr", "cond"};
+    const salts_xml_attribute name = cmeta_attribute(subdialog, "name");
+    const salts_xml_attribute src = cmeta_attribute(subdialog, "src");
+    const salts_xml_attribute srcexpr =
+        cmeta_attribute(subdialog, "srcexpr");
+    const salts_xml_attribute expr = cmeta_attribute(subdialog, "expr");
+    const salts_xml_attribute cond = cmeta_attribute(subdialog, "cond");
+    size_t uri_size = 0u;
+    vxml_status status;
+
+    if (!cmeta_subdialog_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires enabled subdialog bounds");
+
+    status = cmeta_validate_attributes(
+        subdialog, allowed,
+        sizeof(allowed) / sizeof(allowed[0]), diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (name.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires name");
+    if (src.impl != NULL && srcexpr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog src and srcexpr are mutually exclusive");
+    if (srcexpr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(srcexpr),
+            "dynamic VoiceXML subdialog srcexpr is deferred");
+    if (src.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires literal src");
+    if (expr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(expr),
+            "STRUCT-valued VoiceXML subdialog expr is not supported by the current CMeta expression ABI");
+
+    status = cmeta_validate_empty_element(subdialog, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (measurement->subdialog_count >= options->max_subdialogs ||
+        !cmeta_measure_increment(&measurement->subdialog_count) ||
+        !cmeta_measure_increment(&measurement->form_item_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog/form-item count exceeds configured bounds");
+
+    status = cmeta_measure_name(
+        name, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_measure_name(
+        src, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (!cmeta_decode_entities(
+            salts_xml_attribute_value(src), NULL, 0u, &uri_size))
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(src),
+            "VoiceXML subdialog src contains an invalid XML reference");
+    if (uri_size == 0u ||
+        uri_size > options->max_subdialog_uri_bytes)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(src),
+            "VoiceXML subdialog src exceeds max_subdialog_uri_bytes");
+
+    if (cond.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(cond),
+            "VoiceXML subdialog cond count overflow");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_form(
     salts_xml_node form,
     const vxml_cmeta_compile_options_v1 *options,
@@ -2917,6 +3024,7 @@ static vxml_status cmeta_measure_form(
     size_t pre_index;
     size_t form_field_count = 0u;
     size_t form_initial_count = 0u;
+    size_t form_subdialog_count = 0u;
     size_t grammar_count = 0u;
     bool saw_block = false;
     bool saw_directed = false;
@@ -2924,6 +3032,7 @@ static vxml_status cmeta_measure_form(
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
     const size_t first_initial = measurement->initial_count;
+    const size_t first_subdialog = measurement->subdialog_count;
 
     for (pre_index = 0u;
          pre_index < salts_xml_node_child_count(form);
@@ -2934,6 +3043,8 @@ static vxml_status cmeta_measure_form(
             ++form_field_count;
         else if (cmeta_node_named(child, "initial"))
             ++form_initial_count;
+        else if (cmeta_node_named(child, "subdialog"))
+            ++form_subdialog_count;
         else if (cmeta_node_named(child, "grammar"))
             ++grammar_count;
     }
@@ -3049,6 +3160,23 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "subdialog")) {
+            if (saw_block || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "subdialog and block form items cannot mix in this profile");
+            saw_directed = true;
+            {
+                const vxml_status subdialog_status =
+                    cmeta_measure_subdialog(
+                        child, options, measurement, limits, diagnostic);
+                if (subdialog_status != VXML_OK)
+                    return subdialog_status;
+            }
+            continue;
+        }
+
         if (cmeta_node_named(child, "field")) {
             if (saw_block || saw_filled)
                 return cmeta_program_fail(
@@ -3070,10 +3198,17 @@ static vxml_status cmeta_measure_form(
         }
 
         if (cmeta_node_named(child, "filled")) {
+            if (form_subdialog_count != 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "form-level filled with subdialog is deferred to RETURN_DATA processing");
             if (saw_block || !saw_directed ||
                 measurement->field_count - first_field != form_field_count ||
                 measurement->initial_count - first_initial !=
-                    form_initial_count)
+                    form_initial_count ||
+                measurement->subdialog_count - first_subdialog !=
+                    form_subdialog_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
@@ -3114,7 +3249,8 @@ static vxml_status cmeta_measure_form(
 
     if (measurement->block_count == first_block &&
         measurement->field_count == first_field &&
-        measurement->initial_count == first_initial)
+        measurement->initial_count == first_initial &&
+        measurement->subdialog_count == first_subdialog)
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(form),
@@ -3342,6 +3478,7 @@ typedef struct cmeta_program_builder {
     size_t menu_grammar_index;
     size_t field_index;
     size_t initial_index;
+    size_t subdialog_index;
     size_t form_item_index;
     size_t prompt_index;
     size_t prompt_segment_index;
@@ -3414,6 +3551,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
     vxml_free(profile->form_items);
+    vxml_free(profile->subdialogs);
     vxml_free(profile->initials);
     vxml_free(profile->fields);
     vxml_free(profile->blocks);
@@ -3464,6 +3602,7 @@ static bool cmeta_allocate_rows(
     profile->menu_grammar_count = measurement->menu_grammar_count;
     profile->field_count = measurement->field_count;
     profile->initial_count = measurement->initial_count;
+    profile->subdialog_count = measurement->subdialog_count;
     profile->form_item_count = measurement->form_item_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
@@ -3509,6 +3648,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(menu_grammars, measurement->menu_grammar_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(initials, measurement->initial_count);
+    CMETA_ALLOC_ROWS(subdialogs, measurement->subdialog_count);
     CMETA_ALLOC_ROWS(form_items, measurement->form_item_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
@@ -4054,6 +4194,18 @@ static vxml_status cmeta_compile_field_schema(
             salts_xml_attribute_location(name_attribute),
             "VoiceXML field name has no matching application-root field");
         goto done;
+    }
+    for (prior = 0u; prior < builder->subdialog_index; ++prior) {
+        const vxml_cmeta_subdialog_row *subdialog =
+            &builder->profile->subdialogs[prior];
+        if (subdialog->form == form_index &&
+            subdialog->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML field form item duplicates a subdialog result target");
+            goto done;
+        }
     }
 
     for (child_index = 0u;
@@ -4894,6 +5046,127 @@ static vxml_status cmeta_compile_menu_schema(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_compile_subdialog_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    size_t form_index,
+    size_t form_scope,
+    size_t first_subdialog,
+    vxml_cmeta_subdialog_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    const salts_xml_attribute src_attribute =
+        cmeta_attribute(node, "src");
+    cmeta_decoded_value decoded_name = {0};
+    const cmeta_data_field_desc *root_field;
+    size_t root_field_index = 0u;
+    size_t prior;
+    vxml_status status;
+
+    memset(out, 0, sizeof(*out));
+    out->condition = VXML_CMETA_NO_INDEX;
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded_name);
+    if (status != VXML_OK) return status;
+    if (!cmeta_is_ncname(decoded_name.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name must be a decoded XML NCName");
+        goto done;
+    }
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            decoded_name.view.data, decoded_name.view.size, NULL) != NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name collides with a form lexical variable");
+        goto done;
+    }
+
+    root_field = cmeta_root_field(
+        builder->profile->root, decoded_name.view, &root_field_index);
+    if (root_field == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name has no matching application-root field");
+        goto done;
+    }
+    if (root_field->value == NULL ||
+        root_field->value->kind != CMETA_DATA_STRUCT ||
+        root_field->value->storage_type == NULL ||
+        root_field->value->shape == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog result target must be a CMeta STRUCT");
+        goto done;
+    }
+
+    for (prior = 0u; prior < builder->field_index; ++prior) {
+        const vxml_cmeta_field_row *field =
+            &builder->profile->fields[prior];
+        if (field->form == form_index &&
+            field->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML subdialog result target duplicates a field form item");
+            goto done;
+        }
+    }
+    for (prior = first_subdialog;
+         prior < builder->subdialog_index;
+         ++prior) {
+        const vxml_cmeta_subdialog_row *previous =
+            &builder->profile->subdialogs[prior];
+        if (previous->form == form_index &&
+            previous->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML subdialog result target");
+            goto done;
+        }
+    }
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(src_attribute),
+        salts_xml_attribute_location(src_attribute),
+        &out->src, &out->src_size);
+    if (status != VXML_OK) goto done;
+    if (out->src_size == 0u ||
+        out->src_size > builder->options->max_subdialog_uri_bytes) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML subdialog src changed between compiler passes");
+        goto done;
+    }
+
+    out->form = form_index;
+    out->root_field = root_field_index;
+    out->field_offset = root_field->offset;
+    out->result_data = root_field->value;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded_name);
+    if (status != VXML_OK)
+        memset(out, 0, sizeof(*out));
+    return status;
+}
+
 static vxml_status cmeta_build_schemas(
     cmeta_program_builder *builder, salts_xml_node root,
     const cmeta_program_measurement *measurement) {
@@ -5000,6 +5273,8 @@ static vxml_status cmeta_build_schemas(
             form->field_count = 0u;
             form->first_initial = builder->initial_index;
             form->initial_count = 0u;
+            form->first_subdialog = builder->subdialog_index;
+            form->subdialog_count = 0u;
             form->first_item = builder->form_item_index;
             form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
@@ -5028,6 +5303,7 @@ static vxml_status cmeta_build_schemas(
             form->first_declaration = builder->declaration_index;
             form->first_field = builder->field_index;
             form->first_initial = builder->initial_index;
+            form->first_subdialog = builder->subdialog_index;
             form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
@@ -5121,6 +5397,30 @@ static vxml_status cmeta_build_schemas(
                         builder->form_item_index++];
                     order->kind = VXML_CMETA_FORM_ITEM_INITIAL;
                     order->index = builder->initial_index++;
+                    continue;
+                }
+                if (cmeta_node_named(item, "subdialog")) {
+                    vxml_cmeta_subdialog_row *subdialog;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->subdialog_index >=
+                            builder->profile->subdialog_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count ||
+                        builder->profile->subdialogs == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog/form-item rows changed between compiler passes");
+                    subdialog = &builder->profile->subdialogs[
+                        builder->subdialog_index];
+                    status = cmeta_compile_subdialog_schema(
+                        builder, item, form_index, form_scope,
+                        form->first_subdialog, subdialog);
+                    if (status != VXML_OK) return status;
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_SUBDIALOG;
+                    order->index = builder->subdialog_index++;
                     continue;
                 }
                 if (cmeta_node_named(item, "field")) {
@@ -5256,6 +5556,8 @@ static vxml_status cmeta_build_schemas(
                 builder->field_index - form->first_field;
             form->initial_count =
                 builder->initial_index - form->first_initial;
+            form->subdialog_count =
+                builder->subdialog_index - form->first_subdialog;
             form->item_count =
                 builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
@@ -6272,6 +6574,7 @@ static vxml_status cmeta_lower_program(
     size_t form_index = 0u;
     size_t field_index = 0u;
     size_t initial_index = 0u;
+    size_t subdialog_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -6441,6 +6744,30 @@ static vxml_status cmeta_lower_program(
                                 salts_xml_node_location(item),
                                 "VoiceXML initial prompt rows changed between compiler passes");
                     }
+                } else if (cmeta_node_named(item, "subdialog")) {
+                    vxml_cmeta_subdialog_row *subdialog;
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    if (subdialog_index >=
+                            builder->profile->subdialog_count ||
+                        builder->profile->subdialogs == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog rows changed during lowering");
+                    subdialog =
+                        &builder->profile->subdialogs[subdialog_index++];
+                    if (subdialog->form != form_index)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog form ownership changed during lowering");
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &subdialog->condition);
+                        if (status != VXML_OK) return status;
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -6600,7 +6927,8 @@ static vxml_status cmeta_lower_program(
         }
     }
     if (field_index != builder->profile->field_count ||
-        initial_index != builder->profile->initial_count)
+        initial_index != builder->profile->initial_count ||
+        subdialog_index != builder->profile->subdialog_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
@@ -6662,6 +6990,7 @@ static vxml_status cmeta_write_program(
          builder.menu_grammar_index != measurement->menu_grammar_count ||
          builder.field_index != measurement->field_count ||
          builder.initial_index != measurement->initial_count ||
+         builder.subdialog_index != measurement->subdialog_count ||
          builder.form_item_index != measurement->form_item_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
