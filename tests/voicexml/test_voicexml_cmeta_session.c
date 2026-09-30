@@ -609,6 +609,13 @@ static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 initial_event_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = initial_compile_options();
+    options.max_event_handlers = 16u;
+    options.max_event_name_bytes = 64u;
+    return options;
+}
+
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
@@ -1166,6 +1173,41 @@ static vxml_cmeta_session_options_v1 event_session_options(
     options.max_event_name_bytes = 64u;
     options.max_event_dispatch_depth = 16u;
     return options;
+}
+
+static vxml_cmeta_session_options_v1 initial_event_session_options(
+    const vxml_cmeta_session_root *root,
+    const vxml_cmeta_collect_adapter_v1 *adapter,
+    cmeta_collect_probe *probe) {
+    vxml_cmeta_session_options_v1 options =
+        initial_session_options(root, adapter, probe);
+    options.max_event_counters = 32u;
+    options.max_event_name_bytes = 64u;
+    options.max_event_dispatch_depth = 16u;
+    return options;
+}
+
+static unsigned initial_recovery_count(
+    const vxml_session *session,
+    size_t initial_index,
+    const char *event_name) {
+    const vxml_cmeta_session_data *profile =
+        session != NULL ? session_data((vxml_session *)session) : NULL;
+    const size_t event_size =
+        event_name != NULL ? strlen(event_name) : 0u;
+    size_t index;
+    if (profile == NULL || event_name == NULL || event_size == 0u)
+        return UINT_MAX;
+    for (index = 0u; index < profile->event_counter_count; ++index) {
+        const vxml_cmeta_event_counter *counter =
+            &profile->event_counters[index];
+        if (counter->scope_kind == VXML_CMETA_EVENT_INITIAL &&
+            counter->owner == initial_index &&
+            counter->event_size == event_size &&
+            memcmp(counter->event, event_name, event_size) == 0)
+            return counter->count;
+    }
+    return 0u;
 }
 
 static unsigned field_recovery_count(
