@@ -203,7 +203,8 @@ typedef struct vxml_cmeta_branch_row {
 typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_DOCUMENT = 0,
     VXML_CMETA_EVENT_FORM,
-    VXML_CMETA_EVENT_FIELD
+    VXML_CMETA_EVENT_FIELD,
+    VXML_CMETA_EVENT_INITIAL
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
@@ -412,6 +413,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_event_counter *event_counters;
     size_t event_counter_count;
     unsigned char *retry_reset_pending;
+    unsigned char *initial_retry_reset_pending;
     size_t event_counter_capacity;
     char *event_counter_names;
     size_t event_name_stride;

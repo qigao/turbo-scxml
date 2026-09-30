@@ -835,6 +835,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->initial_retry_reset_pending);
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
@@ -877,18 +878,32 @@ static bool recovery_event_name(
           memcmp(counter->event, "nomatch", sizeof("nomatch") - 1u) == 0));
 }
 
-static void reset_field_retry_counters(
-    vxml_cmeta_session_data *session, size_t field_index) {
+static void reset_owner_retry_counters(
+    vxml_cmeta_session_data *session,
+    vxml_cmeta_event_scope_kind scope_kind,
+    size_t owner) {
     size_t index;
     if (session == NULL) return;
     for (index = 0u; index < session->event_counter_count; ++index) {
         vxml_cmeta_event_counter *counter =
             &session->event_counters[index];
-        if (counter->scope_kind == VXML_CMETA_EVENT_FIELD &&
-            counter->owner == field_index &&
+        if (counter->scope_kind == scope_kind &&
+            counter->owner == owner &&
             recovery_event_name(counter))
             counter->count = 0u;
     }
+}
+
+static void reset_field_retry_counters(
+    vxml_cmeta_session_data *session, size_t field_index) {
+    reset_owner_retry_counters(
+        session, VXML_CMETA_EVENT_FIELD, field_index);
+}
+
+static void reset_initial_retry_counters(
+    vxml_cmeta_session_data *session, size_t initial_index) {
+    reset_owner_retry_counters(
+        session, VXML_CMETA_EVENT_INITIAL, initial_index);
 }
 
 static void reset_form_retry_counters(
@@ -898,11 +913,16 @@ static void reset_form_retry_counters(
     size_t offset;
     if (session == NULL || program == NULL || form == NULL ||
         !range_valid(form->first_field, form->field_count,
-                     program->field_count))
+                     program->field_count) ||
+        !range_valid(form->first_initial, form->initial_count,
+                     program->initial_count))
         return;
     for (offset = 0u; offset < form->field_count; ++offset)
         reset_field_retry_counters(
             session, form->first_field + offset);
+    for (offset = 0u; offset < form->initial_count; ++offset)
+        reset_initial_retry_counters(
+            session, form->first_initial + offset);
 }
 
 static void mark_field_retry_reset(
@@ -916,16 +936,31 @@ static void mark_field_retry_reset(
     session->retry_reset_pending[field_index] = 1u;
 }
 
+static void mark_initial_retry_reset(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t initial_index) {
+    if (session == NULL || program == NULL ||
+        session->initial_retry_reset_pending == NULL ||
+        initial_index >= program->initial_count)
+        return;
+    session->initial_retry_reset_pending[initial_index] = 1u;
+}
+
 static void apply_retry_resets(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
-    if (session == NULL || program == NULL ||
-        session->retry_reset_pending == NULL)
+    if (session == NULL || program == NULL)
         return;
-    for (index = 0u; index < program->field_count; ++index)
-        if (session->retry_reset_pending[index] != 0u)
-            reset_field_retry_counters(session, index);
+    if (session->retry_reset_pending != NULL)
+        for (index = 0u; index < program->field_count; ++index)
+            if (session->retry_reset_pending[index] != 0u)
+                reset_field_retry_counters(session, index);
+    if (session->initial_retry_reset_pending != NULL)
+        for (index = 0u; index < program->initial_count; ++index)
+            if (session->initial_retry_reset_pending[index] != 0u)
+                reset_initial_retry_counters(session, index);
 }
 
 static void transaction_reset(
@@ -940,6 +975,11 @@ static void transaction_reset(
     if (program->field_count != 0u &&
         session->retry_reset_pending != NULL)
         memset(session->retry_reset_pending, 0, program->field_count);
+    if (program->initial_count != 0u &&
+        session->initial_retry_reset_pending != NULL)
+        memset(
+            session->initial_retry_reset_pending, 0,
+            program->initial_count);
 }
 
 static bool transaction_begin(
@@ -1555,6 +1595,33 @@ static void mark_form_retry_reset_by_root(
     }
 }
 
+static void mark_form_initial_retry_reset_by_slot(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    size_t scope,
+    size_t slot) {
+    size_t offset;
+    if (session == NULL || program == NULL || form == NULL ||
+        scope != form->scope ||
+        !range_valid(
+            form->first_initial, form->initial_count,
+            program->initial_count) ||
+        (form->initial_count != 0u && program->initials == NULL))
+        return;
+    for (offset = 0u; offset < form->initial_count; ++offset) {
+        const size_t initial_index = form->first_initial + offset;
+        const vxml_cmeta_initial_row *initial =
+            &program->initials[initial_index];
+        if (initial->form == session->active_form &&
+            initial->form_item_slot == slot) {
+            mark_initial_retry_reset(
+                session, program, initial_index);
+            return;
+        }
+    }
+}
+
 static vxml_status execute_clear(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1600,6 +1667,8 @@ static vxml_status execute_clear(
             cmeta_scope_view_clear_slot(
                 &session->staged_scopes[form->scope].view,
                 initial->form_item_slot);
+            mark_initial_retry_reset(
+                session, program, form->first_initial + index);
         }
         return VXML_OK;
     }
@@ -1615,6 +1684,10 @@ static vxml_status execute_clear(
         if (resolved.scope != NULL) {
             cmeta_scope_view_clear_slot(
                 resolved.scope, resolved.candidate->location.slot);
+            mark_form_initial_retry_reset_by_slot(
+                session, program, form,
+                resolved.candidate->scope,
+                resolved.candidate->location.slot);
         } else {
             root_storage_clear_field(
                 resolved.root, program, resolved.candidate->root_field);
@@ -2350,8 +2423,11 @@ vxml_status vxml_cmeta_session_init_profile(
                 profile->event_counter_names +
                 index * profile->event_name_stride;
     }
-    if (program->field_count != 0u || program->menu_count != 0u) {
+    if (program->field_count != 0u ||
+        program->initial_count != 0u ||
+        program->menu_count != 0u) {
         if ((program->field_count != 0u && program->fields == NULL) ||
+            (program->initial_count != 0u && program->initials == NULL) ||
             (program->menu_count != 0u &&
              (program->menus == NULL ||
               program->menu_choices == NULL ||
@@ -2367,6 +2443,15 @@ vxml_status vxml_cmeta_session_init_profile(
                 (unsigned char *)vxml_calloc(
                     program->field_count, sizeof(unsigned char));
             if (profile->retry_reset_pending == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+        }
+        if (program->initial_count != 0u) {
+            profile->initial_retry_reset_pending =
+                (unsigned char *)vxml_calloc(
+                    program->initial_count, sizeof(unsigned char));
+            if (profile->initial_retry_reset_pending == NULL) {
                 status = VXML_ALLOCATION_FAILED;
                 goto failure;
             }
@@ -4654,6 +4739,15 @@ static bool event_scope_owner(
         out_kind == NULL || out_owner == NULL)
         return false;
     if (scope_rank == 0u) {
+        if (profile->active_initial != VXML_CMETA_NO_INDEX) {
+            if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_initial >= program->initial_count ||
+                program->initials == NULL)
+                return false;
+            *out_kind = VXML_CMETA_EVENT_INITIAL;
+            *out_owner = profile->active_initial;
+            return true;
+        }
         if (profile->active_field == VXML_CMETA_NO_INDEX ||
             profile->active_field >= program->field_count)
             return false;
@@ -4742,7 +4836,8 @@ static vxml_status execute_event_handler(
         scope_count = 1u;
         execution_scope = program->document_scope;
     } else if (handler->scope_kind == VXML_CMETA_EVENT_FORM ||
-               handler->scope_kind == VXML_CMETA_EVENT_FIELD) {
+               handler->scope_kind == VXML_CMETA_EVENT_FIELD ||
+               handler->scope_kind == VXML_CMETA_EVENT_INITIAL) {
         if (form == NULL || form->scope >= program->scope_count)
             return VXML_INVALID_STRUCTURE;
         scope_values[0] = form->scope;
@@ -4826,6 +4921,13 @@ vxml_status vxml_session_cmeta_raise(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_initial != VXML_CMETA_NO_INDEX &&
+        (profile->active_initial >= program->initial_count ||
+         program->initials == NULL ||
+         profile->active_field != VXML_CMETA_NO_INDEX ||
+         profile->active_menu != VXML_CMETA_NO_INDEX ||
+         profile->active_block != VXML_CMETA_NO_INDEX))
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
     if (!cmeta_location_path_valid(
             event_name, event_name_size, SIZE_MAX))
         return VXML_INVALID_ARGUMENT;

@@ -609,6 +609,13 @@ static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 initial_event_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = initial_compile_options();
+    options.max_event_handlers = 16u;
+    options.max_event_name_bytes = 64u;
+    return options;
+}
+
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
@@ -1168,6 +1175,41 @@ static vxml_cmeta_session_options_v1 event_session_options(
     return options;
 }
 
+static vxml_cmeta_session_options_v1 initial_event_session_options(
+    const vxml_cmeta_session_root *root,
+    const vxml_cmeta_collect_adapter_v1 *adapter,
+    cmeta_collect_probe *probe) {
+    vxml_cmeta_session_options_v1 options =
+        initial_session_options(root, adapter, probe);
+    options.max_event_counters = 32u;
+    options.max_event_name_bytes = 64u;
+    options.max_event_dispatch_depth = 16u;
+    return options;
+}
+
+static unsigned initial_recovery_count(
+    const vxml_session *session,
+    size_t initial_index,
+    const char *event_name) {
+    const vxml_cmeta_session_data *profile =
+        session != NULL ? session_data((vxml_session *)session) : NULL;
+    const size_t event_size =
+        event_name != NULL ? strlen(event_name) : 0u;
+    size_t index;
+    if (profile == NULL || event_name == NULL || event_size == 0u)
+        return UINT_MAX;
+    for (index = 0u; index < profile->event_counter_count; ++index) {
+        const vxml_cmeta_event_counter *counter =
+            &profile->event_counters[index];
+        if (counter->scope_kind == VXML_CMETA_EVENT_INITIAL &&
+            counter->owner == initial_index &&
+            counter->event_size == event_size &&
+            memcmp(counter->event, event_name, event_size) == 0)
+            return counter->count;
+    }
+    return 0u;
+}
+
 static unsigned field_recovery_count(
     const vxml_session *session,
     size_t field_index,
@@ -1405,6 +1447,228 @@ spec("VoiceXML CMeta session execution") {
             VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
 
         probe.active = false;
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("selects INITIAL-local recovery first and isolates retry counters per initial") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<catch event='route'><assign name='late' expr='22'/></catch>"
+            "<initial name='first'>"
+            "<noinput count='1'><assign name='other' expr='1'/><reprompt/></noinput>"
+            "<noinput count='2'><assign name='other' expr='2'/></noinput>"
+            "<catch event='route'><assign name='late' expr='11'/></catch>"
+            "<catch event='reset'><clear namelist='first'/></catch>"
+            "</initial>"
+            "<initial name='second'>"
+            "<noinput count='1'><assign name='other' expr='7'/></noinput>"
+            "</initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            initial_event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        vxml_cmeta_session_options_v1 options =
+            initial_event_session_options(&root, &adapter, &probe);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const vxml_cmeta_program_data *compiled;
+        vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_session_root *committed;
+        bool reprompt = false;
+        size_t first_initial;
+        size_t second_initial;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        compiled = program_data(&program);
+        check_not_null(compiled);
+        check_equal(compiled->form_count, (size_t)1u);
+        check_equal(compiled->forms[0].initial_count, (size_t)2u);
+        first_initial = compiled->forms[0].first_initial;
+        second_initial = first_initial + 1u;
+
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        check_equal(runtime->active_initial, first_initial);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(committed->other, 1);
+        check_equal(
+            initial_recovery_count(&session, first_initial, "noinput"),
+            (unsigned)1u);
+        check_equal(
+            vxml_session_cmeta_take_reprompt(&session, &reprompt),
+            VXML_OK);
+        check_true(reprompt);
+        reprompt = true;
+        check_equal(
+            vxml_session_cmeta_take_reprompt(&session, &reprompt),
+            VXML_OK);
+        check_false(reprompt);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(committed->other, 2);
+        check_equal(
+            initial_recovery_count(&session, first_initial, "noinput"),
+            (unsigned)2u);
+
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session, "route", sizeof("route") - 1u),
+            VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(committed->late, 11);
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session, "reset", sizeof("reset") - 1u),
+            VXML_OK);
+        check_equal(
+            initial_recovery_count(&session, first_initial, "noinput"),
+            (unsigned)0u);
+
+        runtime->active_initial = second_initial;
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(committed->other, 7);
+        check_equal(
+            initial_recovery_count(&session, first_initial, "noinput"),
+            (unsigned)0u);
+        check_equal(
+            initial_recovery_count(&session, second_initial, "noinput"),
+            (unsigned)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rethrows from INITIAL scope to FORM before DOCUMENT") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='route'><assign name='late' expr='33'/></catch>"
+            "<form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<catch event='route'><assign name='late' expr='22'/></catch>"
+            "<initial><catch event='route'><rethrow/></catch></initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            initial_event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        vxml_cmeta_session_options_v1 options =
+            initial_event_session_options(&root, &adapter, &probe);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session, "route", sizeof("route") - 1u),
+            VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->late, 22);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails closed when INITIAL and FIELD owners are simultaneously active") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<initial><catch event='route'/></initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            initial_event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        vxml_cmeta_session_options_v1 options =
+            initial_event_session_options(&root, &adapter, &probe);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_program_data *compiled;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        compiled = program_data(&program);
+        check_true(runtime->active_initial != VXML_CMETA_NO_INDEX);
+        runtime->active_field = compiled->forms[0].first_field;
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session, "route", sizeof("route") - 1u),
+            VXML_INVALID_STRUCTURE);
+        check_equal(
+            vxml_session_get_state(&session), VXML_SESSION_FAILED);
+
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
     }
