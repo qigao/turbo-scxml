@@ -29,6 +29,7 @@ extern "C" {
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_BATCH UINT64_C(8)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_MARK UINT64_C(16)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -219,7 +220,8 @@ typedef struct vxml_cmeta_collect_completion_v2 {
 typedef enum vxml_cmeta_prompt_media_segment_kind {
     VXML_CMETA_PROMPT_MEDIA_TEXT = 1,
     VXML_CMETA_PROMPT_MEDIA_SSML,
-    VXML_CMETA_PROMPT_MEDIA_AUDIO
+    VXML_CMETA_PROMPT_MEDIA_AUDIO,
+    VXML_CMETA_PROMPT_MEDIA_MARK
 } vxml_cmeta_prompt_media_segment_kind;
 
 typedef enum vxml_cmeta_prompt_bargein_type {
@@ -296,6 +298,25 @@ typedef struct vxml_cmeta_prompt_media_adapter_v1 {
         vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
         const char **out_error);
 } vxml_cmeta_prompt_media_adapter_v1;
+
+typedef enum vxml_cmeta_prompt_mark_result {
+    VXML_CMETA_PROMPT_MARK_ACCEPTED = 0,
+    VXML_CMETA_PROMPT_MARK_CLOSED,
+    VXML_CMETA_PROMPT_MARK_STALE,
+    VXML_CMETA_PROMPT_MARK_NOT_MARK,
+    VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER,
+    VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT
+} vxml_cmeta_prompt_mark_result;
+
+typedef struct vxml_cmeta_prompt_mark_view_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    size_t segment_index;
+    vxml_cmeta_name_view name;
+} vxml_cmeta_prompt_mark_view_v1;
+
+#define VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 1u
 
 typedef enum vxml_cmeta_prompt_barge_result {
     VXML_CMETA_PROMPT_BARGE_CANCELED = 0,
@@ -499,6 +520,24 @@ vxml_session_cmeta_prompt_media_barge_in(
     vxml_session *session,
     uint64_t collect_generation,
     vxml_cmeta_prompt_bargein_type signal_type);
+
+/**
+ * Report that one Program-owned MARK segment has been executed by the media
+ * provider. Progress is generation-scoped and monotonically increasing.
+ */
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark(
+    vxml_session *session,
+    uint64_t generation,
+    size_t segment_index);
+
+/**
+ * Borrow the last MARK executed for the most recently committed prompt
+ * generation. The returned name borrows immutable Program storage.
+ */
+vxml_status vxml_session_cmeta_prompt_media_last_mark(
+    const vxml_session *session,
+    vxml_cmeta_prompt_mark_view_v1 *out_mark);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
