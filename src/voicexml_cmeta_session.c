@@ -587,16 +587,16 @@ static void exit_snapshot_destroy(vxml_cmeta_exit_snapshot *snapshot) {
     memset(snapshot, 0, sizeof(*snapshot));
 }
 
-static vxml_status exit_snapshot_prepare(
+static vxml_status exit_snapshot_prepare_range(
     vxml_cmeta_exit_snapshot *snapshot,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_block_row *block) {
+    size_t first_action, size_t action_end) {
     size_t entry_capacity;
     size_t name_capacity;
     size_t string_capacity;
     exit_snapshot_destroy(snapshot);
     if (!exit_capacity_measure(
-            program, block->first_action, block->action_end,
+            program, first_action, action_end,
             &entry_capacity, &name_capacity, &string_capacity))
         return VXML_INVALID_STRUCTURE;
     if (entry_capacity != 0u) {
@@ -1345,15 +1345,13 @@ static vxml_status execute_clear(
 static vxml_status execute_var(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_form_row *form,
-    const vxml_cmeta_block_row *block,
+    size_t execution_scope,
+    const size_t *scopes, size_t scope_count,
     const vxml_cmeta_action_row *action) {
-    const size_t scopes[3] = {
-        block->scope, form->scope, program->document_scope};
     unsigned char *declared;
     vxml_cmeta_value_view value;
     vxml_status status;
-    if (action->scope != block->scope ||
+    if (action->scope != execution_scope ||
         action->scope >= program->scope_count ||
         action->slot >= program->scopes[action->scope].schema.slot_count)
         return VXML_INVALID_STRUCTURE;
@@ -1364,7 +1362,7 @@ static vxml_status execute_var(
     if (action->expression == VXML_CMETA_NO_INDEX) return VXML_OK;
     status = evaluate_expression(
         session, program, true, action->expression,
-        scopes, 3u, &value);
+        scopes, scope_count, &value);
     if (status != VXML_OK) return status;
     return assign_scope_slot(
         session, program, true, action->scope, action->slot, &value);
@@ -1373,17 +1371,15 @@ static vxml_status execute_var(
 static vxml_status execute_assign(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_form_row *form,
-    const vxml_cmeta_block_row *block,
+    size_t execution_scope,
+    const size_t *scopes, size_t scope_count,
     const vxml_cmeta_action_row *action) {
-    const size_t scopes[3] = {
-        block->scope, form->scope, program->document_scope};
     vxml_cmeta_value_view value;
     vxml_status status;
     if (action->scope != VXML_CMETA_NO_INDEX) {
         unsigned char *declared;
         if (action->scope >= program->scope_count ||
-            action->scope != block->scope ||
+            action->scope != execution_scope ||
             action->slot >=
                 program->scopes[action->scope].schema.slot_count)
             return VXML_INVALID_STRUCTURE;
@@ -1399,7 +1395,7 @@ static vxml_status execute_assign(
         return VXML_INVALID_STRUCTURE;
     status = evaluate_expression(
         session, program, true, action->expression,
-        scopes, 3u, &value);
+        scopes, scope_count, &value);
     if (status != VXML_OK) return status;
     return assign_resolved_location(
         session, program, &program->locations[action->target], &value);
@@ -1408,17 +1404,14 @@ static vxml_status execute_assign(
 static vxml_status execute_exit(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_form_row *form,
-    const vxml_cmeta_block_row *block,
+    const size_t *scopes, size_t scope_count,
     const vxml_cmeta_action_row *action) {
-    const size_t scopes[3] = {
-        block->scope, form->scope, program->document_scope};
     size_t index;
     if (action->exit_kind == VXML_CMETA_EXIT_EXPRESSION) {
         vxml_cmeta_value_view value;
         vxml_status status = evaluate_expression(
             session, program, true, action->expression,
-            scopes, 3u, &value);
+            scopes, scope_count, &value);
         if (status != VXML_OK) return status;
         status = exit_snapshot_append(
             &session->pending_exit, NULL, 0u, &value);
@@ -1452,13 +1445,10 @@ static vxml_status execute_exit(
 static vxml_status select_if_branch(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_form_row *form,
-    const vxml_cmeta_block_row *block,
+    const size_t *scopes, size_t scope_count,
     const vxml_cmeta_action_row *action,
     size_t action_index,
     bool *out_selected, size_t *out_first, size_t *out_end) {
-    const size_t scopes[3] = {
-        block->scope, form->scope, program->document_scope};
     size_t branch_offset;
     *out_selected = false;
     *out_first = 0u;
@@ -1482,7 +1472,7 @@ static vxml_status select_if_branch(
         if (branch->condition != VXML_CMETA_NO_INDEX) {
             status = evaluate_condition(
                 session, program, true, branch->condition,
-                scopes, 3u, &matches);
+                scopes, scope_count, &matches);
             if (status != VXML_OK) return status;
         }
         if (!matches) continue;
@@ -1494,22 +1484,24 @@ static vxml_status select_if_branch(
     return VXML_OK;
 }
 
-static vxml_status execute_actions(
+static vxml_status execute_action_range(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
-    const vxml_cmeta_block_row *block) {
+    size_t execution_scope,
+    const size_t *scopes, size_t scope_count,
+    size_t first_action, size_t action_end) {
     size_t frame_count = 1u;
-    if (block->first_action > block->action_end ||
-        !range_valid(block->first_action,
-                     block->action_end - block->first_action,
+    if (first_action > action_end ||
+        !range_valid(first_action,
+                     action_end - first_action,
                      program->action_count) ||
         session->exec_frame_capacity == 0u ||
         session->exec_frames == NULL ||
         (program->action_count != 0u && program->actions == NULL))
         return VXML_INVALID_STRUCTURE;
     session->exec_frames[0] = (vxml_cmeta_exec_frame){
-        block->first_action, block->action_end};
+        first_action, action_end};
     while (frame_count != 0u) {
         vxml_cmeta_exec_frame *frame =
             &session->exec_frames[frame_count - 1u];
@@ -1532,7 +1524,8 @@ static vxml_status execute_actions(
         switch (action->kind) {
             case VXML_CMETA_ACTION_VAR: {
                 const vxml_status status = execute_var(
-                    session, program, form, block, action);
+                    session, program, execution_scope,
+                    scopes, scope_count, action);
                 if (status != VXML_OK) return status;
                 break;
             }
@@ -1541,7 +1534,7 @@ static vxml_status execute_actions(
                 size_t first;
                 size_t end;
                 const vxml_status status = select_if_branch(
-                    session, program, form, block, action,
+                    session, program, scopes, scope_count, action,
                     action_index,
                     &selected, &first, &end);
                 if (status != VXML_OK) return status;
@@ -1555,7 +1548,8 @@ static vxml_status execute_actions(
             }
             case VXML_CMETA_ACTION_ASSIGN: {
                 const vxml_status status = execute_assign(
-                    session, program, form, block, action);
+                    session, program, execution_scope,
+                    scopes, scope_count, action);
                 if (status != VXML_OK) return status;
                 break;
             }
@@ -1567,7 +1561,7 @@ static vxml_status execute_actions(
             }
             case VXML_CMETA_ACTION_EXIT: {
                 const vxml_status status = execute_exit(
-                    session, program, form, block, action);
+                    session, program, scopes, scope_count, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
@@ -1576,6 +1570,18 @@ static vxml_status execute_actions(
         }
     }
     return VXML_OK;
+}
+
+static vxml_status execute_actions(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_block_row *block) {
+    const size_t scopes[3] = {
+        block->scope, form->scope, program->document_scope};
+    return execute_action_range(
+        session, program, form, block->scope,
+        scopes, 3u, block->first_action, block->action_end);
 }
 
 static vxml_status map_databind_runtime_status(
@@ -2249,8 +2255,9 @@ vxml_status vxml_cmeta_session_start_profile_at(
         profile->active_block = (size_t)(selected - program->blocks);
         if (!consume_step(profile))
             return session_fail(session, VXML_LIMIT_EXCEEDED);
-        status = exit_snapshot_prepare(
-            &profile->pending_exit, program, selected);
+        status = exit_snapshot_prepare_range(
+            &profile->pending_exit, program,
+            selected->first_action, selected->action_end);
         if (status != VXML_OK) return session_fail(session, status);
         profile->exit_requested = false;
         if (!transaction_begin(profile, program)) {
