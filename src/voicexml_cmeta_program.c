@@ -503,7 +503,8 @@ static bool cmeta_node_ignorable(salts_xml_node node) {
 static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
-        cmeta_node_named(node, "grammar") || cmeta_node_named(node, "var") ||
+        cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
+        cmeta_node_named(node, "var") ||
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
@@ -861,6 +862,122 @@ static vxml_status cmeta_measure_executable(
     if (cmeta_node_named(node, "if"))
         return cmeta_measure_conditional(
             node, measurement, limits, diagnostic);
+    return VXML_OK;
+}
+
+static bool cmeta_tree_contains_var(salts_xml_node node) {
+    size_t index;
+    if (cmeta_node_named(node, "var")) return true;
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_tree_contains_var(child)) return true;
+    }
+    return false;
+}
+
+static vxml_status cmeta_measure_filled_targets(
+    salts_xml_attribute namelist,
+    size_t default_count,
+    cmeta_program_measurement *measurement,
+    vxml_diagnostic *diagnostic) {
+    size_t count = 0u;
+    if (namelist.impl == NULL) {
+        count = default_count;
+    } else {
+        const salts_xml_string_view raw =
+            salts_xml_attribute_value(namelist);
+        size_t cursor = 0u;
+        bool in_name = false;
+        while (cursor < raw.size) {
+            uint32_t codepoint;
+            if (!cmeta_next_decoded_codepoint(raw, &cursor, &codepoint))
+                return cmeta_program_fail(
+                    diagnostic, VXML_XML_ERROR,
+                    salts_xml_attribute_location(namelist),
+                    "VoiceXML filled namelist contains an invalid XML reference");
+            if (codepoint == ' ' || codepoint == '\t' ||
+                codepoint == '\r' || codepoint == '\n') {
+                in_name = false;
+            } else if (!in_name) {
+                if (count == SIZE_MAX)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_attribute_location(namelist),
+                        "VoiceXML filled namelist count overflow");
+                ++count;
+                in_name = true;
+            }
+        }
+    }
+    if (count == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            namelist.impl != NULL
+                ? salts_xml_attribute_location(namelist)
+                : (salts_xml_location){0},
+            "VoiceXML filled target list must not be empty");
+    if (measurement->filled_target_count > SIZE_MAX - count)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            namelist.impl != NULL
+                ? salts_xml_attribute_location(namelist)
+                : (salts_xml_location){0},
+            "VoiceXML filled target count overflow");
+    measurement->filled_target_count += count;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_measure_filled_content(
+    salts_xml_node filled,
+    bool form_level,
+    size_t default_target_count,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const field_allowed[] = {NULL};
+    static const char *const form_allowed[] = {"mode", "namelist"};
+    const salts_xml_attribute mode = cmeta_attribute(filled, "mode");
+    const salts_xml_attribute namelist = cmeta_attribute(filled, "namelist");
+    size_t index;
+    vxml_status status = cmeta_validate_attributes(
+        filled,
+        form_level ? form_allowed : field_allowed,
+        form_level ? 2u : 0u,
+        diagnostic);
+    if (status != VXML_OK) return status;
+    if (form_level && mode.impl != NULL &&
+        !cmeta_decoded_equal(salts_xml_attribute_value(mode), "all") &&
+        !cmeta_decoded_equal(salts_xml_attribute_value(mode), "any"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(mode),
+            "VoiceXML filled mode must be all or any");
+    if (!cmeta_measure_increment(&measurement->filled_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(filled),
+            "VoiceXML filled handler count overflow");
+    if (form_level) {
+        status = cmeta_measure_filled_targets(
+            namelist, default_target_count,
+            measurement, diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (cmeta_tree_contains_var(filled))
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(filled),
+            "local var inside VoiceXML filled is deferred");
+    for (index = 0u; index < salts_xml_node_child_count(filled); ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(filled, index);
+        if (cmeta_node_ignorable(child)) continue;
+        status = cmeta_measure_executable(
+            child, filled, index, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+    }
     return VXML_OK;
 }
 
