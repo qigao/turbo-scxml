@@ -2359,6 +2359,15 @@ vxml_status vxml_session_cmeta_collect_prepare(
         return VXML_INVALID_STATE;
     status = collect_request_from_impl(impl, &request);
     if (status != VXML_OK) return status;
+    {
+        const vxml_cmeta_program_data *program =
+            (const vxml_cmeta_program_data *)impl->program->profile_data;
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL ||
+            !collect_fixed_scalar_data(
+                program->fields[profile->active_field].field_data))
+            return VXML_UNSUPPORTED_FEATURE;
+    }
     if ((profile->collect_adapter->capabilities &
          request.required_capabilities) !=
         request.required_capabilities)
@@ -2399,6 +2408,34 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
         profile->collect_ticket.commit == NULL ||
         profile->collect_ticket.discard == NULL)
         return VXML_INVALID_STATE;
+    {
+        const vxml_cmeta_program_data *program =
+            (const vxml_cmeta_program_data *)impl->program->profile_data;
+        const vxml_cmeta_field_row *field;
+        unsigned state;
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL)
+            return VXML_INVALID_STRUCTURE;
+        field = &program->fields[profile->active_field];
+        if (!collect_fixed_scalar_data(field->field_data) ||
+            profile->collect_mailbox.storage == NULL ||
+            field->field_data->storage_type->size >
+                profile->collect_mailbox.storage_bytes)
+            return VXML_UNSUPPORTED_FEATURE;
+        state = atomic_load_explicit(
+            &profile->collect_mailbox.state, memory_order_acquire);
+        if (state != VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+            return VXML_INVALID_STATE;
+        profile->collect_mailbox.data = field->field_data;
+        atomic_store_explicit(
+            &profile->collect_mailbox.generation,
+            profile->collect_generation,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &profile->collect_mailbox.state,
+            VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+            memory_order_release);
+    }
     ticket = profile->collect_ticket;
     profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
     profile->collect_prepared = false;
