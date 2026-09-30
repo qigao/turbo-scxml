@@ -33,7 +33,10 @@ int main(void) {
         .struct_size = sizeof(vxml_cmeta_session_options_v1),
         .initial_root = &initial_root,
         .max_transaction_bytes = 65536u,
-        .max_execution_steps = 128u
+        .max_execution_steps = 128u,
+        .max_event_counters = 8u,
+        .max_event_name_bytes = 64u,
+        .max_event_dispatch_depth = 8u
     };
     vxml_program program = {0};
     vxml_session session = {0};
@@ -59,7 +62,13 @@ int main(void) {
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
     vxml_cmeta_value_view exit_value = {0};
+    vxml_status (*raise_event)(
+        vxml_session *, const char *, size_t) =
+        vxml_session_cmeta_raise;
     int result = 1;
+
+    if (raise_event == NULL)
+        return 6;
 
     if (data_adapter.abi_version !=
             VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 ||
