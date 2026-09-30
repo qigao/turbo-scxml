@@ -700,6 +700,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
@@ -1949,7 +1950,32 @@ vxml_status vxml_cmeta_session_init_profile(
         goto failure;
     }
     if (program->field_count != 0u) {
+        const size_t multi_tail_size =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                max_collect_result_slots) +
+            sizeof(options->max_collect_result_slots);
+        size_t requested_slots = 1u;
         size_t mailbox_allocation_bytes;
+        size_t remainder;
+        if (options->struct_size >= multi_tail_size &&
+            options->max_collect_result_slots != 0u)
+            requested_slots = options->max_collect_result_slots;
+        if (root_shape == NULL || root_shape->field_count == 0u) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        if (requested_slots > root_shape->field_count)
+            requested_slots = root_shape->field_count;
+        profile->collect_mailbox.slot_capacity = requested_slots;
+        profile->collect_mailbox.root_fields =
+            (size_t *)vxml_calloc(
+                requested_slots,
+                sizeof(*profile->collect_mailbox.root_fields));
+        if (profile->collect_mailbox.root_fields == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
         if (!measure_collect_mailbox(
                 program,
                 &profile->collect_mailbox.storage_bytes,
@@ -1957,12 +1983,25 @@ vxml_status vxml_cmeta_session_init_profile(
             status = VXML_INVALID_CONTRACT;
             goto failure;
         }
-        mailbox_allocation_bytes =
+        profile->collect_mailbox.storage_stride =
             profile->collect_mailbox.storage_bytes;
-        if (profile->collect_mailbox.storage_alignment > 1u &&
+        remainder = profile->collect_mailbox.storage_stride %
+            profile->collect_mailbox.storage_alignment;
+        if (remainder != 0u &&
             !checked_add(
+                &profile->collect_mailbox.storage_stride,
+                profile->collect_mailbox.storage_alignment - remainder)) {
+            status = VXML_LIMIT_EXCEEDED;
+            goto failure;
+        }
+        if (!checked_multiply(
+                profile->collect_mailbox.storage_stride,
+                requested_slots,
+                &mailbox_allocation_bytes) ||
+            (profile->collect_mailbox.storage_alignment > 1u &&
+             !checked_add(
                 &mailbox_allocation_bytes,
-                profile->collect_mailbox.storage_alignment - 1u)) {
+                profile->collect_mailbox.storage_alignment - 1u))) {
             status = VXML_LIMIT_EXCEEDED;
             goto failure;
         }
@@ -1975,7 +2014,8 @@ vxml_status vxml_cmeta_session_init_profile(
                         profile->collect_mailbox.allocation,
                     mailbox_allocation_bytes,
                     profile->collect_mailbox.storage_alignment,
-                    profile->collect_mailbox.storage_bytes,
+                    profile->collect_mailbox.storage_stride *
+                        requested_slots,
                     &profile->collect_mailbox.storage)) {
                 status = VXML_ALLOCATION_FAILED;
                 goto failure;
