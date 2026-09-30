@@ -2204,6 +2204,44 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles initial-local scoped Event handlers without enabling prompt content") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<initial name='start'>"
+            "<noinput count='1'><assign name='value' expr='1'/></noinput>"
+            "<catch event='route'><assign name='value' expr='2'/></catch>"
+            "</initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            initial_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        size_t index;
+        size_t initial_handlers = 0u;
+
+        options.max_event_handlers = 8u;
+        options.max_event_name_bytes = 64u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        for (index = 0u; index < profile->event_handler_count; ++index)
+            if (profile->event_handlers[index].scope_kind ==
+                    VXML_CMETA_EVENT_INITIAL &&
+                profile->event_handlers[index].owner == 0u)
+                ++initial_handlers;
+        check_equal(initial_handlers, (size_t)2u);
+        vxml_program_destroy(&program);
+    }
+
     it("rejects invalid mixed-initiative form contracts without approximation") {
         static const struct {
             const char *source;
