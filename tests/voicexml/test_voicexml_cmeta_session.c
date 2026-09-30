@@ -613,6 +613,8 @@ typedef struct cmeta_collect_probe {
     bool reserved;
     bool active;
     uint64_t generation;
+    bool has_timeout;
+    uint64_t timeout_us;
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
@@ -665,6 +667,8 @@ static vxml_status cmeta_collect_prepare(
            request->grammar_src.data, request->grammar_src.size);
     probe->grammar_src[request->grammar_src.size] = '\0';
     probe->generation = request->generation;
+    probe->has_timeout = request->has_timeout;
+    probe->timeout_us = request->timeout_us;
     probe->reserved = true;
     *out_ticket = (vxml_cmeta_collect_ticket_v1){
         .commit = cmeta_collect_commit,
