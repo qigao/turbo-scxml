@@ -1530,6 +1530,8 @@ spec("VoiceXML CMeta session execution") {
         check_false(reprompt);
 
         check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
         check_equal(committed->other, 2);
         check_equal(
             initial_recovery_count(&session, first_initial, "noinput"),
@@ -1539,6 +1541,8 @@ spec("VoiceXML CMeta session execution") {
             vxml_session_cmeta_raise(
                 &session, "route", sizeof("route") - 1u),
             VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
         check_equal(committed->late, 11);
         check_equal(
             vxml_session_cmeta_raise(
@@ -1550,6 +1554,8 @@ spec("VoiceXML CMeta session execution") {
 
         runtime->active_initial = second_initial;
         check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
         check_equal(committed->other, 7);
         check_equal(
             initial_recovery_count(&session, first_initial, "noinput"),
