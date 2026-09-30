@@ -347,6 +347,67 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles audio alternate content as a conditional fallback range") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Before<audio src='welcome.wav'>Fallback "
+            "<emphasis>voice</emphasis></audio>After</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_prompt_row *prompt;
+        const vxml_cmeta_prompt_media_fallback_v1 *fallback;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_segment_count, (size_t)5u);
+        check_equal(profile->prompt_fallback_count, (size_t)1u);
+        prompt = &profile->prompts[0];
+        check_equal(prompt->segment_count, (size_t)5u);
+        check_equal(prompt->fallback_count, (size_t)1u);
+        check_equal(prompt->required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_SSML |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK);
+        check_equal(profile->prompt_segments[0].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(profile->prompt_segments[1].kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(profile->prompt_segments[2].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(profile->prompt_segments[3].kind,
+                    VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_equal(profile->prompt_segments[4].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        fallback = &profile->prompt_fallbacks[0];
+        check_equal(fallback->audio_segment_index, (size_t)1u);
+        check_equal(fallback->first_fallback_segment, (size_t)2u);
+        check_equal(fallback->fallback_segment_count, (size_t)2u);
+        check_equal(memcmp(
+                        profile->prompt_segments[2].payload.data,
+                        "Fallback ", sizeof("Fallback ") - 1u), 0);
+        check_not_null(strstr(
+            profile->prompt_segments[3].payload.data, "<emphasis"));
+        check_equal(memcmp(
+                        profile->prompt_segments[4].payload.data,
+                        "After", sizeof("After") - 1u), 0);
+
+        vxml_program_destroy(&program);
+    }
+
     it("compiles static SSML subtrees into Program-owned ordered segments") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
