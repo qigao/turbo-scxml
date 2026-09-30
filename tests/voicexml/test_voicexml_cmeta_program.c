@@ -491,7 +491,7 @@ spec("VoiceXML CMeta program compiler") {
             "<choice event='e3'/><choice event='e4'/>"
             "<choice event='e5'/><choice event='e6'/>"
             "<choice event='e7'/><choice event='e8'/>"
-            "<choice event='e9'/><choice event='e10'/>"
+            "<choice event='e9'/><choice event='e10'>ten</choice>"
             "</menu></vxml>";
         const vxml_cmeta_compile_options_v1 options =
             menu_compile_options();
@@ -513,6 +513,14 @@ spec("VoiceXML CMeta program compiler") {
         check_equal(profile->menu_choices[8].dtmf.data[0], '9');
         check_null(profile->menu_choices[9].dtmf.data);
         check_equal(profile->menu_choices[9].dtmf.size, (size_t)0u);
+        check_equal(
+            profile->menu_choices[9].speech.size,
+            sizeof("ten") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choices[9].speech.data,
+                "ten", sizeof("ten") - 1u),
+            0);
 
         vxml_program_destroy(&program);
     }
