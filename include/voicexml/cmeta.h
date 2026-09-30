@@ -20,8 +20,13 @@ extern "C" {
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
+#define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
+#define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -110,6 +115,10 @@ typedef struct vxml_cmeta_session_options_v1 {
     size_t max_event_counters;
     size_t max_event_name_bytes;
     size_t max_event_dispatch_depth;
+
+    /* Optional append-only prompt-media provider tail. */
+    const struct vxml_cmeta_prompt_media_adapter_v1 *prompt_media;
+    void *prompt_media_user;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -201,6 +210,49 @@ typedef struct vxml_cmeta_collect_completion_v2 {
     const vxml_cmeta_collect_result_slot_v1 *slots;
     size_t slot_count;
 } vxml_cmeta_collect_completion_v2;
+
+typedef enum vxml_cmeta_prompt_media_segment_kind {
+    VXML_CMETA_PROMPT_MEDIA_TEXT = 1,
+    VXML_CMETA_PROMPT_MEDIA_SSML,
+    VXML_CMETA_PROMPT_MEDIA_AUDIO
+} vxml_cmeta_prompt_media_segment_kind;
+
+typedef struct vxml_cmeta_prompt_media_segment_v1 {
+    vxml_cmeta_prompt_media_segment_kind kind;
+    vxml_cmeta_name_view payload;
+    vxml_cmeta_name_view media_type;
+} vxml_cmeta_prompt_media_segment_v1;
+
+typedef struct vxml_cmeta_prompt_media_ticket_v1 {
+    void (*commit)(void *user);
+    void (*discard)(void *user);
+    void *user;
+} vxml_cmeta_prompt_media_ticket_v1;
+
+typedef struct vxml_cmeta_prompt_media_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view field;
+    unsigned prompt_count;
+    unsigned selected_count;
+    size_t segment_count;
+    vxml_cmeta_prompt_media_segment_v1 segment;
+} vxml_cmeta_prompt_media_request_v1;
+
+typedef struct vxml_cmeta_prompt_media_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t capabilities;
+    vxml_status (*prepare)(
+        void *user,
+        const vxml_cmeta_prompt_media_request_v1 *request,
+        vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
+        const char **out_error);
+    /** No-fail/nonblocking cancellation of one committed generation. */
+    void (*cancel)(void *user, uint64_t generation);
+} vxml_cmeta_prompt_media_adapter_v1;
 
 typedef struct vxml_cmeta_prompt_view_v1 {
     uint32_t abi_version;
@@ -315,6 +367,26 @@ vxml_status vxml_session_cmeta_take_reprompt(
 vxml_status vxml_session_cmeta_prompt(
     const vxml_session *session,
     vxml_cmeta_prompt_view_v1 *out_prompt);
+
+/**
+ * Build the current tapered prompt-media request.
+ *
+ * V1 returns either zero segments (no eligible prompt) or one literal TEXT
+ * segment. All views borrow immutable Program storage.
+ */
+vxml_status vxml_session_cmeta_prompt_media_request(
+    const vxml_session *session,
+    vxml_cmeta_prompt_media_request_v1 *out_request);
+
+/** Reserve the current prompt with the configured media provider. */
+vxml_status vxml_session_cmeta_prompt_media_prepare(
+    vxml_session *session, const char **out_error);
+
+/** Commit the prepared media ticket; provider callback is no-fail. */
+vxml_status vxml_session_cmeta_prompt_media_commit(vxml_session *session);
+
+/** Discard the prepared media ticket and restore admission. */
+vxml_status vxml_session_cmeta_prompt_media_discard(vxml_session *session);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
