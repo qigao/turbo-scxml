@@ -102,6 +102,8 @@ struct vxml_dialog_manager_impl {
     size_t max_navigation_hops;
     char *resolve_uri_scratch;
     char *resolve_fragment_scratch;
+    char *resolve_fetchaudio_uri_scratch;
+    char *resolve_fetchaudio_fragment_scratch;
     vxml_dialog_event_sink_v1 events;
     void *event_user;
 
@@ -1272,9 +1274,17 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
         (char *)calloc(config->max_source_bytes + 1u, 1u);
     impl->resolve_fragment_scratch =
         (char *)calloc(config->max_source_bytes + 1u, 1u);
+    impl->resolve_fetchaudio_uri_scratch =
+        (char *)calloc(config->max_source_bytes + 1u, 1u);
+    impl->resolve_fetchaudio_fragment_scratch =
+        (char *)calloc(config->max_source_bytes + 1u, 1u);
     if (impl->rows == NULL ||
         impl->resolve_uri_scratch == NULL ||
-        impl->resolve_fragment_scratch == NULL) {
+        impl->resolve_fragment_scratch == NULL ||
+        impl->resolve_fetchaudio_uri_scratch == NULL ||
+        impl->resolve_fetchaudio_fragment_scratch == NULL) {
+        free(impl->resolve_fetchaudio_fragment_scratch);
+        free(impl->resolve_fetchaudio_uri_scratch);
         free(impl->resolve_fragment_scratch);
         free(impl->resolve_uri_scratch);
         free(impl->rows);
@@ -1310,6 +1320,8 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
             size_t cleanup;
             for (cleanup = 0u; cleanup <= index; ++cleanup)
                 row_free_buffers(&impl->rows[cleanup]);
+            free(impl->resolve_fetchaudio_fragment_scratch);
+            free(impl->resolve_fetchaudio_uri_scratch);
             free(impl->resolve_fragment_scratch);
             free(impl->resolve_uri_scratch);
             free(impl->rows);
@@ -1490,6 +1502,8 @@ vxml_dialog_manager_status vxml_dialog_manager_destroy(
     impl = (vxml_dialog_manager_impl *)manager->impl;
     for (index = 0u; index < impl->capacity; ++index)
         row_free_buffers(&impl->rows[index]);
+    free(impl->resolve_fetchaudio_fragment_scratch);
+    free(impl->resolve_fetchaudio_uri_scratch);
     free(impl->resolve_fragment_scratch);
     free(impl->resolve_uri_scratch);
     free(impl->rows);
