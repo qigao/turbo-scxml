@@ -382,6 +382,8 @@ typedef struct cmeta_program_measurement {
     size_t form_count;
     size_t menu_count;
     size_t menu_choice_count;
+    size_t menu_speech_policy_count;
+    size_t menu_grammar_count;
     size_t field_count;
     size_t prompt_count;
     size_t prompt_segment_count;
@@ -2980,6 +2982,8 @@ typedef struct cmeta_program_builder {
     size_t form_index;
     size_t menu_index;
     size_t menu_choice_index;
+    size_t menu_speech_policy_index;
+    size_t menu_grammar_index;
     size_t field_index;
     size_t prompt_index;
     size_t prompt_segment_index;
@@ -3034,6 +3038,8 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
         for (index = 0u; index < profile->scope_count; ++index)
             cmeta_scope_schema_destroy(&profile->scopes[index].schema);
     vxml_free(profile->external_data);
+    vxml_free(profile->menu_grammars);
+    vxml_free(profile->menu_speech_policies);
     vxml_free(profile->menu_choice_targets);
     vxml_free(profile->menu_choices);
     vxml_free(profile->menus);
@@ -3093,6 +3099,9 @@ static bool cmeta_allocate_rows(
     profile->form_count = measurement->form_count;
     profile->menu_count = measurement->menu_count;
     profile->menu_choice_count = measurement->menu_choice_count;
+    profile->menu_speech_policy_count =
+        measurement->menu_speech_policy_count;
+    profile->menu_grammar_count = measurement->menu_grammar_count;
     profile->field_count = measurement->field_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
@@ -3133,6 +3142,9 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(menus, measurement->menu_count);
     CMETA_ALLOC_ROWS(menu_choices, measurement->menu_choice_count);
     CMETA_ALLOC_ROWS(menu_choice_targets, measurement->menu_choice_count);
+    CMETA_ALLOC_ROWS(
+        menu_speech_policies, measurement->menu_speech_policy_count);
+    CMETA_ALLOC_ROWS(menu_grammars, measurement->menu_grammar_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
@@ -5882,6 +5894,9 @@ static vxml_status cmeta_write_program(
          builder.form_index != measurement->form_count ||
          builder.menu_index != measurement->menu_count ||
          builder.menu_choice_index != measurement->menu_choice_count ||
+         builder.menu_speech_policy_index !=
+             measurement->menu_speech_policy_count ||
+         builder.menu_grammar_index != measurement->menu_grammar_count ||
          builder.field_index != measurement->field_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
