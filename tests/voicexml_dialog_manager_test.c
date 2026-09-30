@@ -298,7 +298,10 @@ typedef struct navigation_document_probe {
     const navigation_document_entry *entries;
     size_t entry_count;
     size_t open_calls;
+    size_t policy_open_calls;
     size_t close_calls;
+    char fetchaudio[128];
+    size_t fetchaudio_size;
 } navigation_document_probe;
 
 static vxml_dialog_manager_status navigation_document_open(
@@ -339,6 +342,45 @@ static vxml_dialog_manager_status navigation_document_open(
     return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
 }
 
+static vxml_dialog_manager_status navigation_document_open_with_policy(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    const vxml_document_fetch_policy_v1 *policy,
+    vxml_dialog_document *out_document) {
+    navigation_document_probe *probe =
+        (navigation_document_probe *)user;
+    const size_t prefix =
+        offsetof(vxml_document_fetch_policy_v1, fetchaudio_uri);
+    const size_t tail =
+        offsetof(vxml_document_fetch_policy_v1, fetchaudio_uri_size) +
+        sizeof(((vxml_document_fetch_policy_v1 *)0)->fetchaudio_uri_size);
+    if (probe == NULL || policy == NULL ||
+        policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
+        policy->struct_size < prefix)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    ++probe->policy_open_calls;
+    probe->fetchaudio_size = 0u;
+    probe->fetchaudio[0] = '\0';
+    if (policy->struct_size >= tail &&
+        policy->fetchaudio_uri_size != 0u) {
+        if (policy->fetchaudio_uri == NULL ||
+            policy->fetchaudio_uri_size >= sizeof(probe->fetchaudio))
+            return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+        memcpy(
+            probe->fetchaudio,
+            policy->fetchaudio_uri,
+            policy->fetchaudio_uri_size);
+        probe->fetchaudio[policy->fetchaudio_uri_size] = '\0';
+        probe->fetchaudio_size = policy->fetchaudio_uri_size;
+    }
+    return navigation_document_open(
+        user, source, source_size,
+        media_type, media_type_size,
+        max_bytes, out_document);
+}
+
 static void navigation_document_close(
     void *user, vxml_dialog_document *document) {
     navigation_document_probe *probe =
@@ -355,7 +397,8 @@ navigation_document_adapter = {
     .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
     .struct_size = sizeof(vxml_dialog_document_adapter_v1),
     .open = navigation_document_open,
-    .close = navigation_document_close};
+    .close = navigation_document_close,
+    .open_with_policy = navigation_document_open_with_policy};
 
 static vxml_document_store_status navigation_store_init(
     vxml_document_store *store,
@@ -1267,7 +1310,7 @@ spec("VoiceXML dialog manager") {
         static const char a_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form id='main'><block>"
-            "<goto next='b.vxml#target'/>"
+            "<goto next='b.vxml#target' fetchaudio='media/wait.wav'/>"
             "</block></form></vxml>";
         static const char b_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
@@ -1322,6 +1365,11 @@ spec("VoiceXML dialog manager") {
                 &manager, 1u, &processed),
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
+        check_equal(documents.policy_open_calls, (size_t)1u);
+        check_equal(
+            documents.fetchaudio_size,
+            sizeof("media/wait.wav") - 1u);
+        check_equal(documents.fetchaudio, "media/wait.wav");
         check_equal(documents.close_calls, (size_t)2u);
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
@@ -1340,6 +1388,7 @@ spec("VoiceXML dialog manager") {
                 &manager, 1u, &processed),
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
+        check_equal(documents.policy_open_calls, (size_t)1u);
         check_equal(events.count, (size_t)4u);
         check_equal(events.rows[2].name, "dialog.started");
         check_equal(events.rows[3].name, "dialog.exit");
