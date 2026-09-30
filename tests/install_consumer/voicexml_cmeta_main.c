@@ -42,6 +42,12 @@ int main(void) {
     vxml_cmeta_collect_adapter_v1 collect_adapter = {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
+    vxml_cmeta_collect_request_v1 collect_request = {0};
+    vxml_cmeta_collect_ticket_v1 collect_ticket = {0};
+    vxml_cmeta_collect_adapter_v1 collect_adapter = {
+        .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_collect_adapter_v1),
+        .capabilities = VXML_CMETA_COLLECT_CAP_SRGS_XML};
     vxml_cmeta_data_resource_v1 data_resource = {0};
     vxml_cmeta_data_resource_adapter_v1 data_adapter = {
         .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
@@ -52,6 +58,10 @@ int main(void) {
     vxml_cmeta_value_view exit_value = {0};
     int result = 1;
 
+    if (collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1 ||
+        collect_request.abi_version != 0u ||
+        collect_ticket.commit != NULL)
+        return 4;
     if (data_adapter.abi_version !=
             VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 ||
         data_resource.format != 0)
