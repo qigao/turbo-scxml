@@ -2655,7 +2655,8 @@ static vxml_status cmeta_measure_program(
             }
             continue;
         }
-        if (!cmeta_node_named(child, "form")) {
+        if (!cmeta_node_named(child, "form") &&
+            !cmeta_node_named(child, "menu")) {
             status = cmeta_program_fail(
                 diagnostic,
                 cmeta_known_profile_element(child)
@@ -2667,8 +2668,11 @@ static vxml_status cmeta_measure_program(
             break;
         }
         saw_form = true;
-        status = cmeta_measure_form(
-            child, options, measurement, limits, diagnostic);
+        status = cmeta_node_named(child, "menu")
+            ? cmeta_measure_menu(
+                child, options, measurement, limits, diagnostic)
+            : cmeta_measure_form(
+                child, options, measurement, limits, diagnostic);
         if (status != VXML_OK) break;
     }
     if (status == VXML_OK && measurement->form_count == 0u)
@@ -2695,6 +2699,8 @@ typedef struct cmeta_program_builder {
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
     size_t form_index;
+    size_t menu_index;
+    size_t menu_choice_index;
     size_t field_index;
     size_t prompt_index;
     size_t prompt_segment_index;
@@ -2749,6 +2755,9 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
         for (index = 0u; index < profile->scope_count; ++index)
             cmeta_scope_schema_destroy(&profile->scopes[index].schema);
     vxml_free(profile->external_data);
+    vxml_free(profile->menu_choice_targets);
+    vxml_free(profile->menu_choices);
+    vxml_free(profile->menus);
     vxml_free(profile->location_candidates);
     vxml_free(profile->locations);
     vxml_free(profile->expressions);
@@ -2792,6 +2801,8 @@ static bool cmeta_allocate_rows(
     profile->scope_count = measurement->scope_count;
     profile->document_scope = 0u;
     profile->form_count = measurement->form_count;
+    profile->menu_count = measurement->menu_count;
+    profile->menu_choice_count = measurement->menu_choice_count;
     profile->field_count = measurement->field_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
@@ -2829,6 +2840,9 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(external_data, measurement->external_data_count);
     CMETA_ALLOC_ROWS(scopes, measurement->scope_count);
     CMETA_ALLOC_ROWS(forms, measurement->form_count);
+    CMETA_ALLOC_ROWS(menus, measurement->menu_count);
+    CMETA_ALLOC_ROWS(menu_choices, measurement->menu_choice_count);
+    CMETA_ALLOC_ROWS(menu_choice_targets, measurement->menu_choice_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
