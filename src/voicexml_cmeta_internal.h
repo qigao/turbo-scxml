@@ -50,6 +50,7 @@ typedef struct vxml_cmeta_initial_row {
     size_t form_item_slot;
     const char *name;
     size_t name_size;
+    size_t initial_expression;
     size_t condition;
 } vxml_cmeta_initial_row;
 
