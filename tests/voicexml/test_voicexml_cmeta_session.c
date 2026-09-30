@@ -241,6 +241,111 @@ static const cmeta_data_desc session_root_data = {
     .shape = &session_root_shape
 };
 
+
+typedef struct vxml_cmeta_subdialog_result {
+    int code;
+} vxml_cmeta_subdialog_result;
+
+typedef struct vxml_cmeta_subdialog_test_root {
+    int value;
+    bool flag;
+    vxml_cmeta_subdialog_result child;
+} vxml_cmeta_subdialog_test_root;
+
+static const cmeta_type_identity subdialog_result_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.subdialog.result");
+static const cmeta_type_identity subdialog_root_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.subdialog.root");
+static const cmeta_type_traits subdialog_trivial_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+static const cmeta_type_desc subdialog_result_type = {
+    .name = "vxml_cmeta_subdialog_result",
+    .size = sizeof(vxml_cmeta_subdialog_result),
+    .align = _Alignof(vxml_cmeta_subdialog_result),
+    .kind = CMETA_T_OBJECT,
+    .traits = &subdialog_trivial_traits,
+    .identity = &subdialog_result_identity
+};
+static const cmeta_type_desc subdialog_root_type = {
+    .name = "vxml_cmeta_subdialog_test_root",
+    .size = sizeof(vxml_cmeta_subdialog_test_root),
+    .align = _Alignof(vxml_cmeta_subdialog_test_root),
+    .kind = CMETA_T_OBJECT,
+    .traits = &subdialog_trivial_traits,
+    .identity = &subdialog_root_identity
+};
+static const cmeta_field_desc subdialog_result_layout_fields[] = {
+    {"code", "int", offsetof(vxml_cmeta_subdialog_result, code),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL}
+};
+static const cmeta_struct_desc subdialog_result_layout = {
+    .name = "vxml_cmeta_subdialog_result",
+    .size = sizeof(vxml_cmeta_subdialog_result),
+    .align = _Alignof(vxml_cmeta_subdialog_result),
+    .fields = subdialog_result_layout_fields,
+    .field_count = 1u
+};
+static const cmeta_data_field_desc subdialog_result_fields[] = {
+    {"test.voicexml.cmeta.subdialog.result.code", "code",
+     offsetof(vxml_cmeta_subdialog_result, code), &cmeta_data_int}
+};
+static const cmeta_data_struct_shape subdialog_result_shape = {
+    .layout = &subdialog_result_layout,
+    .fields = subdialog_result_fields,
+    .field_count = 1u
+};
+static const cmeta_data_desc subdialog_result_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.subdialog.result.data",
+    .display_name = "VoiceXML CMeta subdialog result",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &subdialog_result_type,
+    .shape = &subdialog_result_shape
+};
+static const cmeta_field_desc subdialog_root_layout_fields[] = {
+    {"value", "int", offsetof(vxml_cmeta_subdialog_test_root, value),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
+    {"flag", "bool", offsetof(vxml_cmeta_subdialog_test_root, flag),
+     sizeof(bool), _Alignof(bool), &cmeta_type_bool, NULL},
+    {"child", "vxml_cmeta_subdialog_result",
+     offsetof(vxml_cmeta_subdialog_test_root, child),
+     sizeof(vxml_cmeta_subdialog_result),
+     _Alignof(vxml_cmeta_subdialog_result),
+     &subdialog_result_type, NULL}
+};
+static const cmeta_struct_desc subdialog_root_layout = {
+    .name = "vxml_cmeta_subdialog_test_root",
+    .size = sizeof(vxml_cmeta_subdialog_test_root),
+    .align = _Alignof(vxml_cmeta_subdialog_test_root),
+    .fields = subdialog_root_layout_fields,
+    .field_count = 3u
+};
+static const cmeta_data_field_desc subdialog_root_fields[] = {
+    {"test.voicexml.cmeta.subdialog.root.value", "value",
+     offsetof(vxml_cmeta_subdialog_test_root, value), &cmeta_data_int},
+    {"test.voicexml.cmeta.subdialog.root.flag", "flag",
+     offsetof(vxml_cmeta_subdialog_test_root, flag), &cmeta_data_bool},
+    {"test.voicexml.cmeta.subdialog.root.child", "child",
+     offsetof(vxml_cmeta_subdialog_test_root, child),
+     &subdialog_result_data}
+};
+static const cmeta_data_struct_shape subdialog_root_shape = {
+    .layout = &subdialog_root_layout,
+    .fields = subdialog_root_fields,
+    .field_count = 3u
+};
+static const cmeta_data_desc subdialog_root_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.subdialog.root.data",
+    .display_name = "VoiceXML CMeta subdialog root",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &subdialog_root_type,
+    .shape = &subdialog_root_shape
+};
+
 typedef struct mutable_session_root_contract {
     cmeta_type_traits text_traits;
     cmeta_type_desc text_type;
@@ -395,6 +500,31 @@ static vxml_cmeta_compile_options_v1 compile_options(void) {
         .max_scope_storage_bytes = 4096u,
         .max_conditional_depth = 8u
     };
+}
+
+
+static vxml_cmeta_compile_options_v1 subdialog_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.root = &subdialog_root_data;
+    options.max_subdialogs = 4u;
+    options.max_subdialog_uri_bytes = 256u;
+    return options;
+}
+
+static vxml_cmeta_session_options_v1 subdialog_session_options(
+    const vxml_cmeta_subdialog_test_root *root,
+    const vxml_cmeta_name_view *undefined,
+    size_t undefined_count) {
+    vxml_cmeta_session_options_v1 options = {
+        .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_session_options_v1),
+        .initial_root = root,
+        .initially_undefined = undefined,
+        .initially_undefined_count = undefined_count,
+        .max_transaction_bytes = 4096u,
+        .max_execution_steps = 16u
+    };
+    return options;
 }
 
 static vxml_cmeta_session_options_v1 session_options(
@@ -1248,6 +1378,104 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects a static subdialog without starting any provider") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='parent'>"
+            "<subdialog name='child' src='child.vxml#entry' cond='flag'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        vxml_cmeta_subdialog_test_root root = {
+            .value = 7, .flag = true, .child = {99}};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_session_options(&root, undefined, 1u);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_program_data *compiled;
+        const vxml_cmeta_subdialog_row *row;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+
+        runtime = session_data(&session);
+        compiled = program_data(&program);
+        check_not_null(runtime);
+        check_not_null(compiled);
+        check_equal(runtime->active_field, VXML_CMETA_NO_INDEX);
+        check_equal(runtime->active_initial, VXML_CMETA_NO_INDEX);
+        check_equal(runtime->active_subdialog, (size_t)0u);
+        check_true(runtime->subdialog_generation != UINT64_C(0));
+        check_equal(runtime->collect_generation, UINT64_C(0));
+
+        row = &compiled->subdialogs[runtime->active_subdialog];
+        check_equal(row->form, (size_t)0u);
+        check_true(row->result_data == &subdialog_result_data);
+        check_equal(row->root_field, (size_t)2u);
+        check_equal(row->src_size, sizeof("child.vxml#entry") - 1u);
+        check_equal(
+            memcmp(row->src, "child.vxml#entry", row->src_size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("skips an ineligible static subdialog and fails corrupted descriptors at init") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='child' src='child.vxml' cond='flag'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        vxml_cmeta_subdialog_test_root root = {
+            .value = 1, .flag = false, .child = {0}};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_session_options(&root, undefined, 1u);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_program_data *compiled;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        vxml_session_destroy(&session);
+
+        compiled = (vxml_cmeta_program_data *)
+            ((vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(compiled);
+        ++compiled->subdialogs[0].field_offset;
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_INVALID_CONTRACT);
+        check_null(session.impl);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("commits initial multi-slot semantics and fills every initial before PROCESS") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
