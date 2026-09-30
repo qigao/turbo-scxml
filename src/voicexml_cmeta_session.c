@@ -4855,6 +4855,13 @@ vxml_status vxml_session_cmeta_raise(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_initial != VXML_CMETA_NO_INDEX &&
+        (profile->active_initial >= program->initial_count ||
+         program->initials == NULL ||
+         profile->active_field != VXML_CMETA_NO_INDEX ||
+         profile->active_menu != VXML_CMETA_NO_INDEX ||
+         profile->active_block != VXML_CMETA_NO_INDEX))
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
     if (!cmeta_location_path_valid(
             event_name, event_name_size, SIZE_MAX))
         return VXML_INVALID_ARGUMENT;
