@@ -300,6 +300,7 @@ typedef struct vxml_cmeta_session_data {
     size_t thrown_event_size;
     bool throw_requested;
     bool rethrow_requested;
+    bool event_dispatch_active;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
