@@ -2627,12 +2627,21 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
         ? impl : NULL;
 }
 
+static vxml_status selected_prompt_row(
+    const vxml_session_impl *impl,
+    const vxml_cmeta_field_row **out_field,
+    const vxml_cmeta_prompt_row **out_prompt,
+    unsigned *out_prompt_count);
+
 static vxml_status collect_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_collect_request_v1 *out_request) {
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_session_data *profile;
     const vxml_cmeta_field_row *field;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    unsigned prompt_count = 0u;
+    vxml_status status;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     *out_request = (vxml_cmeta_collect_request_v1){0};
     if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
@@ -2647,6 +2656,10 @@ static vxml_status collect_request_from_impl(
         profile->collect_generation == 0u)
         return VXML_INVALID_STATE;
     field = &program->fields[profile->active_field];
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
+    if (status != VXML_OK) return status;
+    (void)prompt_count;
     if (field->name == NULL || field->name_size == 0u ||
         field->grammar_type == NULL || field->grammar_type_size == 0u ||
         field->grammar_src == NULL || field->grammar_src_size == 0u)
@@ -2658,7 +2671,9 @@ static vxml_status collect_request_from_impl(
         .required_capabilities = field->required_capabilities,
         .field = {field->name, field->name_size},
         .grammar_type = {field->grammar_type, field->grammar_type_size},
-        .grammar_src = {field->grammar_src, field->grammar_src_size}
+        .grammar_src = {field->grammar_src, field->grammar_src_size},
+        .has_timeout = prompt != NULL ? prompt->has_timeout : false,
+        .timeout_us = prompt != NULL ? prompt->timeout_us : UINT64_C(0)
     };
     return VXML_OK;
 }

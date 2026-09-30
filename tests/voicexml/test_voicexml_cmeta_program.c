@@ -557,6 +557,81 @@ spec("VoiceXML CMeta program compiler") {
         }
     }
 
+    it("compiles exact literal prompt time designations to microseconds") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt timeout='250ms'>a</prompt>"
+            "<prompt count='2' timeout='1s'>b</prompt>"
+            "<prompt count='3' timeout='1.5s'>c</prompt>"
+            "<prompt count='4' timeout='0ms'>d</prompt>"
+            "<prompt count='5'>e</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_count, (size_t)5u);
+        check_true(profile->prompts[0].has_timeout);
+        check_equal(profile->prompts[0].timeout_us, UINT64_C(250000));
+        check_true(profile->prompts[1].has_timeout);
+        check_equal(profile->prompts[1].timeout_us, UINT64_C(1000000));
+        check_true(profile->prompts[2].has_timeout);
+        check_equal(profile->prompts[2].timeout_us, UINT64_C(1500000));
+        check_true(profile->prompts[3].has_timeout);
+        check_equal(profile->prompts[3].timeout_us, UINT64_C(0));
+        check_false(profile->prompts[4].has_timeout);
+        check_equal(profile->prompts[4].timeout_us, UINT64_C(0));
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects malformed overflowing or over-precise prompt timeouts") {
+        static const struct {
+            const char *timeout;
+            vxml_status expected;
+        } cases[] = {
+            {"1", VXML_INVALID_STRUCTURE},
+            {"-1s", VXML_INVALID_STRUCTURE},
+            {"NaNs", VXML_INVALID_STRUCTURE},
+            {"1.s", VXML_INVALID_STRUCTURE},
+            {"1.0000001s", VXML_LIMIT_EXCEEDED},
+            {"18446744073709551615s", VXML_LIMIT_EXCEEDED}
+        };
+        static const char prefix[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'><prompt timeout='";
+        static const char suffix[] =
+            "'>x</prompt><grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            char source[768];
+            vxml_program program = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s%s",
+                prefix, cases[index].timeout, suffix);
+            check_true(written > 0 && (size_t)written < sizeof(source));
+            check_equal(vxml_compile_cmeta(
+                            source, (size_t)written, NULL, &options,
+                            &program, NULL),
+                        cases[index].expected);
+            check_null(program.impl);
+        }
+    }
+
     it("rejects invalid prompt barge-in policy at compile time") {
         static const struct {
             const char *body;

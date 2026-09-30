@@ -57,6 +57,8 @@ typedef struct vxml_cmeta_prompt_row {
     uint64_t required_capabilities;
     bool bargein;
     vxml_cmeta_prompt_bargein_type bargein_type;
+    bool has_timeout;
+    uint64_t timeout_us;
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;

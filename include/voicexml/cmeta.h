@@ -168,6 +168,16 @@ typedef struct vxml_cmeta_collect_request_v1 {
     vxml_cmeta_name_view field;
     vxml_cmeta_name_view grammar_type;
     vxml_cmeta_name_view grammar_src;
+
+    /*
+     * Append-only selected-prompt input timing.
+     *
+     * has_timeout distinguishes an absent timeout from an explicit 0ms.
+     * timeout_us is immutable compile-time policy; TurboSCXML does not create
+     * a timer or consult a clock on this path.
+     */
+    bool has_timeout;
+    uint64_t timeout_us;
 } vxml_cmeta_collect_request_v1;
 
 typedef struct vxml_cmeta_collect_adapter_v1 {

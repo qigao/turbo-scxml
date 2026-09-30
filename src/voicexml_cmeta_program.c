@@ -1264,6 +1264,158 @@ static vxml_status cmeta_measure_block(
         block, block, measurement, diagnostic);
 }
 
+static vxml_status cmeta_parse_prompt_timeout(
+    salts_xml_attribute attribute,
+    bool *out_has_timeout,
+    uint64_t *out_timeout_us,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t number_size;
+    size_t cursor = 0u;
+    size_t fractional_digits = 0u;
+    size_t fractional_limit;
+    uint64_t unit_us;
+    uint64_t integer_part = 0u;
+    uint64_t fractional_part = 0u;
+    bool saw_digit = false;
+    bool saw_decimal = false;
+    vxml_status status = VXML_OK;
+
+    if (out_has_timeout == NULL || out_timeout_us == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_has_timeout = false;
+    *out_timeout_us = UINT64_C(0);
+    if (attribute.impl == NULL)
+        return VXML_OK;
+
+    raw = salts_xml_attribute_value(attribute);
+    if (!cmeta_decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size < 2u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout must be a non-negative time designation");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout decoding allocation failed");
+    if (!cmeta_decode_entities(
+            raw, decoded, decoded_size, &decoded_size)) {
+        status = cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout decoding changed between passes");
+        goto done;
+    }
+    decoded[decoded_size] = '\0';
+
+    if (decoded_size >= 2u &&
+        decoded[decoded_size - 2u] == 'm' &&
+        decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000);
+        fractional_limit = 3u;
+        number_size = decoded_size - 2u;
+    } else if (decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000000);
+        fractional_limit = 6u;
+        number_size = decoded_size - 1u;
+    } else {
+        status = cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout requires ms or s units");
+        goto done;
+    }
+    if (number_size == 0u) {
+        status = cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout is missing its numeric value");
+        goto done;
+    }
+
+    while (cursor < number_size) {
+        const unsigned char ch = (unsigned char)decoded[cursor++];
+        if (ch == '.') {
+            if (saw_decimal || !saw_digit || cursor == number_size) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML prompt timeout has an invalid decimal form");
+                goto done;
+            }
+            saw_decimal = true;
+            continue;
+        }
+        if (ch < '0' || ch > '9') {
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML prompt timeout must be a non-negative decimal");
+            goto done;
+        }
+        saw_digit = true;
+        if (!saw_decimal) {
+            const uint64_t digit = (uint64_t)(ch - '0');
+            if (integer_part >
+                (UINT64_MAX - digit) / UINT64_C(10)) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML prompt timeout numeric value overflows");
+                goto done;
+            }
+            integer_part = integer_part * UINT64_C(10) + digit;
+        } else {
+            if (fractional_digits >= fractional_limit) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML prompt timeout exceeds microsecond precision");
+                goto done;
+            }
+            fractional_part =
+                fractional_part * UINT64_C(10) +
+                (uint64_t)(ch - '0');
+            ++fractional_digits;
+        }
+    }
+    if (!saw_digit ||
+        integer_part > UINT64_MAX / unit_us) {
+        status = cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML prompt timeout exceeds uint64 microseconds");
+        goto done;
+    }
+
+    *out_timeout_us = integer_part * unit_us;
+    if (fractional_digits != 0u) {
+        uint64_t scale = unit_us;
+        size_t index;
+        for (index = 0u; index < fractional_digits; ++index)
+            scale /= UINT64_C(10);
+        if (fractional_part >
+            (UINT64_MAX - *out_timeout_us) / scale) {
+            status = cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML prompt timeout exceeds uint64 microseconds");
+            goto done;
+        }
+        *out_timeout_us += fractional_part * scale;
+    }
+    *out_has_timeout = true;
+
+done:
+    vxml_free(decoded);
+    return status;
+}
+
 static vxml_status cmeta_parse_prompt_count(
     salts_xml_attribute attribute,
     unsigned *out_count,
@@ -1312,7 +1464,7 @@ static vxml_status cmeta_measure_prompt(
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {
-        "count", "cond", "bargein", "bargeintype"};
+        "count", "cond", "bargein", "bargeintype", "timeout"};
     static const char *const audio_allowed[] = {"src"};
     static const char *const mark_allowed[] = {"name"};
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
@@ -1321,6 +1473,8 @@ static vxml_status cmeta_measure_prompt(
         cmeta_attribute(prompt, "bargein");
     const salts_xml_attribute bargeintype =
         cmeta_attribute(prompt, "bargeintype");
+    const salts_xml_attribute timeout =
+        cmeta_attribute(prompt, "timeout");
     size_t child_index;
     size_t text_bytes = 0u;
     size_t text_segment_count = 0u;
@@ -1329,8 +1483,10 @@ static vxml_status cmeta_measure_prompt(
     size_t mark_count = 0u;
     size_t total_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        prompt, allowed, 4u, diagnostic);
+        prompt, allowed, 5u, diagnostic);
     if (status != VXML_OK) return status;
     if (bargein.impl != NULL &&
         !cmeta_decoded_equal(
@@ -1366,7 +1522,12 @@ static vxml_status cmeta_measure_prompt(
     status = cmeta_parse_prompt_count(
         count, &parsed_count, diagnostic);
     if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        timeout, &has_timeout, &timeout_us, diagnostic);
+    if (status != VXML_OK) return status;
     (void)parsed_count;
+    (void)has_timeout;
+    (void)timeout_us;
     if (measurement->prompt_count >= options->max_prompts ||
         !cmeta_measure_increment(&measurement->prompt_count))
         return cmeta_program_fail(
@@ -2335,11 +2496,19 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "bargein");
     const salts_xml_attribute bargeintype_attribute =
         cmeta_attribute(prompt, "bargeintype");
+    const salts_xml_attribute timeout_attribute =
+        cmeta_attribute(prompt, "timeout");
     size_t child_index;
     unsigned count = 1u;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
     vxml_status status = cmeta_parse_prompt_count(
         count_attribute, &count, builder->diagnostic);
 
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        timeout_attribute, &has_timeout, &timeout_us,
+        builder->diagnostic);
     if (status != VXML_OK) return status;
     memset(out, 0, sizeof(*out));
     out->field = field_index;
@@ -2355,6 +2524,8 @@ static vxml_status cmeta_compile_prompt_schema(
             salts_xml_attribute_value(bargeintype_attribute), "speech")
             ? VXML_CMETA_PROMPT_BARGEIN_SPEECH
             : VXML_CMETA_PROMPT_BARGEIN_HOTWORD;
+    out->has_timeout = has_timeout;
+    out->timeout_us = timeout_us;
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
