@@ -938,10 +938,6 @@ static vxml_status cmeta_measure_executable(
         if (status != VXML_OK) return status;
     }
     if (cmeta_node_named(node, "throw")) {
-        if (!cmeta_event_options_valid(NULL)) {
-            /* compile options are validated by enclosing Event-aware paths;
-             * throw-specific limits are rechecked during lowering. */
-        }
         status = cmeta_measure_name(
             cmeta_attribute(node, "event"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
@@ -1007,6 +1003,57 @@ static bool cmeta_tree_contains_var(salts_xml_node node) {
         if (cmeta_tree_contains_var(child)) return true;
     }
     return false;
+}
+
+static vxml_status cmeta_measure_catch(
+    salts_xml_node node,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"event", "count"};
+    const salts_xml_attribute event = cmeta_attribute(node, "event");
+    const salts_xml_attribute count = cmeta_attribute(node, "count");
+    unsigned parsed_count = 1u;
+    size_t index;
+    vxml_status status = cmeta_validate_attributes(
+        node, allowed, 2u, diagnostic);
+    if (status != VXML_OK) return status;
+    if (!cmeta_event_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(node),
+            "VoiceXML catch requires enabled Event limits");
+    status = cmeta_measure_event_name(
+        event, options, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_count_attribute(
+        count, &parsed_count, diagnostic);
+    if (status != VXML_OK) return status;
+    (void)parsed_count;
+    if (measurement->event_handler_count >=
+            options->max_event_handlers ||
+        !cmeta_measure_increment(
+            &measurement->event_handler_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML catch count exceeds max_event_handlers");
+    if (cmeta_tree_contains_var(node))
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(node),
+            "local var inside VoiceXML catch is deferred");
+    for (index = 0u;
+         index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (cmeta_node_ignorable(child)) continue;
+        status = cmeta_measure_executable(
+            child, node, index, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    return VXML_OK;
 }
 
 static vxml_status cmeta_measure_filled_targets(
@@ -1206,6 +1253,12 @@ static vxml_status cmeta_measure_field(
         size_t type_size = 0u;
         size_t src_size = 0u;
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "catch")) {
+            status = cmeta_measure_catch(
+                child, options, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "filled")) {
             if (filled_count != 0u)
                 return cmeta_program_fail(
@@ -1346,6 +1399,12 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
                     "VoiceXML declaration count overflow");
+            continue;
+        }
+        if (cmeta_node_named(child, "catch")) {
+            const vxml_status catch_status = cmeta_measure_catch(
+                child, options, measurement, limits, diagnostic);
+            if (catch_status != VXML_OK) return catch_status;
             continue;
         }
         if (cmeta_node_named(child, "field")) {
@@ -1534,6 +1593,19 @@ static vxml_status cmeta_measure_program(
                 break;
             }
             status = cmeta_measure_data(
+                child, options, measurement, limits, diagnostic);
+            if (status != VXML_OK) break;
+            continue;
+        }
+        if (cmeta_node_named(child, "catch")) {
+            if (saw_form) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "document catch must precede forms");
+                break;
+            }
+            status = cmeta_measure_catch(
                 child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) break;
             continue;
