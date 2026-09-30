@@ -704,6 +704,7 @@ static vxml_cmeta_session_options_v1 field_session_options(
 typedef struct cmeta_prompt_media_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
+    size_t batch_prepare_calls;
     size_t commit_calls;
     size_t discard_calls;
     size_t cancel_calls;
