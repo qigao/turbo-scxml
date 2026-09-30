@@ -2908,7 +2908,6 @@ vxml_status vxml_session_cmeta_collect_prepare(
     vxml_session *session, const char **out_error) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
-    vxml_cmeta_collect_request_v1 request;
     vxml_cmeta_collect_ticket_v1 ticket = {0};
     vxml_status status;
     if (out_error != NULL) *out_error = NULL;
@@ -2922,31 +2921,44 @@ vxml_status vxml_session_cmeta_collect_prepare(
         impl->profile_data == NULL)
         return VXML_INVALID_STATE;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
-    if (profile->collect_adapter == NULL ||
-        profile->collect_adapter->prepare == NULL)
+    if (profile->collect_adapter == NULL)
         return VXML_INVALID_CONTRACT;
     if (profile->collect_prepared || profile->collect_in_flight)
         return VXML_INVALID_STATE;
-    status = collect_request_from_impl(impl, &request);
-    if (status != VXML_OK) return status;
-    if (request.item_kind == VXML_CMETA_COLLECT_ITEM_FIELD) {
+
+    if (profile->active_menu != VXML_CMETA_NO_INDEX) {
+        vxml_cmeta_menu_collect_request_v1 request = {0};
+        status = menu_collect_request_from_impl(impl, &request);
+        if (status != VXML_OK) return status;
+        if ((profile->collect_adapter->capabilities &
+             request.required_capabilities) !=
+            request.required_capabilities)
+            return VXML_UNSUPPORTED_FEATURE;
+        if (!collect_adapter_has_menu(profile->collect_adapter))
+            return VXML_UNSUPPORTED_FEATURE;
+        status = profile->collect_adapter->prepare_menu(
+            profile->collect_user, &request, &ticket, out_error);
+    } else {
+        vxml_cmeta_collect_request_v1 request = {0};
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
+        status = collect_request_from_impl(impl, &request);
+        if (status != VXML_OK) return status;
         if (profile->active_field >= program->field_count ||
             program->fields == NULL ||
             !collect_fixed_scalar_data(
                 program->fields[profile->active_field].field_data))
             return VXML_UNSUPPORTED_FEATURE;
-    } else if (request.item_kind != VXML_CMETA_COLLECT_ITEM_MENU) {
-        return VXML_INVALID_STRUCTURE;
+        if ((profile->collect_adapter->capabilities &
+             request.required_capabilities) !=
+            request.required_capabilities)
+            return VXML_UNSUPPORTED_FEATURE;
+        if (profile->collect_adapter->prepare == NULL)
+            return VXML_INVALID_CONTRACT;
+        status = profile->collect_adapter->prepare(
+            profile->collect_user, &request, &ticket, out_error);
     }
-    if ((profile->collect_adapter->capabilities &
-         request.required_capabilities) !=
-        request.required_capabilities)
-        return VXML_UNSUPPORTED_FEATURE;
 
-    status = profile->collect_adapter->prepare(
-        profile->collect_user, &request, &ticket, out_error);
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
