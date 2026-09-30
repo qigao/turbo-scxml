@@ -868,7 +868,7 @@ static vxml_dialog_manager_status follow_external_navigation(
     while (row->session_live &&
            vxml_session_get_state(&row->session) ==
                VXML_SESSION_NAVIGATING) {
-        vxml_navigation_target target = {0};
+        vxml_navigation_request_v1 navigation = {0};
         vxml_document_view current_view = {0};
         vxml_document_view next_view = {0};
         vxml_document_ref next_ref = {0};
@@ -892,8 +892,8 @@ static vxml_dialog_manager_status follow_external_navigation(
                 VXML_LIMIT_EXCEEDED);
             return VXML_DIALOG_MANAGER_OK;
         }
-        voice_status = vxml_session_navigation(
-            &row->session, &target);
+        voice_status = vxml_session_navigation_request(
+            &row->session, &navigation);
         if (voice_status != VXML_OK) {
             (void)queue_event(
                 row, VXML_DIALOG_EVENT_ERROR_START,
@@ -924,8 +924,8 @@ static vxml_dialog_manager_status follow_external_navigation(
             impl->document_store,
             current_view.document_uri,
             current_view.document_uri_size,
-            target.uri,
-            target.uri_size,
+            navigation.uri,
+            navigation.uri_size,
             &resolved);
         if (store_status != VXML_DOCUMENT_STORE_OK) {
             (void)queue_event(
@@ -934,12 +934,54 @@ static vxml_dialog_manager_status follow_external_navigation(
             return VXML_DIALOG_MANAGER_OK;
         }
 
-        store_status = vxml_document_store_acquire(
-            impl->document_store,
-            resolved.document_uri,
-            resolved.document_uri_size,
-            &next_ref,
-            &error);
+        if (navigation.fetchaudio_uri_size != 0u) {
+            vxml_resolved_uri_v1 fetchaudio_resolved = {
+                .abi_version = 1u,
+                .struct_size = sizeof(vxml_resolved_uri_v1),
+                .document_uri =
+                    impl->resolve_fetchaudio_uri_scratch,
+                .document_uri_capacity =
+                    impl->max_source_bytes + 1u,
+                .fragment =
+                    impl->resolve_fetchaudio_fragment_scratch,
+                .fragment_capacity =
+                    impl->max_source_bytes + 1u};
+            vxml_document_fetch_policy_v1 policy =
+                VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+            store_status = vxml_document_store_resolve(
+                impl->document_store,
+                current_view.document_uri,
+                current_view.document_uri_size,
+                navigation.fetchaudio_uri,
+                navigation.fetchaudio_uri_size,
+                &fetchaudio_resolved);
+            if (store_status != VXML_DOCUMENT_STORE_OK) {
+                (void)queue_event(
+                    row, VXML_DIALOG_EVENT_ERROR_START,
+                    store_failure_voice_status(store_status, NULL));
+                return VXML_DIALOG_MANAGER_OK;
+            }
+            policy.has_fetchaudio = true;
+            policy.fetchaudio_uri =
+                fetchaudio_resolved.document_uri;
+            policy.fetchaudio_uri_size =
+                fetchaudio_resolved.document_uri_size;
+            store_status =
+                vxml_document_store_acquire_with_policy(
+                    impl->document_store,
+                    resolved.document_uri,
+                    resolved.document_uri_size,
+                    &policy,
+                    &next_ref,
+                    &error);
+        } else {
+            store_status = vxml_document_store_acquire(
+                impl->document_store,
+                resolved.document_uri,
+                resolved.document_uri_size,
+                &next_ref,
+                &error);
+        }
         if (store_status != VXML_DOCUMENT_STORE_OK) {
             (void)queue_event(
                 row, VXML_DIALOG_EVENT_ERROR_START,
