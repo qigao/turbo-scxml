@@ -796,7 +796,10 @@ spec("VoiceXML CMeta program compiler") {
         field = &profile->fields[0];
         check_equal(field->first_prompt, (size_t)0u);
         check_equal(field->prompt_count, (size_t)2u);
-        check_equal(profile->prompts[0].field, (size_t)0u);
+        check_equal(
+            profile->prompts[0].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_FIELD);
+        check_equal(profile->prompts[0].owner, (size_t)0u);
         check_equal(profile->prompts[0].count, (unsigned)1u);
         check_equal(profile->prompts[0].text_size,
                     sizeof("First prompt") - 1u);
@@ -2242,6 +2245,62 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles initial prompts into immutable INITIAL-owned rows") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<initial name='start'>"
+            "<prompt>First initial</prompt>"
+            "<prompt count='2' cond='flag'>Retry initial</prompt>"
+            "</initial>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            initial_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_initial_row *initial;
+
+        options.max_prompts = 8u;
+        options.max_prompt_bytes = 256u;
+        options.max_prompt_segments = 8u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->initial_count, (size_t)1u);
+        check_equal(profile->prompt_count, (size_t)2u);
+        initial = &profile->initials[0];
+        check_equal(initial->first_prompt, (size_t)0u);
+        check_equal(initial->prompt_count, (size_t)2u);
+        check_equal(
+            profile->prompts[0].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_INITIAL);
+        check_equal(profile->prompts[0].owner, (size_t)0u);
+        check_equal(
+            profile->prompts[1].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_INITIAL);
+        check_equal(profile->prompts[1].owner, (size_t)0u);
+        check_equal(profile->prompts[0].count, (unsigned)1u);
+        check_equal(profile->prompts[1].count, (unsigned)2u);
+        check_equal(
+            memcmp(
+                profile->prompts[0].text,
+                "First initial",
+                sizeof("First initial") - 1u), 0);
+        check_true(
+            profile->prompts[1].condition != VXML_CMETA_NO_INDEX);
+
+        vxml_program_destroy(&program);
+    }
+
     it("rejects invalid mixed-initiative form contracts without approximation") {
         static const struct {
             const char *source;
@@ -2277,7 +2336,7 @@ spec("VoiceXML CMeta program compiler") {
                 "<initial><prompt>hello</prompt></initial>"
                 "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
                 "</form></vxml>",
-                VXML_UNSUPPORTED_FEATURE
+                VXML_INVALID_CONTRACT
             },
             {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
