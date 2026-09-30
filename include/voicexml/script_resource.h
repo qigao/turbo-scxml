@@ -84,6 +84,16 @@ const char *vxml_script_resource_status_string(
     vxml_script_resource_status status);
 
 /**
+ * Project one resource failure to its exact VoiceXML Event name.
+ *
+ * The returned view is process-lifetime immutable static storage. OK and
+ * caller-contract failures return NULL and set out_event_size to zero.
+ */
+const char *vxml_script_resource_failure_event(
+    vxml_script_resource_status status,
+    size_t *out_event_size);
+
+/**
  * Compile the explicit static external-script VoiceXML profile.
  *
  * Unlike base vxml_compile(), this admits bounded external <script src=...>

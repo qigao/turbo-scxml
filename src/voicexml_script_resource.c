@@ -80,6 +80,38 @@ const char *vxml_script_resource_status_string(
     }
 }
 
+const char *vxml_script_resource_failure_event(
+    vxml_script_resource_status status,
+    size_t *out_event_size) {
+    static const char badfetch[] = "error.badfetch";
+    static const char unsupported_format[] = "error.unsupported.format";
+    static const char noresource[] = "error.noresource";
+
+    if (out_event_size != NULL)
+        *out_event_size = 0u;
+    switch (status) {
+    case VXML_SCRIPT_RESOURCE_INVALID_URI:
+    case VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED:
+    case VXML_SCRIPT_RESOURCE_PROVIDER_ERROR:
+    case VXML_SCRIPT_RESOURCE_INVALID_DATA:
+        if (out_event_size != NULL)
+            *out_event_size = sizeof(badfetch) - 1u;
+        return badfetch;
+    case VXML_SCRIPT_RESOURCE_UNSUPPORTED_CHARSET:
+        if (out_event_size != NULL)
+            *out_event_size = sizeof(unsupported_format) - 1u;
+        return unsupported_format;
+    case VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED:
+        if (out_event_size != NULL)
+            *out_event_size = sizeof(noresource) - 1u;
+        return noresource;
+    case VXML_SCRIPT_RESOURCE_OK:
+    case VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT:
+    default:
+        return NULL;
+    }
+}
+
 vxml_script_resource_status vxml_script_resource_acquire(
     const vxml_document_store *resolver,
     const vxml_script_resource_adapter_v1 *adapter,

@@ -277,6 +277,55 @@ spec("VoiceXML external script resource") {
         }
     }
 
+    it("maps bounded resource failures to exact VoiceXML Events") {
+        static const struct {
+            vxml_script_resource_status status;
+            const char *event;
+            size_t event_size;
+        } cases[] = {
+            {VXML_SCRIPT_RESOURCE_INVALID_URI,
+             "error.badfetch", sizeof("error.badfetch") - 1u},
+            {VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED,
+             "error.badfetch", sizeof("error.badfetch") - 1u},
+            {VXML_SCRIPT_RESOURCE_PROVIDER_ERROR,
+             "error.badfetch", sizeof("error.badfetch") - 1u},
+            {VXML_SCRIPT_RESOURCE_INVALID_DATA,
+             "error.badfetch", sizeof("error.badfetch") - 1u},
+            {VXML_SCRIPT_RESOURCE_UNSUPPORTED_CHARSET,
+             "error.unsupported.format",
+             sizeof("error.unsupported.format") - 1u},
+            {VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED,
+             "error.noresource", sizeof("error.noresource") - 1u}
+        };
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            size_t event_size = 99u;
+            const char *event =
+                vxml_script_resource_failure_event(
+                    cases[index].status, &event_size);
+            check_not_null(event);
+            check_equal(event_size, cases[index].event_size);
+            check_equal(
+                memcmp(event, cases[index].event, event_size), 0);
+        }
+
+        {
+            size_t event_size = 99u;
+            check_null(
+                vxml_script_resource_failure_event(
+                    VXML_SCRIPT_RESOURCE_OK, &event_size));
+            check_equal(event_size, (size_t)0u);
+        }
+        {
+            size_t event_size = 99u;
+            check_null(
+                vxml_script_resource_failure_event(
+                    VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT, &event_size));
+            check_equal(event_size, (size_t)0u);
+        }
+    }
+
     it("resolves a relative URI and retains one provider lease until close") {
         static const char body[] = "var answer = 42;";
         script_probe probe = {
