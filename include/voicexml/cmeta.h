@@ -121,6 +121,10 @@ typedef struct vxml_cmeta_compile_options_v1 {
 
     /* Optional append-only mixed-initiative control bound. Zero disables <initial>. */
     size_t max_initials;
+
+    /* Optional append-only static subdialog bounds. Zero disables <subdialog>. */
+    size_t max_subdialogs;
+    size_t max_subdialog_uri_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
