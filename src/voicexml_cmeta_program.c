@@ -3201,6 +3201,44 @@ static vxml_status cmeta_lower_filled_actions(
     return VXML_OK;
 }
 
+static vxml_status cmeta_retain_event_attribute(
+    cmeta_program_builder *builder,
+    salts_xml_attribute attribute,
+    const char **out_event,
+    size_t *out_size) {
+    cmeta_decoded_value decoded = {0};
+    vxml_status status;
+    if (!cmeta_event_options_valid(builder->options) ||
+        attribute.impl == NULL || out_event == NULL || out_size == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_CONTRACT,
+            attribute.impl != NULL
+                ? salts_xml_attribute_location(attribute)
+                : (salts_xml_location){0},
+            "VoiceXML Event requires enabled Event limits");
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(attribute),
+        salts_xml_attribute_location(attribute), &decoded);
+    if (status != VXML_OK) return status;
+    if (decoded.view.size == 0u ||
+        decoded.view.size > builder->options->max_event_name_bytes ||
+        !cmeta_location_path_valid(
+            decoded.view.data, decoded.view.size, SIZE_MAX)) {
+        cmeta_decoded_value_destroy(&decoded);
+        return cmeta_program_fail(
+            builder->diagnostic,
+            decoded.view.size > builder->options->max_event_name_bytes
+                ? VXML_LIMIT_EXCEEDED : VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML Event name is invalid");
+    }
+    cmeta_decoded_value_destroy(&decoded);
+    return cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(attribute),
+        salts_xml_attribute_location(attribute),
+        out_event, out_size);
+}
+
 static vxml_status cmeta_lower_simple_action(
     cmeta_program_builder *builder, salts_xml_node node,
     size_t execution_scope,
@@ -3346,6 +3384,14 @@ static vxml_status cmeta_lower_simple_action(
                     "VoiceXML exit count changed between passes");
             builder->impl->actions[builder->generic_action_index++].kind =
                 VXML_ACTION_EXIT;
+    } else if (cmeta_node_named(node, "throw")) {
+        const salts_xml_attribute event =
+            cmeta_attribute(node, "event");
+        action->kind = VXML_CMETA_ACTION_THROW;
+        status = cmeta_retain_event_attribute(
+            builder, event,
+            &action->event_name, &action->event_name_size);
+        if (status != VXML_OK) return status;
     } else {
         return cmeta_program_fail(
             builder->diagnostic, VXML_UNSUPPORTED_FEATURE,
