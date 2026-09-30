@@ -404,6 +404,14 @@ typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_NAMELIST
 } vxml_cmeta_exit_kind;
 
+typedef enum vxml_cmeta_terminal_kind {
+    VXML_CMETA_TERMINAL_NONE = 0,
+    VXML_CMETA_TERMINAL_EXIT,
+    VXML_CMETA_TERMINAL_RETURN,
+    VXML_CMETA_TERMINAL_RETURN_EVENT,
+    VXML_CMETA_TERMINAL_DISCONNECT
+} vxml_cmeta_terminal_kind;
+
 vxml_status vxml_compile_cmeta(
     const void *bytes, size_t size,
     const vxml_limits *limits,
@@ -581,6 +589,14 @@ vxml_session_cmeta_prompt_media_mark(
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
     const vxml_session *session,
     vxml_cmeta_prompt_mark_view_v1 *out_mark);
+
+vxml_status vxml_session_cmeta_terminal_kind(
+    const vxml_session *session,
+    vxml_cmeta_terminal_kind *out_kind);
+
+vxml_status vxml_session_cmeta_terminal_event(
+    const vxml_session *session,
+    vxml_cmeta_name_view *out_event);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
