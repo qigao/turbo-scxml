@@ -66,6 +66,9 @@ int main(void) {
     vxml_cmeta_prompt_media_request_v1 prompt_media_request = {
         .abi_version = VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_media_request_v1)};
+    vxml_cmeta_prompt_media_batch_request_v1 prompt_media_batch = {
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_batch_request_v1)};
     vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter = {
         .abi_version = VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_media_adapter_v1)};
@@ -93,6 +96,8 @@ int main(void) {
             VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
         prompt_media_adapter.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
+        prompt_media_batch.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 ||
         prompt_media_segment.kind != 0 ||
         prompt_media_ticket.commit != NULL)
         return 6;
