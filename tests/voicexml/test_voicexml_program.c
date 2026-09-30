@@ -326,7 +326,7 @@ spec("VoiceXML program compiler") {
                 "</block></form>"
                 "<form id='b'><block><exit/></block></form>"
                 "</vxml>",
-                VXML_INVALID_STRUCTURE, NULL, 2u);
+                VXML_INVALID_STRUCTURE, NULL, 1u);
         }
 
         it("rejects missing empty and unknown local goto targets") {
