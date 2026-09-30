@@ -306,6 +306,11 @@ typedef struct vxml_cmeta_exit_snapshot {
     size_t string_capacity;
 } vxml_cmeta_exit_snapshot;
 
+typedef enum vxml_cmeta_collect_item_kind {
+    VXML_CMETA_COLLECT_ITEM_FIELD = 0,
+    VXML_CMETA_COLLECT_ITEM_MENU
+} vxml_cmeta_collect_item_kind;
+
 typedef enum vxml_cmeta_collect_mailbox_state {
     VXML_CMETA_COLLECT_MAILBOX_DISARMED = 0,
     VXML_CMETA_COLLECT_MAILBOX_EMPTY,
