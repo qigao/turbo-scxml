@@ -1926,7 +1926,8 @@ static vxml_status cmeta_decode_menu_dtmf(
     vxml_diagnostic *diagnostic) {
     char *decoded = NULL;
     size_t decoded_size = 0u;
-    size_t index;
+    size_t read_index;
+    size_t write_index = 0u;
     if (out_data == NULL || out_size == NULL)
         return VXML_INVALID_ARGUMENT;
     *out_data = NULL;
@@ -1938,11 +1939,12 @@ static vxml_status cmeta_decode_menu_dtmf(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 (salts_xml_location){0},
                 "VoiceXML choice requires dtmf unless menu dtmf=true");
+        /*
+         * VoiceXML assigns implicit digits only to the first nine choices
+         * lacking explicit DTMF. Later choices remain valid but have no DTMF.
+         */
         if (auto_ordinal >= 9u)
-            return cmeta_program_fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
-                (salts_xml_location){0},
-                "VoiceXML menu auto-DTMF supports at most nine implicit choices");
+            return VXML_OK;
         decoded = (char *)vxml_malloc(2u);
         if (decoded == NULL)
             return cmeta_program_fail(
@@ -1964,11 +1966,6 @@ static vxml_status cmeta_decode_menu_dtmf(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(attribute),
             "VoiceXML choice dtmf must be non-empty");
-    if (decoded_size > max_bytes)
-        return cmeta_program_fail(
-            diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_attribute_location(attribute),
-            "VoiceXML choice dtmf exceeds max_menu_choice_bytes");
     decoded = (char *)vxml_malloc(decoded_size + 1u);
     if (decoded == NULL)
         return cmeta_program_fail(
@@ -1984,9 +1981,15 @@ static vxml_status cmeta_decode_menu_dtmf(
             salts_xml_attribute_location(attribute),
             "VoiceXML choice dtmf decoding changed between passes");
     }
-    decoded[decoded_size] = '\0';
-    for (index = 0u; index < decoded_size; ++index) {
-        unsigned char ch = (unsigned char)decoded[index];
+
+    /*
+     * DTMF attribute whitespace is optional. Normalize to the compact token
+     * sequence consumed by this provider boundary.
+     */
+    for (read_index = 0u; read_index < decoded_size; ++read_index) {
+        unsigned char ch = (unsigned char)decoded[read_index];
+        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
+            continue;
         if (!cmeta_menu_dtmf_char(ch)) {
             vxml_free(decoded);
             return cmeta_program_fail(
@@ -1995,8 +1998,26 @@ static vxml_status cmeta_decode_menu_dtmf(
                 "VoiceXML choice dtmf contains an unsupported DTMF symbol");
         }
         if (ch >= 'a' && ch <= 'd')
-            decoded[index] = (char)(ch - 'a' + 'A');
+            ch = (unsigned char)(ch - 'a' + 'A');
+        decoded[write_index++] = (char)ch;
     }
+    if (write_index == 0u) {
+        vxml_free(decoded);
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice dtmf must contain a DTMF token");
+    }
+    if (write_index > max_bytes) {
+        vxml_free(decoded);
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice dtmf exceeds max_menu_choice_bytes");
+    }
+    decoded[write_index] = '\0';
+    decoded_size = write_index;
+
     if (auto_dtmf &&
         (decoded_size != 1u ||
          (decoded[0] != '0' && decoded[0] != '*' && decoded[0] != '#'))) {
@@ -2155,31 +2176,37 @@ static vxml_status cmeta_measure_menu(
         if (status != VXML_OK) goto done;
         if (explicit_dtmf.impl == NULL)
             ++implicit_count;
-        for (prior = 0u; prior < choice_count; ++prior) {
-            if (seen_sizes[prior] == normalized_size &&
-                memcmp(seen_dtmf[prior], normalized, normalized_size) == 0) {
+        if (normalized_size != 0u) {
+            for (prior = 0u; prior < choice_count; ++prior) {
+                if (seen_sizes[prior] != 0u &&
+                    seen_sizes[prior] == normalized_size &&
+                    memcmp(
+                        seen_dtmf[prior], normalized,
+                        normalized_size) == 0) {
+                    vxml_free(normalized);
+                    status = cmeta_program_fail(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(child),
+                        "duplicate VoiceXML menu DTMF sequence");
+                    goto done;
+                }
+            }
+            if (measurement->name_bytes >
+                    SIZE_MAX - (normalized_size + 1u) ||
+                measurement->name_bytes + normalized_size + 1u >
+                    limits->max_name_bytes) {
                 vxml_free(normalized);
                 status = cmeta_program_fail(
-                    diagnostic, VXML_INVALID_STRUCTURE,
+                    diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "duplicate VoiceXML menu DTMF sequence");
+                    "VoiceXML menu bytes exceed max_name_bytes");
                 goto done;
             }
+            measurement->name_bytes += normalized_size + 1u;
         }
         seen_dtmf[choice_count] = normalized;
         seen_sizes[choice_count] = normalized_size;
         ++choice_count;
-        if (measurement->name_bytes >
-                SIZE_MAX - (normalized_size + 1u) ||
-            measurement->name_bytes + normalized_size + 1u >
-                limits->max_name_bytes) {
-            status = cmeta_program_fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
-                salts_xml_node_location(child),
-                "VoiceXML menu bytes exceed max_name_bytes");
-            goto done;
-        }
-        measurement->name_bytes += normalized_size + 1u;
     }
 
     if (measurement->menu_count >= options->max_menus ||
@@ -3904,27 +3931,37 @@ static vxml_status cmeta_compile_menu_schema(
         if (explicit_dtmf.impl == NULL)
             ++implicit_count;
 
-        retained = cmeta_retain_view(
-            builder,
-            (salts_xml_string_view){normalized, normalized_size});
-        vxml_free(normalized);
-        if (retained == NULL)
-            return cmeta_program_fail(
-                builder->diagnostic, VXML_LIMIT_EXCEEDED,
-                salts_xml_node_location(child),
-                "VoiceXML menu DTMF retention overflow");
-        for (prior = menu->first_choice;
-             prior < builder->menu_choice_index;
-             ++prior) {
-            const vxml_cmeta_name_view prior_dtmf =
-                builder->profile->menu_choices[prior].dtmf;
-            if (prior_dtmf.size == normalized_size &&
-                memcmp(prior_dtmf.data, retained, normalized_size) == 0)
+        retained = NULL;
+        if (normalized_size != 0u) {
+            retained = cmeta_retain_view(
+                builder,
+                (salts_xml_string_view){normalized, normalized_size});
+            if (retained == NULL) {
+                vxml_free(normalized);
                 return cmeta_program_fail(
-                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "duplicate VoiceXML menu DTMF sequence");
+                    "VoiceXML menu DTMF retention overflow");
+            }
+            for (prior = menu->first_choice;
+                 prior < builder->menu_choice_index;
+                 ++prior) {
+                const vxml_cmeta_name_view prior_dtmf =
+                    builder->profile->menu_choices[prior].dtmf;
+                if (prior_dtmf.size != 0u &&
+                    prior_dtmf.size == normalized_size &&
+                    memcmp(
+                        prior_dtmf.data, retained,
+                        normalized_size) == 0) {
+                    vxml_free(normalized);
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(child),
+                        "duplicate VoiceXML menu DTMF sequence");
+                }
+            }
         }
+        vxml_free(normalized);
 
         view = &builder->profile->menu_choices[
             builder->menu_choice_index];
