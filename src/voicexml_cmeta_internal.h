@@ -6,6 +6,7 @@
 #include "voicexml_internal.h"
 
 #include <data_bind_native.h>
+#include <stdatomic.h>
 
 #define VXML_CMETA_NO_INDEX ((size_t)-1)
 
@@ -199,6 +200,24 @@ typedef struct vxml_cmeta_exit_snapshot {
     size_t string_capacity;
 } vxml_cmeta_exit_snapshot;
 
+typedef enum vxml_cmeta_collect_mailbox_state {
+    VXML_CMETA_COLLECT_MAILBOX_DISARMED = 0,
+    VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+    VXML_CMETA_COLLECT_MAILBOX_WRITING,
+    VXML_CMETA_COLLECT_MAILBOX_READY,
+    VXML_CMETA_COLLECT_MAILBOX_CLOSED
+} vxml_cmeta_collect_mailbox_state;
+
+typedef struct vxml_cmeta_collect_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    const cmeta_data_desc *data;
+    void *allocation;
+    unsigned char *storage;
+    size_t storage_bytes;
+    size_t storage_alignment;
+} vxml_cmeta_collect_mailbox;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
@@ -213,6 +232,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_collect_ticket_v1 collect_ticket;
     bool collect_prepared;
     bool collect_in_flight;
+    vxml_cmeta_collect_mailbox collect_mailbox;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
