@@ -1952,6 +1952,8 @@ spec("VoiceXML CMeta session execution") {
             "datamodel='cmeta'><form><field name='value'>"
             "<prompt>Before<audio src='a.wav'>fallback</audio>After</prompt>"
             "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='error.unsupported.format'>"
+            "<assign name='other' expr='1'/></catch>"
             "</field></form></vxml>";
         const vxml_cmeta_name_view undefined[] = {
             {"value", sizeof("value") - 1u}};
@@ -2281,6 +2283,8 @@ spec("VoiceXML CMeta session execution") {
             "datamodel='cmeta'><form><field name='value'>"
             "<prompt><emphasis level='strong'>hello</emphasis></prompt>"
             "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='error.unsupported.format'>"
+            "<assign name='other' expr='1'/></catch>"
             "</field></form></vxml>";
         const vxml_cmeta_name_view undefined[] = {
             {"value", sizeof("value") - 1u}};
@@ -2345,6 +2349,8 @@ spec("VoiceXML CMeta session execution") {
             "<prompt count='2'><audio src='retry.wav'/></prompt>"
             "<grammar type='application/srgs+xml' src='a'/>"
             "<noinput><reprompt/></noinput>"
+            "<catch event='error.unsupported.format'>"
+            "<assign name='other' expr='1'/></catch>"
             "</field></form></vxml>";
         const vxml_cmeta_name_view undefined[] = {
             {"value", sizeof("value") - 1u}};
@@ -2624,8 +2630,10 @@ spec("VoiceXML CMeta session execution") {
                         &session, &program, &options), VXML_OK);
         check_equal(vxml_session_start(&session), VXML_OK);
         check_equal(vxml_session_cmeta_prompt_media_prepare(
-                        &session, NULL), VXML_UNSUPPORTED_FEATURE);
+                        &session, NULL), VXML_SEMANTIC_ERROR);
         check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_FAILED);
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
 
