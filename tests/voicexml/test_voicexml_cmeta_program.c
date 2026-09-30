@@ -173,6 +173,12 @@ static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 menu_v2_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = menu_compile_options();
+    options.max_menu_grammar_bytes = 128u;
+    return options;
+}
+
 enum { PROGRAM_ALLOCATION_CAPACITY = 256 };
 
 typedef struct program_allocation_tracker {
@@ -483,6 +489,91 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("retains approximate speech policy and explicit grammar in V2 side tables") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu id='mixed'>"
+            "<choice accept='approximate' event='menu.approx'>"
+            "  sports   news </choice>"
+            "<choice dtmf='0' event='menu.grammar'>label"
+            "<grammar type='application/srgs+xml' src='sports.grxml'/>"
+            "</choice>"
+            "<choice event='menu.exact'> weather </choice>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            menu_v2_compile_options();
+        vxml_program program = {0};
+        const vxml_program_impl *impl;
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_menu_row *menu;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        impl = (const vxml_program_impl *)program.impl;
+        profile = impl != NULL
+            ? (const vxml_cmeta_program_data *)impl->profile_data
+            : NULL;
+        check_not_null(profile);
+        check_equal(profile->menu_count, (size_t)1u);
+        check_equal(profile->menu_choice_count, (size_t)3u);
+        check_equal(profile->menu_speech_policy_count, (size_t)1u);
+        check_equal(profile->menu_grammar_count, (size_t)1u);
+        menu = &profile->menus[0];
+        check_equal(menu->first_speech_policy, (size_t)0u);
+        check_equal(menu->speech_policy_count, (size_t)1u);
+        check_equal(menu->first_grammar, (size_t)0u);
+        check_equal(menu->grammar_count, (size_t)1u);
+
+        check_equal(
+            profile->menu_speech_policies[0].choice_index, (size_t)0u);
+        check_equal(
+            profile->menu_speech_policies[0].mode,
+            VXML_CMETA_MENU_ACCEPT_APPROXIMATE);
+        check_equal(
+            profile->menu_choices[0].speech.size,
+            sizeof("sports news") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choices[0].speech.data,
+                "sports news", sizeof("sports news") - 1u), 0);
+
+        check_equal(
+            profile->menu_grammars[0].choice_index, (size_t)1u);
+        check_equal(
+            profile->menu_grammars[0].media_type.size,
+            sizeof("application/srgs+xml") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_grammars[0].media_type.data,
+                "application/srgs+xml",
+                sizeof("application/srgs+xml") - 1u), 0);
+        check_equal(
+            profile->menu_grammars[0].src.size,
+            sizeof("sports.grxml") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_grammars[0].src.data,
+                "sports.grxml", sizeof("sports.grxml") - 1u), 0);
+        check_null(profile->menu_choices[1].speech.data);
+        check_equal(profile->menu_choices[1].speech.size, (size_t)0u);
+        check_equal(
+            profile->menu_choices[2].speech.size,
+            sizeof("weather") - 1u);
+
+        check_true(
+            profile->menu_grammars[0].media_type.data >= impl->storage);
+        check_true(
+            profile->menu_grammars[0].src.data >= impl->storage);
+        check_true(
+            profile->menu_grammars[0].src.data <
+                impl->storage + impl->storage_size);
+
+        vxml_program_destroy(&program);
+    }
+
     it("leaves implicit choices after nine without a DTMF assignment") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -552,18 +643,10 @@ spec("VoiceXML CMeta program compiler") {
              "<choice event='a'>sports</choice></menu></vxml>",
              VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
-             "datamodel='cmeta'><menu accept='approximate'>"
-             "<choice event='a'>sports news</choice></menu></vxml>",
-             VXML_UNSUPPORTED_FEATURE},
-            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
-             "datamodel='cmeta'><menu><choice accept='approximate' event='a'>"
-             "sports news</choice></menu></vxml>",
-             VXML_UNSUPPORTED_FEATURE},
-            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu><choice event='a'>"
              "<grammar type='application/srgs+xml' src='sports.grxml'/>"
              "sports</choice></menu></vxml>",
-             VXML_UNSUPPORTED_FEATURE},
+             VXML_INVALID_CONTRACT},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu dtmf='maybe'>"
              "<choice dtmf='1' event='a'/></menu></vxml>",
