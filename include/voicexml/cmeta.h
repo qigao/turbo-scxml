@@ -359,6 +359,13 @@ typedef enum vxml_cmeta_prompt_media_outcome {
     VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED
 } vxml_cmeta_prompt_media_outcome;
 
+typedef enum vxml_cmeta_prompt_media_failure {
+    VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE = 0,
+    VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH,
+    VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT,
+    VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE
+} vxml_cmeta_prompt_media_failure;
+
 typedef enum vxml_cmeta_prompt_media_ingress_result {
     VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED = 0,
     VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL,
@@ -372,6 +379,9 @@ typedef struct vxml_cmeta_prompt_media_completion_v1 {
     size_t struct_size;
     uint64_t generation;
     vxml_cmeta_prompt_media_outcome outcome;
+
+    /* Optional append-only terminal failure classification. */
+    vxml_cmeta_prompt_media_failure failure;
 } vxml_cmeta_prompt_media_completion_v1;
 
 #define VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 1u
