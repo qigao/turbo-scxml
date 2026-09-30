@@ -4188,6 +4188,59 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     return prompt_media_batch_request_from_impl(impl, out_request);
 }
 
+static bool prompt_media_failure_event(
+    vxml_cmeta_prompt_media_failure failure,
+    const char **out_event,
+    size_t *out_event_size) {
+    if (out_event == NULL || out_event_size == NULL)
+        return false;
+    *out_event = NULL;
+    *out_event_size = 0u;
+    switch (failure) {
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH:
+        *out_event = "error.badfetch";
+        *out_event_size = sizeof("error.badfetch") - 1u;
+        return true;
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT:
+        *out_event = "error.unsupported.format";
+        *out_event_size = sizeof("error.unsupported.format") - 1u;
+        return true;
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE:
+        *out_event = "error.noresource";
+        *out_event_size = sizeof("error.noresource") - 1u;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static vxml_status prompt_media_raise_failure(
+    vxml_session *session,
+    vxml_cmeta_prompt_media_failure failure) {
+    const char *event_name;
+    size_t event_name_size;
+    if (!prompt_media_failure_event(
+            failure, &event_name, &event_name_size))
+        return VXML_INVALID_ARGUMENT;
+    return vxml_session_cmeta_raise(
+        session, event_name, event_name_size);
+}
+
+static vxml_status prompt_media_admission_failure(
+    vxml_session *session,
+    vxml_status media_status) {
+    vxml_cmeta_prompt_media_failure failure;
+    vxml_status event_status;
+    if (media_status == VXML_LIMIT_EXCEEDED)
+        failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE;
+    else if (media_status == VXML_UNSUPPORTED_FEATURE)
+        failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT;
+    else
+        return media_status;
+    event_status = prompt_media_raise_failure(session, failure);
+    return event_status == VXML_OK ? media_status : event_status;
+}
+
 vxml_status vxml_session_cmeta_prompt_media_prepare(
     vxml_session *session, const char **out_error) {
     vxml_session_impl *impl;
@@ -4223,7 +4276,8 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if ((profile->prompt_media_adapter->capabilities &
          batch.required_capabilities) !=
         batch.required_capabilities)
-        return VXML_UNSUPPORTED_FEATURE;
+        return prompt_media_admission_failure(
+            session, VXML_UNSUPPORTED_FEATURE);
 
     if (batch.segment_count == 1u) {
         vxml_cmeta_prompt_media_request_v1 request = {0};
@@ -4241,7 +4295,8 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         if (profile->prompt_media_adapter->struct_size <
                 batch_field_size ||
             profile->prompt_media_adapter->prepare_batch == NULL)
-            return VXML_UNSUPPORTED_FEATURE;
+            return prompt_media_admission_failure(
+                session, VXML_UNSUPPORTED_FEATURE);
         status = profile->prompt_media_adapter->prepare_batch(
             profile->prompt_media_user,
             &batch, &ticket, out_error);
@@ -4250,7 +4305,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        return status;
+        return prompt_media_admission_failure(session, status);
     }
     if (ticket.commit == NULL || ticket.discard == NULL) {
         if (ticket.discard != NULL)
@@ -4347,17 +4402,42 @@ vxml_session_cmeta_prompt_media_try_complete(
     unsigned state;
     unsigned expected;
     uint64_t generation;
+    vxml_cmeta_prompt_media_failure failure =
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE;
+    const size_t completion_prefix =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, outcome) +
+        sizeof(completion->outcome);
+    const size_t failure_tail =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, failure) +
+        sizeof(completion->failure);
 
     if (session == NULL || completion == NULL ||
         completion->abi_version !=
             VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
-        completion->struct_size < sizeof(*completion) ||
+        completion->struct_size < completion_prefix ||
         completion->generation == 0u ||
         (completion->outcome !=
              VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
          completion->outcome !=
              VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+
+    if (completion->outcome ==
+            VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) {
+        if (completion->struct_size >= failure_tail)
+            failure = completion->failure;
+        if (failure == VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE)
+            failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE;
+        if (failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH &&
+            failure !=
+                VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
+            failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE)
+            return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    } else if (completion->struct_size >= failure_tail &&
+               completion->failure !=
+                    VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) {
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    }
 
     impl = (vxml_session_impl *)session->impl;
     if (impl == NULL)
@@ -4418,6 +4498,7 @@ vxml_session_cmeta_prompt_media_try_complete(
     }
 
     mailbox->outcome = completion->outcome;
+    mailbox->failure = failure;
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
@@ -4441,6 +4522,7 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned expected;
     uint64_t generation;
+    vxml_cmeta_prompt_media_failure failure;
 
     if (out_progressed != NULL) *out_progressed = false;
     if (out_outcome != NULL) *out_outcome = 0;
@@ -4482,7 +4564,16 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
         (mailbox->outcome !=
              VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
          mailbox->outcome !=
-             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED)) {
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) ||
+        (mailbox->outcome ==
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+         mailbox->failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) ||
+        (mailbox->outcome ==
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED &&
+         mailbox->failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH &&
+         mailbox->failure !=
+             VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
+         mailbox->failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE)) {
         profile->prompt_media_in_flight = false;
         profile->prompt_media_generation = 0u;
         prompt_media_mailbox_disarm(profile);
@@ -4491,9 +4582,12 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
 
     *out_progressed = true;
     *out_outcome = mailbox->outcome;
+    failure = mailbox->failure;
     profile->prompt_media_in_flight = false;
     profile->prompt_media_generation = 0u;
     prompt_media_mailbox_disarm(profile);
+    if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED)
+        return prompt_media_raise_failure(session, failure);
     return VXML_OK;
 }
 

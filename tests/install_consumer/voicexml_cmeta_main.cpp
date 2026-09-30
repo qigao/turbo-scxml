@@ -28,6 +28,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_mark_view_v1>::value,
     "prompt mark view must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_completion_v1>::value,
+    "prompt media completion must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
     "collect request must remain C-compatible");
 static_assert(
@@ -71,6 +74,7 @@ int main() {
     vxml_cmeta_prompt_media_batch_request_v1 prompt_media_batch{};
     vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter{};
     vxml_cmeta_prompt_mark_view_v1 prompt_mark{};
+    vxml_cmeta_prompt_media_completion_v1 prompt_media_completion{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
     vxml_cmeta_collect_result_slot_v1 collect_slot{};
@@ -109,6 +113,12 @@ int main() {
     prompt_mark.abi_version = VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1;
     prompt_mark.struct_size = sizeof(prompt_mark);
     prompt_mark.segment_index = SIZE_MAX;
+    prompt_media_completion.abi_version =
+        VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1;
+    prompt_media_completion.struct_size = sizeof(prompt_media_completion);
+    prompt_media_completion.outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED;
+    prompt_media_completion.failure =
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT;
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
@@ -126,6 +136,10 @@ int main() {
         prompt_media_fallback.audio_segment_index != 1u ||
         prompt_media_fallback.first_fallback_segment != 2u ||
         prompt_media_fallback.fallback_segment_count != 1u ||
+        prompt_media_completion.failure !=
+            VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT ||
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH == 0 ||
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE == 0 ||
         prompt_media_segment.kind !=
             static_cast<vxml_cmeta_prompt_media_segment_kind>(0) ||
         prompt_media_ticket.commit != nullptr)
