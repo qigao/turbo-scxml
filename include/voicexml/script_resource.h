@@ -84,6 +84,19 @@ const char *vxml_script_resource_status_string(
     vxml_script_resource_status status);
 
 /**
+ * Compile the explicit static external-script VoiceXML profile.
+ *
+ * Unlike base vxml_compile(), this admits bounded external <script src=...>
+ * descriptors and may yield VXML_SESSION_SCRIPTING. It still does not execute
+ * ECMAScript.
+ */
+vxml_status vxml_compile_external_script_profile(
+    const void *bytes, size_t size,
+    const vxml_limits *limits,
+    vxml_program *out,
+    vxml_diagnostic *diagnostic);
+
+/**
  * Resolve and open one external script.
  *
  * The resolver Store is borrowed only for this call; this function does not

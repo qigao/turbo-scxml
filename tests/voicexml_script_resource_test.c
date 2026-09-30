@@ -145,6 +145,138 @@ static vxml_script_request_v1 request_for(
 }
 
 spec("VoiceXML external script resource") {
+    it("keeps base VoiceXML fail-closed while explicit profile yields immutable external script handoff") {
+        char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<script src='scripts/main.js' charset='utf-8'/>"
+            "</block></form></vxml>";
+        static const char body[] = "globalThis.answer = 42;";
+        script_probe probe = {
+            .open_status = VXML_SCRIPT_RESOURCE_OK,
+            .body = body,
+            .body_size = sizeof(body) - 1u};
+        vxml_program base = {0};
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_external_script_target_v1 target = {0};
+        vxml_document_store store = {0};
+        vxml_script_request_v1 request = VXML_SCRIPT_REQUEST_V1_INIT;
+        vxml_script_source source = {0};
+
+        check_equal(
+            vxml_compile(
+                document, strlen(document), NULL, &base, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_null(base.impl);
+
+        check_equal(
+            vxml_compile_external_script_profile(
+                document, strlen(document), NULL, &program, NULL),
+            VXML_OK);
+        check_not_null(program.impl);
+        memset(document, 'x', sizeof(document) - 1u);
+
+        check_equal(vxml_session_init(&session, &program), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SCRIPTING);
+        check_equal(
+            vxml_session_script(&session, &target), VXML_OK);
+        check_equal(
+            target.abi_version,
+            VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1);
+        check_equal(
+            target.struct_size,
+            sizeof(vxml_external_script_target_v1));
+        check_equal(
+            target.src_size, sizeof("scripts/main.js") - 1u);
+        check_equal(
+            memcmp(
+                target.src, "scripts/main.js",
+                target.src_size), 0);
+        check_equal(
+            target.charset_size, sizeof("UTF-8") - 1u);
+        check_equal(
+            memcmp(
+                target.charset, "UTF-8",
+                target.charset_size), 0);
+
+        init_resolver(&store);
+        request.base_document_uri =
+            "https://voice.example/app/dialogs/current.vxml";
+        request.base_document_uri_size =
+            sizeof("https://voice.example/app/dialogs/current.vxml") - 1u;
+        request.reference = target.src;
+        request.reference_size = target.src_size;
+        request.charset = target.charset;
+        request.charset_size = target.charset_size;
+        request.max_uri_bytes = 255u;
+        request.max_source_bytes = 64u;
+
+        check_equal(
+            vxml_script_resource_acquire(
+                &store, &script_adapter, &probe,
+                &request, &source),
+            VXML_SCRIPT_RESOURCE_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(
+            probe.uri,
+            "https://voice.example/app/dialogs/scripts/main.js");
+        check_equal(probe.charset, "UTF-8");
+        check_equal(source.size, sizeof(body) - 1u);
+        check_equal(memcmp(source.data, body, source.size), 0);
+        check_equal(
+            vxml_script_resource_close(
+                &script_adapter, &probe, &source),
+            VXML_SCRIPT_RESOURCE_OK);
+        check_equal(probe.close_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("rejects invalid external script language shapes before resource admission") {
+        static const char *const documents[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script>inline()</script></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='a.js'>inline()</script></block></form>"
+            "</vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='a.js' charset='UTF-16'/></block></form>"
+            "</vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script srcexpr='x'/></block></form></vxml>"
+        };
+        static const vxml_status expected[] = {
+            VXML_INVALID_STRUCTURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE
+        };
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(documents) / sizeof(documents[0]);
+             ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_external_script_profile(
+                    documents[index], strlen(documents[index]),
+                    NULL, &program, NULL),
+                expected[index]);
+            check_null(program.impl);
+        }
+    }
+
     it("resolves a relative URI and retains one provider lease until close") {
         static const char body[] = "var answer = 42;";
         script_probe probe = {

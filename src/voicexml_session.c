@@ -74,6 +74,22 @@ vxml_status vxml_session_start_literal_at(
                 impl->state = VXML_SESSION_EXITED;
                 return VXML_OK;
             }
+            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
+                if (!program_uri_view_valid(
+                        program, action->script_src,
+                        action->script_src_size) ||
+                    !program_uri_view_valid(
+                        program, action->script_charset,
+                        action->script_charset_size))
+                    return fail_structure(impl);
+                impl->script_src = action->script_src;
+                impl->script_src_size = action->script_src_size;
+                impl->script_charset = action->script_charset;
+                impl->script_charset_size =
+                    action->script_charset_size;
+                impl->state = VXML_SESSION_SCRIPTING;
+                return VXML_OK;
+            }
             if (action->kind == VXML_ACTION_SUBMIT) {
                 if (!program_uri_view_valid(
                         program, action->target_uri,
@@ -170,6 +186,10 @@ vxml_status vxml_session_init_profile(
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
     impl->profile_data = NULL;
     if (program_impl->profile_session_init != NULL) {
         status = program_impl->profile_session_init(impl, options);
@@ -199,6 +219,10 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
     return impl->program->profile_session_start != NULL
         ? impl->program->profile_session_start(impl)
         : vxml_session_start_literal(impl);
@@ -239,6 +263,10 @@ vxml_status vxml_session_start_at_form(
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
     if (form_index == impl->program->form_count)
         return fail_structure(impl);
     if (impl->program->profile_session_start_at != NULL)
@@ -317,6 +345,33 @@ vxml_status vxml_session_submit(
         .uri_size = impl->submit_uri_size,
         .method = impl->submit_method,
         .enctype = impl->submit_enctype};
+    return VXML_OK;
+}
+
+vxml_status vxml_session_script(
+    const vxml_session *session,
+    vxml_external_script_target_v1 *out_target) {
+    const vxml_session_impl *impl;
+    if (session == NULL || out_target == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_target = (vxml_external_script_target_v1){0};
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL) return VXML_INVALID_STATE;
+    if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_SCRIPTING)
+        return VXML_INVALID_STATE;
+    if (impl->script_src == NULL ||
+        impl->script_src_size == 0u ||
+        impl->script_charset == NULL ||
+        impl->script_charset_size == 0u)
+        return VXML_INVALID_CONTRACT;
+    *out_target = (vxml_external_script_target_v1){
+        .abi_version = VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1,
+        .struct_size = sizeof(vxml_external_script_target_v1),
+        .src = impl->script_src,
+        .src_size = impl->script_src_size,
+        .charset = impl->script_charset,
+        .charset_size = impl->script_charset_size};
     return VXML_OK;
 }
 

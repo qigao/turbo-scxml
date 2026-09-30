@@ -8,11 +8,14 @@
 #define VXML_DEFAULT_MAX_ACTIONS 4096u
 #define VXML_DEFAULT_MAX_NAME_BYTES (256u * 1024u)
 
+#define VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT UINT64_C(1)
+
 typedef enum vxml_action_kind {
     VXML_ACTION_EXIT = 1,
     VXML_ACTION_GOTO,
     VXML_ACTION_GOTO_EXTERNAL,
-    VXML_ACTION_SUBMIT
+    VXML_ACTION_SUBMIT,
+    VXML_ACTION_SCRIPT_EXTERNAL
 } vxml_action_kind;
 
 typedef struct vxml_action_row {
@@ -24,6 +27,10 @@ typedef struct vxml_action_row {
     size_t fetchaudio_uri_size;
     vxml_submit_method submit_method;
     vxml_submit_enctype submit_enctype;
+    const char *script_src;
+    size_t script_src_size;
+    const char *script_charset;
+    size_t script_charset_size;
 } vxml_action_row;
 
 typedef struct vxml_block_row {
@@ -71,6 +78,10 @@ struct vxml_session_impl {
     size_t submit_uri_size;
     vxml_submit_method submit_method;
     vxml_submit_enctype submit_enctype;
+    const char *script_src;
+    size_t script_src_size;
+    const char *script_charset;
+    size_t script_charset_size;
     void *profile_data;
 };
 
@@ -93,6 +104,13 @@ struct vxml_program_impl {
     vxml_profile_session_destroy_fn profile_session_destroy;
     vxml_profile_program_destroy_fn profile_program_destroy;
 };
+
+vxml_status vxml_compile_with_features(
+    const void *bytes, size_t size,
+    const vxml_limits *limits,
+    uint64_t features,
+    vxml_program *out,
+    vxml_diagnostic *diagnostic);
 
 vxml_status vxml_session_init_profile(
     vxml_session *session, const vxml_program *program, const void *options);

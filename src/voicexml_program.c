@@ -31,7 +31,16 @@ typedef struct vxml_decoded_submit {
     salts_xml_location location;
 } vxml_decoded_submit;
 
+typedef struct vxml_decoded_script {
+    char *src;
+    size_t src_size;
+    char *charset;
+    size_t charset_size;
+    salts_xml_location location;
+} vxml_decoded_script;
+
 typedef struct vxml_measurement {
+    uint64_t features;
     size_t form_count;
     size_t block_count;
     size_t action_count;
@@ -45,6 +54,9 @@ typedef struct vxml_measurement {
     vxml_decoded_submit *submits;
     size_t submit_count;
     size_t submit_capacity;
+    vxml_decoded_script *scripts;
+    size_t script_count;
+    size_t script_capacity;
 } vxml_measurement;
 
 typedef struct vxml_writer {
@@ -55,6 +67,7 @@ typedef struct vxml_writer {
     size_t action_index;
     size_t goto_index;
     size_t submit_index;
+    size_t script_index;
     size_t storage_index;
 } vxml_writer;
 
@@ -380,6 +393,25 @@ static bool normalized_view_equal(
     return text_index == text_size;
 }
 
+static bool ascii_case_view_equal(
+    salts_xml_string_view view, const char *literal) {
+    const size_t literal_size =
+        literal != NULL ? strlen(literal) : 0u;
+    size_t index;
+    if (view.data == NULL || view.size != literal_size)
+        return false;
+    for (index = 0u; index < view.size; ++index) {
+        unsigned char left = (unsigned char)view.data[index];
+        unsigned char right = (unsigned char)literal[index];
+        if (left >= 'A' && left <= 'Z')
+            left = (unsigned char)(left + ('a' - 'A'));
+        if (right >= 'A' && right <= 'Z')
+            right = (unsigned char)(right + ('a' - 'A'));
+        if (left != right) return false;
+    }
+    return true;
+}
+
 static bool text_is_whitespace(salts_xml_string_view view) {
     size_t cursor = 0u;
     while (cursor < view.size) {
@@ -411,7 +443,8 @@ static bool node_is_known_profile_element(salts_xml_node node) {
             view_equal(local_name, "block") ||
             view_equal(local_name, "exit") ||
             view_equal(local_name, "goto") ||
-            view_equal(local_name, "submit"));
+            view_equal(local_name, "submit") ||
+            view_equal(local_name, "script"));
 }
 
 static salts_xml_attribute unqualified_attribute(
@@ -520,9 +553,14 @@ static void measurement_destroy(vxml_measurement *measurement) {
     }
     for (index = 0u; index < measurement->submit_count; ++index)
         vxml_free(measurement->submits[index].target);
+    for (index = 0u; index < measurement->script_count; ++index) {
+        vxml_free(measurement->scripts[index].src);
+        vxml_free(measurement->scripts[index].charset);
+    }
     vxml_free(measurement->ids);
     vxml_free(measurement->gotos);
     vxml_free(measurement->submits);
+    vxml_free(measurement->scripts);
     memset(measurement, 0, sizeof(*measurement));
 }
 
@@ -961,6 +999,198 @@ static vxml_status measure_submit(
         limits, diagnostic);
 }
 
+static vxml_status append_external_script(
+    vxml_measurement *measurement,
+    salts_xml_attribute src_attribute,
+    salts_xml_attribute charset_attribute,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char utf8[] = "UTF-8";
+    vxml_decoded_script entry = {0};
+    const salts_xml_string_view raw_src =
+        salts_xml_attribute_value(src_attribute);
+    size_t src_size = 0u;
+    size_t src_retained;
+    size_t charset_retained = sizeof(utf8);
+    size_t allocation_size;
+
+    if (src_attribute.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML external script requires src");
+    if (charset_attribute.impl != NULL &&
+        !ascii_case_view_equal(
+            salts_xml_attribute_value(charset_attribute), utf8))
+        return fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(charset_attribute),
+            "VoiceXML external script supports UTF-8 charset only");
+    if (!decode_entities(raw_src, NULL, 0u, &src_size) ||
+        src_size == 0u ||
+        !checked_add(src_size, 1u, &src_retained))
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML script src must be one nonempty URI");
+    if (!checked_add(
+            measurement->name_bytes, src_retained,
+            &measurement->name_bytes) ||
+        !checked_add(
+            measurement->name_bytes, charset_retained,
+            &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes)
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML retained script metadata exceeds max_name_bytes");
+
+    entry.src = (char *)vxml_malloc(src_retained);
+    entry.charset = (char *)vxml_malloc(charset_retained);
+    if (entry.src == NULL || entry.charset == NULL) {
+        vxml_free(entry.charset);
+        vxml_free(entry.src);
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML script metadata allocation failed");
+    }
+    if (!decode_entities(
+            raw_src, entry.src, src_size, &src_size)) {
+        vxml_free(entry.charset);
+        vxml_free(entry.src);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML script src decoding changed between passes");
+    }
+    entry.src[src_size] = '\0';
+    entry.src_size = src_size;
+    memcpy(entry.charset, utf8, sizeof(utf8));
+    entry.charset_size = sizeof(utf8) - 1u;
+    entry.location = salts_xml_attribute_location(src_attribute);
+
+    if (measurement->script_count == measurement->script_capacity) {
+        size_t capacity = measurement->script_capacity == 0u
+            ? 4u : measurement->script_capacity * 2u;
+        vxml_decoded_script *rows;
+        if (capacity < measurement->script_capacity ||
+            capacity > limits->max_actions)
+            capacity = limits->max_actions;
+        if (capacity <= measurement->script_capacity ||
+            !checked_multiply(
+                capacity, sizeof(*rows), &allocation_size)) {
+            vxml_free(entry.charset);
+            vxml_free(entry.src);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                entry.location,
+                "VoiceXML temporary script table size overflow");
+        }
+        rows = (vxml_decoded_script *)vxml_realloc(
+            measurement->scripts, allocation_size);
+        if (rows == NULL) {
+            vxml_free(entry.charset);
+            vxml_free(entry.src);
+            return fail(
+                diagnostic, VXML_ALLOCATION_FAILED,
+                entry.location,
+                "VoiceXML temporary script table allocation failed");
+        }
+        measurement->scripts = rows;
+        measurement->script_capacity = capacity;
+    }
+    measurement->scripts[measurement->script_count++] = entry;
+    return VXML_OK;
+}
+
+static vxml_status measure_external_script(
+    salts_xml_node node,
+    vxml_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_attribute src = {0};
+    salts_xml_attribute charset = {0};
+    size_t index;
+    bool has_inline = false;
+
+    if ((measurement->features &
+         VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT) == 0u)
+        return fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(node),
+            "VoiceXML script requires an explicit script profile");
+
+    for (index = 0u;
+         index < salts_xml_node_attribute_count(node);
+         ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported VoiceXML script attribute");
+        if (view_equal(local, "src")) {
+            if (src.impl != NULL)
+                return fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "duplicate VoiceXML script src");
+            src = attribute;
+        } else if (view_equal(local, "charset")) {
+            if (charset.impl != NULL)
+                return fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "duplicate VoiceXML script charset");
+            charset = attribute;
+        } else {
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported VoiceXML script attribute");
+        }
+    }
+
+    for (index = 0u;
+         index < salts_xml_node_child_count(node);
+         ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (!node_is_ignorable(child)) {
+            has_inline = true;
+            break;
+        }
+    }
+    if (src.impl == NULL)
+        return fail(
+            diagnostic,
+            has_inline ? VXML_UNSUPPORTED_FEATURE
+                       : VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            has_inline
+                ? "inline VoiceXML script execution is outside the external-script profile"
+                : "VoiceXML script requires src or inline content");
+    if (has_inline)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML script cannot combine src with inline content");
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(
+            measurement->action_count, 1u,
+            &measurement->action_count))
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML action count exceeds max_actions");
+    return append_external_script(
+        measurement, src, charset, limits, diagnostic);
+}
+
 static vxml_status resolve_gotos(
     vxml_measurement *measurement,
     vxml_diagnostic *diagnostic) {
@@ -1111,7 +1341,8 @@ static vxml_status measure_block(
                 salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
             (!view_equal(local_name, "exit") &&
              !view_equal(local_name, "goto") &&
-             !view_equal(local_name, "submit")))
+             !view_equal(local_name, "submit") &&
+             !view_equal(local_name, "script")))
             return reject_unexpected_element(
                 child, diagnostic, "unsupported VoiceXML block child element");
         if (actions != 0u)
@@ -1125,8 +1356,11 @@ static vxml_status measure_block(
             : view_equal(local_name, "submit")
                 ? measure_submit(
                     child, measurement, limits, diagnostic)
-                : measure_exit(
-                    child, measurement, limits, diagnostic);
+                : view_equal(local_name, "script")
+                    ? measure_external_script(
+                        child, measurement, limits, diagnostic)
+                    : measure_exit(
+                        child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1267,6 +1501,35 @@ static void write_exit(vxml_writer *writer) {
     action->fetchaudio_uri_size = 0u;
 }
 
+static void write_external_script(vxml_writer *writer) {
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    const vxml_decoded_script script =
+        writer->measurement->scripts[writer->script_index++];
+    action->kind = VXML_ACTION_SCRIPT_EXTERNAL;
+    action->target_form = SIZE_MAX;
+    action->target_uri = NULL;
+    action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
+    action->submit_method = 0;
+    action->submit_enctype = 0;
+    action->script_src =
+        writer->impl->storage + writer->storage_index;
+    action->script_src_size = script.src_size;
+    memcpy(
+        writer->impl->storage + writer->storage_index,
+        script.src, script.src_size + 1u);
+    writer->storage_index += script.src_size + 1u;
+    action->script_charset =
+        writer->impl->storage + writer->storage_index;
+    action->script_charset_size = script.charset_size;
+    memcpy(
+        writer->impl->storage + writer->storage_index,
+        script.charset, script.charset_size + 1u);
+    writer->storage_index += script.charset_size + 1u;
+}
+
 static void write_submit(vxml_writer *writer) {
     vxml_action_row *action =
         &writer->impl->actions[writer->action_index++];
@@ -1336,6 +1599,9 @@ static void write_block(vxml_writer *writer, salts_xml_node node) {
             else if (view_equal(
                          salts_xml_node_local_name(child), "submit"))
                 write_submit(writer);
+            else if (view_equal(
+                         salts_xml_node_local_name(child), "script"))
+                write_external_script(writer);
             else
                 write_exit(writer);
         }
@@ -1427,7 +1693,8 @@ static vxml_status validate_literal_goto_graph(
             if (action == NULL ||
                 action->kind == VXML_ACTION_EXIT ||
                 action->kind == VXML_ACTION_GOTO_EXTERNAL ||
-                action->kind == VXML_ACTION_SUBMIT)
+                action->kind == VXML_ACTION_SUBMIT ||
+                action->kind == VXML_ACTION_SCRIPT_EXTERNAL)
                 break;
             if (action->kind != VXML_ACTION_GOTO ||
                 action->target_form >= impl->form_count)
@@ -1474,10 +1741,12 @@ vxml_limits vxml_default_limits(void) {
     return limits;
 }
 
-vxml_status vxml_compile(const void *bytes, size_t size,
-                         const vxml_limits *limits,
-                         vxml_program *out,
-                         vxml_diagnostic *diagnostic) {
+vxml_status vxml_compile_with_features(
+    const void *bytes, size_t size,
+    const vxml_limits *limits,
+    uint64_t features,
+    vxml_program *out,
+    vxml_diagnostic *diagnostic) {
     const vxml_limits active_limits =
         limits != NULL ? *limits : vxml_default_limits();
     salts_xml_document document = {0};
@@ -1494,6 +1763,12 @@ vxml_status vxml_compile(const void *bytes, size_t size,
     size_t allocation_size;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
     if (out != NULL) out->impl = NULL;
+    if ((features & ~VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT) != 0u)
+        return fail(
+            diagnostic, VXML_INVALID_ARGUMENT,
+            (salts_xml_location){0},
+            "unsupported VoiceXML compile feature");
+    measurement.features = features;
     if (bytes == NULL || size == 0u || out == NULL ||
         active_limits.xml.max_input_bytes == 0u ||
         active_limits.xml.max_nodes == 0u ||
@@ -1565,6 +1840,7 @@ vxml_status vxml_compile(const void *bytes, size_t size,
         writer.action_index != measurement.action_count ||
         writer.goto_index != measurement.goto_count ||
         writer.submit_index != measurement.submit_count ||
+        writer.script_index != measurement.script_count ||
         writer.storage_index != measurement.name_bytes) {
         status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
@@ -1586,6 +1862,15 @@ cleanup:
     measurement_destroy(&measurement);
     salts_xml_document_destroy(&document);
     return status;
+}
+
+vxml_status vxml_compile(
+    const void *bytes, size_t size,
+    const vxml_limits *limits,
+    vxml_program *out,
+    vxml_diagnostic *diagnostic) {
+    return vxml_compile_with_features(
+        bytes, size, limits, UINT64_C(0), out, diagnostic);
 }
 
 void vxml_program_destroy(vxml_program *program) {
