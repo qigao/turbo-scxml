@@ -3800,6 +3800,155 @@ static vxml_status cmeta_register_executable_variables(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_retain_dialog_id(
+    cmeta_program_builder *builder,
+    salts_xml_node dialog,
+    size_t form_index,
+    vxml_form_row *base_form) {
+    const salts_xml_attribute id = cmeta_attribute(dialog, "id");
+    if (id.impl != NULL) {
+        size_t prior_form;
+        salts_xml_string_view decoded_id;
+        vxml_status status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(id),
+            salts_xml_attribute_location(id),
+            &base_form->id, &base_form->id_size);
+        if (status != VXML_OK) return status;
+        decoded_id.data = base_form->id;
+        decoded_id.size = base_form->id_size;
+        if (!cmeta_is_ncname(decoded_id))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(id),
+                "VoiceXML dialog id must be a decoded XML NCName");
+        for (prior_form = 0u; prior_form < form_index; ++prior_form) {
+            const vxml_form_row *previous =
+                &builder->impl->forms[prior_form];
+            if (previous->id != NULL &&
+                previous->id_size == base_form->id_size &&
+                memcmp(previous->id, base_form->id,
+                       base_form->id_size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_DUPLICATE_ID,
+                    salts_xml_attribute_location(id),
+                    "duplicate VoiceXML dialog id");
+        }
+    }
+    return VXML_OK;
+}
+
+static vxml_status cmeta_compile_menu_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node menu_node,
+    size_t form_index,
+    size_t menu_index,
+    vxml_cmeta_menu_row *menu) {
+    const salts_xml_attribute dtmf_attribute =
+        cmeta_attribute(menu_node, "dtmf");
+    bool auto_dtmf = dtmf_attribute.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(dtmf_attribute), "true");
+    size_t implicit_count = 0u;
+    size_t child_index;
+    vxml_status status;
+
+    memset(menu, 0, sizeof(*menu));
+    menu->form = form_index;
+    menu->first_choice = builder->menu_choice_index;
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(menu_node);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(menu_node, child_index);
+        const salts_xml_attribute explicit_dtmf =
+            cmeta_attribute(child, "dtmf");
+        const salts_xml_attribute event =
+            cmeta_attribute(child, "event");
+        vxml_cmeta_menu_choice_v1 *view;
+        vxml_cmeta_menu_choice_target_row *target;
+        char *normalized = NULL;
+        size_t normalized_size = 0u;
+        const char *retained;
+        size_t prior;
+        if (cmeta_node_ignorable(child)) continue;
+        if (!cmeta_node_named(child, "choice"))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML menu choice changed between compiler passes");
+        if (builder->menu_choice_index >=
+            builder->profile->menu_choice_count)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML menu choice rows changed between compiler passes");
+
+        status = cmeta_decode_menu_dtmf(
+            explicit_dtmf, auto_dtmf, implicit_count,
+            builder->options->max_menu_choice_bytes,
+            &normalized, &normalized_size, builder->diagnostic);
+        if (status != VXML_OK) return status;
+        if (explicit_dtmf.impl == NULL)
+            ++implicit_count;
+
+        retained = cmeta_retain_view(
+            builder,
+            (salts_xml_string_view){normalized, normalized_size});
+        vxml_free(normalized);
+        if (retained == NULL)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(child),
+                "VoiceXML menu DTMF retention overflow");
+        for (prior = menu->first_choice;
+             prior < builder->menu_choice_index;
+             ++prior) {
+            const vxml_cmeta_name_view prior_dtmf =
+                builder->profile->menu_choices[prior].dtmf;
+            if (prior_dtmf.size == normalized_size &&
+                memcmp(prior_dtmf.data, retained, normalized_size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "duplicate VoiceXML menu DTMF sequence");
+        }
+
+        view = &builder->profile->menu_choices[
+            builder->menu_choice_index];
+        target = &builder->profile->menu_choice_targets[
+            builder->menu_choice_index];
+        view->dtmf = (vxml_cmeta_name_view){
+            retained, normalized_size};
+        view->speech = (vxml_cmeta_name_view){0};
+
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(event),
+            salts_xml_attribute_location(event),
+            &target->target, &target->target_size);
+        if (status != VXML_OK) return status;
+        if (target->target_size == 0u ||
+            target->target_size > builder->options->max_event_name_bytes ||
+            !cmeta_location_path_valid(
+                target->target, target->target_size, SIZE_MAX))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(event),
+                "VoiceXML menu Event target changed between compiler passes");
+        target->kind = VXML_CMETA_MENU_CHOICE_EVENT;
+        ++builder->menu_choice_index;
+    }
+    menu->choice_count =
+        builder->menu_choice_index - menu->first_choice;
+    if (menu->choice_count == 0u)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(menu_node),
+            "VoiceXML menu choices disappeared between compiler passes");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_build_schemas(
     cmeta_program_builder *builder, salts_xml_node root,
     const cmeta_program_measurement *measurement) {
@@ -3873,6 +4022,43 @@ static vxml_status cmeta_build_schemas(
             ++builder->profile->document_declaration_count;
             continue;
         }
+        if (cmeta_node_named(child, "menu")) {
+            const size_t form_index = builder->form_index++;
+            const size_t form_scope = 1u + form_index;
+            const size_t menu_index = builder->menu_index++;
+            vxml_cmeta_form_row *form;
+            vxml_cmeta_menu_row *menu;
+            vxml_form_row *base_form;
+            if (form_index >= builder->profile->form_count ||
+                menu_index >= builder->profile->menu_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu rows changed between compiler passes");
+            form = &builder->profile->forms[form_index];
+            menu = &builder->profile->menus[menu_index];
+            base_form = &builder->impl->forms[form_index];
+            form->scope = form_scope;
+            form->first_declaration = builder->declaration_index;
+            form->declaration_count = 0u;
+            form->first_field = builder->field_index;
+            form->field_count = 0u;
+            form->first_filled = VXML_CMETA_NO_INDEX;
+            form->filled_count = 0u;
+            form->first_block = builder->block_index;
+            form->block_count = 0u;
+            form->menu = menu_index;
+            builder->profile->scopes[form_scope].owner = form_index;
+            base_form->first_block = builder->block_index;
+            base_form->block_count = 0u;
+            status = cmeta_retain_dialog_id(
+                builder, child, form_index, base_form);
+            if (status != VXML_OK) return status;
+            status = cmeta_compile_menu_schema(
+                builder, child, form_index, menu_index, menu);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "form")) {
             const size_t form_index = builder->form_index++;
             const size_t form_scope = 1u + form_index;
@@ -3884,40 +4070,12 @@ static vxml_status cmeta_build_schemas(
             form->first_field = builder->field_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
+            form->menu = VXML_CMETA_NO_INDEX;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
-            {
-                const salts_xml_attribute id = cmeta_attribute(child, "id");
-                if (id.impl != NULL) {
-                    size_t prior_form;
-                    salts_xml_string_view decoded_id;
-                    status = cmeta_retain_decoded_view(
-                        builder, salts_xml_attribute_value(id),
-                        salts_xml_attribute_location(id),
-                        &base_form->id, &base_form->id_size);
-                    if (status != VXML_OK) return status;
-                    decoded_id.data = base_form->id;
-                    decoded_id.size = base_form->id_size;
-                    if (!cmeta_is_ncname(decoded_id))
-                        return cmeta_program_fail(
-                            builder->diagnostic, VXML_INVALID_STRUCTURE,
-                            salts_xml_attribute_location(id),
-                            "VoiceXML form id must be a decoded XML NCName");
-                    for (prior_form = 0u; prior_form < form_index;
-                         ++prior_form) {
-                        const vxml_form_row *previous =
-                            &builder->impl->forms[prior_form];
-                        if (previous->id != NULL &&
-                            previous->id_size == base_form->id_size &&
-                            memcmp(previous->id, base_form->id,
-                                   base_form->id_size) == 0)
-                            return cmeta_program_fail(
-                                builder->diagnostic, VXML_DUPLICATE_ID,
-                                salts_xml_attribute_location(id),
-                                "duplicate VoiceXML form id");
-                    }
-                }
-            }
+            status = cmeta_retain_dialog_id(
+                builder, child, form_index, base_form);
+            if (status != VXML_OK) return status;
             for (form_child = 0u;
                  form_child < salts_xml_node_child_count(child);
                  ++form_child) {
