@@ -2141,6 +2141,76 @@ static const cmeta_data_field_desc *cmeta_root_field(
     return NULL;
 }
 
+static vxml_status cmeta_compile_prompt_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node prompt,
+    size_t field_index,
+    vxml_cmeta_prompt_row *out) {
+    const salts_xml_attribute count_attribute =
+        cmeta_attribute(prompt, "count");
+    size_t child_index;
+    size_t text_bytes = 0u;
+    char *destination;
+    unsigned count = 1u;
+    vxml_status status = cmeta_parse_prompt_count(
+        count_attribute, &count, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    memset(out, 0, sizeof(*out));
+    out->field = field_index;
+    out->count = count;
+    out->condition = VXML_CMETA_NO_INDEX;
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(prompt);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(prompt, child_index);
+        if (salts_xml_node_type(child) == SALTS_XML_TEXT) {
+            const salts_xml_string_view text =
+                salts_xml_node_text_view(child);
+            if (text.size > SIZE_MAX - text_bytes)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt text size changed between passes");
+            text_bytes += text.size;
+        }
+    }
+    if (text_bytes == 0u)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(prompt),
+            "VoiceXML prompt text disappeared between passes");
+    if (builder->string_index > builder->profile->string_size ||
+        text_bytes >=
+            builder->profile->string_size - builder->string_index)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(prompt),
+            "VoiceXML retained prompt storage overflow");
+    destination =
+        builder->profile->strings + builder->string_index;
+    text_bytes = 0u;
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(prompt);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(prompt, child_index);
+        if (salts_xml_node_type(child) == SALTS_XML_TEXT) {
+            const salts_xml_string_view text =
+                salts_xml_node_text_view(child);
+            if (text.size != 0u)
+                memcpy(destination + text_bytes, text.data, text.size);
+            text_bytes += text.size;
+        }
+    }
+    destination[text_bytes] = '\0';
+    out->text = destination;
+    out->text_size = text_bytes;
+    builder->string_index += text_bytes + 1u;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_compile_field_schema(
     cmeta_program_builder *builder,
     salts_xml_node node,
@@ -2775,6 +2845,7 @@ static vxml_status cmeta_build_schemas(
                         builder, item, form_index, form_scope,
                         form->first_field, field);
                     if (status != VXML_OK) return status;
+                    field->first_prompt = builder->prompt_index;
                     {
                         size_t field_child;
                         for (field_child = 0u;
@@ -2784,6 +2855,22 @@ static vxml_status cmeta_build_schemas(
                             const salts_xml_node nested =
                                 salts_xml_node_child_at(
                                     item, field_child);
+                            if (cmeta_node_named(nested, "prompt")) {
+                                if (builder->prompt_index >=
+                                    builder->profile->prompt_count)
+                                    return cmeta_program_fail(
+                                        builder->diagnostic,
+                                        VXML_INVALID_STRUCTURE,
+                                        salts_xml_node_location(nested),
+                                        "VoiceXML prompt rows changed between compiler passes");
+                                status = cmeta_compile_prompt_schema(
+                                    builder, nested,
+                                    builder->field_index,
+                                    &builder->profile->prompts[
+                                        builder->prompt_index++]);
+                                if (status != VXML_OK) return status;
+                                continue;
+                            }
                             if (!cmeta_node_named(nested, "filled"))
                                 continue;
                             if (builder->filled_index >=
@@ -2803,6 +2890,8 @@ static vxml_status cmeta_build_schemas(
                             break;
                         }
                     }
+                    field->prompt_count =
+                        builder->prompt_index - field->first_prompt;
                     ++builder->field_index;
                     continue;
                 }
@@ -4043,6 +4132,7 @@ static vxml_status cmeta_write_program(
         (builder.external_data_index != measurement->external_data_count ||
          builder.form_index != measurement->form_count ||
          builder.field_index != measurement->field_count ||
+         builder.prompt_index != measurement->prompt_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index != measurement->filled_target_count ||
          builder.event_handler_index != measurement->event_handler_count ||
