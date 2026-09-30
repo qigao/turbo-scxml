@@ -3374,6 +3374,60 @@ static vxml_status cmeta_lower_program(
                             &field->condition);
                         if (status != VXML_OK) return status;
                     }
+                    if (field->filled != VXML_CMETA_NO_INDEX) {
+                        size_t nested_index;
+                        salts_xml_node filled_node = {0};
+                        if (field->filled >= builder->profile->filled_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML field filled index is invalid");
+                        for (nested_index = 0u;
+                             nested_index < salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(item, nested_index);
+                            if (cmeta_node_named(nested, "filled")) {
+                                filled_node = nested;
+                                break;
+                            }
+                        }
+                        if (filled_node.impl == NULL)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML field filled disappeared between passes");
+                        status = cmeta_lower_filled_actions(
+                            builder, filled_node, form,
+                            &builder->profile->filled[field->filled]);
+                        if (status != VXML_OK) return status;
+                    }
+                } else if (cmeta_node_named(item, "filled")) {
+                    size_t offset;
+                    vxml_cmeta_filled_row *filled = NULL;
+                    if (form->first_filled == VXML_CMETA_NO_INDEX)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form filled range is missing");
+                    for (offset = 0u; offset < form->filled_count; ++offset) {
+                        vxml_cmeta_filled_row *candidate =
+                            &builder->profile->filled[
+                                form->first_filled + offset];
+                        if (candidate->action_end == 0u &&
+                            candidate->first_action == 0u) {
+                            filled = candidate;
+                            break;
+                        }
+                    }
+                    if (filled == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form filled rows changed during lowering");
+                    status = cmeta_lower_filled_actions(
+                        builder, item, form, filled);
+                    if (status != VXML_OK) return status;
                 } else if (cmeta_node_named(item, "block")) {
                     status = cmeta_lower_block_actions(
                         builder, item, block_index++);
@@ -3439,6 +3493,8 @@ static vxml_status cmeta_write_program(
         (builder.external_data_index != measurement->external_data_count ||
          builder.form_index != measurement->form_count ||
          builder.field_index != measurement->field_count ||
+         builder.filled_index != measurement->filled_count ||
+         builder.filled_target_index != measurement->filled_target_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
          builder.action_index != measurement->action_count ||
