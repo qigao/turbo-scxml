@@ -920,6 +920,196 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("barge-in cancels only the matching active prompt generation") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt bargein='true' bargeintype='speech'>hello</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 collect_request = {0};
+        vxml_cmeta_prompt_media_request_v1 media_request = {0};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome =
+                VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &collect_request),
+                    VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &media_request),
+                    VXML_OK);
+        check_equal(media_request.generation,
+                    collect_request.generation);
+        check_true(media_request.bargein);
+        check_equal(media_request.bargein_type,
+                    VXML_CMETA_PROMPT_BARGEIN_SPEECH);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_commit(
+                        &session),
+                    VXML_OK);
+        check_true(media_probe.active);
+
+        check_equal(vxml_session_cmeta_prompt_media_barge_in(
+                        &session, collect_request.generation,
+                        VXML_CMETA_PROMPT_BARGEIN_HOTWORD),
+                    VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH);
+        check_equal(media_probe.cancel_calls, (size_t)0u);
+        check_true(media_probe.active);
+
+        check_equal(vxml_session_cmeta_prompt_media_barge_in(
+                        &session, collect_request.generation,
+                        VXML_CMETA_PROMPT_BARGEIN_SPEECH),
+                    VXML_CMETA_PROMPT_BARGE_CANCELED);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+        check_false(media_probe.active);
+
+        completion.generation = media_request.generation;
+        check_equal(vxml_session_cmeta_prompt_media_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE);
+
+        /*
+         * The collect generation has not advanced. Re-admitting a prompt here
+         * would let a late completion from the canceled playback hit a new
+         * playback with the same generation.
+         */
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_INVALID_STATE);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+        vxml_program_destroy(&program);
+    }
+
+    it("keeps non-bargeable prompt media in flight on collect input") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt bargein='false'>hello</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 collect_request = {0};
+        vxml_cmeta_prompt_media_request_v1 media_request = {0};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome =
+                VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        bool progressed = false;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &collect_request),
+                    VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &media_request),
+                    VXML_OK);
+        check_false(media_request.bargein);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_commit(
+                        &session),
+                    VXML_OK);
+        check_true(media_probe.active);
+
+        check_equal(vxml_session_cmeta_prompt_media_barge_in(
+                        &session, collect_request.generation,
+                        VXML_CMETA_PROMPT_BARGEIN_SPEECH),
+                    VXML_CMETA_PROMPT_BARGE_DISABLED);
+        check_equal(media_probe.cancel_calls, (size_t)0u);
+        check_true(media_probe.active);
+
+        /* Provider completes normally; host completion must not cancel it. */
+        media_probe.active = false;
+        completion.generation = media_request.generation;
+        check_equal(vxml_session_cmeta_prompt_media_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_prompt_media_run_ready(
+                        &session, &progressed, &outcome),
+                    VXML_OK);
+        check_true(progressed);
+        check_equal(outcome,
+                    VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED);
+        check_equal(media_probe.cancel_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        check_equal(media_probe.cancel_calls, (size_t)0u);
+        vxml_program_destroy(&program);
+    }
+
     it("settles one prompt completion exactly once without provider cancellation") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
