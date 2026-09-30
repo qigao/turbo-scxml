@@ -3888,7 +3888,8 @@ static vxml_status selected_prompt_row(
             const vxml_cmeta_prompt_media_segment_v1 *segment =
                 &program->prompt_segments[row->first_segment];
             if ((segment->kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
-                 segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
+                 segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
+                 segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
                 segment->payload.data == NULL ||
                 segment->payload.size == 0u ||
                 row->media_kind != segment->kind ||
@@ -3914,7 +3915,8 @@ static vxml_status selected_prompt_row(
                     &program->prompt_segments[
                         row->first_segment + segment_offset];
                 if ((segment->kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
-                     segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
+                     segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
+                     segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
                     segment->payload.data == NULL ||
                     segment->payload.size == 0u)
                     return VXML_INVALID_STRUCTURE;
