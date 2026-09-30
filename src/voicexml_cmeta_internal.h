@@ -55,6 +55,8 @@ typedef struct vxml_cmeta_prompt_row {
     size_t first_segment;
     size_t segment_count;
     uint64_t required_capabilities;
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;
