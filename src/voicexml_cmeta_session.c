@@ -4576,10 +4576,14 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
              ++prompt_index) {
             const vxml_cmeta_prompt_row *prompt =
                 &program->prompts[prompt_index];
-            if (profile->prompt_media_last_mark_segment >=
+            if (range_valid(
+                    prompt->first_segment, prompt->segment_count,
+                    program->prompt_segment_count) &&
+                profile->prompt_media_last_mark_segment >=
                     prompt->first_segment &&
-                profile->prompt_media_last_mark_segment <
-                    prompt->first_segment + prompt->segment_count) {
+                profile->prompt_media_last_mark_segment -
+                    prompt->first_segment <
+                    prompt->segment_count) {
                 out_mark->segment_index =
                     profile->prompt_media_last_mark_segment -
                     prompt->first_segment;
