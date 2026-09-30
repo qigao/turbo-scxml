@@ -4,6 +4,18 @@
 
 static_assert(std::is_standard_layout<vxml_cmeta_prompt_view_v1>::value,
               "prompt view must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_segment_v1>::value,
+    "prompt media segment must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_ticket_v1>::value,
+    "prompt media ticket must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_request_v1>::value,
+    "prompt media request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_adapter_v1>::value,
+    "prompt media adapter must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_ticket_v1>::value,
               "collect ticket must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
