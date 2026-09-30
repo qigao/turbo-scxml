@@ -317,6 +317,12 @@ typedef struct vxml_cmeta_session_data {
     bool handler_reprompt_requested;
     bool reprompt_requested;
     bool event_dispatch_active;
+    const vxml_cmeta_prompt_media_adapter_v1 *prompt_media_adapter;
+    void *prompt_media_user;
+    vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;
+    uint64_t prompt_media_generation;
+    bool prompt_media_prepared;
+    bool prompt_media_in_flight;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;

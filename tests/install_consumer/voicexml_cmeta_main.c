@@ -61,6 +61,14 @@ int main(void) {
     vxml_cmeta_prompt_view_v1 prompt_view = {
         .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_view_v1)};
+    vxml_cmeta_prompt_media_segment_v1 prompt_media_segment = {0};
+    vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket = {0};
+    vxml_cmeta_prompt_media_request_v1 prompt_media_request = {
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_request_v1)};
+    vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter = {
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_adapter_v1)};
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
@@ -80,7 +88,13 @@ int main(void) {
     int result = 1;
 
     if (raise_event == NULL || query_prompt == NULL ||
-        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1)
+        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1 ||
+        prompt_media_request.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
+        prompt_media_adapter.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
+        prompt_media_segment.kind != 0 ||
+        prompt_media_ticket.commit != NULL)
         return 6;
 
     if (data_adapter.abi_version !=

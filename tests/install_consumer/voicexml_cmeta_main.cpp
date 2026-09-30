@@ -7,6 +7,18 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_view_v1>::value,
     "prompt view must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_segment_v1>::value,
+    "prompt media segment must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_ticket_v1>::value,
+    "prompt media ticket must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_request_v1>::value,
+    "prompt media request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_adapter_v1>::value,
+    "prompt media adapter must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
     "collect request must remain C-compatible");
 static_assert(
@@ -42,6 +54,10 @@ int main() {
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
     vxml_cmeta_prompt_view_v1 prompt_view{};
+    vxml_cmeta_prompt_media_segment_v1 prompt_media_segment{};
+    vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket{};
+    vxml_cmeta_prompt_media_request_v1 prompt_media_request{};
+    vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
     vxml_cmeta_collect_result_slot_v1 collect_slot{};
@@ -66,8 +82,21 @@ int main() {
 
     prompt_view.abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1;
     prompt_view.struct_size = sizeof(prompt_view);
+    prompt_media_request.abi_version =
+        VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1;
+    prompt_media_request.struct_size = sizeof(prompt_media_request);
+    prompt_media_adapter.abi_version =
+        VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1;
+    prompt_media_adapter.struct_size = sizeof(prompt_media_adapter);
     if (raise_event == nullptr || query_prompt == nullptr ||
-        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1)
+        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1 ||
+        prompt_media_request.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
+        prompt_media_adapter.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
+        prompt_media_segment.kind !=
+            static_cast<vxml_cmeta_prompt_media_segment_kind>(0) ||
+        prompt_media_ticket.commit != nullptr)
         return 6;
 
     collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
