@@ -1863,6 +1863,7 @@ spec("VoiceXML CMeta program compiler") {
                 const vxml_status expected =
                     index == 3u || index == 4u ||
                     index == 5u || index == 6u ||
+                    index == 7u || index == 8u ||
                     index == 13u
                         ? VXML_INVALID_STRUCTURE
                         : VXML_UNSUPPORTED_FEATURE;
