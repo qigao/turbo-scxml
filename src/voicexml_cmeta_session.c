@@ -3655,8 +3655,10 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
     const cmeta_data_struct_shape *root_shape;
-    const vxml_cmeta_field_row *selected;
+    const vxml_cmeta_field_row *selected = NULL;
+    const vxml_cmeta_form_row *form = NULL;
     vxml_cmeta_collect_mailbox *mailbox;
+    bool initial_mode;
     uint64_t generation;
     unsigned state;
     unsigned expected;
@@ -3689,12 +3691,37 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     mailbox = &profile->collect_mailbox;
+
     if (profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
-    if (profile->active_field >= program->field_count ||
-        program->fields == NULL)
-        return VXML_CMETA_COLLECT_INGRESS_STALE;
-    selected = &program->fields[profile->active_field];
+    initial_mode = profile->active_initial != VXML_CMETA_NO_INDEX;
+
+    if (initial_mode) {
+        const vxml_cmeta_initial_row *initial;
+        if (profile->active_field != VXML_CMETA_NO_INDEX ||
+            profile->active_initial >= program->initial_count ||
+            profile->active_form >= program->form_count ||
+            program->initials == NULL || program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        initial = &program->initials[profile->active_initial];
+        form = &program->forms[profile->active_form];
+        if (initial->form != profile->active_form ||
+            form->initial_count == 0u ||
+            form->field_count == 0u)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    } else {
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        selected = &program->fields[profile->active_field];
+        if (profile->active_form >= program->form_count ||
+            program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        form = &program->forms[profile->active_form];
+        if (selected->form != profile->active_form)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    }
+
     root_shape = session_root_shape(program);
     if (root_shape == NULL || mailbox->root_fields == NULL ||
         mailbox->slot_capacity == 0u ||
@@ -3720,7 +3747,10 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
         &mailbox->generation, memory_order_relaxed);
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
-    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD)
+    if ((!initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD) ||
+        (initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_INITIAL))
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 
     expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
@@ -3748,9 +3778,9 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
 
         if (slot->name.data == NULL || slot->name.size == 0u ||
             memchr(slot->name.data, '\0', slot->name.size) != NULL ||
-            slot->data == NULL || slot->value == NULL) {
+            slot->data == NULL || slot->value == NULL)
             goto incompatible;
-        }
+
         for (root_field = 0u;
              root_field < root_shape->field_count;
              ++root_field) {
@@ -3766,6 +3796,30 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
             !cmeta_data_desc_equal(slot->data, target->value) ||
             !collect_fixed_scalar_data(target->value))
             goto incompatible;
+
+        if (initial_mode) {
+            size_t field_offset;
+            bool same_form = false;
+            if (!range_valid(
+                    form->first_field, form->field_count,
+                    program->field_count) ||
+                program->fields == NULL)
+                goto incompatible;
+            for (field_offset = 0u;
+                 field_offset < form->field_count;
+                 ++field_offset) {
+                const vxml_cmeta_field_row *candidate =
+                    &program->fields[form->first_field + field_offset];
+                if (candidate->form != profile->active_form)
+                    goto incompatible;
+                if (candidate->root_field == root_field) {
+                    same_form = true;
+                    break;
+                }
+            }
+            if (!same_form) goto incompatible;
+        }
+
         type = target->value->storage_type;
         if (type == NULL ||
             type->size > mailbox->storage_stride)
@@ -3773,7 +3827,7 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
         for (prior = 0u; prior < slot_index; ++prior)
             if (mailbox->root_fields[prior] == root_field)
                 goto incompatible;
-        if (root_field == selected->root_field)
+        if (!initial_mode && root_field == selected->root_field)
             ++selected_count;
 
         mailbox->root_fields[slot_index] = root_field;
@@ -3782,15 +3836,16 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
                 slot_index * mailbox->storage_stride,
             slot->value, type->size);
     }
-    if (selected_count != 1u)
+
+    if (!initial_mode && selected_count != 1u)
         goto incompatible;
     if (atomic_load_explicit(
             &mailbox->generation, memory_order_relaxed) !=
-        completion->generation)
+            completion->generation)
         goto stale_after_claim;
 
     mailbox->slot_count = completion->slot_count;
-    mailbox->data = selected->field_data;
+    mailbox->data = initial_mode ? NULL : selected->field_data;
     expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
