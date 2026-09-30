@@ -4,6 +4,7 @@
 #include <xml_parser/xml_parser.h>
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +73,17 @@ typedef struct vxml_navigation_target {
     size_t uri_size;
 } vxml_navigation_target;
 
+#define VXML_NAVIGATION_REQUEST_ABI_V1 1u
+
+typedef struct vxml_navigation_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    const char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
+} vxml_navigation_request_v1;
+
 /**
  * Caller-allocated, single-owner, non-copyable session handle. Move only by
  * copying the complete handle into an empty destination and immediately
@@ -127,6 +139,10 @@ vxml_status vxml_session_start_at_form(
 vxml_status vxml_session_navigation(
     const vxml_session *session,
     vxml_navigation_target *out_target);
+
+vxml_status vxml_session_navigation_request(
+    const vxml_session *session,
+    vxml_navigation_request_v1 *out_request);
 
 /**
  * Synchronously inject one byte-counted Event into the active runtime profile.

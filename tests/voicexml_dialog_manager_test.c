@@ -299,6 +299,10 @@ typedef struct navigation_document_probe {
     size_t entry_count;
     size_t open_calls;
     size_t close_calls;
+    size_t fetch_audio_begin_calls;
+    size_t fetch_audio_finish_calls;
+    char fetch_audio_uri[256];
+    size_t fetch_audio_uri_size;
 } navigation_document_probe;
 
 static vxml_dialog_manager_status navigation_document_open(
@@ -350,6 +354,47 @@ static void navigation_document_close(
         memset(document, 0, sizeof(*document));
 }
 
+static void navigation_fetch_audio_finish(void *user) {
+    navigation_document_probe *probe =
+        (navigation_document_probe *)user;
+    if (probe != NULL)
+        ++probe->fetch_audio_finish_calls;
+}
+
+static vxml_fetch_audio_begin_result navigation_fetch_audio_begin(
+    void *user,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_ticket_v1 *out_ticket) {
+    navigation_document_probe *probe =
+        (navigation_document_probe *)user;
+    if (out_ticket != NULL)
+        *out_ticket = (vxml_fetch_audio_ticket_v1){0};
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_FETCH_AUDIO_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->uri == NULL || request->uri_size == 0u ||
+        request->uri_size >= sizeof(probe->fetch_audio_uri) ||
+        request->has_delay || request->has_minimum)
+        return (vxml_fetch_audio_begin_result)99;
+    ++probe->fetch_audio_begin_calls;
+    memcpy(
+        probe->fetch_audio_uri,
+        request->uri,
+        request->uri_size);
+    probe->fetch_audio_uri[request->uri_size] = '\0';
+    probe->fetch_audio_uri_size = request->uri_size;
+    *out_ticket = (vxml_fetch_audio_ticket_v1){
+        .finish = navigation_fetch_audio_finish,
+        .user = probe};
+    return VXML_FETCH_AUDIO_STARTED;
+}
+
+static const vxml_fetch_audio_adapter_v1
+navigation_fetch_audio_adapter = {
+    .abi_version = VXML_FETCH_AUDIO_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_fetch_audio_adapter_v1),
+    .begin = navigation_fetch_audio_begin};
+
 static const vxml_dialog_document_adapter_v1
 navigation_document_adapter = {
     .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
@@ -374,7 +419,9 @@ static vxml_document_store_status navigation_store_init(
         .max_cache_bytes = 8192u,
         .voice_limits = {0},
         .documents = &navigation_document_adapter,
-        .document_user = documents};
+        .document_user = documents,
+        .fetch_audio = &navigation_fetch_audio_adapter,
+        .fetch_audio_user = documents};
     config.voice_limits = vxml_default_limits();
     return vxml_document_store_init(store, &config);
 }
@@ -1259,15 +1306,18 @@ spec("VoiceXML dialog manager") {
             VXML_DOCUMENT_STORE_OK);
     }
 
-    it("V3 follows relative external goto to a target fragment and reuses both cached programs") {
+    it("V3 resolves goto fetchaudio and skips it when target documents are cached") {
         static const char a_uri[] =
             "https://voice.example/app/dialogs/a.vxml";
         static const char b_uri[] =
             "https://voice.example/app/dialogs/b.vxml";
+        static const char wait_audio_uri[] =
+            "https://voice.example/app/media/wait.wav";
         static const char a_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form id='main'><block>"
-            "<goto next='b.vxml#target'/>"
+            "<goto next='b.vxml#target' "
+            "fetchaudio='../media/wait.wav'/>"
             "</block></form></vxml>";
         static const char b_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
@@ -1323,6 +1373,16 @@ spec("VoiceXML dialog manager") {
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
         check_equal(documents.close_calls, (size_t)2u);
+        check_equal(
+            documents.fetch_audio_begin_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_finish_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_uri_size,
+            sizeof(wait_audio_uri) - 1u);
+        check_equal(
+            documents.fetch_audio_uri,
+            wait_audio_uri);
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
         check_equal(events.rows[1].name, "dialog.exit");
@@ -1340,6 +1400,10 @@ spec("VoiceXML dialog manager") {
                 &manager, 1u, &processed),
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
+        check_equal(
+            documents.fetch_audio_begin_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_finish_calls, (size_t)1u);
         check_equal(events.count, (size_t)4u);
         check_equal(events.rows[2].name, "dialog.started");
         check_equal(events.rows[3].name, "dialog.exit");

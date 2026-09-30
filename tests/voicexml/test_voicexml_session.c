@@ -243,10 +243,12 @@ spec("VoiceXML session") {
         }
     }
 
-        it("follows a finite forward and backward form goto chain") {
+        it("follows local goto with fetchaudio without entering fetch navigation") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='first'><block><goto next='#third'/></block></form>"
+                "<form id='first'><block>"
+                "<goto next='#third' fetchaudio='wait.wav'/>"
+                "</block></form>"
                 "<form id='second'><block><exit/></block></form>"
                 "<form id='third'><block><goto next='#second'/></block></form>"
                 "</vxml>";
@@ -263,16 +265,19 @@ spec("VoiceXML session") {
             vxml_program_destroy(&program);
         }
 
-        it("yields a borrowed external goto target without performing document I/O") {
+        it("exposes external goto fetchaudio through the versioned navigation request") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='first'><block>"
-                "<goto next='dialogs/next.vxml#target'/>"
+                "<goto next='dialogs/next.vxml#target' "
+                "fetchaudio='media/wait.wav'/>"
                 "</block></form></vxml>";
             static const char expected[] = "dialogs/next.vxml#target";
+            static const char wait_audio[] = "media/wait.wav";
             vxml_program program = {0};
             vxml_session session = {0};
             vxml_navigation_target target = {0};
+            vxml_navigation_request_v1 navigation = {0};
 
             check_equal(compile_program(source, &program), VXML_OK);
             check_equal(vxml_session_init(&session, &program), VXML_OK);
@@ -285,11 +290,28 @@ spec("VoiceXML session") {
             check_equal(target.uri_size, sizeof(expected) - 1u);
             check_equal(target.uri, expected);
             check_equal(
+                vxml_session_navigation_request(
+                    &session, &navigation), VXML_OK);
+            check_equal(
+                navigation.abi_version,
+                VXML_NAVIGATION_REQUEST_ABI_V1);
+            check_equal(
+                navigation.struct_size,
+                sizeof(vxml_navigation_request_v1));
+            check_equal(navigation.uri, expected);
+            check_equal(
+                navigation.fetchaudio_uri_size,
+                sizeof(wait_audio) - 1u);
+            check_equal(
+                navigation.fetchaudio_uri,
+                wait_audio);
+            check_equal(
                 vxml_session_start(&session),
                 VXML_INVALID_STATE);
             check_equal(vxml_session_close(&session), VXML_OK);
             check_equal(
-                vxml_session_navigation(&session, &target),
+                vxml_session_navigation_request(
+                    &session, &navigation),
                 VXML_CLOSED);
 
             vxml_session_destroy(&session);

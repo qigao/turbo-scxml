@@ -16,6 +16,8 @@ typedef struct vxml_decoded_id {
 typedef struct vxml_decoded_goto {
     char *target;
     size_t target_size;
+    char *fetchaudio;
+    size_t fetchaudio_size;
     size_t target_form;
     salts_xml_location location;
     bool external;
@@ -434,13 +436,42 @@ static vxml_status validate_attributes(
     return VXML_OK;
 }
 
+static vxml_status validate_goto_attributes(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    size_t index;
+    bool seen_next = false;
+    bool seen_fetchaudio = false;
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        bool *seen = NULL;
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(local, "next"))
+            seen = &seen_next;
+        else if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+                 view_equal(local, "fetchaudio"))
+            seen = &seen_fetchaudio;
+        if (seen == NULL || *seen)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML goto attribute");
+        *seen = true;
+    }
+    return VXML_OK;
+}
+
 static void measurement_destroy(vxml_measurement *measurement) {
     size_t index;
     if (measurement == NULL) return;
     for (index = 0u; index < measurement->id_count; ++index)
         vxml_free(measurement->ids[index].data);
-    for (index = 0u; index < measurement->goto_count; ++index)
+    for (index = 0u; index < measurement->goto_count; ++index) {
         vxml_free(measurement->gotos[index].target);
+        vxml_free(measurement->gotos[index].fetchaudio);
+    }
     vxml_free(measurement->ids);
     vxml_free(measurement->gotos);
     memset(measurement, 0, sizeof(*measurement));
@@ -541,7 +572,9 @@ static vxml_status append_id(
 }
 
 static vxml_status append_goto(
-    vxml_measurement *measurement, salts_xml_attribute attribute,
+    vxml_measurement *measurement,
+    salts_xml_attribute attribute,
+    salts_xml_attribute fetchaudio_attribute,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     vxml_decoded_goto entry = {0};
     const salts_xml_string_view raw =
@@ -617,6 +650,55 @@ static vxml_status append_goto(
         }
     }
 
+    if (fetchaudio_attribute.impl != NULL) {
+        const salts_xml_string_view raw_fetchaudio =
+            salts_xml_attribute_value(fetchaudio_attribute);
+        size_t fetchaudio_size = 0u;
+        size_t retained_size;
+        if (!decode_entities(
+                raw_fetchaudio, NULL, 0u, &fetchaudio_size) ||
+            fetchaudio_size == 0u ||
+            !checked_add(fetchaudio_size, 1u, &retained_size)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio_attribute),
+                "VoiceXML goto fetchaudio must be one nonempty URI");
+        }
+        if (entry.external) {
+            if (!checked_add(
+                    measurement->name_bytes, retained_size,
+                    &measurement->name_bytes) ||
+                measurement->name_bytes > limits->max_name_bytes) {
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio exceeds max_name_bytes");
+            }
+            entry.fetchaudio = (char *)vxml_malloc(retained_size);
+            if (entry.fetchaudio == NULL) {
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_ALLOCATION_FAILED,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio allocation failed");
+            }
+            if (!decode_entities(
+                    raw_fetchaudio, entry.fetchaudio,
+                    fetchaudio_size, &fetchaudio_size)) {
+                vxml_free(entry.fetchaudio);
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio decoding changed between passes");
+            }
+            entry.fetchaudio[fetchaudio_size] = '\0';
+            entry.fetchaudio_size = fetchaudio_size;
+        }
+    }
+
     if (measurement->goto_count == measurement->goto_capacity) {
         size_t capacity = measurement->goto_capacity == 0u
             ? 4u : measurement->goto_capacity * 2u;
@@ -626,6 +708,7 @@ static vxml_status append_goto(
             capacity = limits->max_actions;
         if (capacity <= measurement->goto_capacity ||
             !checked_multiply(capacity, sizeof(*gotos), &allocation_size)) {
+            vxml_free(entry.fetchaudio);
             vxml_free(entry.target);
             return fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -635,6 +718,7 @@ static vxml_status append_goto(
         gotos = (vxml_decoded_goto *)vxml_realloc(
             measurement->gotos, allocation_size);
         if (gotos == NULL) {
+            vxml_free(entry.fetchaudio);
             vxml_free(entry.target);
             return fail(
                 diagnostic, VXML_ALLOCATION_FAILED,
@@ -742,10 +826,12 @@ static vxml_status measure_goto(
     salts_xml_node node, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     salts_xml_attribute next;
+    salts_xml_attribute fetchaudio;
     size_t index;
-    vxml_status status = validate_attributes(node, "next", diagnostic);
+    vxml_status status = validate_goto_attributes(node, diagnostic);
     if (status != VXML_OK) return status;
     next = unqualified_attribute(node, "next");
+    fetchaudio = unqualified_attribute(node, "fetchaudio");
     if (next.impl == NULL)
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
@@ -766,7 +852,8 @@ static vxml_status measure_goto(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(node),
             "VoiceXML action count exceeds max_actions");
-    return append_goto(measurement, next, limits, diagnostic);
+    return append_goto(
+        measurement, next, fetchaudio, limits, diagnostic);
 }
 
 static vxml_status measure_block(
@@ -942,6 +1029,8 @@ static void write_exit(vxml_writer *writer) {
     action->target_form = SIZE_MAX;
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
 }
 
 static void write_goto(vxml_writer *writer) {
@@ -951,6 +1040,8 @@ static void write_goto(vxml_writer *writer) {
         writer->measurement->gotos[writer->goto_index++];
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
     if (target.external) {
         action->kind = VXML_ACTION_GOTO_EXTERNAL;
         action->target_form = SIZE_MAX;
@@ -961,6 +1052,18 @@ static void write_goto(vxml_writer *writer) {
             writer->impl->storage + writer->storage_index,
             target.target, target.target_size + 1u);
         writer->storage_index += target.target_size + 1u;
+        if (target.fetchaudio != NULL &&
+            target.fetchaudio_size != 0u) {
+            action->fetchaudio_uri =
+                writer->impl->storage + writer->storage_index;
+            action->fetchaudio_uri_size =
+                target.fetchaudio_size;
+            memcpy(
+                writer->impl->storage + writer->storage_index,
+                target.fetchaudio, target.fetchaudio_size + 1u);
+            writer->storage_index +=
+                target.fetchaudio_size + 1u;
+        }
     } else {
         action->kind = VXML_ACTION_GOTO;
         action->target_form = target.target_form;
