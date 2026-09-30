@@ -169,6 +169,7 @@ static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
     options.max_menus = 4u;
     options.max_menu_choices = 16u;
     options.max_menu_choice_bytes = 16u;
+    options.max_menu_target_bytes = 256u;
     return options;
 }
 
@@ -339,6 +340,62 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("retains literal menu next targets in immutable Program storage") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu id='main' dtmf='true'>"
+            "<choice next='#target'/>"
+            "<choice dtmf='0' next='leaf.vxml#target'/>"
+            "</menu><form id='target'><block><exit/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            menu_compile_options();
+        vxml_program program = {0};
+        const vxml_program_impl *impl;
+        const vxml_cmeta_program_data *profile;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, strlen(source), NULL, &options, &program, NULL),
+            VXML_OK);
+        impl = (const vxml_program_impl *)program.impl;
+        profile = impl != NULL
+            ? (const vxml_cmeta_program_data *)impl->profile_data : NULL;
+        memset(source, 'x', sizeof(source) - 1u);
+
+        check_not_null(impl);
+        check_not_null(profile);
+        check_equal(profile->menu_count, (size_t)1u);
+        check_equal(profile->menu_choice_count, (size_t)2u);
+        check_equal(
+            profile->menu_choice_targets[0].kind,
+            VXML_CMETA_MENU_CHOICE_NEXT);
+        check_equal(
+            profile->menu_choice_targets[0].target_size,
+            sizeof("#target") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choice_targets[0].target,
+                "#target", sizeof("#target") - 1u), 0);
+        check_equal(
+            profile->menu_choice_targets[1].kind,
+            VXML_CMETA_MENU_CHOICE_NEXT);
+        check_equal(
+            profile->menu_choice_targets[1].target_size,
+            sizeof("leaf.vxml#target") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choice_targets[1].target,
+                "leaf.vxml#target",
+                sizeof("leaf.vxml#target") - 1u), 0);
+        check_true(
+            profile->menu_choice_targets[0].target >= impl->storage);
+        check_true(
+            profile->menu_choice_targets[0].target <
+                impl->storage + impl->storage_size);
+
+        vxml_program_destroy(&program);
+    }
+
     it("leaves implicit choices after nine without a DTMF assignment") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -387,8 +444,11 @@ spec("VoiceXML CMeta program compiler") {
              "<choice dtmf='1' event='a'/></menu></vxml>",
              VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
-             "datamodel='cmeta'><menu><choice dtmf='1' next='#x'/>"
-             "</menu></vxml>", VXML_UNSUPPORTED_FEATURE},
+             "datamodel='cmeta'><menu><choice dtmf='1' next='#x' event='a'/>"
+             "</menu></vxml>", VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu><choice dtmf='1' next='#'/>"
+             "</menu></vxml>", VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu><choice dtmf='1'/></menu></vxml>",
              VXML_INVALID_STRUCTURE},
@@ -411,6 +471,50 @@ spec("VoiceXML CMeta program compiler") {
                     cases[index].source, strlen(cases[index].source),
                     NULL, &options, &program, NULL),
                 cases[index].expected);
+            check_null(program.impl);
+        }
+        {
+            static const char target[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><menu><choice dtmf='1' "
+                "next='leaf.vxml'/></menu></vxml>";
+            vxml_program program = {0};
+            vxml_cmeta_compile_options_v1 bounded =
+                menu_compile_options();
+            bounded.max_menu_target_bytes = 4u;
+            check_equal(
+                vxml_compile_cmeta(
+                    target, sizeof(target) - 1u, NULL,
+                    &bounded, &program, NULL),
+                VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+        }
+        {
+            static const char event_only[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><menu><choice dtmf='1' event='a'/>"
+                "</menu></vxml>";
+            static const char next_only[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><menu><choice dtmf='1' next='#x'/>"
+                "</menu></vxml>";
+            vxml_program program = {0};
+            vxml_cmeta_compile_options_v1 prefix =
+                menu_compile_options();
+            prefix.struct_size =
+                offsetof(vxml_cmeta_compile_options_v1,
+                         max_menu_target_bytes);
+            check_equal(
+                vxml_compile_cmeta(
+                    event_only, sizeof(event_only) - 1u, NULL,
+                    &prefix, &program, NULL),
+                VXML_OK);
+            vxml_program_destroy(&program);
+            check_equal(
+                vxml_compile_cmeta(
+                    next_only, sizeof(next_only) - 1u, NULL,
+                    &prefix, &program, NULL),
+                VXML_INVALID_CONTRACT);
             check_null(program.impl);
         }
         {
