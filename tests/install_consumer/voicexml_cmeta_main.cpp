@@ -61,6 +61,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_menu_completion_v1>::value,
     "menu completion must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_initial_collect_request_v1>::value,
+    "initial collect request must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
     "collect adapter must remain C-compatible");
 static_assert(
@@ -102,6 +105,7 @@ int main() {
     vxml_cmeta_menu_grammar_ref_v1 menu_grammar{};
     vxml_cmeta_menu_collect_request_v2 menu_request_v2{};
     vxml_cmeta_menu_completion_v1 menu_completion{};
+    vxml_cmeta_initial_collect_request_v1 initial_request{};
     vxml_cmeta_collect_completion_v2 collect_completion_v2{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
@@ -126,6 +130,7 @@ int main() {
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
     auto query_menu = &vxml_session_cmeta_menu_collect_request;
     auto query_menu_v2 = &vxml_session_cmeta_menu_collect_request_v2;
+    auto query_initial = &vxml_session_cmeta_initial_collect_request;
     auto complete_menu = &vxml_session_cmeta_menu_try_complete;
     int result = 1;
 
@@ -153,7 +158,7 @@ int main() {
         report_mark == nullptr || query_mark == nullptr ||
         query_terminal == nullptr || query_terminal_event == nullptr ||
         query_menu == nullptr || query_menu_v2 == nullptr ||
-        complete_menu == nullptr ||
+        query_initial == nullptr || complete_menu == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -189,6 +194,9 @@ int main() {
     menu_request_v2.struct_size = sizeof(menu_request_v2);
     menu_completion.abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1;
     menu_completion.struct_size = sizeof(menu_completion);
+    initial_request.abi_version =
+        VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1;
+    initial_request.struct_size = sizeof(initial_request);
     collect_completion_v2.abi_version =
         VXML_CMETA_COLLECT_COMPLETION_ABI_V2;
     collect_completion_v2.struct_size = sizeof(collect_completion_v2);
@@ -210,12 +218,15 @@ int main() {
         menu_grammar.media_type.data != nullptr ||
         menu_grammar.src.data != nullptr ||
         menu_completion.abi_version != VXML_CMETA_MENU_COMPLETION_ABI_V1 ||
+        initial_request.abi_version !=
+            VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1 ||
         menu_choice.dtmf.data != nullptr ||
         menu_choice.speech.data != nullptr ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL == 0u ||
+        VXML_CMETA_COLLECT_CAP_INITIAL_MULTI == 0u ||
         collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
         return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
