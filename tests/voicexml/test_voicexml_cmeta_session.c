@@ -1216,6 +1216,57 @@ spec("VoiceXML CMeta session execution") {
         check_equal(session_text_invalid_operations, (size_t)0u);
     }
 
+    it("routes the generic hangup Event through the CMeta scoped catch") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='connection.disconnect.hangup'>"
+            "<assign name='other' expr='42'/></catch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+
+        check_equal(vxml_session_raise_event(
+                        &session,
+                        "connection.disconnect.hangup",
+                        sizeof("connection.disconnect.hangup") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_not_null(committed);
+        check_equal(committed->other, 42);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("selects the innermost most-specific catch deterministically") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
