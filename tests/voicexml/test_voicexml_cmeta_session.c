@@ -850,6 +850,7 @@ spec("VoiceXML CMeta session execution") {
             .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
         int value = 31;
         bool wrong_bool = true;
+        cmeta_data_desc peer_int = cmeta_data_int;
         bool progressed = true;
 
         options.initially_undefined = undefined;
@@ -893,7 +894,10 @@ spec("VoiceXML CMeta session execution") {
             session_data(&session)->committed_root.bound[0],
             (unsigned char)0u);
 
-        completion.data = &cmeta_data_int;
+        check_true(peer_int.storage_type == cmeta_data_int.storage_type);
+        check_true(&peer_int != &cmeta_data_int);
+        check_true(cmeta_data_desc_equal(&peer_int, &cmeta_data_int));
+        completion.data = &peer_int;
         completion.value = &value;
         probe.active = false;
         check_equal(vxml_session_cmeta_collect_try_complete(
