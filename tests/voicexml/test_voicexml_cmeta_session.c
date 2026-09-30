@@ -911,7 +911,7 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
-    it("cancels an active generation and discards a copied completion on destroy") {
+    it("closes completion ingress and cancels an active generation exactly once") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form>"
@@ -961,9 +961,14 @@ spec("VoiceXML CMeta session execution") {
                         &session, &completion),
                     VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
 
-        vxml_session_destroy(&session);
+        check_equal(vxml_session_close(&session), VXML_OK);
         check_equal(probe.cancel_calls, (size_t)1u);
         check_false(probe.active);
+        check_equal(vxml_session_cmeta_collect_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_CLOSED);
+        vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)1u);
         vxml_program_destroy(&program);
     }
 
