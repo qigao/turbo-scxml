@@ -1317,9 +1317,10 @@ static vxml_status cmeta_measure_prompt(
     const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
     size_t child_index;
     size_t text_bytes = 0u;
+    size_t text_segment_count = 0u;
     size_t audio_count = 0u;
     size_t audio_src_bytes = 0u;
-    bool non_whitespace_text = false;
+    size_t total_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
     vxml_status status = cmeta_validate_attributes(
         prompt, allowed, 2u, diagnostic);
@@ -1364,18 +1365,29 @@ static vxml_status cmeta_measure_prompt(
                     salts_xml_node_location(child),
                     "VoiceXML prompt text size overflow");
             text_bytes += text.size;
-            if (!cmeta_text_whitespace(text))
-                non_whitespace_text = true;
+            if (!cmeta_text_whitespace(text)) {
+                if (!cmeta_measure_increment(&text_segment_count))
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_node_location(child),
+                        "VoiceXML prompt text segment count overflow");
+                if (text.size > SIZE_MAX - total_prompt_bytes)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_node_location(child),
+                        "VoiceXML prompt total bytes overflow");
+                total_prompt_bytes += text.size;
+            }
             continue;
         }
         if (cmeta_node_named(child, "audio")) {
             const salts_xml_attribute src =
                 cmeta_attribute(child, "src");
-            if (++audio_count > 1u)
+            if (!cmeta_measure_increment(&audio_count))
                 return cmeta_program_fail(
-                    diagnostic, VXML_INVALID_STRUCTURE,
+                    diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML V1 media prompt accepts one audio element");
+                    "VoiceXML prompt audio segment count overflow");
             status = cmeta_validate_attributes(
                 child, audio_allowed, 1u, diagnostic);
             if (status == VXML_OK)
@@ -1400,6 +1412,12 @@ static vxml_status cmeta_measure_prompt(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_attribute_location(src),
                     "VoiceXML audio src exceeds max_prompt_bytes");
+            if (audio_src_bytes > SIZE_MAX - total_prompt_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(src),
+                    "VoiceXML prompt total bytes overflow");
+            total_prompt_bytes += audio_src_bytes;
             continue;
         }
         return cmeta_program_fail(
@@ -1408,21 +1426,45 @@ static vxml_status cmeta_measure_prompt(
             "VoiceXML prompt child markup is deferred to the media profile");
     }
 
-    if (audio_count != 0u) {
-        if (non_whitespace_text)
+    {
+        size_t segment_count = text_segment_count;
+        const size_t tail_size =
+            offsetof(vxml_cmeta_compile_options_v1, max_prompt_segments) +
+            sizeof(options->max_prompt_segments);
+        if (audio_count > SIZE_MAX - segment_count)
             return cmeta_program_fail(
-                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
-                "mixed VoiceXML text/audio prompt requires media V2");
-        return VXML_OK;
+                "VoiceXML prompt segment count overflow");
+        segment_count += audio_count;
+        if (segment_count == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt requires literal text or audio");
+        if (total_prompt_bytes > options->max_prompt_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt content exceeds max_prompt_bytes");
+        if (segment_count > 1u &&
+            (options->struct_size < tail_size ||
+             options->max_prompt_segments == 0u ||
+             segment_count > options->max_prompt_segments))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "mixed VoiceXML prompt exceeds max_prompt_segments");
+        if (measurement->prompt_segment_count >
+                SIZE_MAX - segment_count)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt segment table overflow");
+        measurement->prompt_segment_count += segment_count;
     }
 
-    if (text_bytes == 0u)
-        return cmeta_program_fail(
-            diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_node_location(prompt),
-            "VoiceXML prompt requires literal text or audio");
-    if (text_bytes > options->max_prompt_bytes)
+    if (audio_count == 0u && text_bytes > options->max_prompt_bytes)
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(prompt),
