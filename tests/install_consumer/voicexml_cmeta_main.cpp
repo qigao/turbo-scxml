@@ -87,6 +87,7 @@ int main() {
     vxml_program program{};
     vxml_session session{};
     vxml_cmeta_value_view read_value{};
+    vxml_cmeta_terminal_kind terminal_kind = VXML_CMETA_TERMINAL_NONE;
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name{};
     vxml_cmeta_value_view exit_value{};
@@ -97,6 +98,8 @@ int main() {
     auto query_prompt = &vxml_session_cmeta_prompt;
     auto report_mark = &vxml_session_cmeta_prompt_media_mark;
     auto query_mark = &vxml_session_cmeta_prompt_media_last_mark;
+    auto query_terminal = &vxml_session_cmeta_terminal_kind;
+    auto query_terminal_event = &vxml_session_cmeta_terminal_event;
     int result = 1;
 
     prompt_view.abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1;
@@ -121,6 +124,7 @@ int main() {
         VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT;
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
+        query_terminal == nullptr || query_terminal_event == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -210,7 +214,10 @@ int main() {
         read_value.kind != VXML_CMETA_VALUE_SINT ||
         read_value.data.sint != 13)
         goto cleanup;
-    if (vxml_session_cmeta_exit_kind(&session, &exit_kind) != VXML_OK ||
+    if (vxml_session_cmeta_terminal_kind(
+            &session, &terminal_kind) != VXML_OK ||
+        terminal_kind != VXML_CMETA_TERMINAL_EXIT ||
+        vxml_session_cmeta_exit_kind(&session, &exit_kind) != VXML_OK ||
         exit_kind != VXML_CMETA_EXIT_EXPRESSION ||
         vxml_session_cmeta_exit_count(&session) != 1u ||
         vxml_session_cmeta_exit_at(
