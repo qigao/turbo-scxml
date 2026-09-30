@@ -3680,6 +3680,18 @@ vxml_status vxml_session_cmeta_raise(
     }
 }
 
+vxml_status vxml_cmeta_session_raise_event_profile(
+    vxml_session_impl *session,
+    const char *event_name,
+    size_t event_name_size) {
+    vxml_session wrapper;
+    if (session == NULL)
+        return VXML_INVALID_ARGUMENT;
+    wrapper.impl = session;
+    return vxml_session_cmeta_raise(
+        &wrapper, event_name, event_name_size);
+}
+
 vxml_status vxml_session_cmeta_noinput(vxml_session *session) {
     return vxml_session_cmeta_raise(
         session, "noinput", sizeof("noinput") - 1u);
