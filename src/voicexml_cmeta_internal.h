@@ -36,6 +36,8 @@ typedef struct vxml_cmeta_form_row {
     size_t declaration_count;
     size_t first_field;
     size_t field_count;
+    size_t first_filled;
+    size_t filled_count;
     size_t first_block;
     size_t block_count;
 } vxml_cmeta_form_row;
@@ -53,7 +55,24 @@ typedef struct vxml_cmeta_field_row {
     const char *grammar_src;
     size_t grammar_src_size;
     uint64_t required_capabilities;
+    size_t filled;
 } vxml_cmeta_field_row;
+
+typedef enum vxml_cmeta_filled_mode {
+    VXML_CMETA_FILLED_FIELD = 0,
+    VXML_CMETA_FILLED_ALL,
+    VXML_CMETA_FILLED_ANY
+} vxml_cmeta_filled_mode;
+
+typedef struct vxml_cmeta_filled_row {
+    size_t form;
+    size_t field;
+    vxml_cmeta_filled_mode mode;
+    size_t first_target;
+    size_t target_count;
+    size_t first_action;
+    size_t action_end;
+} vxml_cmeta_filled_row;
 
 typedef struct vxml_cmeta_block_row {
     size_t form;
@@ -144,6 +163,10 @@ typedef struct vxml_cmeta_program_data {
     size_t form_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
+    vxml_cmeta_filled_row *filled;
+    size_t filled_count;
+    size_t *filled_root_fields;
+    size_t filled_root_field_count;
     vxml_cmeta_block_row *blocks;
     size_t block_count;
     vxml_cmeta_declaration_row *declarations;

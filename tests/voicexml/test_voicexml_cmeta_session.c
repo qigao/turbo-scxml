@@ -705,6 +705,389 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("runs field filled against the newly staged collect value") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><assign name='late' expr='value + 1'/></filled>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.late = 3};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        int value = 7;
+        const vxml_cmeta_collect_result_slot_v1 slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &value};
+        vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &slot,
+            .slot_count = 1u};
+        bool progressed = false;
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        options.max_collect_result_slots = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        completion.generation = request.generation;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed),
+                    VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_EXITED);
+
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->value, 7);
+        check_equal(committed->late, 8);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("runs form filled mode all only after every named field is defined") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='b'/></field>"
+            "<filled mode='all' namelist='value other'>"
+            "<assign name='late' expr='value + other'/></filled>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.late = 40};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        vxml_cmeta_collect_result_slot_v1 slot = {0};
+        vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &slot,
+            .slot_count = 1u};
+        int first = 2;
+        int second = 3;
+        bool progressed = false;
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        options.max_collect_result_slots = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.field.size, sizeof("value") - 1u);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        slot = (vxml_cmeta_collect_result_slot_v1){
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &first};
+        completion.generation = request.generation;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->late, 40);
+
+        request = (vxml_cmeta_collect_request_v1){0};
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.field.size, sizeof("other") - 1u);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        slot = (vxml_cmeta_collect_result_slot_v1){
+            {"other", sizeof("other") - 1u},
+            &cmeta_data_int, &second};
+        completion.generation = request.generation;
+        progressed = false;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_EXITED);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->late, 5);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("runs form filled mode any for a matching current completion") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='b'/></field>"
+            "<filled mode='any' namelist='value other'>"
+            "<assign name='late' expr='late + 1'/></filled>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.late = 0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        int value = 4;
+        const vxml_cmeta_collect_result_slot_v1 slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &value};
+        vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &slot,
+            .slot_count = 1u};
+        bool progressed = false;
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        options.max_collect_result_slots = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        completion.generation = request.generation;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed), VXML_OK);
+        check_true(progressed);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->late, 1);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rolls back completion slots when a filled handler fails") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><assign name='other' expr='5'/>"
+            "<exit expr='late + 1'/></filled></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"late", sizeof("late") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.other = 2};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        int value = 9;
+        const vxml_cmeta_collect_result_slot_v1 slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &value};
+        vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &slot,
+            .slot_count = 1u};
+        bool progressed = false;
+        const vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        options.max_collect_result_slots = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        completion.generation = request.generation;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed),
+                    VXML_SEMANTIC_ERROR);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_FAILED);
+
+        runtime = session_data(&session);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(runtime->committed_root.bound[0],
+                    (unsigned char)0u);
+        check_equal(committed->other, 2);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("treats exit in field filled as a process barrier") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><exit expr='value'/></filled></field>"
+            "<filled mode='any' namelist='value'>"
+            "<assign name='other' expr='99'/></filled>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.other = 2};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        int value = 7;
+        const vxml_cmeta_collect_result_slot_v1 slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &value};
+        vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &slot,
+            .slot_count = 1u};
+        bool progressed = false;
+        vxml_cmeta_name_view exit_name = {0};
+        vxml_cmeta_value_view exit_value = {0};
+        const vxml_cmeta_session_root *committed;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        options.max_collect_result_slots = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session),
+                    VXML_OK);
+        completion.generation = request.generation;
+        probe.active = false;
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(
+                        &session, &completion),
+                    VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_run_ready(
+                        &session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_EXITED);
+        check_equal(vxml_session_cmeta_exit_at(
+                        &session, 0u, &exit_name, &exit_value),
+                    VXML_OK);
+        check_equal(exit_value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(exit_value.data.sint, (int64_t)7);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->other, 2);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("commits one bounded V2 completion into two fields atomically") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "

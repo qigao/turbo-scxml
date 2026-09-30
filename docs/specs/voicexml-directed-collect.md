@@ -1,8 +1,7 @@
 # VoiceXML directed field collect admission
 
-This document describes the delivered Directed FIA collect admission and
-fixed-scalar completion slices for the CMeta profile. `filled` processing
-remains a later slice.
+This document describes the Directed FIA collect admission, bounded fixed-scalar
+completion, and PROCESS/`filled` slices for the CMeta profile.
 
 ## Supported form shape
 
@@ -154,9 +153,64 @@ ownership:
 The provider must treat cancel of an already-completed generation as an
 idempotent settlement.
 
-## Deferred to the next #45 slice
+## Multi-slot completion V2
 
-Field/form `filled` handlers, multi-slot recognition results, managed
-STRING/BYTES/aggregate semantic payloads, noinput/nomatch Events and prompt
-media remain deferred. Managed results require an independent retained-byte
-budget and are not approximated by unbounded copies.
+V2 completion admission accepts a bounded slot set:
+
+```text
+generation
+slots[] = { name, exact CMeta descriptor, fixed native value }
+```
+
+Every borrowed name/value is resolved and copied before mailbox READY
+publication. Duplicate/unknown/wrong-descriptor slots, a missing selected
+field, stale generation, or capacity overflow publish nothing.
+
+Owner progress stages every accepted slot inside one CMeta transaction. A later
+directed field may therefore be pre-filled by the same recognition result and
+will be skipped by the next SELECT.
+
+## PROCESS and filled
+
+The PROCESS phase extends that same transaction:
+
+```text
+READY completion
+  -> transaction_begin
+  -> stage all result slots
+  -> selected field-level filled
+  -> eligible form-level filled in document order
+  -> commit once
+  -> exit barrier OR SELECT
+```
+
+A field may contain at most one field-level `filled`. Form-level `filled`
+handlers follow the directed fields and support:
+
+- `mode="all"` (default): all named target fields are defined in staged state;
+- `mode="any"`: the current completion supplied at least one named target;
+- optional `namelist`; omission means every directed field in the form.
+
+Namelist names are resolved to immutable root-field indices at compile time.
+Runtime does not parse or search names.
+
+Filled executable content reuses the same CMeta action rows and expression VM
+as block content. This slice supports `assign`, `clear`, `if`, and
+`exit`. Handler-local `var` is explicitly deferred rather than being
+approximated as form scope.
+
+Any result assignment or filled-handler failure resets the entire staged
+transaction; no recognition slot or earlier handler effect reaches committed
+state. `exit` inside field filled is a transfer-of-control barrier: later
+form-level filled handlers do not execute, the staged result still commits,
+and terminal exit storage is published afterward.
+
+An empty `clear` treats directed fields as form items and clears their staged
+application-root values before the next SELECT.
+
+## Still deferred
+
+Managed STRING/BYTES/aggregate semantic payloads, handler-local variable scope,
+noinput/nomatch Events, prompt tapering, and prompt/media playback remain
+deferred. Managed recognition results require an independent retained-byte
+budget and are never approximated by unbounded copies.
