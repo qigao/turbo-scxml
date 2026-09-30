@@ -602,6 +602,15 @@ static bool cmeta_menu_options_valid(
         options->max_menu_choice_bytes != 0u;
 }
 
+static bool cmeta_menu_target_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_menu_target_bytes) +
+        sizeof(options->max_menu_target_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_menu_target_bytes != 0u;
+}
+
 static bool cmeta_external_data_options_valid(
     const vxml_cmeta_compile_options_v1 *options) {
     const size_t tail_size =
@@ -2032,6 +2041,73 @@ static vxml_status cmeta_decode_menu_dtmf(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_menu_next(
+    salts_xml_attribute attribute,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    vxml_status status;
+    if (attribute.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML choice next is required");
+    if (!cmeta_menu_target_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next requires max_menu_target_bytes");
+    raw = salts_xml_attribute_value(attribute);
+    if (!cmeta_decode_entities(raw, NULL, 0u, &decoded_size))
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next contains an invalid XML reference");
+    if (decoded_size == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next must be nonempty");
+    if (decoded_size > options->max_menu_target_bytes)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next exceeds max_menu_target_bytes");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next allocation failed");
+    if (!cmeta_decode_entities(raw, decoded, decoded_size, &decoded_size)) {
+        vxml_free(decoded);
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML choice next decoding changed between passes");
+    }
+    decoded[decoded_size] = '\0';
+    if (decoded[0] == '#') {
+        const salts_xml_string_view fragment = {
+            decoded + 1u, decoded_size - 1u};
+        if (decoded_size == 1u || !cmeta_is_ncname(fragment)) {
+            vxml_free(decoded);
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML choice next local fragment must name one dialog");
+        }
+    }
+    vxml_free(decoded);
+    status = cmeta_measure_name(
+        attribute, measurement, limits, diagnostic);
+    return status;
+}
+
 static vxml_status cmeta_measure_menu(
     salts_xml_node menu,
     const vxml_cmeta_compile_options_v1 *options,
@@ -2126,6 +2202,7 @@ static vxml_status cmeta_measure_menu(
         const salts_xml_node child =
             salts_xml_node_child_at(menu, child_index);
         const salts_xml_attribute event = cmeta_attribute(child, "event");
+        const salts_xml_attribute next = cmeta_attribute(child, "next");
         const salts_xml_attribute explicit_dtmf =
             cmeta_attribute(child, "dtmf");
         char *normalized = NULL;
@@ -2138,8 +2215,7 @@ static vxml_status cmeta_measure_menu(
             sizeof(choice_allowed) / sizeof(choice_allowed[0]),
             diagnostic);
         if (status != VXML_OK) goto done;
-        if (cmeta_attribute(child, "next").impl != NULL ||
-            cmeta_attribute(child, "expr").impl != NULL ||
+        if (cmeta_attribute(child, "expr").impl != NULL ||
             cmeta_attribute(child, "eventexpr").impl != NULL ||
             cmeta_attribute(child, "message").impl != NULL ||
             cmeta_attribute(child, "messageexpr").impl != NULL ||
@@ -2147,14 +2223,14 @@ static vxml_status cmeta_measure_menu(
             status = cmeta_program_fail(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
                 salts_xml_node_location(child),
-                "dynamic/speech/navigation VoiceXML choice is deferred");
+                "dynamic/speech VoiceXML choice is deferred");
             goto done;
         }
-        if (event.impl == NULL) {
+        if ((event.impl != NULL) == (next.impl != NULL)) {
             status = cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "this VoiceXML menu slice requires literal choice event");
+                "VoiceXML choice requires exactly one literal event or next");
             goto done;
         }
         {
@@ -2172,15 +2248,20 @@ static vxml_status cmeta_measure_menu(
                 goto done;
             }
         }
-        if (!cmeta_event_options_valid(options)) {
-            status = cmeta_program_fail(
-                diagnostic, VXML_INVALID_CONTRACT,
-                salts_xml_node_location(child),
-                "VoiceXML menu Event requires enabled Event limits");
-            goto done;
+        if (event.impl != NULL) {
+            if (!cmeta_event_options_valid(options)) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_INVALID_CONTRACT,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu Event requires enabled Event limits");
+                goto done;
+            }
+            status = cmeta_measure_event_name(
+                event, options, measurement, limits, diagnostic);
+        } else {
+            status = cmeta_measure_menu_next(
+                next, options, measurement, limits, diagnostic);
         }
-        status = cmeta_measure_event_name(
-            event, options, measurement, limits, diagnostic);
         if (status != VXML_OK) goto done;
         status = cmeta_decode_menu_dtmf(
             explicit_dtmf, auto_dtmf, implicit_count,
@@ -3917,6 +3998,8 @@ static vxml_status cmeta_compile_menu_schema(
             cmeta_attribute(child, "dtmf");
         const salts_xml_attribute event =
             cmeta_attribute(child, "event");
+        const salts_xml_attribute next =
+            cmeta_attribute(child, "next");
         vxml_cmeta_menu_choice_v1 *view;
         vxml_cmeta_menu_choice_target_row *target;
         char *normalized = NULL;
@@ -3984,20 +4067,54 @@ static vxml_status cmeta_compile_menu_schema(
             retained, normalized_size};
         view->speech = (vxml_cmeta_name_view){0};
 
-        status = cmeta_retain_decoded_view(
-            builder, salts_xml_attribute_value(event),
-            salts_xml_attribute_location(event),
-            &target->target, &target->target_size);
-        if (status != VXML_OK) return status;
-        if (target->target_size == 0u ||
-            target->target_size > builder->options->max_event_name_bytes ||
-            !cmeta_location_path_valid(
-                target->target, target->target_size, SIZE_MAX))
+        if (event.impl != NULL) {
+            status = cmeta_retain_decoded_view(
+                builder, salts_xml_attribute_value(event),
+                salts_xml_attribute_location(event),
+                &target->target, &target->target_size);
+            if (status != VXML_OK) return status;
+            if (target->target_size == 0u ||
+                target->target_size > builder->options->max_event_name_bytes ||
+                !cmeta_location_path_valid(
+                    target->target, target->target_size, SIZE_MAX))
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(event),
+                    "VoiceXML menu Event target changed between compiler passes");
+            target->kind = VXML_CMETA_MENU_CHOICE_EVENT;
+        } else if (next.impl != NULL &&
+                   cmeta_menu_target_options_valid(builder->options)) {
+            salts_xml_string_view fragment;
+            status = cmeta_retain_decoded_view(
+                builder, salts_xml_attribute_value(next),
+                salts_xml_attribute_location(next),
+                &target->target, &target->target_size);
+            if (status != VXML_OK) return status;
+            if (target->target_size == 0u ||
+                target->target_size >
+                    builder->options->max_menu_target_bytes)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(next),
+                    "VoiceXML menu next target changed between compiler passes");
+            if (target->target[0] == '#') {
+                fragment = (salts_xml_string_view){
+                    target->target + 1u,
+                    target->target_size - 1u};
+                if (target->target_size == 1u ||
+                    !cmeta_is_ncname(fragment))
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(next),
+                        "VoiceXML menu local fragment changed between compiler passes");
+            }
+            target->kind = VXML_CMETA_MENU_CHOICE_NEXT;
+        } else {
             return cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
-                salts_xml_attribute_location(event),
-                "VoiceXML menu Event target changed between compiler passes");
-        target->kind = VXML_CMETA_MENU_CHOICE_EVENT;
+                salts_xml_node_location(child),
+                "VoiceXML menu target changed between compiler passes");
+        }
         ++builder->menu_choice_index;
     }
     menu->choice_count =

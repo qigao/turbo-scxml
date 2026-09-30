@@ -69,7 +69,8 @@ typedef struct vxml_cmeta_prompt_row {
 } vxml_cmeta_prompt_row;
 
 typedef enum vxml_cmeta_menu_choice_target_kind {
-    VXML_CMETA_MENU_CHOICE_EVENT = 1
+    VXML_CMETA_MENU_CHOICE_EVENT = 1,
+    VXML_CMETA_MENU_CHOICE_NEXT
 } vxml_cmeta_menu_choice_target_kind;
 
 typedef struct vxml_cmeta_menu_choice_target_row {

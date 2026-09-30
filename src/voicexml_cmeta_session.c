@@ -3749,18 +3749,29 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
 
-        if (target->kind != VXML_CMETA_MENU_CHOICE_EVENT ||
-            target->target == NULL || target->target_size == 0u)
+        if (target->target == NULL || target->target_size == 0u)
             return session_fail(impl, VXML_INVALID_STRUCTURE);
-        status = vxml_session_cmeta_raise(
-            session, target->target, target->target_size);
-        if (status != VXML_OK) return status;
-        if (impl->state == VXML_SESSION_RUNNING) {
-            ++profile->collect_generation;
-            if (profile->collect_generation == 0u)
-                profile->collect_generation = 1u;
+        if (target->kind == VXML_CMETA_MENU_CHOICE_EVENT) {
+            status = vxml_session_cmeta_raise(
+                session, target->target, target->target_size);
+            if (status != VXML_OK) return status;
+            if (impl->state == VXML_SESSION_RUNNING) {
+                ++profile->collect_generation;
+                if (profile->collect_generation == 0u)
+                    profile->collect_generation = 1u;
+            }
+            return VXML_OK;
         }
-        return VXML_OK;
+        if (target->kind == VXML_CMETA_MENU_CHOICE_NEXT) {
+            impl->navigation_uri = target->target;
+            impl->navigation_uri_size = target->target_size;
+            impl->navigation_fetchaudio_uri = NULL;
+            impl->navigation_fetchaudio_uri_size = 0u;
+            impl->state = VXML_SESSION_NAVIGATING;
+            impl->error = VXML_OK;
+            return VXML_OK;
+        }
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
     }
 
     if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD ||
