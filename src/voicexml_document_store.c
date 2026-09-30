@@ -566,7 +566,9 @@ vxml_document_store_status vxml_document_store_init(
         config->documents == NULL ||
         config->documents->abi_version !=
             VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 ||
-        config->documents->struct_size < sizeof(*config->documents) ||
+        config->documents->struct_size <
+            offsetof(vxml_dialog_document_adapter_v1, close) +
+                sizeof(config->documents->close) ||
         config->documents->open == NULL ||
         config->documents->close == NULL)
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
