@@ -3,6 +3,7 @@
 
 #include <ccxml/ccxml.h>
 #include <voicexml/resource.h>
+#include <voicexml/submit_resource.h>
 #include <voicexml/voicexml.h>
 
 #include <stdbool.h>
@@ -16,6 +17,7 @@ extern "C" {
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V1 1u
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V2 2u
 #define VXML_DIALOG_MANAGER_CONFIG_ABI_V3 3u
+#define VXML_DIALOG_MANAGER_CONFIG_ABI_V4 4u
 #define VXML_DIALOG_EVENT_SINK_ABI_V1 1u
 
 typedef enum vxml_dialog_event_sink_status {
@@ -138,6 +140,39 @@ typedef struct vxml_dialog_manager_config_v3 {
     void *event_user;
 } vxml_dialog_manager_config_v3;
 
+/**
+ * Submit-enabled store-backed manager configuration.
+ *
+ * V4 preserves V3 external navigation and adds one borrowed one-attempt submit
+ * provider. max_navigation_hops bounds the combined external goto/submit
+ * control-transfer chain. max_submit_response_bytes bounds leased response
+ * VoiceXML before compilation.
+ */
+typedef struct vxml_dialog_manager_config_v4 {
+    uint32_t abi_version;
+    size_t struct_size;
+
+    size_t capacity;
+    size_t max_source_bytes;
+    size_t max_media_type_bytes;
+    size_t max_connection_id_bytes;
+    size_t max_dialog_id_bytes;
+    size_t max_navigation_hops;
+    size_t max_submit_response_bytes;
+    vxml_limits voice_limits;
+
+    const ccxml_telephony_adapter_v1 *upstream;
+    void *upstream_user;
+
+    vxml_document_store *document_store;
+
+    const vxml_submit_resource_adapter_v1 *submit;
+    void *submit_user;
+
+    const vxml_dialog_event_sink_v1 *events;
+    void *event_user;
+} vxml_dialog_manager_config_v4;
+
 typedef struct vxml_dialog_manager_stats {
     size_t capacity;
     size_t active;
@@ -160,6 +195,7 @@ typedef struct vxml_dialog_manager {
 vxml_dialog_manager_config_v1 vxml_dialog_manager_default_config_v1(void);
 vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void);
 vxml_dialog_manager_config_v3 vxml_dialog_manager_default_config_v3(void);
+vxml_dialog_manager_config_v4 vxml_dialog_manager_default_config_v4(void);
 
 const char *vxml_dialog_manager_status_string(
     vxml_dialog_manager_status status);
@@ -175,6 +211,10 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
 vxml_dialog_manager_status vxml_dialog_manager_init_v3(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v3 *config);
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v4(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v4 *config);
 
 /**
  * Full-size CCXML telephony decorator. Non-dialog operations forward to the

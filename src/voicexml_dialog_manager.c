@@ -71,6 +71,8 @@ typedef struct vxml_dialog_row {
     size_t connection_id_size;
     char *start_fragment;
     size_t start_fragment_size;
+    char *current_document_uri;
+    size_t current_document_uri_size;
     size_t navigation_hops;
 
     vxml_program program;
@@ -99,6 +101,10 @@ struct vxml_dialog_manager_impl {
     vxml_document_store *document_store;
     bool store_backed;
     bool navigation_enabled;
+    bool submit_enabled;
+    vxml_submit_resource_adapter_v1 submit;
+    void *submit_user;
+    size_t max_submit_response_bytes;
     size_t max_navigation_hops;
     char *resolve_uri_scratch;
     char *resolve_fragment_scratch;
@@ -135,6 +141,19 @@ static bool media_type_valid(const char *data, size_t size) {
     return data != NULL &&
            size == sizeof(VXML_MEDIA_TYPE) - 1u &&
            memcmp(data, VXML_MEDIA_TYPE, size) == 0;
+}
+
+static bool submit_prefix_valid(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t required =
+        offsetof(vxml_submit_resource_adapter_v1, close) +
+        sizeof(adapter->close);
+    return adapter != NULL &&
+           adapter->abi_version ==
+               VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 &&
+           adapter->struct_size >= required &&
+           adapter->execute != NULL &&
+           adapter->close != NULL;
 }
 
 static bool upstream_prefix_valid(
@@ -180,6 +199,7 @@ static void row_clear(vxml_dialog_row *row) {
     char *media_type;
     char *connection_id;
     char *start_fragment;
+    char *current_document_uri;
     if (row == NULL) return;
     row_destroy_runtime(row);
     generation = row->generation;
@@ -190,6 +210,7 @@ static void row_clear(vxml_dialog_row *row) {
     media_type = row->media_type;
     connection_id = row->connection_id;
     start_fragment = row->start_fragment;
+    current_document_uri = row->current_document_uri;
     memset(row, 0, sizeof(*row));
     row->generation = generation;
     row->owner = owner;
@@ -199,6 +220,7 @@ static void row_clear(vxml_dialog_row *row) {
     row->media_type = media_type;
     row->connection_id = connection_id;
     row->start_fragment = start_fragment;
+    row->current_document_uri = current_document_uri;
     row->state = VXML_DIALOG_ROW_EMPTY;
 }
 
@@ -213,9 +235,12 @@ static bool row_allocate_buffers(
     row->connection_id = (char *)calloc(connection_bytes + 1u, 1u);
     row->dialog_id = (char *)calloc(dialog_id_bytes + 1u, 1u);
     row->start_fragment = (char *)calloc(source_bytes + 1u, 1u);
+    row->current_document_uri =
+        (char *)calloc(source_bytes + 1u, 1u);
     return row->source != NULL && row->media_type != NULL &&
            row->connection_id != NULL && row->dialog_id != NULL &&
-           row->start_fragment != NULL;
+           row->start_fragment != NULL &&
+           row->current_document_uri != NULL;
 }
 
 static void row_free_buffers(vxml_dialog_row *row) {
@@ -225,11 +250,13 @@ static void row_free_buffers(vxml_dialog_row *row) {
     free(row->connection_id);
     free(row->dialog_id);
     free(row->start_fragment);
+    free(row->current_document_uri);
     row->source = NULL;
     row->media_type = NULL;
     row->connection_id = NULL;
     row->dialog_id = NULL;
     row->start_fragment = NULL;
+    row->current_document_uri = NULL;
 }
 
 static bool row_copy(
@@ -827,6 +854,20 @@ static vxml_dialog_manager_status acquire_store_document(
         (void)queue_event(row, failure_event, VXML_INVALID_STATE);
         return VXML_DIALOG_MANAGER_OK;
     }
+    if (!row_copy(
+            row->current_document_uri,
+            impl->max_source_bytes,
+            resolved.document_uri,
+            resolved.document_uri_size,
+            &row->current_document_uri_size)) {
+        (void)vxml_document_store_release(
+            impl->document_store, &row->document_ref);
+        row->document_ref_live = false;
+        row->document_ref = (vxml_document_ref){0};
+        (void)queue_event(
+            row, failure_event, VXML_LIMIT_EXCEEDED);
+        return VXML_DIALOG_MANAGER_OK;
+    }
     row->program_view = view.program;
     return VXML_DIALOG_MANAGER_OK;
 }
@@ -858,6 +899,199 @@ static vxml_status start_current_session(
         : vxml_session_start(&row->session);
 }
 
+static vxml_status submit_failure_voice_status(
+    vxml_submit_resource_status status) {
+    switch (status) {
+    case VXML_SUBMIT_RESOURCE_ALLOCATION_FAILED:
+        return VXML_ALLOCATION_FAILED;
+    case VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED:
+        return VXML_LIMIT_EXCEEDED;
+    case VXML_SUBMIT_RESOURCE_INVALID_URI:
+    case VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT:
+        return VXML_INVALID_ARGUMENT;
+    case VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING:
+        return VXML_UNSUPPORTED_FEATURE;
+    case VXML_SUBMIT_RESOURCE_PROVIDER_ERROR:
+    case VXML_SUBMIT_RESOURCE_POSSIBLY_PROCESSED:
+    case VXML_SUBMIT_RESOURCE_INVALID_RESPONSE:
+        return VXML_INVALID_STATE;
+    case VXML_SUBMIT_RESOURCE_OK:
+        return VXML_OK;
+    }
+    return VXML_INVALID_STATE;
+}
+
+static vxml_dialog_manager_status follow_one_submit(
+    vxml_dialog_row *row) {
+    static const char urlencoded[] =
+        "application/x-www-form-urlencoded";
+    vxml_dialog_manager_impl *impl;
+    vxml_submit_target_v1 submit = {0};
+    vxml_submit_request_v1 request = VXML_SUBMIT_REQUEST_V1_INIT;
+    vxml_submit_response response = {0};
+    vxml_resolved_uri_v1 target_resolved;
+    vxml_resolved_uri_v1 effective_resolved;
+    const char *next_base = NULL;
+    size_t next_base_size = 0u;
+    const char *next_fragment = NULL;
+    size_t next_fragment_size = 0u;
+    vxml_submit_resource_status submit_status;
+    vxml_document_store_status store_status;
+    vxml_program next_program = {0};
+    vxml_diagnostic diagnostic = {0};
+    vxml_status voice_status;
+
+    if (row == NULL || row->owner == NULL)
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    impl = row->owner;
+    if (!impl->submit_enabled ||
+        !impl->store_backed ||
+        impl->document_store == NULL ||
+        row->current_document_uri == NULL ||
+        row->current_document_uri_size == 0u)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_UNSUPPORTED_FEATURE);
+    if (row->navigation_hops >= impl->max_navigation_hops)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_LIMIT_EXCEEDED);
+
+    voice_status = vxml_session_submit(
+        &row->session, &submit);
+    if (voice_status != VXML_OK)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            voice_status);
+    if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_UNSUPPORTED_FEATURE);
+
+    target_resolved = (vxml_resolved_uri_v1){
+        .abi_version = 1u,
+        .struct_size = sizeof(vxml_resolved_uri_v1),
+        .document_uri = impl->resolve_uri_scratch,
+        .document_uri_capacity = impl->max_source_bytes + 1u,
+        .fragment = impl->resolve_fragment_scratch,
+        .fragment_capacity = impl->max_source_bytes + 1u};
+    store_status = vxml_document_store_resolve(
+        impl->document_store,
+        row->current_document_uri,
+        row->current_document_uri_size,
+        submit.uri, submit.uri_size,
+        &target_resolved);
+    if (store_status != VXML_DOCUMENT_STORE_OK)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            store_failure_voice_status(store_status, NULL));
+
+    request.base_document_uri = row->current_document_uri;
+    request.base_document_uri_size =
+        row->current_document_uri_size;
+    request.target = submit.uri;
+    request.target_size = submit.uri_size;
+    request.method = submit.method;
+    if (submit.method == VXML_SUBMIT_METHOD_POST) {
+        request.enctype = urlencoded;
+        request.enctype_size = sizeof(urlencoded) - 1u;
+    }
+    request.max_uri_bytes = impl->max_source_bytes;
+    request.max_body_bytes = impl->max_source_bytes;
+    request.max_response_bytes =
+        impl->max_submit_response_bytes;
+
+    submit_status = vxml_submit_resource_execute(
+        impl->document_store,
+        &impl->submit, impl->submit_user,
+        &request, &response);
+    if (submit_status != VXML_SUBMIT_RESOURCE_OK)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            submit_failure_voice_status(submit_status));
+
+    next_base = target_resolved.document_uri;
+    next_base_size = target_resolved.document_uri_size;
+    next_fragment =
+        target_resolved.fragment_size != 0u
+            ? target_resolved.fragment : NULL;
+    next_fragment_size = target_resolved.fragment_size;
+
+    if (response.effective_uri_size != 0u) {
+        effective_resolved = (vxml_resolved_uri_v1){
+            .abi_version = 1u,
+            .struct_size = sizeof(vxml_resolved_uri_v1),
+            .document_uri =
+                impl->resolve_fetchaudio_uri_scratch,
+            .document_uri_capacity =
+                impl->max_source_bytes + 1u,
+            .fragment =
+                impl->resolve_fetchaudio_fragment_scratch,
+            .fragment_capacity =
+                impl->max_source_bytes + 1u};
+        store_status = vxml_document_store_resolve(
+            impl->document_store,
+            row->current_document_uri,
+            row->current_document_uri_size,
+            response.effective_uri,
+            response.effective_uri_size,
+            &effective_resolved);
+        if (store_status != VXML_DOCUMENT_STORE_OK) {
+            (void)vxml_submit_resource_close(
+                &impl->submit, impl->submit_user,
+                &response);
+            return queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                store_failure_voice_status(store_status, NULL));
+        }
+        next_base = effective_resolved.document_uri;
+        next_base_size = effective_resolved.document_uri_size;
+        if (effective_resolved.fragment_size != 0u) {
+            next_fragment = effective_resolved.fragment;
+            next_fragment_size =
+                effective_resolved.fragment_size;
+        }
+    }
+
+    voice_status = vxml_compile(
+        response.data, response.size,
+        &impl->voice_limits,
+        &next_program, &diagnostic);
+    (void)vxml_submit_resource_close(
+        &impl->submit, impl->submit_user, &response);
+    if (voice_status != VXML_OK) {
+        vxml_program_destroy(&next_program);
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            voice_status);
+    }
+
+    if (!row_copy(
+            row->current_document_uri,
+            impl->max_source_bytes,
+            next_base, next_base_size,
+            &row->current_document_uri_size)) {
+        vxml_program_destroy(&next_program);
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_LIMIT_EXCEEDED);
+    }
+
+    row_destroy_runtime(row);
+    row->program = next_program;
+    row->program_live = true;
+    row->program_view = &row->program;
+    ++row->navigation_hops;
+
+    voice_status = start_current_session(
+        row, next_fragment, next_fragment_size);
+    if (voice_status != VXML_OK)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            voice_status);
+    return VXML_DIALOG_MANAGER_OK;
+}
+
 static vxml_dialog_manager_status follow_external_navigation(
     vxml_dialog_row *row) {
     vxml_dialog_manager_impl *impl;
@@ -866,10 +1100,11 @@ static vxml_dialog_manager_status follow_external_navigation(
     impl = row->owner;
 
     while (row->session_live &&
-           vxml_session_get_state(&row->session) ==
-               VXML_SESSION_NAVIGATING) {
+           (vxml_session_get_state(&row->session) ==
+                VXML_SESSION_NAVIGATING ||
+            vxml_session_get_state(&row->session) ==
+                VXML_SESSION_SUBMITTING)) {
         vxml_navigation_request_v1 navigation = {0};
-        vxml_document_view current_view = {0};
         vxml_document_view next_view = {0};
         vxml_document_ref next_ref = {0};
         vxml_document_store_error error = {0};
@@ -877,10 +1112,22 @@ static vxml_dialog_manager_status follow_external_navigation(
         vxml_document_store_status store_status;
         vxml_status voice_status;
 
+        if (vxml_session_get_state(&row->session) ==
+            VXML_SESSION_SUBMITTING) {
+            vxml_dialog_manager_status submit_progress =
+                follow_one_submit(row);
+            if (submit_progress != VXML_DIALOG_MANAGER_OK)
+                return submit_progress;
+            if (row->state == VXML_DIALOG_ROW_EVENT_PENDING)
+                return VXML_DIALOG_MANAGER_OK;
+            continue;
+        }
+
         if (!impl->navigation_enabled ||
             !impl->store_backed ||
             impl->document_store == NULL ||
-            !row->document_ref_live) {
+            row->current_document_uri == NULL ||
+            row->current_document_uri_size == 0u) {
             (void)queue_event(
                 row, VXML_DIALOG_EVENT_ERROR_START,
                 VXML_UNSUPPORTED_FEATURE);
@@ -900,19 +1147,6 @@ static vxml_dialog_manager_status follow_external_navigation(
                 voice_status);
             return VXML_DIALOG_MANAGER_OK;
         }
-        store_status = vxml_document_store_view(
-            impl->document_store,
-            row->document_ref,
-            &current_view);
-        if (store_status != VXML_DOCUMENT_STORE_OK ||
-            current_view.document_uri == NULL ||
-            current_view.program == NULL) {
-            (void)queue_event(
-                row, VXML_DIALOG_EVENT_ERROR_START,
-                VXML_INVALID_STATE);
-            return VXML_DIALOG_MANAGER_OK;
-        }
-
         resolved = (vxml_resolved_uri_v1){
             .abi_version = 1u,
             .struct_size = sizeof(vxml_resolved_uri_v1),
@@ -922,8 +1156,8 @@ static vxml_dialog_manager_status follow_external_navigation(
             .fragment_capacity = impl->max_source_bytes + 1u};
         store_status = vxml_document_store_resolve(
             impl->document_store,
-            current_view.document_uri,
-            current_view.document_uri_size,
+            row->current_document_uri,
+            row->current_document_uri_size,
             navigation.uri,
             navigation.uri_size,
             &resolved);
@@ -950,8 +1184,8 @@ static vxml_dialog_manager_status follow_external_navigation(
                 VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
             store_status = vxml_document_store_resolve(
                 impl->document_store,
-                current_view.document_uri,
-                current_view.document_uri_size,
+                row->current_document_uri,
+                row->current_document_uri_size,
                 navigation.fetchaudio_uri,
                 navigation.fetchaudio_uri_size,
                 &fetchaudio_resolved);
@@ -1000,19 +1234,20 @@ static vxml_dialog_manager_status follow_external_navigation(
             return VXML_DIALOG_MANAGER_OK;
         }
 
-        vxml_session_destroy(&row->session);
-        row->session_live = false;
-        store_status = vxml_document_store_release(
-            impl->document_store, &row->document_ref);
-        if (store_status != VXML_DOCUMENT_STORE_OK) {
+        if (!row_copy(
+                row->current_document_uri,
+                impl->max_source_bytes,
+                resolved.document_uri,
+                resolved.document_uri_size,
+                &row->current_document_uri_size)) {
             (void)vxml_document_store_release(
                 impl->document_store, &next_ref);
             (void)queue_event(
                 row, VXML_DIALOG_EVENT_ERROR_START,
-                VXML_INVALID_STATE);
+                VXML_LIMIT_EXCEEDED);
             return VXML_DIALOG_MANAGER_OK;
         }
-        row->document_ref_live = false;
+        row_destroy_runtime(row);
         row->document_ref = next_ref;
         row->document_ref_live = true;
         row->program_view = next_view.program;
@@ -1055,7 +1290,9 @@ static vxml_dialog_manager_status start_session(
         return VXML_DIALOG_MANAGER_OK;
     }
     if (vxml_session_get_state(&row->session) ==
-        VXML_SESSION_NAVIGATING)
+            VXML_SESSION_NAVIGATING ||
+        vxml_session_get_state(&row->session) ==
+            VXML_SESSION_SUBMITTING)
         return follow_external_navigation(row);
     return queue_event(
         row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
@@ -1156,6 +1393,22 @@ vxml_dialog_manager_config_v2 vxml_dialog_manager_default_config_v2(void) {
     config.max_media_type_bytes = 127u;
     config.max_connection_id_bytes = 511u;
     config.max_dialog_id_bytes = 63u;
+    return config;
+}
+
+vxml_dialog_manager_config_v4 vxml_dialog_manager_default_config_v4(void) {
+    vxml_dialog_manager_config_v4 config;
+    memset(&config, 0, sizeof(config));
+    config.abi_version = VXML_DIALOG_MANAGER_CONFIG_ABI_V4;
+    config.struct_size = sizeof(config);
+    config.capacity = 32u;
+    config.max_source_bytes = 4096u;
+    config.max_media_type_bytes = 127u;
+    config.max_connection_id_bytes = 511u;
+    config.max_dialog_id_bytes = 63u;
+    config.max_navigation_hops = 32u;
+    config.max_submit_response_bytes = 1024u * 1024u;
+    config.voice_limits = vxml_default_limits();
     return config;
 }
 
@@ -1373,6 +1626,52 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
     }
 
     manager->impl = impl;
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+vxml_dialog_manager_status vxml_dialog_manager_init_v4(
+    vxml_dialog_manager *manager,
+    const vxml_dialog_manager_config_v4 *config) {
+    vxml_dialog_manager_config_v3 v3;
+    vxml_dialog_manager_impl *impl;
+    vxml_dialog_manager_status status;
+
+    if (manager == NULL || config == NULL ||
+        config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V4 ||
+        config->struct_size < sizeof(*config) ||
+        config->max_navigation_hops == 0u ||
+        config->max_submit_response_bytes == 0u ||
+        config->max_submit_response_bytes == SIZE_MAX ||
+        !submit_prefix_valid(config->submit))
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+
+    v3 = vxml_dialog_manager_default_config_v3();
+    v3.capacity = config->capacity;
+    v3.max_source_bytes = config->max_source_bytes;
+    v3.max_media_type_bytes = config->max_media_type_bytes;
+    v3.max_connection_id_bytes = config->max_connection_id_bytes;
+    v3.max_dialog_id_bytes = config->max_dialog_id_bytes;
+    v3.max_navigation_hops = config->max_navigation_hops;
+    v3.upstream = config->upstream;
+    v3.upstream_user = config->upstream_user;
+    v3.document_store = config->document_store;
+    v3.events = config->events;
+    v3.event_user = config->event_user;
+
+    status = vxml_dialog_manager_init_v3(manager, &v3);
+    if (status != VXML_DIALOG_MANAGER_OK)
+        return status;
+
+    impl = (vxml_dialog_manager_impl *)manager->impl;
+    memset(&impl->submit, 0, sizeof(impl->submit));
+    memcpy(
+        &impl->submit, config->submit,
+        min_size(config->submit->struct_size, sizeof(impl->submit)));
+    impl->submit_user = config->submit_user;
+    impl->submit_enabled = true;
+    impl->max_submit_response_bytes =
+        config->max_submit_response_bytes;
+    impl->voice_limits = config->voice_limits;
     return VXML_DIALOG_MANAGER_OK;
 }
 

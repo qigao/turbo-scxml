@@ -336,7 +336,8 @@ target_link_libraries(turbo_voicexml_dialog_manager
     TurboSCXML::VoiceXML
     TurboSCXML::CCXML
   PRIVATE
-    TurboSCXML::VoiceXMLDocumentStore)
+    TurboSCXML::VoiceXMLDocumentStore
+    TurboSCXML::VoiceXMLSubmitResource)
 
 if(BUILD_TESTING)
   target_compile_definitions(turbo_voicexml PRIVATE
@@ -492,7 +493,7 @@ if(BUILD_TESTING)
     TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS
     turbo_voicexml_dialog_manager INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOVOICEXML_DIALOG_MANAGER_PUBLIC_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>")
+     "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>;$<LINK_ONLY:TurboSCXML::VoiceXMLSubmitResource>")
     message(FATAL_ERROR
       "TurboSCXML::VoiceXMLDialogManager dependency contract changed")
   endif()

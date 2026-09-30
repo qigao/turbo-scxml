@@ -11,7 +11,8 @@
 typedef enum vxml_action_kind {
     VXML_ACTION_EXIT = 1,
     VXML_ACTION_GOTO,
-    VXML_ACTION_GOTO_EXTERNAL
+    VXML_ACTION_GOTO_EXTERNAL,
+    VXML_ACTION_SUBMIT
 } vxml_action_kind;
 
 typedef struct vxml_action_row {
@@ -21,6 +22,8 @@ typedef struct vxml_action_row {
     size_t target_uri_size;
     const char *fetchaudio_uri;
     size_t fetchaudio_uri_size;
+    vxml_submit_method submit_method;
+    vxml_submit_enctype submit_enctype;
 } vxml_action_row;
 
 typedef struct vxml_block_row {
@@ -64,6 +67,10 @@ struct vxml_session_impl {
     size_t navigation_uri_size;
     const char *navigation_fetchaudio_uri;
     size_t navigation_fetchaudio_uri_size;
+    const char *submit_uri;
+    size_t submit_uri_size;
+    vxml_submit_method submit_method;
+    vxml_submit_enctype submit_enctype;
     void *profile_data;
 };
 
