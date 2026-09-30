@@ -450,6 +450,39 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("lets a choice exact policy override an approximate menu default") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu accept='approximate'>"
+            "<choice accept='exact' event='menu.sports'> sports </choice>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            menu_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = program.impl != NULL
+            ? (const vxml_cmeta_program_data *)
+                ((const vxml_program_impl *)program.impl)->profile_data
+            : NULL;
+        check_not_null(profile);
+        check_equal(profile->menu_choice_count, (size_t)1u);
+        check_equal(
+            profile->menu_choices[0].speech.size,
+            sizeof("sports") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choices[0].speech.data,
+                "sports", sizeof("sports") - 1u),
+            0);
+        vxml_program_destroy(&program);
+    }
+
     it("leaves implicit choices after nine without a DTMF assignment") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -505,6 +538,10 @@ spec("VoiceXML CMeta program compiler") {
              "</menu></vxml>", VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu><choice dtmf='1'/></menu></vxml>",
+             VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu accept='maybe'>"
+             "<choice event='a'>sports</choice></menu></vxml>",
              VXML_INVALID_STRUCTURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><menu accept='approximate'>"
