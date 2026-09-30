@@ -3285,7 +3285,7 @@ static vxml_status cmeta_lower_block_actions(
         }
         if (condition.impl != NULL) {
             status = cmeta_append_expression(
-                builder, condition, scopes, scope_count, true,
+                builder, condition, scopes, 3u, true,
                 &block->condition);
             if (status != VXML_OK) return status;
         }
