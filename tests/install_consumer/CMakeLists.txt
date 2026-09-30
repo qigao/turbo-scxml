@@ -367,7 +367,7 @@ else()
       TURBOSCXML_DIALOG_MANAGER_LINKS
       TurboSCXML::VoiceXMLDialogManager INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOSCXML_DIALOG_MANAGER_LINKS STREQUAL
-       "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>")
+       "TurboSCXML::VoiceXML;TurboSCXML::CCXML;$<LINK_ONLY:TurboSCXML::VoiceXMLDocumentStore>;$<LINK_ONLY:TurboSCXML::VoiceXMLSubmitResource>")
       message(FATAL_ERROR
         "Unexpected VoiceXMLDialogManager link closure: "
         "${TURBOSCXML_DIALOG_MANAGER_LINKS}")
