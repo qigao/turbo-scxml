@@ -21,7 +21,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_ASSIGN,
     VXML_CMETA_ACTION_CLEAR,
     VXML_CMETA_ACTION_IF,
-    VXML_CMETA_ACTION_EXIT
+    VXML_CMETA_ACTION_EXIT,
+    VXML_CMETA_ACTION_THROW
 } vxml_cmeta_action_kind;
 
 typedef struct vxml_cmeta_scope_row {
@@ -123,6 +124,30 @@ typedef struct vxml_cmeta_branch_row {
     salts_xml_location location;
 } vxml_cmeta_branch_row;
 
+typedef enum vxml_cmeta_event_scope_kind {
+    VXML_CMETA_EVENT_DOCUMENT = 0,
+    VXML_CMETA_EVENT_FORM,
+    VXML_CMETA_EVENT_FIELD
+} vxml_cmeta_event_scope_kind;
+
+typedef struct vxml_cmeta_event_handler_row {
+    vxml_cmeta_event_scope_kind scope_kind;
+    size_t owner;
+    const char *event;
+    size_t event_size;
+    unsigned count;
+    size_t first_action;
+    size_t action_end;
+} vxml_cmeta_event_handler_row;
+
+typedef struct vxml_cmeta_event_counter {
+    vxml_cmeta_event_scope_kind scope_kind;
+    size_t owner;
+    char *event;
+    size_t event_size;
+    unsigned count;
+} vxml_cmeta_event_counter;
+
 typedef struct vxml_cmeta_external_data_row {
     const char *name;
     size_t name_size;
@@ -149,6 +174,8 @@ typedef struct vxml_cmeta_action_row {
     size_t first_branch;
     size_t branch_count;
     vxml_cmeta_exit_kind exit_kind;
+    const char *event_name;
+    size_t event_name_size;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
 
@@ -167,6 +194,8 @@ typedef struct vxml_cmeta_program_data {
     size_t filled_count;
     size_t *filled_root_fields;
     size_t filled_root_field_count;
+    vxml_cmeta_event_handler_row *event_handlers;
+    size_t event_handler_count;
     vxml_cmeta_block_row *blocks;
     size_t block_count;
     vxml_cmeta_declaration_row *declarations;
@@ -260,6 +289,15 @@ typedef struct vxml_cmeta_session_data {
     bool collect_prepared;
     bool collect_in_flight;
     vxml_cmeta_collect_mailbox collect_mailbox;
+    vxml_cmeta_event_counter *event_counters;
+    size_t event_counter_count;
+    size_t event_counter_capacity;
+    char *event_counter_names;
+    size_t event_name_stride;
+    size_t max_event_dispatch_depth;
+    const char *thrown_event;
+    size_t thrown_event_size;
+    bool throw_requested;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;
