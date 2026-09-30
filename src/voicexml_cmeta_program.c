@@ -554,6 +554,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
         cmeta_node_named(node, "initial") ||
         cmeta_node_named(node, "subdialog") ||
+        cmeta_node_named(node, "param") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -618,6 +619,17 @@ static bool cmeta_initial_options_valid(
     return options != NULL && options->struct_size >= tail_size &&
         options->max_initials != 0u &&
         cmeta_field_options_valid(options);
+}
+
+static bool cmeta_subdialog_param_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_subdialog_param_value_bytes) +
+        sizeof(options->max_subdialog_param_value_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_subdialog_params != 0u &&
+        options->max_subdialog_param_name_bytes != 0u &&
+        options->max_subdialog_param_value_bytes != 0u;
 }
 
 static bool cmeta_subdialog_options_valid(
@@ -3623,6 +3635,9 @@ static bool cmeta_allocate_rows(
     profile->location_candidate_count = candidate_count;
     profile->max_string_bytes = options->max_string_bytes;
     profile->max_conditional_depth = options->max_conditional_depth;
+    if (measurement->subdialog_param_count != 0u)
+        profile->max_subdialog_param_value_bytes =
+            options->max_subdialog_param_value_bytes;
     if (measurement->external_data_count != 0u) {
         profile->max_data_bind_depth = options->max_data_bind_depth;
         profile->max_data_bind_items = options->max_data_bind_items;
