@@ -2149,7 +2149,7 @@ spec("VoiceXML CMeta program compiler") {
             "<grammar type='application/srgs+xml' src='form.grxml'/>"
             "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
             "<initial name='start'/>"
-            "<field name='other'><grammar type='application/srgs+xml' src='o.grxml'/></field>"
+            "<field name='flag'><grammar type='application/srgs+xml' src='f.grxml'/></field>"
             "<initial/>"
             "</form></vxml>";
         const vxml_cmeta_compile_options_v1 options =
