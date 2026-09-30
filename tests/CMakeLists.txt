@@ -118,6 +118,11 @@ turboscxml_add_test(
   voicexml_document_store_test.c
   LIBS TurboSCXML::VoiceXMLDocumentStore)
 
+turboscxml_add_test(
+  voicexml_script_resource_test
+  voicexml_script_resource_test.c
+  LIBS TurboSCXML::VoiceXMLScriptResource)
+
 add_executable(voicexml_dialog_manager_test
   voicexml_dialog_manager_test.c)
 target_compile_features(voicexml_dialog_manager_test PRIVATE c_std_11)
