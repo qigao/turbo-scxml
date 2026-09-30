@@ -1615,6 +1615,8 @@ static vxml_status cmeta_measure_prompt(
         if (cmeta_node_named(child, "audio")) {
             const salts_xml_attribute src =
                 cmeta_attribute(child, "src");
+            size_t fallback_child_index;
+            size_t fallback_segment_count = 0u;
             if (!cmeta_measure_increment(&audio_count))
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
@@ -1622,9 +1624,6 @@ static vxml_status cmeta_measure_prompt(
                     "VoiceXML prompt audio segment count overflow");
             status = cmeta_validate_attributes(
                 child, audio_allowed, 1u, diagnostic);
-            if (status == VXML_OK)
-                status = cmeta_validate_empty_element(
-                    child, diagnostic);
             if (status != VXML_OK) return status;
             if (src.impl == NULL)
                 return cmeta_program_fail(
@@ -1650,6 +1649,74 @@ static vxml_status cmeta_measure_prompt(
                     salts_xml_attribute_location(src),
                     "VoiceXML prompt total bytes overflow");
             total_prompt_bytes += audio_src_bytes;
+
+            for (fallback_child_index = 0u;
+                 fallback_child_index < salts_xml_node_child_count(child);
+                 ++fallback_child_index) {
+                const salts_xml_node fallback =
+                    salts_xml_node_child_at(child, fallback_child_index);
+                const salts_xml_node_kind fallback_kind =
+                    salts_xml_node_type(fallback);
+                if (fallback_kind == SALTS_XML_COMMENT ||
+                    fallback_kind == SALTS_XML_PROCESSING_INSTRUCTION)
+                    continue;
+                if (fallback_kind == SALTS_XML_TEXT) {
+                    const salts_xml_string_view text =
+                        salts_xml_node_text_view(fallback);
+                    if (cmeta_text_whitespace(text))
+                        continue;
+                    if (!cmeta_measure_increment(&text_segment_count) ||
+                        !cmeta_measure_increment(&fallback_segment_count))
+                        return cmeta_program_fail(
+                            diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML audio fallback segment count overflow");
+                    if (text.size > SIZE_MAX - total_prompt_bytes)
+                        return cmeta_program_fail(
+                            diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML audio fallback bytes overflow");
+                    total_prompt_bytes += text.size;
+                    continue;
+                }
+                if (cmeta_static_ssml_subtree(fallback)) {
+                    char *serialized;
+                    size_t serialized_size = 0u;
+                    if (!cmeta_measure_increment(&ssml_count) ||
+                        !cmeta_measure_increment(&fallback_segment_count))
+                        return cmeta_program_fail(
+                            diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML audio fallback segment count overflow");
+                    serialized = salts_xml_node_serialize(
+                        fallback, &serialized_size);
+                    if (serialized == NULL)
+                        return cmeta_program_fail(
+                            diagnostic, VXML_ALLOCATION_FAILED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML fallback SSML serialization failed");
+                    salts_xml_owned_string_free(serialized);
+                    if (serialized_size == 0u ||
+                        serialized_size > options->max_prompt_bytes ||
+                        serialized_size > SIZE_MAX - total_prompt_bytes)
+                        return cmeta_program_fail(
+                            diagnostic, VXML_LIMIT_EXCEEDED,
+                            salts_xml_node_location(fallback),
+                            "VoiceXML fallback SSML exceeds prompt bounds");
+                    total_prompt_bytes += serialized_size;
+                    continue;
+                }
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(fallback),
+                    "VoiceXML audio fallback supports static text/SSML only");
+            }
+            if (fallback_segment_count != 0u &&
+                !cmeta_measure_increment(&measurement->prompt_fallback_count))
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt fallback table overflow");
             continue;
         }
         if (cmeta_static_ssml_subtree(child)) {
