@@ -27,15 +27,21 @@ traverse the array using `sizeof(vxml_cmeta_menu_choice_v1)`.
 
 ## Collect ABI
 
-The historical `vxml_cmeta_collect_request_v1` prefix is unchanged. Its
-append-only tail identifies FIELD versus MENU and exposes a Program-owned menu
-choice array.
+The historical `vxml_cmeta_collect_request_v1` is unchanged byte-for-byte.
+This matters because it is also a caller-owned output object; growing it would
+let a new library overwrite an old caller's smaller allocation.
+
+Menus instead use `vxml_cmeta_menu_collect_request_v1` and an append-only
+`prepare_menu` callback at the end of `vxml_cmeta_collect_adapter_v1`.
+Historical adapters remain valid through the old `cancel` prefix.
 
 A menu request requires `VXML_CMETA_COLLECT_CAP_MENU_CHOICE`. Providers that
-do not advertise the capability are rejected before `prepare()`.
+do not advertise the capability are rejected before the menu tail callback is
+inspected or invoked.
 
 ```text
-collect prepare / commit / cancel       existing provider lifecycle
+field prepare / menu prepare / commit / cancel
+                     existing provider lifecycle
                  |
                  v
         generation-scoped mailbox
