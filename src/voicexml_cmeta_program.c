@@ -2248,94 +2248,119 @@ static vxml_status cmeta_compile_prompt_schema(
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
     size_t child_index;
-    size_t text_bytes = 0u;
-    salts_xml_node audio = {0};
-    char *destination;
     unsigned count = 1u;
     vxml_status status = cmeta_parse_prompt_count(
         count_attribute, &count, builder->diagnostic);
+
     if (status != VXML_OK) return status;
     memset(out, 0, sizeof(*out));
     out->field = field_index;
     out->count = count;
     out->condition = VXML_CMETA_NO_INDEX;
+    out->first_segment = builder->prompt_segment_index;
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
          ++child_index) {
         const salts_xml_node child =
             salts_xml_node_child_at(prompt, child_index);
-        if (salts_xml_node_type(child) == SALTS_XML_TEXT) {
+        const salts_xml_node_kind kind =
+            salts_xml_node_type(child);
+        vxml_cmeta_prompt_media_segment_v1 *segment;
+
+        if (kind == SALTS_XML_COMMENT ||
+            kind == SALTS_XML_PROCESSING_INSTRUCTION)
+            continue;
+
+        if (kind == SALTS_XML_TEXT) {
             const salts_xml_string_view text =
                 salts_xml_node_text_view(child);
-            if (text.size > SIZE_MAX - text_bytes)
-                return cmeta_program_fail(
-                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
-                    salts_xml_node_location(child),
-                    "VoiceXML prompt text size changed between passes");
-            text_bytes += text.size;
-        } else if (cmeta_node_named(child, "audio")) {
-            if (audio.impl != NULL)
+            const char *retained;
+            if (cmeta_text_whitespace(text))
+                continue;
+            if (builder->prompt_segment_index >=
+                builder->profile->prompt_segment_count)
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
-                    "VoiceXML audio count changed between passes");
-            audio = child;
+                    "VoiceXML prompt segment rows changed between passes");
+            retained = cmeta_retain_view(builder, text);
+            if (retained == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML retained prompt segment storage overflow");
+            segment = &builder->profile->prompt_segments[
+                builder->prompt_segment_index++];
+            *segment = (vxml_cmeta_prompt_media_segment_v1){
+                .kind = VXML_CMETA_PROMPT_MEDIA_TEXT,
+                .payload = {retained, text.size},
+                .media_type = {0}};
+            out->required_capabilities |=
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+            continue;
         }
-    }
 
-    if (audio.impl != NULL) {
-        const salts_xml_attribute src =
-            cmeta_attribute(audio, "src");
-        status = cmeta_retain_decoded_view(
-            builder, salts_xml_attribute_value(src),
-            salts_xml_attribute_location(src),
-            &out->media_payload, &out->media_payload_size);
-        if (status != VXML_OK) return status;
-        if (out->media_payload_size == 0u)
-            return cmeta_program_fail(
-                builder->diagnostic, VXML_INVALID_STRUCTURE,
+        if (cmeta_node_named(child, "audio")) {
+            const salts_xml_attribute src =
+                cmeta_attribute(child, "src");
+            const char *payload = NULL;
+            size_t payload_size = 0u;
+            if (builder->prompt_segment_index >=
+                builder->profile->prompt_segment_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt segment rows changed between passes");
+            status = cmeta_retain_decoded_view(
+                builder, salts_xml_attribute_value(src),
                 salts_xml_attribute_location(src),
-                "VoiceXML audio src disappeared between passes");
-        out->media_kind = VXML_CMETA_PROMPT_MEDIA_AUDIO;
-        return VXML_OK;
+                &payload, &payload_size);
+            if (status != VXML_OK) return status;
+            if (payload_size == 0u)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(src),
+                    "VoiceXML audio src disappeared between passes");
+            segment = &builder->profile->prompt_segments[
+                builder->prompt_segment_index++];
+            *segment = (vxml_cmeta_prompt_media_segment_v1){
+                .kind = VXML_CMETA_PROMPT_MEDIA_AUDIO,
+                .payload = {payload, payload_size},
+                .media_type = {0}};
+            out->required_capabilities |=
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+            continue;
+        }
+
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(child),
+            "VoiceXML prompt child changed between compiler passes");
     }
 
-    if (text_bytes == 0u)
+    out->segment_count =
+        builder->prompt_segment_index - out->first_segment;
+    if (out->segment_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(prompt),
-            "VoiceXML prompt text disappeared between passes");
-    if (builder->string_index > builder->profile->string_size ||
-        text_bytes >=
-            builder->profile->string_size - builder->string_index)
-        return cmeta_program_fail(
-            builder->diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_node_location(prompt),
-            "VoiceXML retained prompt storage overflow");
-    destination =
-        builder->profile->strings + builder->string_index;
-    text_bytes = 0u;
-    for (child_index = 0u;
-         child_index < salts_xml_node_child_count(prompt);
-         ++child_index) {
-        const salts_xml_node child =
-            salts_xml_node_child_at(prompt, child_index);
-        if (salts_xml_node_type(child) == SALTS_XML_TEXT) {
-            const salts_xml_string_view text =
-                salts_xml_node_text_view(child);
-            if (text.size != 0u)
-                memcpy(destination + text_bytes, text.data, text.size);
-            text_bytes += text.size;
+            "VoiceXML prompt segments disappeared between passes");
+
+    if (out->segment_count == 1u) {
+        const vxml_cmeta_prompt_media_segment_v1 *segment =
+            &builder->profile->prompt_segments[out->first_segment];
+        out->media_kind = segment->kind;
+        out->media_payload = segment->payload.data;
+        out->media_payload_size = segment->payload.size;
+        if (segment->kind == VXML_CMETA_PROMPT_MEDIA_TEXT) {
+            out->text = segment->payload.data;
+            out->text_size = segment->payload.size;
         }
+    } else {
+        out->required_capabilities |=
+            VXML_CMETA_PROMPT_MEDIA_CAP_BATCH;
     }
-    destination[text_bytes] = '\0';
-    out->text = destination;
-    out->text_size = text_bytes;
-    out->media_kind = VXML_CMETA_PROMPT_MEDIA_TEXT;
-    out->media_payload = out->text;
-    out->media_payload_size = out->text_size;
-    builder->string_index += text_bytes + 1u;
     return VXML_OK;
 }
 
