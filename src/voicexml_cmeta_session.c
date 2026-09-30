@@ -1566,7 +1566,11 @@ static vxml_status execute_clear(
             !range_valid(form->first_block, form->block_count,
                          program->block_count) ||
             !range_valid(form->first_field, form->field_count,
-                         program->field_count))
+                         program->field_count) ||
+            !range_valid(form->first_initial, form->initial_count,
+                         program->initial_count) ||
+            (form->field_count != 0u && program->fields == NULL) ||
+            (form->initial_count != 0u && program->initials == NULL))
             return VXML_INVALID_STRUCTURE;
         for (index = 0u; index < form->block_count; ++index) {
             const vxml_cmeta_block_row *block =
@@ -1585,6 +1589,17 @@ static vxml_status execute_clear(
                 &session->staged_root, program, field->root_field);
             mark_field_retry_reset(
                 session, program, form->first_field + index);
+        }
+        for (index = 0u; index < form->initial_count; ++index) {
+            const vxml_cmeta_initial_row *initial =
+                &program->initials[form->first_initial + index];
+            if (initial->form != session->active_form ||
+                initial->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                initial->form_item_slot);
         }
         return VXML_OK;
     }
