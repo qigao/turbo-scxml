@@ -155,6 +155,21 @@ vxml_document_store_status vxml_document_store_acquire(
     vxml_document_ref *out_ref,
     vxml_document_store_error *out_error);
 
+/**
+ * Acquire with an optional callback-borrowed per-request fetch policy.
+ *
+ * Cache hits do not call the provider and therefore do not require
+ * open_with_policy. On a cache miss, an explicit timeout requires the adapter
+ * tail and fails closed when the provider cannot honor it.
+ */
+vxml_document_store_status vxml_document_store_acquire_with_policy(
+    vxml_document_store *store,
+    const char *document_uri,
+    size_t document_uri_size,
+    const vxml_document_fetch_policy_v1 *policy,
+    vxml_document_ref *out_ref,
+    vxml_document_store_error *out_error);
+
 /** Borrow one cached immutable view while ref remains live. */
 vxml_document_store_status vxml_document_store_view(
     const vxml_document_store *store,

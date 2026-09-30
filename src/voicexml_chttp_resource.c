@@ -58,6 +58,31 @@ static vxml_dialog_manager_status document_open(
     return VXML_DIALOG_MANAGER_OK;
 }
 
+static vxml_dialog_manager_status document_open_with_policy(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    const vxml_document_fetch_policy_v1 *policy,
+    vxml_dialog_document *out_document) {
+    vxml_chttp_resource *owner = (vxml_chttp_resource *)user;
+    vxml_chttp_resource_impl *impl = owner != NULL
+        ? (vxml_chttp_resource_impl *)owner->impl : NULL;
+    if (policy == NULL ||
+        policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
+        policy->struct_size < sizeof(*policy))
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    if (!policy->has_timeout)
+        return document_open(
+            user, source, source_size, media_type, media_type_size,
+            max_bytes, out_document);
+    if (out_document != NULL)
+        memset(out_document, 0, sizeof(*out_document));
+    if (impl != NULL)
+        impl->last_status = SCXML_RESOURCE_FAILED;
+    return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+}
+
 static void document_close(
     void *user, vxml_dialog_document *document) {
     vxml_chttp_resource *owner = (vxml_chttp_resource *)user;
@@ -76,7 +101,8 @@ static const vxml_dialog_document_adapter_v1 DOCUMENT_ADAPTER = {
     .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
     .struct_size = sizeof(vxml_dialog_document_adapter_v1),
     .open = document_open,
-    .close = document_close};
+    .close = document_close,
+    .open_with_policy = document_open_with_policy};
 
 const char *vxml_chttp_resource_status_string(
     vxml_chttp_resource_status status) {

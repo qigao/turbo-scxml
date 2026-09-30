@@ -5,7 +5,10 @@
 
 typedef struct document_probe {
     size_t open_calls;
+    size_t policy_open_calls;
     size_t close_calls;
+    bool observed_has_timeout;
+    uint64_t observed_timeout_us;
     vxml_dialog_manager_status open_status;
     const char *body;
     size_t body_size;
@@ -47,6 +50,26 @@ static vxml_dialog_manager_status probe_open(
     return VXML_DIALOG_MANAGER_OK;
 }
 
+static vxml_dialog_manager_status probe_open_with_policy(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    const vxml_document_fetch_policy_v1 *policy,
+    vxml_dialog_document *out_document) {
+    document_probe *probe = (document_probe *)user;
+    if (probe == NULL || policy == NULL ||
+        policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
+        policy->struct_size < sizeof(*policy))
+        return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
+    ++probe->policy_open_calls;
+    probe->observed_has_timeout = policy->has_timeout;
+    probe->observed_timeout_us = policy->timeout_us;
+    return probe_open(
+        user, source, source_size, media_type, media_type_size,
+        max_bytes, out_document);
+}
+
 static void probe_close(
     void *user, vxml_dialog_document *document) {
     document_probe *probe = (document_probe *)user;
@@ -60,6 +83,15 @@ static void probe_close(
 static const vxml_dialog_document_adapter_v1 document_adapter = {
     .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
     .struct_size = sizeof(vxml_dialog_document_adapter_v1),
+    .open = probe_open,
+    .close = probe_close,
+    .open_with_policy = probe_open_with_policy};
+
+static const vxml_dialog_document_adapter_v1 legacy_document_adapter = {
+    .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
+    .struct_size =
+        offsetof(vxml_dialog_document_adapter_v1, close) +
+        sizeof(((vxml_dialog_document_adapter_v1 *)0)->close),
     .open = probe_open,
     .close = probe_close};
 
@@ -259,6 +291,145 @@ spec("VoiceXML bounded document store") {
         check_equal(
             vxml_document_store_destroy(&store),
             VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("passes exact timed policy on cache miss including explicit zero") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+        vxml_document_fetch_policy_v1 policy =
+            VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+
+        init_store(&store, &probe, 2u, 4096u);
+        policy.has_timeout = true;
+        policy.timeout_us = UINT64_C(1500000);
+        check_equal(
+            vxml_document_store_acquire_with_policy(
+                &store, "https://voice.example/timed.vxml",
+                sizeof("https://voice.example/timed.vxml") - 1u,
+                &policy, &ref, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(probe.policy_open_calls, (size_t)1u);
+        check_true(probe.observed_has_timeout);
+        check_equal(probe.observed_timeout_us, UINT64_C(1500000));
+        check_equal(vxml_document_store_release(&store, &ref),
+                    VXML_DOCUMENT_STORE_OK);
+
+        policy.timeout_us = UINT64_C(0);
+        check_equal(
+            vxml_document_store_acquire_with_policy(
+                &store, "https://voice.example/zero.vxml",
+                sizeof("https://voice.example/zero.vxml") - 1u,
+                &policy, &ref, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(probe.policy_open_calls, (size_t)2u);
+        check_true(probe.observed_has_timeout);
+        check_equal(probe.observed_timeout_us, UINT64_C(0));
+        check_equal(vxml_document_store_release(&store, &ref),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("serves a timed cache hit without requiring the policy adapter tail") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_store_config_v1 config =
+            store_config(&probe, 1u, 2048u);
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+        vxml_document_fetch_policy_v1 policy =
+            VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+        static const char uri[] = "https://voice.example/cached.vxml";
+
+        config.documents = &legacy_document_adapter;
+        check_equal(vxml_document_store_init(&store, &config),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_acquire(
+                        &store, uri, sizeof(uri) - 1u, &ref, NULL),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_release(&store, &ref),
+                    VXML_DOCUMENT_STORE_OK);
+        policy.has_timeout = true;
+        policy.timeout_us = UINT64_C(7);
+        check_equal(vxml_document_store_acquire_with_policy(
+                        &store, uri, sizeof(uri) - 1u,
+                        &policy, &ref, NULL),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.policy_open_calls, (size_t)0u);
+        check_equal(vxml_document_store_release(&store, &ref),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("fails a timed cache miss before provider publication when tail is absent") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_store_config_v1 config =
+            store_config(&probe, 1u, 2048u);
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+        vxml_document_store_error error = {0};
+        vxml_document_store_stats stats = {0};
+        vxml_document_fetch_policy_v1 policy =
+            VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+
+        config.documents = &legacy_document_adapter;
+        check_equal(vxml_document_store_init(&store, &config),
+                    VXML_DOCUMENT_STORE_OK);
+        policy.has_timeout = true;
+        policy.timeout_us = UINT64_C(1000);
+        check_equal(vxml_document_store_acquire_with_policy(
+                        &store, "https://voice.example/miss.vxml",
+                        sizeof("https://voice.example/miss.vxml") - 1u,
+                        &policy, &ref, &error),
+                    VXML_DOCUMENT_STORE_RESOURCE_ERROR);
+        check_equal(error.resource_status,
+                    VXML_DIALOG_MANAGER_DOCUMENT_ERROR);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.policy_open_calls, (size_t)0u);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)0u);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("closes timed fetch leases when compilation rejects the document") {
+        static const char malformed[] = "<vxml";
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = malformed,
+            .body_size = sizeof(malformed) - 1u};
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+        vxml_document_store_stats stats = {0};
+        vxml_document_fetch_policy_v1 policy =
+            VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+
+        init_store(&store, &probe, 1u, 2048u);
+        policy.has_timeout = true;
+        policy.timeout_us = UINT64_C(500000);
+        check_equal(vxml_document_store_acquire_with_policy(
+                        &store, "https://voice.example/bad-timed.vxml",
+                        sizeof("https://voice.example/bad-timed.vxml") - 1u,
+                        &policy, &ref, NULL),
+                    VXML_DOCUMENT_STORE_COMPILE_ERROR);
+        check_equal(probe.policy_open_calls, (size_t)1u);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)0u);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
     }
 
     it("invalidates one released borrow without consuming a peer borrow") {

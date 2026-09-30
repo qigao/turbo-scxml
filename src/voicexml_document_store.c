@@ -566,7 +566,9 @@ vxml_document_store_status vxml_document_store_init(
         config->documents == NULL ||
         config->documents->abi_version !=
             VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 ||
-        config->documents->struct_size < sizeof(*config->documents) ||
+        config->documents->struct_size <
+            offsetof(vxml_dialog_document_adapter_v1, close) +
+            sizeof(config->documents->close) ||
         config->documents->open == NULL ||
         config->documents->close == NULL)
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
@@ -606,7 +608,12 @@ vxml_document_store_status vxml_document_store_init(
     impl->max_document_bytes = config->max_document_bytes;
     impl->max_cache_bytes = config->max_cache_bytes;
     impl->voice_limits = config->voice_limits;
-    impl->documents = *config->documents;
+    memset(&impl->documents, 0, sizeof(impl->documents));
+    memcpy(
+        &impl->documents, config->documents,
+        config->documents->struct_size < sizeof(impl->documents)
+            ? config->documents->struct_size
+            : sizeof(impl->documents));
     impl->document_user = config->document_user;
     store->impl = impl;
     return VXML_DOCUMENT_STORE_OK;
@@ -715,10 +722,11 @@ done:
     return status;
 }
 
-vxml_document_store_status vxml_document_store_acquire(
+vxml_document_store_status vxml_document_store_acquire_with_policy(
     vxml_document_store *store,
     const char *document_uri,
     size_t document_uri_size,
+    const vxml_document_fetch_policy_v1 *policy,
     vxml_document_ref *out_ref,
     vxml_document_store_error *out_error) {
     vxml_document_store_impl *impl =
@@ -742,7 +750,10 @@ vxml_document_store_status vxml_document_store_acquire(
     error_clear(out_error);
     if (impl == NULL || out_ref == NULL ||
         !uri_bytes_valid(document_uri, document_uri_size) ||
-        document_uri_size > impl->max_uri_bytes)
+        document_uri_size > impl->max_uri_bytes ||
+        (policy != NULL &&
+         (policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
+          policy->struct_size < sizeof(*policy))))
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
 
     if (impl->active_borrows >= impl->capacity) {
@@ -791,13 +802,34 @@ vxml_document_store_status vxml_document_store_acquire(
         return VXML_DOCUMENT_STORE_FULL;
     }
 
-    resource_status = impl->documents.open(
-        impl->document_user,
-        canonical, canonical_size,
-        "application/voicexml+xml",
-        sizeof("application/voicexml+xml") - 1u,
-        impl->max_document_bytes,
-        &document);
+    if (policy != NULL && policy->has_timeout) {
+        const size_t policy_tail =
+            offsetof(vxml_dialog_document_adapter_v1, open_with_policy) +
+            sizeof(impl->documents.open_with_policy);
+        if (impl->documents.struct_size < policy_tail ||
+            impl->documents.open_with_policy == NULL) {
+            free(canonical);
+            error_set(out_error, VXML_DOCUMENT_STORE_RESOURCE_ERROR,
+                      VXML_DIALOG_MANAGER_DOCUMENT_ERROR, VXML_OK);
+            return VXML_DOCUMENT_STORE_RESOURCE_ERROR;
+        }
+        resource_status = impl->documents.open_with_policy(
+            impl->document_user,
+            canonical, canonical_size,
+            "application/voicexml+xml",
+            sizeof("application/voicexml+xml") - 1u,
+            impl->max_document_bytes,
+            policy,
+            &document);
+    } else {
+        resource_status = impl->documents.open(
+            impl->document_user,
+            canonical, canonical_size,
+            "application/voicexml+xml",
+            sizeof("application/voicexml+xml") - 1u,
+            impl->max_document_bytes,
+            &document);
+    }
     if (resource_status != VXML_DIALOG_MANAGER_OK) {
         free(canonical);
         error_set(out_error, VXML_DOCUMENT_STORE_RESOURCE_ERROR,
@@ -888,6 +920,17 @@ vxml_document_store_status vxml_document_store_acquire(
     (void)slot_index;
     free(canonical);
     return VXML_DOCUMENT_STORE_OK;
+}
+
+vxml_document_store_status vxml_document_store_acquire(
+    vxml_document_store *store,
+    const char *document_uri,
+    size_t document_uri_size,
+    vxml_document_ref *out_ref,
+    vxml_document_store_error *out_error) {
+    return vxml_document_store_acquire_with_policy(
+        store, document_uri, document_uri_size,
+        NULL, out_ref, out_error);
 }
 
 vxml_document_store_status vxml_document_store_view(
