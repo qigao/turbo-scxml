@@ -7008,8 +7008,11 @@ static vxml_status cmeta_lower_program(
                     }
                 } else if (cmeta_node_named(item, "subdialog")) {
                     vxml_cmeta_subdialog_row *subdialog;
+                    const size_t current_subdialog_index = subdialog_index;
                     const salts_xml_attribute condition =
                         cmeta_attribute(item, "cond");
+                    size_t nested_index;
+                    size_t param_offset = 0u;
                     if (subdialog_index >=
                             builder->profile->subdialog_count ||
                         builder->profile->subdialogs == NULL)
@@ -7019,17 +7022,78 @@ static vxml_status cmeta_lower_program(
                             "VoiceXML subdialog rows changed during lowering");
                     subdialog =
                         &builder->profile->subdialogs[subdialog_index++];
-                    if (subdialog->form != form_index)
+                    if (subdialog->form != form_index ||
+                        !range_valid(
+                            subdialog->first_param, subdialog->param_count,
+                            builder->profile->subdialog_param_count) ||
+                        (subdialog->param_count != 0u &&
+                         builder->profile->subdialog_params == NULL))
                         return cmeta_program_fail(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
-                            "VoiceXML subdialog form ownership changed during lowering");
+                            "VoiceXML subdialog form/parameter ownership changed during lowering");
                     if (condition.impl != NULL) {
                         status = cmeta_append_expression(
                             builder, condition, scopes, 2u, true,
                             &subdialog->condition);
                         if (status != VXML_OK) return status;
                     }
+                    for (nested_index = 0u;
+                         nested_index < salts_xml_node_child_count(item);
+                         ++nested_index) {
+                        const salts_xml_node nested =
+                            salts_xml_node_child_at(item, nested_index);
+                        vxml_cmeta_subdialog_param_row *param;
+                        const salts_xml_attribute expression =
+                            cmeta_attribute(nested, "expr");
+                        if (cmeta_node_ignorable(nested)) continue;
+                        if (!cmeta_node_named(nested, "param") ||
+                            param_offset >= subdialog->param_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(nested),
+                                "VoiceXML subdialog parameter rows changed during lowering");
+                        param = &builder->profile->subdialog_params[
+                            subdialog->first_param + param_offset++];
+                        if (param->subdialog != current_subdialog_index)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(nested),
+                                "VoiceXML subdialog parameter owner changed during lowering");
+                        if (param->source ==
+                                VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+                            if (expression.impl == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML typed param expression disappeared between passes");
+                            status = cmeta_append_expression(
+                                builder, expression, scopes, 2u, false,
+                                &param->expression);
+                            if (status != VXML_OK) return status;
+                        } else if (param->source ==
+                                       VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+                            if (expression.impl != NULL ||
+                                param->literal == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML literal param changed between passes");
+                        } else {
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(nested),
+                                "VoiceXML param source is invalid");
+                        }
+                    }
+                    if (param_offset != subdialog->param_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog parameter count changed during lowering");
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
