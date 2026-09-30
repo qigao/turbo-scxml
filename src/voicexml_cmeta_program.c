@@ -1962,6 +1962,7 @@ typedef struct cmeta_program_builder {
     size_t form_index;
     size_t field_index;
     size_t prompt_index;
+    size_t prompt_segment_index;
     size_t filled_index;
     size_t filled_target_index;
     size_t event_handler_index;
@@ -4313,6 +4314,7 @@ static vxml_status cmeta_write_program(
          builder.form_index != measurement->form_count ||
          builder.field_index != measurement->field_count ||
          builder.prompt_index != measurement->prompt_count ||
+         builder.prompt_segment_index != measurement->prompt_segment_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index != measurement->filled_target_count ||
          builder.event_handler_index != measurement->event_handler_count ||
