@@ -45,6 +45,7 @@ typedef struct vxml_cmeta_form_row {
     size_t filled_count;
     size_t first_block;
     size_t block_count;
+    size_t menu;
 } vxml_cmeta_form_row;
 
 typedef struct vxml_cmeta_prompt_row {
@@ -66,6 +67,23 @@ typedef struct vxml_cmeta_prompt_row {
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;
+
+typedef enum vxml_cmeta_menu_choice_target_kind {
+    VXML_CMETA_MENU_CHOICE_EVENT = 1
+} vxml_cmeta_menu_choice_target_kind;
+
+typedef struct vxml_cmeta_menu_choice_row {
+    vxml_cmeta_menu_choice_v1 view;
+    vxml_cmeta_menu_choice_target_kind target_kind;
+    const char *target;
+    size_t target_size;
+} vxml_cmeta_menu_choice_row;
+
+typedef struct vxml_cmeta_menu_row {
+    size_t form;
+    size_t first_choice;
+    size_t choice_count;
+} vxml_cmeta_menu_row;
 
 typedef struct vxml_cmeta_field_row {
     size_t form;
@@ -214,6 +232,10 @@ typedef struct vxml_cmeta_program_data {
     size_t document_scope;
     vxml_cmeta_form_row *forms;
     size_t form_count;
+    vxml_cmeta_menu_row *menus;
+    size_t menu_count;
+    vxml_cmeta_menu_choice_row *menu_choices;
+    size_t menu_choice_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
     vxml_cmeta_prompt_row *prompts;
@@ -295,6 +317,8 @@ typedef enum vxml_cmeta_collect_mailbox_state {
 typedef struct vxml_cmeta_collect_mailbox {
     atomic_uint state;
     atomic_uint_fast64_t generation;
+    vxml_cmeta_collect_item_kind item_kind;
+    size_t choice_index;
     const cmeta_data_desc *data;
     void *allocation;
     unsigned char *storage;
@@ -328,6 +352,7 @@ typedef struct vxml_cmeta_session_data {
     size_t execution_steps;
     size_t active_form;
     size_t active_field;
+    size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;
     const vxml_cmeta_collect_adapter_v1 *collect_adapter;
