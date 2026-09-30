@@ -549,6 +549,10 @@ static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
 
+static vxml_status cmeta_measure_name(
+    salts_xml_attribute attribute, cmeta_program_measurement *measurement,
+    const vxml_limits *limits, vxml_diagnostic *diagnostic);
+
 static vxml_status cmeta_measure_event_name(
     salts_xml_attribute attribute,
     const vxml_cmeta_compile_options_v1 *options,
@@ -893,7 +897,8 @@ static vxml_status cmeta_measure_executable(
         !cmeta_node_named(node, "assign") &&
         !cmeta_node_named(node, "clear") &&
         !cmeta_node_named(node, "if") &&
-        !cmeta_node_named(node, "exit"))
+        !cmeta_node_named(node, "exit") &&
+        !cmeta_node_named(node, "throw"))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -913,6 +918,15 @@ static vxml_status cmeta_measure_executable(
     } else if (cmeta_node_named(node, "if")) {
         static const char *const allowed[] = {"cond"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
+    } else if (cmeta_node_named(node, "throw")) {
+        static const char *const allowed[] = {"event"};
+        status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
+        if (status == VXML_OK &&
+            cmeta_attribute(node, "event").impl == NULL)
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML throw requires event");
     } else {
         static const char *const allowed[] = {"expr", "namelist"};
         status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
@@ -921,6 +935,15 @@ static vxml_status cmeta_measure_executable(
     if (cmeta_node_named(node, "var") || cmeta_node_named(node, "assign")) {
         status = cmeta_measure_name(
             cmeta_attribute(node, "name"), measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (cmeta_node_named(node, "throw")) {
+        if (!cmeta_event_options_valid(NULL)) {
+            /* compile options are validated by enclosing Event-aware paths;
+             * throw-specific limits are rechecked during lowering. */
+        }
+        status = cmeta_measure_name(
+            cmeta_attribute(node, "event"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     if (!cmeta_node_named(node, "if") &&
