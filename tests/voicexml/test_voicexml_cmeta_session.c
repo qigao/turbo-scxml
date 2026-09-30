@@ -969,6 +969,7 @@ static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
     options.max_menus = 4u;
     options.max_menu_choices = 16u;
     options.max_menu_choice_bytes = 16u;
+    options.max_menu_target_bytes = 256u;
     return options;
 }
 
@@ -1174,6 +1175,101 @@ spec("VoiceXML CMeta session execution") {
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
+    }
+
+    it("publishes literal menu next through the shared navigation handoff exactly once") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu id='main' dtmf='true'>"
+            "<choice next='#target'/></menu>"
+            "<form id='target'><block><exit/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu dtmf='true'>"
+            "<choice next='leaf.vxml#target'/></menu></vxml>"
+        };
+        static const char *const expected[] = {
+            "#target", "leaf.vxml#target"};
+        const vxml_cmeta_compile_options_v1 compile =
+            menu_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        size_t index;
+
+        for (index = 0u; index < sizeof(sources) / sizeof(sources[0]);
+             ++index) {
+            cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+            vxml_cmeta_collect_adapter_v1 adapter =
+                cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+            vxml_cmeta_session_options_v1 options =
+                field_session_options(&root, &adapter, &probe);
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_cmeta_menu_collect_request_v1 request = {0};
+            vxml_cmeta_menu_completion_v1 completion = {
+                .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
+                .struct_size = sizeof(vxml_cmeta_menu_completion_v1),
+                .choice_index = 0u};
+            vxml_navigation_request_v1 navigation = {0};
+            bool progressed = false;
+
+            check_equal(
+                vxml_compile_cmeta(
+                    sources[index], strlen(sources[index]), NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(&session, &program, &options),
+                VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_cmeta_menu_collect_request(&session, &request),
+                VXML_OK);
+            check_equal(
+                vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+            check_equal(
+                vxml_session_cmeta_collect_commit(&session), VXML_OK);
+            completion.generation = request.generation;
+            check_equal(
+                vxml_session_cmeta_menu_try_complete(
+                    &session, &completion),
+                VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+            check_equal(
+                vxml_session_cmeta_menu_try_complete(
+                    &session, &completion),
+                VXML_CMETA_COLLECT_INGRESS_FULL);
+            probe.active = false;
+            check_equal(
+                vxml_session_cmeta_collect_run_ready(
+                    &session, &progressed),
+                VXML_OK);
+            check_true(progressed);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_NAVIGATING);
+            check_equal(
+                vxml_session_navigation_request(
+                    &session, &navigation),
+                VXML_OK);
+            check_equal(
+                navigation.uri_size, strlen(expected[index]));
+            check_equal(
+                memcmp(
+                    navigation.uri, expected[index],
+                    navigation.uri_size), 0);
+            check_null(navigation.fetchaudio_uri);
+            check_equal(navigation.fetchaudio_uri_size, (size_t)0u);
+
+            check_equal(
+                vxml_session_cmeta_menu_try_complete(
+                    &session, &completion),
+                VXML_CMETA_COLLECT_INGRESS_STALE);
+            check_equal(
+                vxml_session_cmeta_menu_collect_request(
+                    &session, &request),
+                VXML_INVALID_STATE);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
     }
 
     it("rejects a menu completion for an active directed field generation") {
