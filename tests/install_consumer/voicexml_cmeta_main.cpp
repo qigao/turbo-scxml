@@ -54,6 +54,9 @@ int main() {
     vxml_cmeta_name_view exit_name{};
     vxml_cmeta_value_view exit_value{};
     auto raise_event = &vxml_session_cmeta_raise;
+    auto raise_noinput = &vxml_session_cmeta_noinput;
+    auto raise_nomatch = &vxml_session_cmeta_nomatch;
+    auto take_reprompt = &vxml_session_cmeta_take_reprompt;
     int result = 1;
 
     if (raise_event == nullptr)
