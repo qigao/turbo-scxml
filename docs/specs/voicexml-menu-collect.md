@@ -124,3 +124,58 @@ Approximate matching is deliberately not expanded in core. VoiceXML permits
 platform/language-dependent approximate grammar generation, so a future
 profile must make that capability and per-choice acceptance mode explicit
 without changing the stable choice-array stride.
+
+
+## V2 speech policy and explicit grammar
+
+The V1 menu choice array remains fixed stride:
+
+```c
+vxml_cmeta_menu_choice_v1 {
+    vxml_cmeta_name_view dtmf;
+    vxml_cmeta_name_view speech;
+}
+```
+
+Neither accept mode nor external grammar metadata is appended to that row.
+Providers may iterate V1 choices by `sizeof(vxml_cmeta_menu_choice_v1)`.
+
+V2 adds two fixed-stride Program-owned side tables:
+
+```text
+speech_policy[] = { choice_index, APPROXIMATE }
+grammar_ref[]   = { choice_index, media_type, src }
+```
+
+Absence of a speech-policy row means exact generated speech. This keeps
+exact-only menus on the V1 provider path.
+
+A menu uses `prepare_menu_v2` only when at least one V2 row exists:
+
+```text
+DTMF / exact generated speech only
+    -> prepare_menu(V1)
+
+approximate generated speech
+or explicit external grammar
+    -> prepare_menu_v2(V2)
+```
+
+The runtime checks required capabilities before invoking either provider
+callback:
+
+- `VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT`
+- `VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE`
+- `VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL`
+
+Approximate speech passes one normalized Program-owned phrase plus an explicit
+APPROXIMATE policy. The core does not generate subphrase expansions.
+
+The first explicit grammar profile accepts only external
+`application/srgs+xml` with literal `src`. An explicit grammar suppresses
+automatic generated speech for that choice. URI acquisition remains outside
+CMeta; no network dependency enters VoiceXML core.
+
+V1 request/choice/adapter prefixes remain byte-for-byte compatible. V2 request
+objects are separate caller-owned structs, and V2 metadata is represented only
+through side tables.
