@@ -5295,7 +5295,7 @@ vxml_status vxml_session_cmeta_prompt(
     *out_prompt = (vxml_cmeta_prompt_view_v1){
         .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_view_v1),
-        .field = {field->name, field->name_size},
+        .field = owner,
         .text = best != NULL &&
                 best->media_kind == VXML_CMETA_PROMPT_MEDIA_TEXT
             ? (vxml_cmeta_name_view){best->text, best->text_size}
