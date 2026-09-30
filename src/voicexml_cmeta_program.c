@@ -6370,6 +6370,18 @@ static vxml_status cmeta_lower_program(
                     }
                     {
                         size_t nested_index;
+                        size_t prompt_offset = 0u;
+                        if (!range_valid(
+                                initial->first_prompt,
+                                initial->prompt_count,
+                                builder->profile->prompt_count) ||
+                            (initial->prompt_count != 0u &&
+                             builder->profile->prompts == NULL))
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML initial prompt range is invalid");
                         for (nested_index = 0u;
                              nested_index <
                                  salts_xml_node_child_count(item);
@@ -6379,6 +6391,38 @@ static vxml_status cmeta_lower_program(
                                     item, nested_index);
                             if (cmeta_node_ignorable(nested))
                                 continue;
+                            if (cmeta_node_named(nested, "prompt")) {
+                                vxml_cmeta_prompt_row *prompt;
+                                const salts_xml_attribute prompt_cond =
+                                    cmeta_attribute(nested, "cond");
+                                if (prompt_offset >= initial->prompt_count)
+                                    return cmeta_program_fail(
+                                        builder->diagnostic,
+                                        VXML_INVALID_STRUCTURE,
+                                        salts_xml_node_location(nested),
+                                        "VoiceXML initial prompt count changed during lowering");
+                                prompt = &builder->profile->prompts[
+                                    initial->first_prompt + prompt_offset++];
+                                if (prompt->owner_kind !=
+                                        VXML_CMETA_PROMPT_OWNER_INITIAL ||
+                                    prompt->owner_index !=
+                                        (size_t)(
+                                            initial -
+                                            builder->profile->initials))
+                                    return cmeta_program_fail(
+                                        builder->diagnostic,
+                                        VXML_INVALID_STRUCTURE,
+                                        salts_xml_node_location(nested),
+                                        "VoiceXML initial prompt ownership changed during lowering");
+                                if (prompt_cond.impl != NULL) {
+                                    status = cmeta_append_expression(
+                                        builder, prompt_cond,
+                                        scopes, 2u, true,
+                                        &prompt->condition);
+                                    if (status != VXML_OK) return status;
+                                }
+                                continue;
+                            }
                             if (!cmeta_node_named(nested, "catch") &&
                                 !cmeta_node_named(nested, "help") &&
                                 !cmeta_node_named(nested, "noinput") &&
@@ -6393,6 +6437,12 @@ static vxml_status cmeta_lower_program(
                                 form->scope, scopes, 2u);
                             if (status != VXML_OK) return status;
                         }
+                        if (prompt_offset != initial->prompt_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML initial prompt rows changed between compiler passes");
                     }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
