@@ -1271,6 +1271,7 @@ static vxml_status initialize_form(
     size_t form_index) {
     const size_t document_scopes[1] = {program->document_scope};
     const size_t form_scopes[2] = {form->scope, program->document_scope};
+    size_t initial_offset;
     size_t block_offset;
     vxml_status status = initialize_declarations(
         session, program,
@@ -1282,6 +1283,40 @@ static vxml_status initialize_form(
         session, program, form->first_declaration, form->declaration_count,
         form_scopes, 2u);
     if (status != VXML_OK) return status;
+
+    if (!range_valid(
+            form->first_initial, form->initial_count,
+            program->initial_count) ||
+        (form->initial_count != 0u && program->initials == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (initial_offset = 0u;
+         initial_offset < form->initial_count;
+         ++initial_offset) {
+        const vxml_cmeta_initial_row *initial =
+            &program->initials[form->first_initial + initial_offset];
+        unsigned char *form_declared;
+        if (initial->form != form_index ||
+            initial->form_item_slot >=
+                program->scopes[form->scope].schema.slot_count)
+            return VXML_INVALID_STRUCTURE;
+        form_declared = session_declared(
+            session, program, true, form->scope);
+        if (form_declared == NULL) return VXML_INVALID_STRUCTURE;
+        form_declared[initial->form_item_slot] = 1u;
+        if (initial->initial_expression != VXML_CMETA_NO_INDEX) {
+            vxml_cmeta_value_view value;
+            status = evaluate_expression(
+                session, program, true,
+                initial->initial_expression,
+                form_scopes, 2u, &value);
+            if (status != VXML_OK) return status;
+            status = assign_scope_slot(
+                session, program, true, form->scope,
+                initial->form_item_slot, &value);
+            if (status != VXML_OK) return status;
+        }
+    }
+
     for (block_offset = 0u; block_offset < form->block_count; ++block_offset) {
         const size_t block_index = form->first_block + block_offset;
         const vxml_cmeta_block_row *block = &program->blocks[block_index];
@@ -2235,6 +2270,7 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     profile->collect_mailbox.item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -2545,7 +2581,29 @@ failure:
     return status;
 }
 
-static vxml_status select_directed_field(
+static bool form_has_bound_input(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_form_row *form) {
+    size_t offset;
+    if (program == NULL || profile == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count) ||
+        (form->field_count != 0u && program->fields == NULL))
+        return true;
+    for (offset = 0u; offset < form->field_count; ++offset) {
+        const vxml_cmeta_field_row *field =
+            &program->fields[form->first_field + offset];
+        if (field->root_field >=
+            session_root_shape(program)->field_count)
+            return true;
+        if (profile->committed_root.bound[field->root_field] != 0u)
+            return true;
+    }
+    return false;
+}
+
+static vxml_status select_directed_item(
     vxml_session_impl *session,
     const vxml_cmeta_program_data *program,
     vxml_cmeta_session_data *profile,
@@ -2553,46 +2611,103 @@ static vxml_status select_directed_field(
     size_t form_index) {
     const cmeta_data_struct_shape *root_shape =
         session_root_shape(program);
-    size_t field_offset;
+    const cmeta_scope_storage *form_scope;
+    size_t item_offset;
     vxml_status status;
 
     settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+
     if (root_shape == NULL ||
         (root_shape->field_count != 0u &&
-         profile->committed_root.bound == NULL))
+         profile->committed_root.bound == NULL) ||
+        form->scope >= program->scope_count ||
+        profile->committed_scopes == NULL ||
+        !range_valid(
+            form->first_item, form->item_count,
+            program->form_item_count) ||
+        (form->item_count != 0u && program->form_items == NULL))
         return session_fail(session, VXML_INVALID_STRUCTURE);
+    form_scope = &profile->committed_scopes[form->scope];
 
-    for (field_offset = 0u;
-         field_offset < form->field_count;
-         ++field_offset) {
-        const size_t field_index =
-            form->first_field + field_offset;
-        const vxml_cmeta_field_row *field =
-            &program->fields[field_index];
+    for (item_offset = 0u;
+         item_offset < form->item_count;
+         ++item_offset) {
+        const vxml_cmeta_form_item_row *item =
+            &program->form_items[form->first_item + item_offset];
         bool eligible = true;
-        if (field->form != form_index ||
-            field->root_field >= root_shape->field_count ||
-            root_shape->fields[field->root_field].value !=
-                field->field_data ||
-            root_shape->fields[field->root_field].offset !=
-                field->field_offset)
+
+        if (item->kind == VXML_CMETA_FORM_ITEM_FIELD) {
+            const vxml_cmeta_field_row *field;
+            if (item->index >= program->field_count ||
+                program->fields == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            field = &program->fields[item->index];
+            if (field->form != form_index ||
+                item->index < form->first_field ||
+                item->index - form->first_field >= form->field_count ||
+                field->root_field >= root_shape->field_count ||
+                root_shape->fields[field->root_field].value !=
+                    field->field_data ||
+                root_shape->fields[field->root_field].offset !=
+                    field->field_offset)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (profile->committed_root.bound[field->root_field] != 0u)
+                continue;
+            if (field->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    field->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            }
+            if (!eligible) continue;
+            profile->active_field = item->index;
+        } else if (item->kind == VXML_CMETA_FORM_ITEM_INITIAL) {
+            const vxml_cmeta_initial_row *initial;
+            if (item->index >= program->initial_count ||
+                program->initials == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            initial = &program->initials[item->index];
+            if (initial->form != form_index ||
+                item->index < form->first_initial ||
+                item->index - form->first_initial >=
+                    form->initial_count ||
+                initial->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count ||
+                form_scope->view.bound == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (form_scope->view.bound[initial->form_item_slot] != 0u)
+                continue;
+            if (initial->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    initial->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            } else {
+                eligible = !form_has_bound_input(
+                    program, profile, form);
+            }
+            if (!eligible) continue;
+            if (form->grammar_type == NULL ||
+                form->grammar_type_size == 0u ||
+                form->grammar_src == NULL ||
+                form->grammar_src_size == 0u ||
+                form->grammar_required_capabilities == 0u)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            profile->active_initial = item->index;
+        } else {
             return session_fail(session, VXML_INVALID_STRUCTURE);
-        if (profile->committed_root.bound[field->root_field] != 0u)
-            continue;
-        if (field->condition != VXML_CMETA_NO_INDEX) {
-            const size_t scopes[2] = {
-                form->scope, program->document_scope};
-            status = evaluate_condition(
-                profile, program, false,
-                field->condition, scopes, 2u, &eligible);
-            if (status != VXML_OK)
-                return session_fail(session, status);
         }
-        if (!eligible) continue;
-        profile->active_field = field_index;
+
         ++profile->collect_generation;
         if (profile->collect_generation == 0u)
             profile->collect_generation = 1u;
@@ -2603,7 +2718,6 @@ static vxml_status select_directed_field(
     session->error = VXML_OK;
     return VXML_OK;
 }
-
 
 static vxml_status select_menu(
     vxml_session_impl *session,
@@ -2626,6 +2740,7 @@ static vxml_status select_menu(
         return session_fail(session, VXML_INVALID_STRUCTURE);
     settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = form->menu;
     profile->active_block = VXML_CMETA_NO_INDEX;
     ++profile->collect_generation;
@@ -2655,19 +2770,29 @@ vxml_status vxml_cmeta_session_start_profile_at(
         form->scope >= program->scope_count ||
         !range_valid(form->first_field, form->field_count,
                      program->field_count) ||
+        !range_valid(form->first_initial, form->initial_count,
+                     program->initial_count) ||
+        !range_valid(form->first_item, form->item_count,
+                     program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
-        (form->field_count != 0u &&
-         (program->fields == NULL || form->block_count != 0u ||
+        (form->item_count != form->field_count + form->initial_count) ||
+        ((form->field_count != 0u || form->initial_count != 0u) &&
+         ((form->field_count != 0u && program->fields == NULL) ||
+          (form->initial_count != 0u && program->initials == NULL) ||
+          program->form_items == NULL ||
+          form->block_count != 0u ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
         (form->block_count != 0u &&
          (program->blocks == NULL ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
         (form->menu != VXML_CMETA_NO_INDEX &&
-         (form->field_count != 0u || form->block_count != 0u ||
+         (form->field_count != 0u || form->initial_count != 0u ||
+          form->item_count != 0u || form->block_count != 0u ||
           form->menu >= program->menu_count ||
           program->menus == NULL)) ||
-        (form->field_count == 0u && form->block_count == 0u &&
+        (form->field_count == 0u && form->initial_count == 0u &&
+         form->block_count == 0u &&
          form->menu == VXML_CMETA_NO_INDEX))
         return session_fail(session, VXML_INVALID_STRUCTURE);
     profile->active_form = form_index;
@@ -2682,8 +2807,8 @@ vxml_status vxml_cmeta_session_start_profile_at(
         return session_fail(session, status);
     }
     transaction_commit(profile, program);
-    if (form->field_count != 0u)
-        return select_directed_field(
+    if (form->item_count != 0u)
+        return select_directed_item(
             session, program, profile, form, form_index);
     if (form->menu != VXML_CMETA_NO_INDEX)
         return select_menu(
