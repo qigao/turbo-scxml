@@ -2833,6 +2833,159 @@ done:
     return status;
 }
 
+static const vxml_cmeta_field_row *cmeta_form_field_by_name(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    salts_xml_string_view name,
+    size_t *out_field_index) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count) ||
+        (form->field_count != 0u && program->fields == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->field_count; ++offset) {
+        const size_t index = form->first_field + offset;
+        const vxml_cmeta_field_row *field =
+            &program->fields[index];
+        if (field->name != NULL &&
+            field->name_size == name.size &&
+            memcmp(field->name, name.data, name.size) == 0) {
+            if (out_field_index != NULL) *out_field_index = index;
+            return field;
+        }
+    }
+    return NULL;
+}
+
+static vxml_status cmeta_append_filled_target(
+    cmeta_program_builder *builder,
+    vxml_cmeta_filled_row *row,
+    size_t root_field,
+    salts_xml_location location) {
+    size_t index;
+    if (builder->filled_target_index >=
+        builder->profile->filled_root_field_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML filled target rows changed between passes");
+    for (index = 0u; index < row->target_count; ++index) {
+        if (builder->profile->filled_root_fields[
+                row->first_target + index] == root_field)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE, location,
+                "VoiceXML filled namelist contains a duplicate field");
+    }
+    builder->profile->filled_root_fields[
+        builder->filled_target_index++] = root_field;
+    ++row->target_count;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_lower_filled_targets(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    const vxml_cmeta_form_row *form,
+    vxml_cmeta_filled_row *row) {
+    const salts_xml_attribute namelist =
+        cmeta_attribute(node, "namelist");
+    vxml_status status = VXML_OK;
+    row->first_target = builder->filled_target_index;
+    row->target_count = 0u;
+    if (namelist.impl == NULL) {
+        size_t offset;
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const vxml_cmeta_field_row *field =
+                &builder->profile->fields[
+                    form->first_field + offset];
+            status = cmeta_append_filled_target(
+                builder, row, field->root_field,
+                salts_xml_node_location(node));
+            if (status != VXML_OK) return status;
+        }
+        return row->target_count != 0u
+            ? VXML_OK
+            : cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML filled has no directed fields");
+    }
+
+    {
+        cmeta_decoded_value decoded = {0};
+        salts_xml_string_view list;
+        salts_xml_string_view name;
+        size_t cursor = 0u;
+        status = cmeta_decode_temporary(
+            builder, salts_xml_attribute_value(namelist),
+            salts_xml_attribute_location(namelist), &decoded);
+        if (status != VXML_OK) return status;
+        list = decoded.view;
+        while (cmeta_namelist_next(list, &cursor, &name)) {
+            const vxml_cmeta_field_row *field;
+            if (!cmeta_is_ncname(name)) {
+                status = cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(namelist),
+                    "VoiceXML filled namelist requires field NCNames");
+                break;
+            }
+            field = cmeta_form_field_by_name(
+                builder->profile, form, name, NULL);
+            if (field == NULL) {
+                status = cmeta_program_fail(
+                    builder->diagnostic, VXML_SEMANTIC_ERROR,
+                    salts_xml_attribute_location(namelist),
+                    "VoiceXML filled namelist references an unknown field");
+                break;
+            }
+            status = cmeta_append_filled_target(
+                builder, row, field->root_field,
+                salts_xml_attribute_location(namelist));
+            if (status != VXML_OK) break;
+        }
+        cmeta_decoded_value_destroy(&decoded);
+    }
+    if (status == VXML_OK && row->target_count == 0u)
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(namelist),
+            "VoiceXML filled namelist must not be empty");
+    return status;
+}
+
+static vxml_status cmeta_lower_filled_actions(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    const vxml_cmeta_form_row *form,
+    vxml_cmeta_filled_row *row) {
+    const vxml_cmeta_expr_compile_scope scopes[2] = {
+        {form->scope,
+         &builder->profile->scopes[form->scope].schema},
+        {builder->profile->document_scope,
+         &builder->profile->scopes[
+             builder->profile->document_scope].schema}};
+    size_t index;
+    vxml_status status;
+    if (row->mode != VXML_CMETA_FILLED_FIELD) {
+        status = cmeta_lower_filled_targets(
+            builder, node, form, row);
+        if (status != VXML_OK) return status;
+    }
+    row->first_action = builder->action_index;
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (cmeta_node_ignorable(child)) continue;
+        status = cmeta_lower_executable(
+            builder, child, form->scope,
+            scopes, 2u, row->first_action, 0u);
+        if (status != VXML_OK) return status;
+    }
+    row->action_end = builder->action_index;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_lower_simple_action(
     cmeta_program_builder *builder, salts_xml_node node,
     size_t execution_scope,
