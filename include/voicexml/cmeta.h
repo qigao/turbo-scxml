@@ -74,6 +74,10 @@ typedef struct vxml_cmeta_compile_options_v1 {
     /* Optional append-only directed-field admission tail. */
     size_t max_fields;
     size_t max_grammar_bytes;
+
+    /* Optional append-only scoped-Event admission tail. */
+    size_t max_event_handlers;
+    size_t max_event_name_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -97,6 +101,11 @@ typedef struct vxml_cmeta_session_options_v1 {
 
     /* Optional append-only V2 multi-slot completion capacity; zero keeps V1. */
     size_t max_collect_result_slots;
+
+    /* Optional append-only scoped Event runtime bounds. */
+    size_t max_event_counters;
+    size_t max_event_name_bytes;
+    size_t max_event_dispatch_depth;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -259,6 +268,18 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
 vxml_status vxml_session_cmeta_collect_run_ready(
     vxml_session *session,
     bool *out_progressed);
+
+/**
+ * Synchronously inject one byte-counted VoiceXML Event into the active CMeta
+ * session. The complete catch/throw chain is one bounded transaction.
+ *
+ * Event bytes are borrowed only for this call. Uncaught or cyclic rethrow
+ * fails the Session without partially committing handler effects.
+ */
+vxml_status vxml_session_cmeta_raise(
+    vxml_session *session,
+    const char *event_name,
+    size_t event_name_size);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
