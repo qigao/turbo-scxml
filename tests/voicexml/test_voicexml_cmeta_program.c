@@ -1555,8 +1555,10 @@ spec("VoiceXML CMeta program compiler") {
              "datamodel='cmeta'><form><block><disconnect reason='x'/>"
              "</block></form></vxml>", VXML_INVALID_STRUCTURE}
         };
-        const vxml_cmeta_compile_options_v1 options = compile_options();
+        vxml_cmeta_compile_options_v1 options = compile_options();
         size_t index;
+        options.max_event_handlers = 4u;
+        options.max_event_name_bytes = 64u;
 
         for (index = 0u; index < sizeof(accepted) / sizeof(accepted[0]); ++index) {
             vxml_program program = {0};
