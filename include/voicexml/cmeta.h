@@ -522,8 +522,12 @@ vxml_session_cmeta_prompt_media_barge_in(
     vxml_cmeta_prompt_bargein_type signal_type);
 
 /**
- * Report that one Program-owned MARK segment has been executed by the media
- * provider. Progress is generation-scoped and monotonically increasing.
+ * Single-owner progress point reporting that one Program-owned MARK segment
+ * has been executed. An asynchronous provider must marshal its callback to the
+ * Session owner before calling this function.
+ *
+ * segment_index is relative to the current prompt batch. Progress is
+ * generation-scoped and monotonically increasing.
  */
 vxml_cmeta_prompt_mark_result
 vxml_session_cmeta_prompt_media_mark(
@@ -533,7 +537,8 @@ vxml_session_cmeta_prompt_media_mark(
 
 /**
  * Borrow the last MARK executed for the most recently committed prompt
- * generation. The returned name borrows immutable Program storage.
+ * generation. segment_index is relative to that prompt batch. The returned
+ * name borrows immutable Program storage.
  */
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
     const vxml_session *session,
