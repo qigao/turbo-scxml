@@ -58,6 +58,9 @@ int main(void) {
     vxml_cmeta_data_resource_adapter_v1 data_adapter = {
         .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1)};
+    vxml_cmeta_prompt_view_v1 prompt_view = {
+        .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_view_v1)};
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
@@ -71,9 +74,13 @@ int main(void) {
         vxml_session_cmeta_nomatch;
     vxml_status (*take_reprompt)(vxml_session *, bool *) =
         vxml_session_cmeta_take_reprompt;
+    vxml_status (*query_prompt)(
+        const vxml_session *, vxml_cmeta_prompt_view_v1 *) =
+        vxml_session_cmeta_prompt;
     int result = 1;
 
-    if (raise_event == NULL)
+    if (raise_event == NULL || query_prompt == NULL ||
+        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1)
         return 6;
 
     if (data_adapter.abi_version !=

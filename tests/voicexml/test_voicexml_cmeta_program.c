@@ -154,6 +154,13 @@ static vxml_cmeta_compile_options_v1 field_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = field_compile_options();
+    options.max_prompts = 8u;
+    options.max_prompt_bytes = 256u;
+    return options;
+}
+
 enum { PROGRAM_ALLOCATION_CAPACITY = 256 };
 
 typedef struct program_allocation_tracker {
@@ -278,6 +285,94 @@ spec("VoiceXML CMeta program compiler") {
                     VXML_INVALID_STRUCTURE);
         check_null(program.impl);
         check_equal(diagnostic.status, VXML_INVALID_STRUCTURE);
+    }
+
+    it("compiles tapered literal prompts into immutable field-owned rows") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>First prompt</prompt>"
+            "<prompt count='2' cond='flag'>Second prompt</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_field_row *field;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_count, (size_t)2u);
+        check_not_null(profile->prompts);
+        field = &profile->fields[0];
+        check_equal(field->first_prompt, (size_t)0u);
+        check_equal(field->prompt_count, (size_t)2u);
+        check_equal(profile->prompts[0].field, (size_t)0u);
+        check_equal(profile->prompts[0].count, (unsigned)1u);
+        check_equal(profile->prompts[0].text_size,
+                    sizeof("First prompt") - 1u);
+        check_equal(memcmp(
+                        profile->prompts[0].text,
+                        "First prompt",
+                        sizeof("First prompt") - 1u), 0);
+        check_equal(profile->prompts[0].condition,
+                    VXML_CMETA_NO_INDEX);
+        check_equal(profile->prompts[1].count, (unsigned)2u);
+        check_equal(profile->prompts[1].text_size,
+                    sizeof("Second prompt") - 1u);
+        check_equal(memcmp(
+                        profile->prompts[1].text,
+                        "Second prompt",
+                        sizeof("Second prompt") - 1u), 0);
+        check_true(profile->prompts[1].condition !=
+                   VXML_CMETA_NO_INDEX);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid prompt count text limits and child markup") {
+        static const char *const bodies[] = {
+            "<form><field name='value'><prompt count='0'>x</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>",
+            "<form><field name='value'><prompt>toolong</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>",
+            "<form><field name='value'><prompt><audio src='a'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>"
+        };
+        static const vxml_status expected[] = {
+            VXML_INVALID_STRUCTURE,
+            VXML_LIMIT_EXCEEDED,
+            VXML_UNSUPPORTED_FEATURE
+        };
+        static const char prefix[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>";
+        size_t index;
+
+        for (index = 0u; index < 3u; ++index) {
+            char source[768];
+            vxml_cmeta_compile_options_v1 options =
+                prompt_compile_options();
+            vxml_program program = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s</vxml>",
+                prefix, bodies[index]);
+            if (index == 1u) options.max_prompt_bytes = 3u;
+            check_true(written > 0 && (size_t)written < sizeof(source));
+            check_equal(vxml_compile_cmeta(
+                            source, (size_t)written, NULL, &options,
+                            &program, NULL),
+                        expected[index]);
+            check_null(program.impl);
+        }
     }
 
     it("compiles one directed field and literal SRGS grammar into immutable rows") {

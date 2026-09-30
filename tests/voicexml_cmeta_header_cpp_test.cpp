@@ -2,6 +2,8 @@
 
 #include <type_traits>
 
+static_assert(std::is_standard_layout<vxml_cmeta_prompt_view_v1>::value,
+              "prompt view must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_ticket_v1>::value,
               "collect ticket must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
@@ -18,10 +20,13 @@ static_assert(std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
 int turboscxml_voicexml_cmeta_header_cpp_probe()
 {
     vxml_program program{};
+    vxml_cmeta_prompt_view_v1 prompt{};
     vxml_cmeta_compile_options_v1 options{};
     vxml_cmeta_collect_request_v1 request{};
     vxml_cmeta_collect_completion_v1 completion{};
-    return program.impl == nullptr && options.root == nullptr &&
+    return program.impl == nullptr &&
+           prompt.abi_version == 0u &&
+           options.root == nullptr &&
            request.abi_version == 0u &&
            completion.abi_version == 0u ? 0 : 1;
 }

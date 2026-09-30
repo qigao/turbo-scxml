@@ -3690,6 +3690,108 @@ vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
         session, "nomatch", sizeof("nomatch") - 1u);
 }
 
+static unsigned field_prompt_count(
+    const vxml_cmeta_session_data *profile,
+    size_t field_index) {
+    size_t index;
+    unsigned count = 1u;
+    if (profile == NULL) return count;
+    for (index = 0u; index < profile->event_counter_count; ++index) {
+        const vxml_cmeta_event_counter *counter =
+            &profile->event_counters[index];
+        if (counter->scope_kind != VXML_CMETA_EVENT_FIELD ||
+            counter->owner != field_index ||
+            !recovery_event_name(counter))
+            continue;
+        if (counter->count > UINT_MAX - count)
+            return UINT_MAX;
+        count += counter->count;
+    }
+    return count;
+}
+
+vxml_status vxml_session_cmeta_prompt(
+    const vxml_session *session,
+    vxml_cmeta_prompt_view_v1 *out_prompt) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_form_row *form;
+    const vxml_cmeta_field_row *field;
+    const vxml_cmeta_prompt_row *best = NULL;
+    unsigned prompt_count;
+    size_t offset;
+    if (out_prompt != NULL)
+        *out_prompt = (vxml_cmeta_prompt_view_v1){0};
+    if (session == NULL || out_prompt == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->program == NULL ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL ||
+        profile->active_field == VXML_CMETA_NO_INDEX ||
+        profile->active_field >= program->field_count ||
+        program->fields == NULL)
+        return VXML_INVALID_STATE;
+    form = &program->forms[profile->active_form];
+    field = &program->fields[profile->active_field];
+    if (field->form != profile->active_form ||
+        !range_valid(
+            field->first_prompt, field->prompt_count,
+            program->prompt_count) ||
+        (field->prompt_count != 0u && program->prompts == NULL))
+        return VXML_INVALID_STRUCTURE;
+
+    prompt_count = field_prompt_count(
+        profile, profile->active_field);
+    for (offset = 0u; offset < field->prompt_count; ++offset) {
+        const vxml_cmeta_prompt_row *row =
+            &program->prompts[field->first_prompt + offset];
+        bool eligible = true;
+        if (row->field != profile->active_field ||
+            row->count == 0u ||
+            row->text == NULL ||
+            row->text_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        if (row->count > prompt_count)
+            continue;
+        if (row->condition != VXML_CMETA_NO_INDEX) {
+            const size_t scopes[2] = {
+                form->scope, program->document_scope};
+            const vxml_status status = evaluate_condition(
+                profile, program, false,
+                row->condition, scopes, 2u, &eligible);
+            if (status != VXML_OK) return status;
+        }
+        if (!eligible) continue;
+        if (best == NULL || row->count > best->count)
+            best = row;
+    }
+
+    *out_prompt = (vxml_cmeta_prompt_view_v1){
+        .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_view_v1),
+        .field = {field->name, field->name_size},
+        .text = best != NULL
+            ? (vxml_cmeta_name_view){best->text, best->text_size}
+            : (vxml_cmeta_name_view){0},
+        .count = best != NULL ? best->count : 0u,
+        .prompt_count = prompt_count,
+        .generation = profile->collect_generation
+    };
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_take_reprompt(
     vxml_session *session, bool *out_requested) {
     vxml_session_impl *impl;
