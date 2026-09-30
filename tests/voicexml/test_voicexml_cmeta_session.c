@@ -1220,6 +1220,10 @@ spec("VoiceXML CMeta session execution") {
                 VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
         vxml_cmeta_session_options_v1 options =
             initial_session_options(&root, &adapter, &probe);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}
+        };
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_initial_collect_request_v1 request = {0};
@@ -1237,6 +1241,10 @@ spec("VoiceXML CMeta session execution") {
         };
         bool progressed = false;
         vxml_cmeta_value_view read = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
 
         check_equal(
             vxml_compile_cmeta(
@@ -1318,6 +1326,9 @@ spec("VoiceXML CMeta session execution") {
             cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
         vxml_cmeta_session_options_v1 options =
             initial_session_options(&root, &adapter, &probe);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}
+        };
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_initial_collect_request_v1 request = {0};
@@ -1328,6 +1339,10 @@ spec("VoiceXML CMeta session execution") {
             .data = &cmeta_data_int,
             .value = &value
         };
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
 
         check_equal(
             vxml_compile_cmeta(
