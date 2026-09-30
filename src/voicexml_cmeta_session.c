@@ -9,6 +9,7 @@
 #include <data_bind_xml_provider.h>
 #include <data_bind_yaml_provider.h>
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -47,6 +48,19 @@ static bool session_data_options_valid(
         adapter->abi_version == VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
         adapter->struct_size >= sizeof(*adapter) &&
         adapter->open != NULL && adapter->close != NULL;
+}
+
+static bool session_event_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_event_dispatch_depth) +
+        sizeof(options->max_event_dispatch_depth);
+    return options != NULL &&
+        options->struct_size >= tail_size &&
+        options->max_event_counters != 0u &&
+        options->max_event_name_bytes != 0u &&
+        options->max_event_dispatch_depth != 0u &&
+        options->max_event_name_bytes != SIZE_MAX;
 }
 
 static bool session_collect_options_valid(
@@ -700,6 +714,8 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->event_counter_names);
+    vxml_free(session->event_counters);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
@@ -1450,6 +1466,27 @@ static vxml_status execute_exit(
     return VXML_OK;
 }
 
+static vxml_status execute_throw(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_action_row *action) {
+    if (session == NULL || action == NULL ||
+        action->event_name == NULL ||
+        action->event_name_size == 0u)
+        return VXML_INVALID_STRUCTURE;
+    session->thrown_event = action->event_name;
+    session->thrown_event_size = action->event_name_size;
+    session->throw_requested = true;
+    return VXML_OK;
+}
+
+static vxml_status execute_rethrow(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL || !session->event_dispatch_active)
+        return VXML_INVALID_STATE;
+    session->rethrow_requested = true;
+    return VXML_OK;
+}
+
 static vxml_status select_if_branch(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1570,6 +1607,18 @@ static vxml_status execute_action_range(
             case VXML_CMETA_ACTION_EXIT: {
                 const vxml_status status = execute_exit(
                     session, program, scopes, scope_count, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_THROW: {
+                const vxml_status status =
+                    execute_throw(session, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_RETHROW: {
+                const vxml_status status =
+                    execute_rethrow(session);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
@@ -1890,6 +1939,42 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    if (program->event_handler_count != 0u) {
+        size_t name_bytes;
+        size_t index;
+        if (program->event_handlers == NULL ||
+            !session_event_options_valid(options) ||
+            !checked_multiply(
+                options->max_event_counters,
+                options->max_event_name_bytes + 1u,
+                &name_bytes)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->event_counter_capacity =
+            options->max_event_counters;
+        profile->event_name_stride =
+            options->max_event_name_bytes + 1u;
+        profile->max_event_dispatch_depth =
+            options->max_event_dispatch_depth;
+        profile->event_counters =
+            (vxml_cmeta_event_counter *)vxml_calloc(
+                profile->event_counter_capacity,
+                sizeof(*profile->event_counters));
+        profile->event_counter_names =
+            (char *)vxml_calloc(name_bytes, 1u);
+        if (profile->event_counters == NULL ||
+            profile->event_counter_names == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        for (index = 0u;
+             index < profile->event_counter_capacity;
+             ++index)
+            profile->event_counters[index].event =
+                profile->event_counter_names +
+                index * profile->event_name_stride;
+    }
     if (program->field_count != 0u) {
         if (program->fields == NULL ||
             !session_collect_options_valid(options)) {
@@ -3166,6 +3251,311 @@ vxml_status vxml_session_cmeta_collect_run_ready(
     status = select_directed_field(
         impl, program, profile, form, profile->active_form);
     return status;
+}
+
+static bool event_prefix_match(
+    const char *pattern, size_t pattern_size,
+    const char *event_name, size_t event_name_size) {
+    if (pattern == NULL || pattern_size == 0u ||
+        event_name == NULL || event_name_size < pattern_size ||
+        memcmp(pattern, event_name, pattern_size) != 0)
+        return false;
+    return event_name_size == pattern_size ||
+        event_name[pattern_size] == '.';
+}
+
+static vxml_status event_counter_next(
+    vxml_cmeta_session_data *profile,
+    vxml_cmeta_event_scope_kind scope_kind,
+    size_t owner,
+    const char *event_name, size_t event_name_size,
+    unsigned *out_count) {
+    size_t index;
+    vxml_cmeta_event_counter *counter = NULL;
+    if (profile == NULL || out_count == NULL ||
+        event_name == NULL || event_name_size == 0u ||
+        profile->event_name_stride == 0u ||
+        event_name_size >= profile->event_name_stride)
+        return VXML_INVALID_CONTRACT;
+    for (index = 0u; index < profile->event_counter_count; ++index) {
+        vxml_cmeta_event_counter *candidate =
+            &profile->event_counters[index];
+        if (candidate->scope_kind == scope_kind &&
+            candidate->owner == owner &&
+            candidate->event_size == event_name_size &&
+            memcmp(candidate->event, event_name, event_name_size) == 0) {
+            counter = candidate;
+            break;
+        }
+    }
+    if (counter == NULL) {
+        if (profile->event_counter_count >=
+            profile->event_counter_capacity)
+            return VXML_LIMIT_EXCEEDED;
+        counter = &profile->event_counters[
+            profile->event_counter_count++];
+        counter->scope_kind = scope_kind;
+        counter->owner = owner;
+        counter->event_size = event_name_size;
+        memcpy(counter->event, event_name, event_name_size);
+        counter->event[event_name_size] = '\0';
+        counter->count = 0u;
+    }
+    if (counter->count != UINT_MAX)
+        ++counter->count;
+    *out_count = counter->count;
+    return VXML_OK;
+}
+
+static bool event_scope_owner(
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    unsigned scope_rank,
+    vxml_cmeta_event_scope_kind *out_kind,
+    size_t *out_owner) {
+    if (profile == NULL || program == NULL ||
+        out_kind == NULL || out_owner == NULL)
+        return false;
+    if (scope_rank == 0u) {
+        if (profile->active_field == VXML_CMETA_NO_INDEX ||
+            profile->active_field >= program->field_count)
+            return false;
+        *out_kind = VXML_CMETA_EVENT_FIELD;
+        *out_owner = profile->active_field;
+        return true;
+    }
+    if (scope_rank == 1u) {
+        if (profile->active_form == VXML_CMETA_NO_INDEX ||
+            profile->active_form >= program->form_count)
+            return false;
+        *out_kind = VXML_CMETA_EVENT_FORM;
+        *out_owner = profile->active_form;
+        return true;
+    }
+    if (scope_rank == 2u) {
+        *out_kind = VXML_CMETA_EVENT_DOCUMENT;
+        *out_owner = 0u;
+        return true;
+    }
+    return false;
+}
+
+static const vxml_cmeta_event_handler_row *select_event_handler(
+    const vxml_cmeta_program_data *program,
+    vxml_cmeta_event_scope_kind scope_kind,
+    size_t owner,
+    const char *event_name, size_t event_name_size,
+    unsigned occurrence) {
+    const vxml_cmeta_event_handler_row *best = NULL;
+    size_t index;
+    if (program == NULL || event_name == NULL ||
+        event_name_size == 0u ||
+        (program->event_handler_count != 0u &&
+         program->event_handlers == NULL))
+        return NULL;
+    for (index = 0u; index < program->event_handler_count; ++index) {
+        const vxml_cmeta_event_handler_row *row =
+            &program->event_handlers[index];
+        if (row->scope_kind != scope_kind ||
+            row->owner != owner ||
+            row->event == NULL || row->event_size == 0u ||
+            row->count == 0u || row->count > occurrence ||
+            !event_prefix_match(
+                row->event, row->event_size,
+                event_name, event_name_size))
+            continue;
+        if (best == NULL ||
+            row->event_size > best->event_size ||
+            (row->event_size == best->event_size &&
+             row->count > best->count))
+            best = row;
+    }
+    return best;
+}
+
+static vxml_status execute_event_handler(
+    vxml_session_impl *impl,
+    const vxml_cmeta_program_data *program,
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_event_handler_row *handler) {
+    const vxml_cmeta_form_row *form = NULL;
+    const size_t *scopes = NULL;
+    size_t scope_values[2] = {0u, 0u};
+    size_t scope_count = 0u;
+    size_t execution_scope = program->document_scope;
+    vxml_status status;
+    if (impl == NULL || program == NULL || profile == NULL ||
+        handler == NULL ||
+        handler->first_action > handler->action_end ||
+        !range_valid(
+            handler->first_action,
+            handler->action_end - handler->first_action,
+            program->action_count))
+        return VXML_INVALID_STRUCTURE;
+    if (profile->active_form != VXML_CMETA_NO_INDEX) {
+        if (profile->active_form >= program->form_count ||
+            program->forms == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form = &program->forms[profile->active_form];
+    }
+
+    if (handler->scope_kind == VXML_CMETA_EVENT_DOCUMENT) {
+        scope_values[0] = program->document_scope;
+        scopes = scope_values;
+        scope_count = 1u;
+        execution_scope = program->document_scope;
+    } else if (handler->scope_kind == VXML_CMETA_EVENT_FORM ||
+               handler->scope_kind == VXML_CMETA_EVENT_FIELD) {
+        if (form == NULL || form->scope >= program->scope_count)
+            return VXML_INVALID_STRUCTURE;
+        scope_values[0] = form->scope;
+        scope_values[1] = program->document_scope;
+        scopes = scope_values;
+        scope_count = 2u;
+        execution_scope = form->scope;
+    } else {
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    status = exit_snapshot_prepare_range(
+        &profile->pending_exit, program,
+        handler->first_action, handler->action_end);
+    if (status != VXML_OK) return status;
+    profile->exit_requested = false;
+    profile->throw_requested = false;
+    profile->rethrow_requested = false;
+    profile->thrown_event = NULL;
+    profile->thrown_event_size = 0u;
+    profile->event_dispatch_active = true;
+    if (!transaction_begin(profile, program)) {
+        profile->event_dispatch_active = false;
+        exit_snapshot_destroy(&profile->pending_exit);
+        return VXML_ALLOCATION_FAILED;
+    }
+    status = execute_action_range(
+        profile, program, form, execution_scope,
+        scopes, scope_count,
+        handler->first_action, handler->action_end);
+    profile->event_dispatch_active = false;
+    if (status != VXML_OK) {
+        transaction_reset(profile, program);
+        exit_snapshot_destroy(&profile->pending_exit);
+        profile->throw_requested = false;
+        profile->rethrow_requested = false;
+        profile->thrown_event = NULL;
+        profile->thrown_event_size = 0u;
+        return status;
+    }
+    transaction_commit(profile, program);
+    if (profile->exit_requested) {
+        exit_snapshot_publish(profile);
+        impl->state = VXML_SESSION_EXITED;
+        impl->error = VXML_OK;
+    } else {
+        exit_snapshot_destroy(&profile->pending_exit);
+    }
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_raise(
+    vxml_session *session,
+    const char *event_name,
+    size_t event_name_size) {
+    vxml_session_impl *impl;
+    vxml_cmeta_program_data const *program;
+    vxml_cmeta_session_data *profile;
+    const char *current_event;
+    size_t current_event_size;
+    unsigned depth = 0u;
+    unsigned start_scope = 0u;
+
+    if (session == NULL || session->impl == NULL ||
+        event_name == NULL || event_name_size == 0u ||
+        memchr(event_name, '\0', event_name_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!cmeta_location_path_valid(
+            event_name, event_name_size, SIZE_MAX))
+        return VXML_INVALID_ARGUMENT;
+    if (program->event_handler_count == 0u)
+        return session_fail(impl, VXML_SEMANTIC_ERROR);
+    if (profile->event_name_stride == 0u ||
+        event_name_size >= profile->event_name_stride)
+        return VXML_INVALID_ARGUMENT;
+    if (profile->max_event_dispatch_depth == 0u)
+        return session_fail(impl, VXML_INVALID_CONTRACT);
+
+    current_event = event_name;
+    current_event_size = event_name_size;
+    for (;;) {
+        unsigned scope_rank;
+        bool handled = false;
+        if (++depth > profile->max_event_dispatch_depth)
+            return session_fail(impl, VXML_LIMIT_EXCEEDED);
+
+        for (scope_rank = start_scope; scope_rank < 3u; ++scope_rank) {
+            vxml_cmeta_event_scope_kind scope_kind;
+            size_t owner;
+            unsigned occurrence;
+            const vxml_cmeta_event_handler_row *handler;
+            vxml_status status;
+
+            if (!event_scope_owner(
+                    profile, program, scope_rank,
+                    &scope_kind, &owner))
+                continue;
+            status = event_counter_next(
+                profile, scope_kind, owner,
+                current_event, current_event_size,
+                &occurrence);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            handler = select_event_handler(
+                program, scope_kind, owner,
+                current_event, current_event_size,
+                occurrence);
+            if (handler == NULL) continue;
+
+            status = execute_event_handler(
+                impl, program, profile, handler);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            handled = true;
+            if (impl->state != VXML_SESSION_RUNNING)
+                return VXML_OK;
+            if (profile->throw_requested) {
+                current_event = profile->thrown_event;
+                current_event_size = profile->thrown_event_size;
+                profile->throw_requested = false;
+                profile->thrown_event = NULL;
+                profile->thrown_event_size = 0u;
+                start_scope = 0u;
+                break;
+            }
+            if (profile->rethrow_requested) {
+                profile->rethrow_requested = false;
+                start_scope = scope_rank + 1u;
+                break;
+            }
+            return VXML_OK;
+        }
+
+        if (handled && current_event != NULL &&
+            current_event_size != 0u &&
+            start_scope < 3u)
+            continue;
+        return session_fail(impl, VXML_SEMANTIC_ERROR);
+    }
 }
 
 static bool read_sint_value(

@@ -699,12 +699,396 @@ static vxml_cmeta_session_options_v1 field_session_options(
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 event_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = field_compile_options();
+    options.max_event_handlers = 16u;
+    options.max_event_name_bytes = 64u;
+    return options;
+}
+
+static vxml_cmeta_session_options_v1 event_session_options(
+    const vxml_cmeta_session_root *root,
+    const vxml_cmeta_collect_adapter_v1 *adapter,
+    cmeta_collect_probe *probe) {
+    vxml_cmeta_session_options_v1 options =
+        field_session_options(root, adapter, probe);
+    options.max_event_counters = 32u;
+    options.max_event_name_bytes = 64u;
+    options.max_event_dispatch_depth = 16u;
+    return options;
+}
+
 static bool value_view_is_clear(vxml_cmeta_value_view value) {
     return value.kind == VXML_CMETA_VALUE_UNDEFINED &&
         value.data.string.data == NULL && value.data.string.size == 0u;
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects the innermost most-specific catch deterministically") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='app'><assign name='other' expr='1'/></catch>"
+            "<form>"
+            "<catch event='app'><assign name='other' expr='2'/></catch>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='app'><assign name='other' expr='3'/></catch>"
+            "<catch event='app.deep'><assign name='other' expr='4'/></catch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+
+        check_equal(vxml_session_cmeta_raise(
+                        &session,
+                        "app.deep.more",
+                        sizeof("app.deep.more") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            4);
+
+        check_equal(vxml_session_cmeta_raise(
+                        &session,
+                        "app.other",
+                        sizeof("app.other") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            3);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("uses the highest eligible catch count in one scope") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='app.retry' count='1'>"
+            "<assign name='other' expr='1'/></catch>"
+            "<catch event='app.retry' count='2'>"
+            "<assign name='other' expr='2'/></catch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "app.retry",
+                        sizeof("app.retry") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            1);
+
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "app.retry",
+                        sizeof("app.retry") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            2);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("commits a throw handler then restarts lookup for the thrown Event") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='app.second'><assign name='late' expr='2'/></catch>"
+            "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='app.first'>"
+            "<assign name='other' expr='1'/>"
+            "<throw event='app.second'/>"
+            "</catch></field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "app.first",
+                        sizeof("app.first") - 1u),
+                    VXML_OK);
+
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            1);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->late,
+            2);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rethrow widens lookup to the nearest outer scope") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='app.retry'><assign name='late' expr='1'/></catch>"
+            "<form>"
+            "<catch event='app.retry'><assign name='late' expr='2'/></catch>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='app.retry'>"
+            "<assign name='other' expr='3'/><rethrow/>"
+            "</catch></field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "app.retry",
+                        sizeof("app.retry") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            3);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->late,
+            2);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("lowers help into the scoped help Event") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<help><assign name='other' expr='7'/></help>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "help", sizeof("help") - 1u),
+                    VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage)->other,
+            7);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rolls back handler writes and fails the Session on action failure") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='app.bad'>"
+            "<assign name='other' expr='5'/>"
+            "<assign name='text' expr='&quot;abc&quot;'/>"
+            "</catch></field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        reset_session_text_probe();
+        session_text_fail_assign_call = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "app.bad",
+                        sizeof("app.bad") - 1u),
+                    VXML_ALLOCATION_FAILED);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+        check_equal(vxml_session_error(&session), VXML_ALLOCATION_FAILED);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        check_equal(
+            ((const vxml_cmeta_session_root *)
+                runtime->committed_root.storage)->other,
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+    }
+
+    it("turns an uncaught Event into a stable Session failure") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='known'><assign name='other' expr='1'/></catch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            event_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(
+                        &session, "unknown",
+                        sizeof("unknown") - 1u),
+                    VXML_SEMANTIC_ERROR);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+        check_equal(vxml_session_error(&session), VXML_SEMANTIC_ERROR);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("runs field filled against the newly staged collect value") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
