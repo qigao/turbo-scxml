@@ -20,11 +20,13 @@ extern "C" {
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
+#define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
+#define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
@@ -94,6 +96,11 @@ typedef struct vxml_cmeta_compile_options_v1 {
 
     /* Optional append-only mixed prompt batch bound. Zero keeps V1-only. */
     size_t max_prompt_segments;
+
+    /* Optional append-only static menu admission tail. Zero disables <menu>. */
+    size_t max_menus;
+    size_t max_menu_choices;
+    size_t max_menu_choice_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -161,6 +168,21 @@ typedef struct vxml_cmeta_collect_ticket_v1 {
     void *user;
 } vxml_cmeta_collect_ticket_v1;
 
+typedef enum vxml_cmeta_collect_item_kind {
+    VXML_CMETA_COLLECT_ITEM_FIELD = 0,
+    VXML_CMETA_COLLECT_ITEM_MENU
+} vxml_cmeta_collect_item_kind;
+
+/*
+ * Stable array element: do not append fields. Future menu metadata must use a
+ * parallel side table or a new ABI, because providers traverse this array by
+ * sizeof(vxml_cmeta_menu_choice_v1).
+ */
+typedef struct vxml_cmeta_menu_choice_v1 {
+    vxml_cmeta_name_view dtmf;
+    vxml_cmeta_name_view speech;
+} vxml_cmeta_menu_choice_v1;
+
 typedef struct vxml_cmeta_collect_request_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -179,6 +201,11 @@ typedef struct vxml_cmeta_collect_request_v1 {
      */
     bool has_timeout;
     uint64_t timeout_us;
+
+    /* Optional append-only menu projection. FIELD is the historical default. */
+    vxml_cmeta_collect_item_kind item_kind;
+    const vxml_cmeta_menu_choice_v1 *menu_choices;
+    size_t menu_choice_count;
 } vxml_cmeta_collect_request_v1;
 
 typedef struct vxml_cmeta_collect_adapter_v1 {
@@ -227,6 +254,13 @@ typedef struct vxml_cmeta_collect_completion_v2 {
     const vxml_cmeta_collect_result_slot_v1 *slots;
     size_t slot_count;
 } vxml_cmeta_collect_completion_v2;
+
+typedef struct vxml_cmeta_menu_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    size_t choice_index;
+} vxml_cmeta_menu_completion_v1;
 
 typedef enum vxml_cmeta_prompt_media_segment_kind {
     VXML_CMETA_PROMPT_MEDIA_TEXT = 1,
@@ -466,6 +500,14 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
 vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     vxml_session *session,
     const vxml_cmeta_collect_completion_v2 *completion);
+
+/**
+ * MPSC admission of one menu choice ordinal for the active menu generation.
+ * No provider-owned choice bytes survive admission.
+ */
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_menu_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_menu_completion_v1 *completion);
 
 /**
  * Single-owner progress point. Applies at most one accepted completion through
