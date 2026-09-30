@@ -783,6 +783,14 @@ static vxml_status session_fail(
     return status;
 }
 
+static void advance_collect_generation(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    ++session->collect_generation;
+    if (session->collect_generation == 0u)
+        session->collect_generation = 1u;
+}
+
 static bool consume_step(vxml_cmeta_session_data *session) {
     if (session->execution_steps >= session->max_execution_steps)
         return false;
@@ -2078,9 +2086,7 @@ vxml_status vxml_cmeta_session_start_profile_at(
             }
             if (!eligible) continue;
             profile->active_field = field_index;
-            ++profile->collect_generation;
-            if (profile->collect_generation == 0u)
-                profile->collect_generation = 1u;
+            advance_collect_generation(profile);
             return VXML_OK;
         }
         session->state = VXML_SESSION_EXITED;
@@ -2340,6 +2346,7 @@ vxml_status vxml_session_cmeta_collect_discard(vxml_session *session) {
     profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
     profile->collect_prepared = false;
     ticket.discard(ticket.user);
+    advance_collect_generation(profile);
     return VXML_OK;
 }
 
