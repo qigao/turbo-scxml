@@ -52,6 +52,8 @@ typedef struct vxml_cmeta_initial_row {
     size_t name_size;
     size_t initial_expression;
     size_t condition;
+    size_t first_prompt;
+    size_t prompt_count;
 } vxml_cmeta_initial_row;
 
 typedef struct vxml_cmeta_form_row {
@@ -76,8 +78,14 @@ typedef struct vxml_cmeta_form_row {
     uint64_t grammar_required_capabilities;
 } vxml_cmeta_form_row;
 
+typedef enum vxml_cmeta_prompt_owner_kind {
+    VXML_CMETA_PROMPT_OWNER_FIELD = 1,
+    VXML_CMETA_PROMPT_OWNER_INITIAL
+} vxml_cmeta_prompt_owner_kind;
+
 typedef struct vxml_cmeta_prompt_row {
-    size_t field;
+    vxml_cmeta_prompt_owner_kind owner_kind;
+    size_t owner_index;
     const char *text;
     size_t text_size;
     vxml_cmeta_prompt_media_segment_kind media_kind;
