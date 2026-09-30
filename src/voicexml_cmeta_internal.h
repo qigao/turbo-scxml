@@ -49,6 +49,9 @@ typedef struct vxml_cmeta_prompt_row {
     size_t field;
     const char *text;
     size_t text_size;
+    vxml_cmeta_prompt_media_segment_kind media_kind;
+    const char *media_payload;
+    size_t media_payload_size;
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;
