@@ -2426,6 +2426,38 @@ static vxml_status cmeta_compile_prompt_schema(
             continue;
         }
 
+        if (cmeta_node_named(child, "mark")) {
+            const salts_xml_attribute name =
+                cmeta_attribute(child, "name");
+            const char *payload = NULL;
+            size_t payload_size = 0u;
+            if (builder->prompt_segment_index >=
+                builder->profile->prompt_segment_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt segment rows changed between passes");
+            status = cmeta_retain_decoded_view(
+                builder, salts_xml_attribute_value(name),
+                salts_xml_attribute_location(name),
+                &payload, &payload_size);
+            if (status != VXML_OK) return status;
+            if (payload_size == 0u)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name),
+                    "VoiceXML mark name disappeared between passes");
+            segment = &builder->profile->prompt_segments[
+                builder->prompt_segment_index++];
+            *segment = (vxml_cmeta_prompt_media_segment_v1){
+                .kind = VXML_CMETA_PROMPT_MEDIA_MARK,
+                .payload = {payload, payload_size},
+                .media_type = {0}};
+            out->required_capabilities |=
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK;
+            continue;
+        }
+
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(child),
