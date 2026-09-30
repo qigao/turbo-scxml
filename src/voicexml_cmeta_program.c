@@ -2833,6 +2833,13 @@ done:
     return status;
 }
 
+static vxml_status cmeta_lower_executable(
+    cmeta_program_builder *builder, salts_xml_node node,
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    size_t first_action, size_t conditional_depth);
+
 static const vxml_cmeta_field_row *cmeta_form_field_by_name(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
@@ -3141,13 +3148,6 @@ static vxml_status cmeta_lower_simple_action(
     ++builder->action_index;
     return VXML_OK;
 }
-
-static vxml_status cmeta_lower_executable(
-    cmeta_program_builder *builder, salts_xml_node node,
-    size_t execution_scope,
-    const vxml_cmeta_expr_compile_scope *scopes,
-    size_t scope_count,
-    size_t first_action, size_t conditional_depth);
 
 static vxml_status cmeta_lower_conditional(
     cmeta_program_builder *builder, salts_xml_node node,
