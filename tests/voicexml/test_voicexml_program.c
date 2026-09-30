@@ -230,7 +230,9 @@ spec("VoiceXML program compiler") {
         it("lowers a local form fragment to an immutable form index") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='first'><block><goto next='#second'/></block></form>"
+                "<form id='first'><block>"
+                "<goto next='#second' fetchaudio='wait.wav'/>"
+                "</block></form>"
                 "<form id='second'><block><exit/></block></form>"
                 "</vxml>";
             vxml_program program = {0};
@@ -247,6 +249,9 @@ spec("VoiceXML program compiler") {
                 check_equal(impl->action_count, (size_t)2u);
                 check_equal(impl->actions[0].kind, VXML_ACTION_GOTO);
                 check_equal(impl->actions[0].target_form, (size_t)1u);
+                check_null(impl->actions[0].fetchaudio_uri);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri_size, (size_t)0u);
                 check_equal(impl->actions[1].kind, VXML_ACTION_EXIT);
             }
             vxml_program_destroy(&program);
@@ -276,9 +281,11 @@ spec("VoiceXML program compiler") {
             char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block>"
-                "<goto next='dialogs/next.vxml#target'/>"
+                "<goto next='dialogs/next.vxml#target' "
+                "fetchaudio='media/wait.wav'/>"
                 "</block></form></vxml>";
             static const char target[] = "dialogs/next.vxml#target";
+            static const char fetchaudio[] = "media/wait.wav";
             vxml_program program = {0};
             vxml_program_impl *impl;
 
@@ -295,6 +302,12 @@ spec("VoiceXML program compiler") {
                     impl->actions[0].target_uri_size,
                     sizeof(target) - 1u);
                 check_equal(impl->actions[0].target_uri, target);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri_size,
+                    sizeof(fetchaudio) - 1u);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri,
+                    fetchaudio);
                 check_true(
                     impl->actions[0].target_uri >= impl->storage);
                 check_true(
@@ -303,6 +316,9 @@ spec("VoiceXML program compiler") {
                     impl->storage + impl->storage_size);
                 memset(source, 'x', sizeof(source) - 1u);
                 check_equal(impl->actions[0].target_uri, target);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri,
+                    fetchaudio);
             }
             vxml_program_destroy(&program);
         }
