@@ -1522,6 +1522,64 @@ spec("VoiceXML CMeta program compiler") {
         }
     }
 
+    it("admits bounded return/disconnect shapes and rejects unsupported return forms") {
+        static const char *const accepted[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><var name='value' expr='7'/>"
+            "<form><block><return namelist='value'/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><return event='child.failed'/>"
+            "</block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><disconnect/>"
+            "</block></form></vxml>"
+        };
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } rejected[] = {
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><form><block><return/>"
+             "</block></form></vxml>", VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><var name='value'/>"
+             "<form><block><return event='x' namelist='value'/>"
+             "</block></form></vxml>", VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><form><block><return eventexpr='x'/>"
+             "</block></form></vxml>", VXML_UNSUPPORTED_FEATURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><form><block><return event='x' message='m'/>"
+             "</block></form></vxml>", VXML_UNSUPPORTED_FEATURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><form><block><disconnect reason='x'/>"
+             "</block></form></vxml>", VXML_UNSUPPORTED_FEATURE}
+        };
+        vxml_cmeta_compile_options_v1 options = compile_options();
+        size_t index;
+        options.max_event_handlers = 4u;
+        options.max_event_name_bytes = 64u;
+
+        for (index = 0u; index < sizeof(accepted) / sizeof(accepted[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    accepted[index], strlen(accepted[index]), NULL,
+                    &options, &program, NULL),
+                VXML_OK);
+            vxml_program_destroy(&program);
+        }
+        for (index = 0u; index < sizeof(rejected) / sizeof(rejected[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    rejected[index].source, strlen(rejected[index].source),
+                    NULL, &options, &program, NULL),
+                rejected[index].expected);
+            check_null(program.impl);
+        }
+    }
+
     it("reports error.badfetch for mutually exclusive exit data") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "

@@ -86,6 +86,7 @@ int main(void) {
         .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED,
         .failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH};
     vxml_cmeta_value_view read_value = {0};
+    vxml_cmeta_terminal_kind terminal_kind = VXML_CMETA_TERMINAL_NONE;
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
     vxml_cmeta_value_view exit_value = {0};
@@ -107,10 +108,17 @@ int main(void) {
     vxml_status (*query_mark)(
         const vxml_session *, vxml_cmeta_prompt_mark_view_v1 *) =
         vxml_session_cmeta_prompt_media_last_mark;
+    vxml_status (*query_terminal)(
+        const vxml_session *, vxml_cmeta_terminal_kind *) =
+        vxml_session_cmeta_terminal_kind;
+    vxml_status (*query_terminal_event)(
+        const vxml_session *, vxml_cmeta_name_view *) =
+        vxml_session_cmeta_terminal_event;
     int result = 1;
 
     if (raise_event == NULL || query_prompt == NULL ||
         report_mark == NULL || query_mark == NULL ||
+        query_terminal == NULL || query_terminal_event == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -179,7 +187,10 @@ int main(void) {
         result = 40;
         goto cleanup;
     }
-    if (vxml_session_cmeta_exit_kind(&session, &exit_kind) != VXML_OK ||
+    if (vxml_session_cmeta_terminal_kind(
+            &session, &terminal_kind) != VXML_OK ||
+        terminal_kind != VXML_CMETA_TERMINAL_EXIT ||
+        vxml_session_cmeta_exit_kind(&session, &exit_kind) != VXML_OK ||
         exit_kind != VXML_CMETA_EXIT_NAMELIST ||
         vxml_session_cmeta_exit_count(&session) != 1u ||
         vxml_session_cmeta_exit_at(

@@ -553,7 +553,9 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
-        cmeta_node_named(node, "else") || cmeta_node_named(node, "exit");
+        cmeta_node_named(node, "else") || cmeta_node_named(node, "exit") ||
+        cmeta_node_named(node, "return") ||
+        cmeta_node_named(node, "disconnect");
 }
 
 static bool cmeta_event_options_valid(
@@ -959,6 +961,8 @@ static vxml_status cmeta_measure_executable(
          !cmeta_node_named(node, "clear") &&
          !cmeta_node_named(node, "if") &&
          !cmeta_node_named(node, "exit") &&
+         !cmeta_node_named(node, "return") &&
+         !cmeta_node_named(node, "disconnect") &&
          !cmeta_node_named(node, "throw") &&
          !cmeta_node_named(node, "rethrow") &&
          !cmeta_node_named(node, "reprompt")))
@@ -993,9 +997,39 @@ static vxml_status cmeta_measure_executable(
     } else if (cmeta_node_named(node, "rethrow") ||
                cmeta_node_named(node, "reprompt")) {
         status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
-    } else {
+    } else if (cmeta_node_named(node, "exit")) {
         static const char *const allowed[] = {"expr", "namelist"};
         status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
+    } else if (cmeta_node_named(node, "return")) {
+        static const char *const allowed[] = {
+            "event", "eventexpr", "message", "messageexpr", "namelist"};
+        const salts_xml_attribute event = cmeta_attribute(node, "event");
+        const salts_xml_attribute eventexpr =
+            cmeta_attribute(node, "eventexpr");
+        const salts_xml_attribute message = cmeta_attribute(node, "message");
+        const salts_xml_attribute messageexpr =
+            cmeta_attribute(node, "messageexpr");
+        const salts_xml_attribute namelist =
+            cmeta_attribute(node, "namelist");
+        status = cmeta_validate_attributes(node, allowed, 5u, diagnostic);
+        if (status == VXML_OK &&
+            (eventexpr.impl != NULL || message.impl != NULL ||
+             messageexpr.impl != NULL))
+            status = cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(node),
+                "dynamic/message VoiceXML return is not enabled in the bounded CMeta profile");
+        if (status == VXML_OK &&
+            ((event.impl != NULL) == (namelist.impl != NULL)))
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML return requires exactly one literal event or namelist");
+        if (status == VXML_OK && event.impl != NULL)
+            status = cmeta_measure_name(
+                event, measurement, limits, diagnostic);
+    } else {
+        status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
     }
     if (status != VXML_OK) return status;
     if (cmeta_node_named(node, "var") || cmeta_node_named(node, "assign")) {
@@ -1040,13 +1074,15 @@ static vxml_status cmeta_measure_executable(
             if (status != VXML_OK) return status;
         }
     }
-    if (cmeta_node_named(node, "exit")) {
+    if (cmeta_node_named(node, "exit") ||
+        cmeta_node_named(node, "return") ||
+        cmeta_node_named(node, "disconnect")) {
         const salts_xml_attribute namelist = cmeta_attribute(node, "namelist");
         if (!cmeta_measure_increment(&measurement->exit_count))
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(node),
-                "VoiceXML exit row count overflow");
+                "VoiceXML terminal row count overflow");
         if (namelist.impl != NULL) {
             status = cmeta_measure_namelist(
                 namelist, measurement, limits, diagnostic);
@@ -4415,6 +4451,47 @@ static vxml_status cmeta_lower_simple_action(
                     "VoiceXML exit count changed between passes");
             builder->impl->actions[builder->generic_action_index++].kind =
                 VXML_ACTION_EXIT;
+    } else if (cmeta_node_named(node, "return")) {
+            const salts_xml_attribute event =
+                cmeta_attribute(node, "event");
+            const salts_xml_attribute namelist =
+                cmeta_attribute(node, "namelist");
+            action->kind = VXML_CMETA_ACTION_RETURN;
+            action->exit_kind = namelist.impl != NULL
+                ? VXML_CMETA_EXIT_NAMELIST : VXML_CMETA_EXIT_EMPTY;
+            if (event.impl != NULL) {
+                status = cmeta_retain_event_attribute(
+                    builder, event,
+                    &action->event_name, &action->event_name_size);
+                if (status != VXML_OK) return status;
+            } else if (namelist.impl != NULL) {
+                status = cmeta_lower_namelist(
+                    builder, namelist, scopes, scope_count,
+                    &action->first_location, &action->location_count);
+                if (status != VXML_OK) return status;
+            } else {
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    action->location,
+                    "VoiceXML return target changed between compiler passes");
+            }
+            if (builder->generic_action_index >= builder->impl->action_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    action->location,
+                    "VoiceXML terminal count changed between passes");
+            builder->impl->actions[builder->generic_action_index++].kind =
+                VXML_ACTION_RETURN;
+    } else if (cmeta_node_named(node, "disconnect")) {
+            action->kind = VXML_CMETA_ACTION_DISCONNECT;
+            action->exit_kind = VXML_CMETA_EXIT_EMPTY;
+            if (builder->generic_action_index >= builder->impl->action_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    action->location,
+                    "VoiceXML terminal count changed between passes");
+            builder->impl->actions[builder->generic_action_index++].kind =
+                VXML_ACTION_DISCONNECT;
     } else if (cmeta_node_named(node, "throw")) {
         const salts_xml_attribute event =
             cmeta_attribute(node, "event");

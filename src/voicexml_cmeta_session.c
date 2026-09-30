@@ -544,7 +544,10 @@ static bool exit_capacity_measure(
         size_t action_entries;
         size_t action_names;
         size_t action_strings;
-        if (action->kind != VXML_CMETA_ACTION_EXIT) continue;
+        if (action->kind != VXML_CMETA_ACTION_EXIT &&
+            action->kind != VXML_CMETA_ACTION_RETURN &&
+            action->kind != VXML_CMETA_ACTION_DISCONNECT)
+            continue;
         if (!exit_action_capacity(
                 program, action, &action_entries,
                 &action_names, &action_strings))
@@ -699,6 +702,25 @@ static void exit_snapshot_publish(vxml_cmeta_session_data *session) {
     exit_snapshot_destroy(&session->terminal_exit);
     session->terminal_exit = session->pending_exit;
     memset(&session->pending_exit, 0, sizeof(session->pending_exit));
+}
+
+static void terminal_pending_reset(vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    session->pending_terminal_kind = VXML_CMETA_TERMINAL_NONE;
+    session->pending_terminal_event = NULL;
+    session->pending_terminal_event_size = 0u;
+    session->exit_requested = false;
+}
+
+static void terminal_publish(vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    exit_snapshot_publish(session);
+    session->terminal_kind = session->pending_terminal_kind;
+    session->terminal_event = session->pending_terminal_event;
+    session->terminal_event_size = session->pending_terminal_event_size;
+    session->pending_terminal_kind = VXML_CMETA_TERMINAL_NONE;
+    session->pending_terminal_event = NULL;
+    session->pending_terminal_event_size = 0u;
 }
 
 static void prompt_media_mailbox_disarm(
@@ -1617,6 +1639,71 @@ static vxml_status execute_exit(
         return VXML_INVALID_STRUCTURE;
     }
     session->pending_exit.kind = action->exit_kind;
+    session->pending_terminal_kind = VXML_CMETA_TERMINAL_EXIT;
+    session->pending_terminal_event = NULL;
+    session->pending_terminal_event_size = 0u;
+    session->exit_requested = true;
+    return VXML_OK;
+}
+
+static vxml_status execute_return(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const size_t *scopes, size_t scope_count,
+    const vxml_cmeta_action_row *action) {
+    size_t index;
+    (void)scopes;
+    (void)scope_count;
+    if (action->event_name != NULL || action->event_name_size != 0u) {
+        if (action->event_name == NULL || action->event_name_size == 0u ||
+            action->exit_kind != VXML_CMETA_EXIT_EMPTY)
+            return VXML_INVALID_STRUCTURE;
+        session->pending_exit.kind = VXML_CMETA_EXIT_EMPTY;
+        session->pending_terminal_kind = VXML_CMETA_TERMINAL_RETURN_EVENT;
+        session->pending_terminal_event = action->event_name;
+        session->pending_terminal_event_size = action->event_name_size;
+        session->exit_requested = true;
+        return VXML_OK;
+    }
+    if (action->exit_kind != VXML_CMETA_EXIT_NAMELIST ||
+        !range_valid(
+            action->first_location, action->location_count,
+            program->location_count) ||
+        action->location_count == 0u ||
+        program->locations == NULL)
+        return VXML_INVALID_STRUCTURE;
+    for (index = 0u; index < action->location_count; ++index) {
+        const vxml_cmeta_location_row *location =
+            &program->locations[action->first_location + index];
+        vxml_cmeta_value_view value;
+        vxml_status status = read_staged_location_value(
+            session, program, location, &value);
+        if (status != VXML_OK) return status;
+        status = exit_snapshot_append(
+            &session->pending_exit,
+            location->name, location->name_size, &value);
+        if (status != VXML_OK) return status;
+    }
+    session->pending_exit.kind = VXML_CMETA_EXIT_NAMELIST;
+    session->pending_terminal_kind = VXML_CMETA_TERMINAL_RETURN;
+    session->pending_terminal_event = NULL;
+    session->pending_terminal_event_size = 0u;
+    session->exit_requested = true;
+    return VXML_OK;
+}
+
+static vxml_status execute_disconnect(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_action_row *action) {
+    if (session == NULL || action == NULL ||
+        action->exit_kind != VXML_CMETA_EXIT_EMPTY ||
+        action->event_name != NULL || action->event_name_size != 0u ||
+        action->location_count != 0u)
+        return VXML_INVALID_STRUCTURE;
+    session->pending_exit.kind = VXML_CMETA_EXIT_EMPTY;
+    session->pending_terminal_kind = VXML_CMETA_TERMINAL_DISCONNECT;
+    session->pending_terminal_event = NULL;
+    session->pending_terminal_event_size = 0u;
     session->exit_requested = true;
     return VXML_OK;
 }
@@ -1770,6 +1857,18 @@ static vxml_status execute_action_range(
             case VXML_CMETA_ACTION_EXIT: {
                 const vxml_status status = execute_exit(
                     session, program, scopes, scope_count, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_RETURN: {
+                const vxml_status status = execute_return(
+                    session, program, scopes, scope_count, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_DISCONNECT: {
+                const vxml_status status =
+                    execute_disconnect(session, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
@@ -2552,7 +2651,7 @@ vxml_status vxml_cmeta_session_start_profile_at(
             &profile->pending_exit, program,
             selected->first_action, selected->action_end);
         if (status != VXML_OK) return session_fail(session, status);
-        profile->exit_requested = false;
+        terminal_pending_reset(profile);
         if (!transaction_begin(profile, program)) {
             exit_snapshot_destroy(&profile->pending_exit);
             return session_fail(session, VXML_ALLOCATION_FAILED);
@@ -2576,7 +2675,7 @@ vxml_status vxml_cmeta_session_start_profile_at(
         }
         transaction_commit(profile, program);
         if (profile->exit_requested) {
-            exit_snapshot_publish(profile);
+            terminal_publish(profile);
             session->state = VXML_SESSION_EXITED;
             session->error = VXML_OK;
             return VXML_OK;
@@ -3193,7 +3292,7 @@ static vxml_status execute_filled_handler(
         &profile->pending_exit, program,
         filled->first_action, filled->action_end);
     if (status != VXML_OK) return status;
-    profile->exit_requested = false;
+    terminal_pending_reset(profile);
     status = execute_action_range(
         profile, program, form, form->scope,
         scopes, 2u, filled->first_action, filled->action_end);
@@ -3461,7 +3560,7 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         memory_order_release);
 
     if (profile->exit_requested) {
-        exit_snapshot_publish(profile);
+        terminal_publish(profile);
         impl->state = VXML_SESSION_EXITED;
         impl->error = VXML_OK;
         return VXML_OK;
@@ -3640,7 +3739,7 @@ static vxml_status execute_event_handler(
         &profile->pending_exit, program,
         handler->first_action, handler->action_end);
     if (status != VXML_OK) return status;
-    profile->exit_requested = false;
+    terminal_pending_reset(profile);
     profile->throw_requested = false;
     profile->rethrow_requested = false;
     profile->handler_reprompt_requested = false;
@@ -3672,7 +3771,7 @@ static vxml_status execute_event_handler(
         profile->reprompt_requested = true;
     profile->handler_reprompt_requested = false;
     if (profile->exit_requested) {
-        exit_snapshot_publish(profile);
+        terminal_publish(profile);
         impl->state = VXML_SESSION_EXITED;
         impl->error = VXML_OK;
     } else {
@@ -5131,6 +5230,82 @@ static bool terminal_exit_valid(
         if (!terminal_value_valid(snapshot, &snapshot->entries[index].value))
             return false;
     return true;
+}
+
+static bool terminal_control_valid(
+    const vxml_session_impl *impl,
+    const vxml_cmeta_session_data *profile) {
+    const vxml_cmeta_program_data *program;
+    if (impl == NULL || profile == NULL ||
+        impl->program == NULL || impl->program->profile_data == NULL ||
+        !terminal_exit_valid(&profile->terminal_exit))
+        return false;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    switch (profile->terminal_kind) {
+    case VXML_CMETA_TERMINAL_NONE:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY;
+    case VXML_CMETA_TERMINAL_EXIT:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u;
+    case VXML_CMETA_TERMINAL_RETURN:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_NAMELIST &&
+            profile->terminal_exit.count != 0u;
+    case VXML_CMETA_TERMINAL_DISCONNECT:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY;
+    case VXML_CMETA_TERMINAL_RETURN_EVENT:
+        return profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY &&
+            profile->terminal_event != NULL &&
+            profile->terminal_event_size != 0u &&
+            terminal_span_valid(
+                program->strings, program->string_size,
+                profile->terminal_event, profile->terminal_event_size);
+    default:
+        return false;
+    }
+}
+
+vxml_status vxml_session_cmeta_terminal_kind(
+    const vxml_session *session,
+    vxml_cmeta_terminal_kind *out_kind) {
+    const vxml_session_impl *impl = cmeta_session(session);
+    const vxml_cmeta_session_data *profile;
+    if (out_kind == NULL) return VXML_INVALID_ARGUMENT;
+    *out_kind = VXML_CMETA_TERMINAL_NONE;
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_EXITED) return VXML_INVALID_STATE;
+    if (impl->profile_data == NULL) return VXML_INVALID_STRUCTURE;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (!terminal_control_valid(impl, profile))
+        return VXML_INVALID_STRUCTURE;
+    *out_kind = profile->terminal_kind;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_terminal_event(
+    const vxml_session *session,
+    vxml_cmeta_name_view *out_event) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_session_data *profile;
+    if (out_event != NULL) *out_event = (vxml_cmeta_name_view){0};
+    if (out_event == NULL) return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_EXITED) return VXML_INVALID_STATE;
+    if (impl->profile_data == NULL) return VXML_INVALID_STRUCTURE;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (!terminal_control_valid(impl, profile))
+        return VXML_INVALID_STRUCTURE;
+    if (profile->terminal_kind != VXML_CMETA_TERMINAL_RETURN_EVENT)
+        return VXML_INVALID_STATE;
+    out_event->data = profile->terminal_event;
+    out_event->size = profile->terminal_event_size;
+    return VXML_OK;
 }
 
 vxml_status vxml_session_cmeta_exit_kind(
