@@ -2,7 +2,68 @@
 #include <voicexml/document_store.h>
 #include <tinytest.h>
 
+#include "voicexml_internal.h"
+
 #include <string.h>
+
+typedef struct fake_profile_probe {
+    size_t sequence;
+    size_t init_sequence;
+    size_t start_sequence;
+    size_t raise_sequence;
+    size_t destroy_sequence;
+    size_t raise_calls;
+    size_t destroy_calls;
+    vxml_status raise_status;
+    char event[96];
+} fake_profile_probe;
+
+static fake_profile_probe *active_fake_profile;
+
+static vxml_status fake_profile_init(
+    vxml_session_impl *session, const void *options) {
+    fake_profile_probe *probe = active_fake_profile;
+    (void)options;
+    if (session == NULL || probe == NULL)
+        return VXML_INVALID_CONTRACT;
+    session->profile_data = probe;
+    probe->init_sequence = ++probe->sequence;
+    return VXML_OK;
+}
+
+static vxml_status fake_profile_start(vxml_session_impl *session) {
+    fake_profile_probe *probe = session != NULL
+        ? (fake_profile_probe *)session->profile_data : NULL;
+    if (probe == NULL)
+        return VXML_INVALID_CONTRACT;
+    probe->start_sequence = ++probe->sequence;
+    return VXML_OK;
+}
+
+static vxml_status fake_profile_raise(
+    vxml_session_impl *session,
+    const char *event_name,
+    size_t event_name_size) {
+    fake_profile_probe *probe = session != NULL
+        ? (fake_profile_probe *)session->profile_data : NULL;
+    if (probe == NULL || event_name == NULL ||
+        event_name_size >= sizeof(probe->event))
+        return VXML_INVALID_CONTRACT;
+    ++probe->raise_calls;
+    probe->raise_sequence = ++probe->sequence;
+    memcpy(probe->event, event_name, event_name_size);
+    probe->event[event_name_size] = '\0';
+    return probe->raise_status;
+}
+
+static void fake_profile_destroy(vxml_session_impl *session) {
+    fake_profile_probe *probe = session != NULL
+        ? (fake_profile_probe *)session->profile_data : NULL;
+    if (probe == NULL) return;
+    ++probe->destroy_calls;
+    probe->destroy_sequence = ++probe->sequence;
+    session->profile_data = NULL;
+}
 
 typedef struct upstream_probe {
     size_t accept_calls;
@@ -641,6 +702,110 @@ spec("VoiceXML dialog manager") {
         second.discard(second.user);
 
         manager_close_destroy(&manager, &upstream);
+    }
+
+    it("raises hangup before destroying a running dialog and surfaces handler failure") {
+        static const char source[] = "dialogs/hangup.vxml";
+        static const char absolute[] =
+            "https://voice.example/app/dialogs/hangup.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-hangup";
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK,
+            .expected_source = absolute,
+            .expected_source_size = sizeof(absolute) - 1u};
+        event_probe events = {0};
+        fake_profile_probe profile_probe = {
+            .raise_status = VXML_SEMANTIC_ERROR};
+        vxml_document_store store = {0};
+        vxml_document_ref preload = {0};
+        vxml_document_view view = {0};
+        vxml_document_store_error store_error = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request start = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_dialog_terminate_request terminate = {0};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(store_init(&store, &documents, 1u),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_acquire(
+                        &store, absolute, sizeof(absolute) - 1u,
+                        &preload, &store_error),
+                    VXML_DOCUMENT_STORE_OK);
+        check_equal(vxml_document_store_view(
+                        &store, preload, &view),
+                    VXML_DOCUMENT_STORE_OK);
+        check_not_null(view.program);
+        {
+            vxml_program_impl *impl =
+                (vxml_program_impl *)view.program->impl;
+            check_not_null(impl);
+            impl->profile_session_init = fake_profile_init;
+            impl->profile_session_start = fake_profile_start;
+            impl->profile_session_raise_event = fake_profile_raise;
+            impl->profile_session_destroy = fake_profile_destroy;
+        }
+        check_equal(vxml_document_store_release(&store, &preload),
+                    VXML_DOCUMENT_STORE_OK);
+
+        active_fake_profile = &profile_probe;
+        check_equal(manager_init_v2(
+                        &manager, 1u, &upstream, &store, &events),
+                    VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(adapter->prepare_dialog_start(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &start, &dialog_id, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_true(profile_probe.init_sequence != 0u);
+        check_true(profile_probe.start_sequence >
+                   profile_probe.init_sequence);
+        check_equal(profile_probe.raise_calls, (size_t)0u);
+        check_equal(profile_probe.destroy_calls, (size_t)0u);
+
+        terminate.dialog_id = dialog_id.data;
+        terminate.dialog_id_size = dialog_id.size;
+        terminate.immediate = false;
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(adapter->prepare_dialog_terminate(
+                        vxml_dialog_manager_ccxml_user(&manager),
+                        &terminate, &ticket, NULL),
+                    SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+                        &manager, 1u, &processed),
+                    VXML_DIALOG_MANAGER_OK);
+        check_equal(profile_probe.raise_calls, (size_t)1u);
+        check_equal(profile_probe.event,
+                    "connection.disconnect.hangup");
+        check_equal(profile_probe.destroy_calls, (size_t)1u);
+        check_true(profile_probe.raise_sequence <
+                   profile_probe.destroy_sequence);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[1].name, "dialog.exit");
+        check_equal(events.rows[1].voice_status,
+                    VXML_SEMANTIC_ERROR);
+
+        active_fake_profile = NULL;
+        manager_close_destroy(&manager, &upstream);
+        check_equal(vxml_document_store_destroy(&store),
+                    VXML_DOCUMENT_STORE_OK);
     }
 
     it("terminates a prepared dialog without refetching its source") {
