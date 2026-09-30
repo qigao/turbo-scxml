@@ -1306,15 +1306,18 @@ spec("VoiceXML dialog manager") {
             VXML_DOCUMENT_STORE_OK);
     }
 
-    it("V3 follows relative external goto to a target fragment and reuses both cached programs") {
+    it("V3 resolves goto fetchaudio and skips it when target documents are cached") {
         static const char a_uri[] =
             "https://voice.example/app/dialogs/a.vxml";
         static const char b_uri[] =
             "https://voice.example/app/dialogs/b.vxml";
+        static const char wait_audio_uri[] =
+            "https://voice.example/app/media/wait.wav";
         static const char a_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form id='main'><block>"
-            "<goto next='b.vxml#target'/>"
+            "<goto next='b.vxml#target' "
+            "fetchaudio='../media/wait.wav'/>"
             "</block></form></vxml>";
         static const char b_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
@@ -1370,6 +1373,16 @@ spec("VoiceXML dialog manager") {
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
         check_equal(documents.close_calls, (size_t)2u);
+        check_equal(
+            documents.fetch_audio_begin_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_finish_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_uri_size,
+            sizeof(wait_audio_uri) - 1u);
+        check_equal(
+            documents.fetch_audio_uri,
+            wait_audio_uri);
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
         check_equal(events.rows[1].name, "dialog.exit");
@@ -1387,6 +1400,10 @@ spec("VoiceXML dialog manager") {
                 &manager, 1u, &processed),
             VXML_DIALOG_MANAGER_OK);
         check_equal(documents.open_calls, (size_t)2u);
+        check_equal(
+            documents.fetch_audio_begin_calls, (size_t)1u);
+        check_equal(
+            documents.fetch_audio_finish_calls, (size_t)1u);
         check_equal(events.count, (size_t)4u);
         check_equal(events.rows[2].name, "dialog.started");
         check_equal(events.rows[3].name, "dialog.exit");
