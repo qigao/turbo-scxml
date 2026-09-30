@@ -5518,6 +5518,121 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("publishes exact terminal control for exit return event return data and disconnect") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><exit/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><return event='child.failed'/>"
+            "</block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><return namelist='value'/>"
+            "</block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><disconnect/></block></form></vxml>"
+        };
+        static const vxml_cmeta_terminal_kind expected[] = {
+            VXML_CMETA_TERMINAL_EXIT,
+            VXML_CMETA_TERMINAL_RETURN_EVENT,
+            VXML_CMETA_TERMINAL_RETURN,
+            VXML_CMETA_TERMINAL_DISCONNECT
+        };
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {.value = 17};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        size_t index;
+
+        for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_cmeta_terminal_kind terminal = VXML_CMETA_TERMINAL_NONE;
+            vxml_cmeta_name_view event = {
+                (const char *)(uintptr_t)1u, 99u};
+            vxml_cmeta_exit_kind payload = VXML_CMETA_EXIT_EXPRESSION;
+
+            check_equal(
+                vxml_compile_cmeta(
+                    sources[index], strlen(sources[index]), NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(&session, &program, &options),
+                VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_get_state(&session), VXML_SESSION_EXITED);
+            check_equal(
+                vxml_session_cmeta_terminal_kind(&session, &terminal),
+                VXML_OK);
+            check_equal(terminal, expected[index]);
+
+            if (terminal == VXML_CMETA_TERMINAL_RETURN_EVENT) {
+                check_equal(
+                    vxml_session_cmeta_terminal_event(&session, &event),
+                    VXML_OK);
+                check_equal(event.size, sizeof("child.failed") - 1u);
+                check_equal(
+                    memcmp(event.data, "child.failed", event.size), 0);
+            } else {
+                check_equal(
+                    vxml_session_cmeta_terminal_event(&session, &event),
+                    VXML_INVALID_STATE);
+                check_null(event.data);
+                check_equal(event.size, (size_t)0u);
+            }
+
+            check_equal(
+                vxml_session_cmeta_exit_kind(&session, &payload), VXML_OK);
+            if (terminal == VXML_CMETA_TERMINAL_RETURN) {
+                vxml_cmeta_name_view name = {0};
+                vxml_cmeta_value_view value = {0};
+                check_equal(payload, VXML_CMETA_EXIT_NAMELIST);
+                check_equal(vxml_session_cmeta_exit_count(&session), (size_t)1u);
+                check_equal(
+                    vxml_session_cmeta_exit_at(
+                        &session, 0u, &name, &value), VXML_OK);
+                check_equal(name.size, sizeof("value") - 1u);
+                check_equal(memcmp(name.data, "value", name.size), 0);
+                check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+                check_equal(value.data.sint, INT64_C(17));
+            } else {
+                check_equal(payload, VXML_CMETA_EXIT_EMPTY);
+            }
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+
+    it("retains literal return Event bytes in Program-owned storage") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<return event='child.failed'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_name_view event = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, strlen(source), NULL, &compile, &program, NULL),
+            VXML_OK);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_terminal_event(&session, &event), VXML_OK);
+        check_equal(event.size, sizeof("child.failed") - 1u);
+        check_equal(memcmp(event.data, "child.failed", event.size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("publishes one unnamed scalar for an exit expression") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
