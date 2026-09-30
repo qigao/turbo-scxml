@@ -62,6 +62,10 @@ int main(void) {
         .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_view_v1)};
     vxml_cmeta_prompt_media_segment_v1 prompt_media_segment = {0};
+    vxml_cmeta_prompt_media_fallback_v1 prompt_media_fallback = {
+        .audio_segment_index = 1u,
+        .first_fallback_segment = 2u,
+        .fallback_segment_count = 1u};
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket = {0};
     vxml_cmeta_prompt_media_request_v1 prompt_media_request = {
         .abi_version = VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1,
@@ -103,6 +107,7 @@ int main(void) {
     if (raise_event == NULL || query_prompt == NULL ||
         report_mark == NULL || query_mark == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
+        VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
         prompt_mark.abi_version != VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 ||
         prompt_mark.segment_index != SIZE_MAX ||
@@ -113,6 +118,9 @@ int main(void) {
             VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
         prompt_media_batch.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 ||
+        prompt_media_fallback.audio_segment_index != 1u ||
+        prompt_media_fallback.first_fallback_segment != 2u ||
+        prompt_media_fallback.fallback_segment_count != 1u ||
         prompt_media_segment.kind != 0 ||
         prompt_media_ticket.commit != NULL)
         return 6;
