@@ -39,6 +39,9 @@ int main(void) {
     vxml_session session = {0};
     vxml_cmeta_collect_ticket_v1 collect_ticket = {0};
     vxml_cmeta_collect_request_v1 collect_request = {0};
+    vxml_cmeta_collect_completion_v1 collect_completion = {
+        .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
     vxml_cmeta_collect_adapter_v1 collect_adapter = {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
@@ -59,7 +62,10 @@ int main(void) {
     if (collect_adapter.abi_version !=
             VXML_CMETA_COLLECT_ADAPTER_ABI_V1 ||
         collect_ticket.commit != NULL ||
-        collect_request.abi_version != 0u)
+        collect_request.abi_version != 0u ||
+        collect_completion.abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
+        VXML_CMETA_COLLECT_INGRESS_ACCEPTED != 0)
         return 6;
     if (layout_type ==
             turboscxml_install_cmeta_peer_value_descriptor()->storage_type ||
