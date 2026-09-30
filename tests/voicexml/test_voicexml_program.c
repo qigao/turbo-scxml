@@ -276,9 +276,11 @@ spec("VoiceXML program compiler") {
             char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block>"
-                "<goto next='dialogs/next.vxml#target'/>"
+                "<goto next='dialogs/next.vxml#target' "
+                "fetchaudio='media/wait.wav'/>"
                 "</block></form></vxml>";
             static const char target[] = "dialogs/next.vxml#target";
+            static const char fetchaudio[] = "media/wait.wav";
             vxml_program program = {0};
             vxml_program_impl *impl;
 
@@ -295,6 +297,12 @@ spec("VoiceXML program compiler") {
                     impl->actions[0].target_uri_size,
                     sizeof(target) - 1u);
                 check_equal(impl->actions[0].target_uri, target);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri_size,
+                    sizeof(fetchaudio) - 1u);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri,
+                    fetchaudio);
                 check_true(
                     impl->actions[0].target_uri >= impl->storage);
                 check_true(
@@ -303,8 +311,22 @@ spec("VoiceXML program compiler") {
                     impl->storage + impl->storage_size);
                 memset(source, 'x', sizeof(source) - 1u);
                 check_equal(impl->actions[0].target_uri, target);
+                check_equal(
+                    impl->actions[0].fetchaudio_uri,
+                    fetchaudio);
             }
             vxml_program_destroy(&program);
+        }
+
+        it("rejects fetchaudio on local fragment navigation") {
+            check_empty_failure(
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block>"
+                "<goto next='#b' fetchaudio='wait.wav'/>"
+                "</block></form>"
+                "<form id='b'><block><exit/></block></form>"
+                "</vxml>",
+                VXML_INVALID_STRUCTURE, NULL, 2u);
         }
 
         it("rejects missing empty and unknown local goto targets") {
