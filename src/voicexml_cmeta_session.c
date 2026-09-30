@@ -4305,7 +4305,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        return status;
+        return prompt_media_admission_failure(session, status);
     }
     if (ticket.commit == NULL || ticket.discard == NULL) {
         if (ticket.discard != NULL)
