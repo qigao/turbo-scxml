@@ -30,7 +30,9 @@ int main(void) {
     if (v2.document_store != NULL || v3.document_store != NULL)
         return 6;
     if (fetch_policy.abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
-        fetch_policy.struct_size != sizeof(fetch_policy))
+        fetch_policy.struct_size != sizeof(fetch_policy) ||
+        fetch_policy.fetchaudio_uri != NULL ||
+        fetch_policy.fetchaudio_uri_size != 0u)
         return 7;
     if (vxml_document_store_acquire_with_policy(
             &store, "x", 1u, &fetch_policy, &ref, NULL) !=
