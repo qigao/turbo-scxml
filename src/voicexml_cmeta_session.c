@@ -1567,7 +1567,7 @@ static vxml_status execute_actions_range(
             }
             case VXML_CMETA_ACTION_ASSIGN: {
                 const vxml_status status = execute_assign(
-                    session, program, form, block, action);
+                    session, program, form, execution_scope, action);
                 if (status != VXML_OK) return status;
                 break;
             }
@@ -1579,7 +1579,7 @@ static vxml_status execute_actions_range(
             }
             case VXML_CMETA_ACTION_EXIT: {
                 const vxml_status status = execute_exit(
-                    session, program, form, block, action);
+                    session, program, form, execution_scope, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
