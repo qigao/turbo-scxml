@@ -4114,6 +4114,16 @@ static vxml_status prompt_media_batch_request_from_impl(
     out_request->segments =
         &program->prompt_segments[prompt->first_segment];
     out_request->segment_count = prompt->segment_count;
+    if (prompt->fallback_count != 0u) {
+        if (!range_valid(
+                prompt->first_fallback, prompt->fallback_count,
+                program->prompt_fallback_count) ||
+            program->prompt_fallbacks == NULL)
+            return VXML_INVALID_STRUCTURE;
+        out_request->fallbacks =
+            &program->prompt_fallbacks[prompt->first_fallback];
+        out_request->fallback_count = prompt->fallback_count;
+    }
     return VXML_OK;
 }
 
