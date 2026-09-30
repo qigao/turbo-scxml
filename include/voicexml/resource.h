@@ -3,6 +3,7 @@
 
 #include <voicexml/voicexml.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -11,6 +12,7 @@ extern "C" {
 #endif
 
 #define VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 1u
+#define VXML_DOCUMENT_FETCH_POLICY_ABI_V1 1u
 
 /*
  * Shared status space for the delivered dialog/document boundary.
@@ -46,6 +48,17 @@ typedef struct vxml_dialog_document {
     void *lease;
 } vxml_dialog_document;
 
+typedef struct vxml_document_fetch_policy_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    bool has_timeout;
+    uint64_t timeout_us;
+} vxml_document_fetch_policy_v1;
+
+#define VXML_DOCUMENT_FETCH_POLICY_V1_INIT \
+    {VXML_DOCUMENT_FETCH_POLICY_ABI_V1, \
+     sizeof(vxml_document_fetch_policy_v1), false, UINT64_C(0)}
+
 /**
  * Synchronous bounded VoiceXML document acquisition boundary.
  *
@@ -63,6 +76,21 @@ typedef struct vxml_dialog_document_adapter_v1 {
         size_t max_bytes,
         vxml_dialog_document *out_document);
     void (*close)(void *user, vxml_dialog_document *document);
+
+    /**
+     * Optional append-only per-request fetch policy.
+     *
+     * Providers that do not support overrides leave this NULL. The policy is
+     * callback-borrowed only. A caller requiring a timeout must fail closed
+     * rather than silently falling back to open().
+     */
+    vxml_dialog_manager_status (*open_with_policy)(
+        void *user,
+        const char *source, size_t source_size,
+        const char *media_type, size_t media_type_size,
+        size_t max_bytes,
+        const vxml_document_fetch_policy_v1 *policy,
+        vxml_dialog_document *out_document);
 } vxml_dialog_document_adapter_v1;
 
 #ifdef __cplusplus
