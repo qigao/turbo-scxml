@@ -681,15 +681,16 @@ static vxml_status cmeta_collect_prepare(
              ++choice_index) {
             const vxml_cmeta_menu_choice_v1 *choice =
                 &request->menu_choices[choice_index];
-            if (choice->dtmf.data == NULL ||
-                choice->dtmf.size == 0u ||
+            if ((choice->dtmf.size != 0u &&
+                 choice->dtmf.data == NULL) ||
                 choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
                 choice->speech.data != NULL ||
                 choice->speech.size != 0u)
                 return VXML_INVALID_CONTRACT;
-            memcpy(
-                probe->menu_dtmf[choice_index],
-                choice->dtmf.data, choice->dtmf.size);
+            if (choice->dtmf.size != 0u)
+                memcpy(
+                    probe->menu_dtmf[choice_index],
+                    choice->dtmf.data, choice->dtmf.size);
             probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
         }
         probe->menu_choice_count = request->menu_choice_count;
