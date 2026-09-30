@@ -4474,6 +4474,24 @@ static vxml_status cmeta_register_initial_item(
                 : salts_xml_node_location(initial),
             "VoiceXML initial collides with the dialog namespace");
 
+    if (name_attribute.impl != NULL) {
+        const size_t form_index =
+            builder->profile->scopes[form_scope].owner;
+        size_t prior;
+        for (prior = 0u; prior < builder->field_index; ++prior) {
+            const vxml_cmeta_field_row *field =
+                &builder->profile->fields[prior];
+            if (field->form == form_index &&
+                field->name != NULL &&
+                field->name_size == name.size &&
+                memcmp(field->name, name.data, name.size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name_attribute),
+                    "VoiceXML initial name collides with a field");
+        }
+    }
+
     if (builder->profile->scopes[form_scope].schema.slot_count >=
             builder->options->max_scope_slots ||
         cmeta_scope_storage_limit_exceeded(
