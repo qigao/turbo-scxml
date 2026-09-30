@@ -1028,6 +1028,8 @@ static void write_exit(vxml_writer *writer) {
     action->target_form = SIZE_MAX;
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
 }
 
 static void write_goto(vxml_writer *writer) {
@@ -1037,6 +1039,8 @@ static void write_goto(vxml_writer *writer) {
         writer->measurement->gotos[writer->goto_index++];
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
     if (target.external) {
         action->kind = VXML_ACTION_GOTO_EXTERNAL;
         action->target_form = SIZE_MAX;
@@ -1047,6 +1051,18 @@ static void write_goto(vxml_writer *writer) {
             writer->impl->storage + writer->storage_index,
             target.target, target.target_size + 1u);
         writer->storage_index += target.target_size + 1u;
+        if (target.fetchaudio != NULL &&
+            target.fetchaudio_size != 0u) {
+            action->fetchaudio_uri =
+                writer->impl->storage + writer->storage_index;
+            action->fetchaudio_uri_size =
+                target.fetchaudio_size;
+            memcpy(
+                writer->impl->storage + writer->storage_index,
+                target.fetchaudio, target.fetchaudio_size + 1u);
+            writer->storage_index +=
+                target.fetchaudio_size + 1u;
+        }
     } else {
         action->kind = VXML_ACTION_GOTO;
         action->target_form = target.target_form;
