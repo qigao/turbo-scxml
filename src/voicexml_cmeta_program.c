@@ -4419,6 +4419,118 @@ static vxml_status cmeta_register_form_item(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_register_initial_item(
+    cmeta_program_builder *builder,
+    size_t form_scope,
+    salts_xml_node initial,
+    size_t initial_index,
+    vxml_cmeta_initial_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(initial, "name");
+    salts_xml_string_view name;
+    char anonymous_name[48];
+    bool conflict = false;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    vxml_status status = VXML_OK;
+
+    memset(out, 0, sizeof(*out));
+    out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->initial_expression = VXML_CMETA_NO_INDEX;
+    out->condition = VXML_CMETA_NO_INDEX;
+
+    if (name_attribute.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(name_attribute),
+            salts_xml_attribute_location(name_attribute),
+            &out->name, &out->name_size);
+        if (status != VXML_OK) return status;
+        name = (salts_xml_string_view){out->name, out->name_size};
+        if (!cmeta_ascii_ncname(name))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML initial name must be a decoded XML NCName");
+    } else {
+        const int written = snprintf(
+            anonymous_name, sizeof(anonymous_name),
+            "\x1f" "initial:%zu", initial_index);
+        if (written <= 0 || (size_t)written >= sizeof(anonymous_name))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(initial),
+                "VoiceXML anonymous initial identity overflow");
+        name = (salts_xml_string_view){
+            anonymous_name, (size_t)written};
+    }
+
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            name.data, name.size, NULL) != NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            name_attribute.impl != NULL
+                ? salts_xml_attribute_location(name_attribute)
+                : salts_xml_node_location(initial),
+            "VoiceXML initial collides with the dialog namespace");
+
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &cmeta_data_bool))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(initial),
+            "VoiceXML dialog scope exceeds configured bounds");
+
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            name.data, name.size, &cmeta_data_bool,
+            &slot, &conflict))
+        return cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(initial),
+            conflict ? "VoiceXML initial form-item type conflict"
+                     : "VoiceXML initial schema allocation failed");
+    out->form_item_slot = slot;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_compile_form_grammar(
+    cmeta_program_builder *builder,
+    salts_xml_node grammar,
+    vxml_cmeta_form_row *form) {
+    const salts_xml_attribute type = cmeta_attribute(grammar, "type");
+    const salts_xml_attribute src = cmeta_attribute(grammar, "src");
+    vxml_status status;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(type),
+        salts_xml_attribute_location(type),
+        &form->grammar_type, &form->grammar_type_size);
+    if (status != VXML_OK) return status;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(src),
+        salts_xml_attribute_location(src),
+        &form->grammar_src, &form->grammar_src_size);
+    if (status != VXML_OK) return status;
+    if (form->grammar_type_size == 0u ||
+        form->grammar_src_size == 0u ||
+        !cmeta_decoded_equal(
+            (salts_xml_string_view){
+                form->grammar_type, form->grammar_type_size},
+            "application/srgs+xml"))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(grammar),
+            "form-level grammar changed between compiler passes");
+    form->grammar_required_capabilities =
+        VXML_CMETA_COLLECT_CAP_SRGS_XML |
+        VXML_CMETA_COLLECT_CAP_INITIAL_MULTI;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_register_executable_variables(
     cmeta_program_builder *builder, size_t scope_index,
     salts_xml_node container) {
