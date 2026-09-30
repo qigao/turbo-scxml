@@ -167,6 +167,14 @@ static vxml_cmeta_compile_options_v1 subdialog_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 subdialog_param_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = subdialog_compile_options();
+    options.max_subdialog_params = 8u;
+    options.max_subdialog_param_name_bytes = 32u;
+    options.max_subdialog_param_value_bytes = 64u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_prompts = 8u;
@@ -2215,6 +2223,153 @@ spec("VoiceXML CMeta program compiler") {
         check_true(subdialog->condition != VXML_CMETA_NO_INDEX);
 
         vxml_program_destroy(&program);
+    }
+
+    it("compiles immutable typed and literal subdialog parameter rows") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='nested' src='child.vxml'>"
+            "<param name='count' expr='value + 1'/>"
+            "<param name='ready' expr='flag'/>"
+            "<param name='label' value='A&amp;B'/>"
+            "</subdialog></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            subdialog_param_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_subdialog_row *subdialog;
+        const vxml_cmeta_subdialog_param_row *params;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->subdialog_count, (size_t)1u);
+        check_equal(profile->subdialog_param_count, (size_t)3u);
+        check_equal(
+            profile->max_subdialog_param_value_bytes, (size_t)64u);
+        subdialog = &profile->subdialogs[0];
+        check_equal(subdialog->first_param, (size_t)0u);
+        check_equal(subdialog->param_count, (size_t)3u);
+        params = &profile->subdialog_params[subdialog->first_param];
+
+        check_equal(params[0].subdialog, (size_t)0u);
+        check_equal(params[0].source, VXML_CMETA_SUBDIALOG_PARAM_TYPED);
+        check_true(params[0].expression != VXML_CMETA_NO_INDEX);
+        check_equal(params[0].name_size, sizeof("count") - 1u);
+        check_equal(memcmp(params[0].name, "count", params[0].name_size), 0);
+
+        check_equal(params[1].source, VXML_CMETA_SUBDIALOG_PARAM_TYPED);
+        check_true(params[1].expression != VXML_CMETA_NO_INDEX);
+        check_equal(params[1].name_size, sizeof("ready") - 1u);
+
+        check_equal(params[2].source, VXML_CMETA_SUBDIALOG_PARAM_LITERAL);
+        check_equal(params[2].expression, VXML_CMETA_NO_INDEX);
+        check_equal(params[2].name_size, sizeof("label") - 1u);
+        check_equal(params[2].literal_size, sizeof("A&B") - 1u);
+        check_equal(
+            memcmp(params[2].literal, "A&B", params[2].literal_size), 0);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid subdialog parameter contracts before provider admission") {
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<param name='x' expr='value' value='1'/>"
+                "</subdialog></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<param name='x'/>"
+                "</subdialog></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<param name='x' value='1'/><param name='x' value='2'/>"
+                "</subdialog></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<param name='bad.name' value='1'/>"
+                "</subdialog></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<filled/>"
+                "</subdialog></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            }
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            subdialog_param_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    cases[index].source, strlen(cases[index].source),
+                    NULL, &options, &program, NULL),
+                cases[index].expected);
+            check_null(program.impl);
+        }
+
+        {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
+                "<param name='longname' value='abcdef'/>"
+                "</subdialog></form></vxml>";
+            vxml_cmeta_compile_options_v1 bounded =
+                subdialog_param_compile_options();
+            vxml_program program = {0};
+
+            bounded.max_subdialog_param_name_bytes = 4u;
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &bounded, &program, NULL),
+                VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+
+            bounded = subdialog_param_compile_options();
+            bounded.max_subdialog_param_value_bytes = 3u;
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &bounded, &program, NULL),
+                VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+
+            bounded = subdialog_param_compile_options();
+            bounded.max_subdialog_params = 0u;
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &bounded, &program, NULL),
+                VXML_INVALID_CONTRACT);
+            check_null(program.impl);
+        }
     }
 
     it("rejects invalid static subdialog descriptors without approximation") {
