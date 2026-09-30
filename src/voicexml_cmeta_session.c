@@ -714,6 +714,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
     vxml_free(session->collect_mailbox.root_fields);
@@ -746,6 +747,66 @@ static unsigned char *session_declared(
     return base != NULL ? base + session->declared_offsets[scope] : NULL;
 }
 
+static bool recovery_event_name(
+    const vxml_cmeta_event_counter *counter) {
+    return counter != NULL && counter->event != NULL &&
+        ((counter->event_size == sizeof("noinput") - 1u &&
+          memcmp(counter->event, "noinput", sizeof("noinput") - 1u) == 0) ||
+         (counter->event_size == sizeof("nomatch") - 1u &&
+          memcmp(counter->event, "nomatch", sizeof("nomatch") - 1u) == 0));
+}
+
+static void reset_field_retry_counters(
+    vxml_cmeta_session_data *session, size_t field_index) {
+    size_t index;
+    if (session == NULL) return;
+    for (index = 0u; index < session->event_counter_count; ++index) {
+        vxml_cmeta_event_counter *counter =
+            &session->event_counters[index];
+        if (counter->scope_kind == VXML_CMETA_EVENT_FIELD &&
+            counter->owner == field_index &&
+            recovery_event_name(counter))
+            counter->count = 0u;
+    }
+}
+
+static void reset_form_retry_counters(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form) {
+    size_t offset;
+    if (session == NULL || program == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count))
+        return;
+    for (offset = 0u; offset < form->field_count; ++offset)
+        reset_field_retry_counters(
+            session, form->first_field + offset);
+}
+
+static void mark_field_retry_reset(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t field_index) {
+    if (session == NULL || program == NULL ||
+        session->retry_reset_pending == NULL ||
+        field_index >= program->field_count)
+        return;
+    session->retry_reset_pending[field_index] = 1u;
+}
+
+static void apply_retry_resets(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program) {
+    size_t index;
+    if (session == NULL || program == NULL ||
+        session->retry_reset_pending == NULL)
+        return;
+    for (index = 0u; index < program->field_count; ++index)
+        if (session->retry_reset_pending[index] != 0u)
+            reset_field_retry_counters(session, index);
+}
+
 static void transaction_reset(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
@@ -755,6 +816,9 @@ static void transaction_reset(
         cmeta_scope_view_clear(&session->staged_scopes[index].view);
     if (session->declared_count != 0u)
         memset(session->staged_declared, 0, session->declared_count);
+    if (program->field_count != 0u &&
+        session->retry_reset_pending != NULL)
+        memset(session->retry_reset_pending, 0, program->field_count);
 }
 
 static bool transaction_begin(
@@ -794,6 +858,7 @@ static void transaction_commit(
     }
     session->committed_declared = session->staged_declared;
     session->staged_declared = declared_swap;
+    apply_retry_resets(session, program);
     transaction_reset(session, program);
 }
 
@@ -1983,6 +2048,13 @@ vxml_status vxml_cmeta_session_init_profile(
         }
         profile->collect_adapter = options->collect;
         profile->collect_user = options->collect_user;
+        profile->retry_reset_pending =
+            (unsigned char *)vxml_calloc(
+                program->field_count, sizeof(unsigned char));
+        if (profile->retry_reset_pending == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
     }
     if (root_shape->field_count != 0u) {
         undefined = (unsigned char *)vxml_calloc(
