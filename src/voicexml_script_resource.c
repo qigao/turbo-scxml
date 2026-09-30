@@ -1,5 +1,7 @@
 #include <voicexml/script_resource.h>
 
+#include "voicexml_internal.h"
+
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,6 +43,17 @@ static void provider_close_if_live(
         adapter->close(user, source);
     if (source != NULL)
         *source = (vxml_script_source){0};
+}
+
+vxml_status vxml_compile_external_script_profile(
+    const void *bytes, size_t size,
+    const vxml_limits *limits,
+    vxml_program *out,
+    vxml_diagnostic *diagnostic) {
+    return vxml_compile_with_features(
+        bytes, size, limits,
+        VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT,
+        out, diagnostic);
 }
 
 const char *vxml_script_resource_status_string(

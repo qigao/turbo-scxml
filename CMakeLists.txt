@@ -292,7 +292,8 @@ target_compile_options(turbo_voicexml_script_resource
 target_include_directories(turbo_voicexml_script_resource
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(turbo_voicexml_script_resource
   PUBLIC TurboSCXML::VoiceXMLDocumentStore)
 

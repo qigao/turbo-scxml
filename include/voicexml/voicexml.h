@@ -71,7 +71,8 @@ typedef enum vxml_session_state {
     VXML_SESSION_FAILED,
     VXML_SESSION_CLOSED,
     VXML_SESSION_NAVIGATING,
-    VXML_SESSION_SUBMITTING
+    VXML_SESSION_SUBMITTING,
+    VXML_SESSION_SCRIPTING
 } vxml_session_state;
 
 typedef enum vxml_submit_enctype {
@@ -89,6 +90,17 @@ typedef struct vxml_submit_target_v1 {
     vxml_submit_method method;
     vxml_submit_enctype enctype;
 } vxml_submit_target_v1;
+
+#define VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 1u
+
+typedef struct vxml_external_script_target_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *src;
+    size_t src_size;
+    const char *charset;
+    size_t charset_size;
+} vxml_external_script_target_v1;
 
 typedef struct vxml_navigation_target {
     const char *uri;
@@ -170,6 +182,11 @@ vxml_status vxml_session_navigation_request(
 vxml_status vxml_session_submit(
     const vxml_session *session,
     vxml_submit_target_v1 *out_target);
+
+/** Borrow the external script descriptor while state is VXML_SESSION_SCRIPTING. */
+vxml_status vxml_session_script(
+    const vxml_session *session,
+    vxml_external_script_target_v1 *out_target);
 
 /**
  * Synchronously inject one byte-counted Event into the active runtime profile.
