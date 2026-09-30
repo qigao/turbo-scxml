@@ -158,6 +158,7 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_prompts = 8u;
     options.max_prompt_bytes = 256u;
+    options.max_prompt_segments = 8u;
     return options;
 }
 
@@ -346,6 +347,63 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles mixed prompt media into immutable ordered segment rows") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Hello <audio src='retry.wav'/> again</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_prompt_row *prompt;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_count, (size_t)1u);
+        check_equal(profile->prompt_segment_count, (size_t)3u);
+        check_not_null(profile->prompt_segments);
+        prompt = &profile->prompts[0];
+        check_equal(prompt->first_segment, (size_t)0u);
+        check_equal(prompt->segment_count, (size_t)3u);
+        check_equal(prompt->required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        check_equal(profile->prompt_segments[0].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(profile->prompt_segments[1].kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(profile->prompt_segments[2].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(memcmp(
+                        profile->prompt_segments[0].payload.data,
+                        "Hello ", sizeof("Hello ") - 1u), 0);
+        check_equal(profile->prompt_segments[0].payload.size,
+                    sizeof("Hello ") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[1].payload.data,
+                        "retry.wav", sizeof("retry.wav") - 1u), 0);
+        check_equal(profile->prompt_segments[1].payload.size,
+                    sizeof("retry.wav") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[2].payload.data,
+                        " again", sizeof(" again") - 1u), 0);
+        check_equal(profile->prompt_segments[2].payload.size,
+                    sizeof(" again") - 1u);
+
+        vxml_program_destroy(&program);
+    }
+
     it("compiles a literal audio prompt into one immutable AUDIO row") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -393,19 +451,13 @@ spec("VoiceXML CMeta program compiler") {
             "<grammar type='application/srgs+xml' src='a'/></field></form>",
             "<form><field name='value'><prompt><audio expr='x'/></prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>",
-            "<form><field name='value'><prompt>hello<audio src='a'/></prompt>"
-            "<grammar type='application/srgs+xml' src='a'/></field></form>",
             "<form><field name='value'><prompt><audio src='a'>fallback</audio></prompt>"
-            "<grammar type='application/srgs+xml' src='a'/></field></form>",
-            "<form><field name='value'><prompt><audio src='a'/><audio src='b'/></prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>"
         };
         static const vxml_status expected[] = {
             VXML_INVALID_STRUCTURE,
             VXML_LIMIT_EXCEEDED,
             VXML_UNSUPPORTED_FEATURE,
-            VXML_UNSUPPORTED_FEATURE,
-            VXML_INVALID_STRUCTURE,
             VXML_INVALID_STRUCTURE
         };
         static const char prefix[] =
