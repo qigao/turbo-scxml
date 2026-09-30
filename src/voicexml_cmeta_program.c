@@ -4195,6 +4195,18 @@ static vxml_status cmeta_compile_field_schema(
             "VoiceXML field name has no matching application-root field");
         goto done;
     }
+    for (prior = 0u; prior < builder->subdialog_index; ++prior) {
+        const vxml_cmeta_subdialog_row *subdialog =
+            &builder->profile->subdialogs[prior];
+        if (subdialog->form == form_index &&
+            subdialog->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML field form item duplicates a subdialog result target");
+            goto done;
+        }
+    }
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(node);
