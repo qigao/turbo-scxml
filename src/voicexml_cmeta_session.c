@@ -673,6 +673,10 @@ static void session_data_destroy(
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    atomic_store_explicit(
+        &session->collect_mailbox.state,
+        VXML_CMETA_COLLECT_MAILBOX_CLOSED,
+        memory_order_release);
     if (session->collect_prepared) {
         vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
         session->collect_prepared = false;
@@ -696,6 +700,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
     vxml_free(session->exec_frames);
@@ -1624,6 +1629,49 @@ static bool align_buffer(
     return true;
 }
 
+static bool collect_fixed_scalar_data(
+    const cmeta_data_desc *data) {
+    if (!cmeta_data_desc_valid(data) ||
+        data->storage_type == NULL ||
+        data->storage_type->size == 0u ||
+        !valid_alignment(data->storage_type->align))
+        return false;
+    switch (data->kind) {
+    case CMETA_DATA_BOOL:
+    case CMETA_DATA_SINT:
+    case CMETA_DATA_UINT:
+    case CMETA_DATA_FLOAT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool measure_collect_mailbox(
+    const vxml_cmeta_program_data *program,
+    size_t *out_bytes, size_t *out_alignment) {
+    size_t bytes = 0u;
+    size_t alignment = 1u;
+    size_t index;
+    if (program == NULL || out_bytes == NULL ||
+        out_alignment == NULL)
+        return false;
+    for (index = 0u; index < program->field_count; ++index) {
+        const vxml_cmeta_field_row *field =
+            &program->fields[index];
+        const cmeta_type_desc *type =
+            field->field_data != NULL
+                ? field->field_data->storage_type : NULL;
+        if (!collect_fixed_scalar_data(field->field_data))
+            continue;
+        if (type->size > bytes) bytes = type->size;
+        if (type->align > alignment) alignment = type->align;
+    }
+    *out_bytes = bytes;
+    *out_alignment = alignment;
+    return true;
+}
+
 static bool measure_external_data_scratch(
     const vxml_cmeta_program_data *program,
     size_t *out_workspace_bytes,
@@ -1820,6 +1868,10 @@ vxml_status vxml_cmeta_session_init_profile(
     if (profile == NULL) return VXML_ALLOCATION_FAILED;
     profile->max_transaction_bytes = options->max_transaction_bytes;
     profile->max_execution_steps = options->max_execution_steps;
+    atomic_init(
+        &profile->collect_mailbox.state,
+        VXML_CMETA_COLLECT_MAILBOX_DISARMED);
+    atomic_init(&profile->collect_mailbox.generation, UINT64_C(0));
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
@@ -1895,6 +1947,40 @@ vxml_status vxml_cmeta_session_init_profile(
     if (profile->read_scratch == NULL) {
         status = VXML_ALLOCATION_FAILED;
         goto failure;
+    }
+    if (program->field_count != 0u) {
+        size_t mailbox_allocation_bytes;
+        if (!measure_collect_mailbox(
+                program,
+                &profile->collect_mailbox.storage_bytes,
+                &profile->collect_mailbox.storage_alignment)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        mailbox_allocation_bytes =
+            profile->collect_mailbox.storage_bytes;
+        if (profile->collect_mailbox.storage_alignment > 1u &&
+            !checked_add(
+                &mailbox_allocation_bytes,
+                profile->collect_mailbox.storage_alignment - 1u)) {
+            status = VXML_LIMIT_EXCEEDED;
+            goto failure;
+        }
+        if (mailbox_allocation_bytes != 0u) {
+            profile->collect_mailbox.allocation =
+                vxml_malloc(mailbox_allocation_bytes);
+            if (profile->collect_mailbox.allocation == NULL ||
+                !align_buffer(
+                    (unsigned char *)
+                        profile->collect_mailbox.allocation,
+                    mailbox_allocation_bytes,
+                    profile->collect_mailbox.storage_alignment,
+                    profile->collect_mailbox.storage_bytes,
+                    &profile->collect_mailbox.storage)) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+        }
     }
     if (program->external_data_count != 0u) {
         size_t workspace_alignment = 1u;
