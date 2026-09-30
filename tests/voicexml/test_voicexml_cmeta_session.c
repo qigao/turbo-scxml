@@ -606,6 +606,7 @@ static vxml_cmeta_compile_options_v1 field_compile_options(void) {
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
+    size_t menu_prepare_calls;
     size_t batch_prepare_calls;
     size_t commit_calls;
     size_t discard_calls;
@@ -644,11 +645,16 @@ static vxml_status cmeta_collect_prepare(
     vxml_cmeta_collect_ticket_v1 *out_ticket,
     const char **out_error) {
     cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
-    size_t choice_index;
     if (out_error != NULL) *out_error = NULL;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
         request->abi_version != VXML_CMETA_COLLECT_REQUEST_ABI_V1 ||
-        request->struct_size < sizeof(*request))
+        request->struct_size < sizeof(*request) ||
+        request->field.data == NULL ||
+        request->field.size >= sizeof(probe->field) ||
+        request->grammar_type.data == NULL ||
+        request->grammar_type.size >= sizeof(probe->grammar_type) ||
+        request->grammar_src.data == NULL ||
+        request->grammar_src.size >= sizeof(probe->grammar_src))
         return VXML_INVALID_CONTRACT;
     ++probe->prepare_calls;
     *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
@@ -656,68 +662,77 @@ static vxml_status cmeta_collect_prepare(
         return probe->prepare_status;
     if (probe->reserved || probe->active)
         return VXML_INVALID_STATE;
-
-    probe->item_kind = request->item_kind;
+    probe->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
     probe->menu_choice_count = 0u;
+    memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
+    memcpy(probe->field, request->field.data, request->field.size);
+    probe->field[request->field.size] = '\0';
+    memcpy(probe->grammar_type,
+           request->grammar_type.data, request->grammar_type.size);
+    probe->grammar_type[request->grammar_type.size] = '\0';
+    memcpy(probe->grammar_src,
+           request->grammar_src.data, request->grammar_src.size);
+    probe->grammar_src[request->grammar_src.size] = '\0';
+    probe->generation = request->generation;
+    probe->has_timeout = request->has_timeout;
+    probe->timeout_us = request->timeout_us;
+    probe->reserved = true;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){
+        .commit = cmeta_collect_commit,
+        .discard = cmeta_collect_discard,
+        .user = probe};
+    return VXML_OK;
+}
+
+static vxml_status cmeta_collect_prepare_menu(
+    void *user,
+    const vxml_cmeta_menu_collect_request_v1 *request,
+    vxml_cmeta_collect_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    size_t choice_index;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->choices == NULL ||
+        request->choice_count == 0u ||
+        request->choice_count > 16u ||
+        (request->required_capabilities &
+         VXML_CMETA_COLLECT_CAP_MENU_CHOICE) == 0u)
+        return VXML_INVALID_CONTRACT;
+    ++probe->menu_prepare_calls;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    if (probe->prepare_status != VXML_OK)
+        return probe->prepare_status;
+    if (probe->reserved || probe->active)
+        return VXML_INVALID_STATE;
+
+    probe->item_kind = VXML_CMETA_COLLECT_ITEM_MENU;
+    probe->menu_choice_count = request->choice_count;
     memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
     memset(probe->field, 0, sizeof(probe->field));
     memset(probe->grammar_type, 0, sizeof(probe->grammar_type));
     memset(probe->grammar_src, 0, sizeof(probe->grammar_src));
-
-    if (request->item_kind == VXML_CMETA_COLLECT_ITEM_MENU) {
-        if (request->field.data != NULL || request->field.size != 0u ||
-            request->grammar_type.data != NULL ||
-            request->grammar_type.size != 0u ||
-            request->grammar_src.data != NULL ||
-            request->grammar_src.size != 0u ||
-            request->menu_choices == NULL ||
-            request->menu_choice_count == 0u ||
-            request->menu_choice_count > 16u ||
-            (request->required_capabilities &
-             VXML_CMETA_COLLECT_CAP_MENU_CHOICE) == 0u)
+    for (choice_index = 0u;
+         choice_index < request->choice_count;
+         ++choice_index) {
+        const vxml_cmeta_menu_choice_v1 *choice =
+            &request->choices[choice_index];
+        if ((choice->dtmf.size != 0u && choice->dtmf.data == NULL) ||
+            choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
+            choice->speech.data != NULL ||
+            choice->speech.size != 0u)
             return VXML_INVALID_CONTRACT;
-        for (choice_index = 0u;
-             choice_index < request->menu_choice_count;
-             ++choice_index) {
-            const vxml_cmeta_menu_choice_v1 *choice =
-                &request->menu_choices[choice_index];
-            if ((choice->dtmf.size != 0u &&
-                 choice->dtmf.data == NULL) ||
-                choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
-                choice->speech.data != NULL ||
-                choice->speech.size != 0u)
-                return VXML_INVALID_CONTRACT;
-            if (choice->dtmf.size != 0u)
-                memcpy(
-                    probe->menu_dtmf[choice_index],
-                    choice->dtmf.data, choice->dtmf.size);
-            probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
-        }
-        probe->menu_choice_count = request->menu_choice_count;
-    } else if (request->item_kind == VXML_CMETA_COLLECT_ITEM_FIELD) {
-        if (request->field.data == NULL ||
-            request->field.size >= sizeof(probe->field) ||
-            request->grammar_type.data == NULL ||
-            request->grammar_type.size >= sizeof(probe->grammar_type) ||
-            request->grammar_src.data == NULL ||
-            request->grammar_src.size >= sizeof(probe->grammar_src) ||
-            request->menu_choices != NULL ||
-            request->menu_choice_count != 0u)
-            return VXML_INVALID_CONTRACT;
-        memcpy(probe->field, request->field.data, request->field.size);
-        probe->field[request->field.size] = '\0';
-        memcpy(probe->grammar_type,
-               request->grammar_type.data, request->grammar_type.size);
-        probe->grammar_type[request->grammar_type.size] = '\0';
-        memcpy(probe->grammar_src,
-               request->grammar_src.data, request->grammar_src.size);
-        probe->grammar_src[request->grammar_src.size] = '\0';
-    } else {
-        return VXML_INVALID_CONTRACT;
+        if (choice->dtmf.size != 0u)
+            memcpy(
+                probe->menu_dtmf[choice_index],
+                choice->dtmf.data, choice->dtmf.size);
+        probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
     }
     probe->generation = request->generation;
-    probe->has_timeout = request->has_timeout;
-    probe->timeout_us = request->timeout_us;
+    probe->has_timeout = false;
+    probe->timeout_us = 0u;
     probe->reserved = true;
     *out_ticket = (vxml_cmeta_collect_ticket_v1){
         .commit = cmeta_collect_commit,
@@ -741,7 +756,8 @@ static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1),
         .capabilities = capabilities,
         .prepare = cmeta_collect_prepare,
-        .cancel = cmeta_collect_cancel};
+        .cancel = cmeta_collect_cancel,
+        .prepare_menu = cmeta_collect_prepare_menu};
 }
 
 static vxml_cmeta_session_options_v1 field_session_options(
@@ -1028,7 +1044,7 @@ spec("VoiceXML CMeta session execution") {
         vxml_cmeta_session_options_v1 options;
         vxml_program program = {0};
         vxml_session session = {0};
-        vxml_cmeta_collect_request_v1 request = {0};
+        vxml_cmeta_menu_collect_request_v1 request = {0};
         vxml_cmeta_collect_completion_v1 field_completion = {
             .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
             .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
@@ -1040,6 +1056,11 @@ spec("VoiceXML CMeta session execution") {
         uint64_t first_generation;
         int field_value = 9;
         vxml_cmeta_value_view read = {0};
+
+        unsupported_adapter.struct_size =
+            offsetof(vxml_cmeta_collect_adapter_v1, cancel) +
+            sizeof(unsupported_adapter.cancel);
+        unsupported_adapter.prepare_menu = NULL;
 
         check_equal(
             vxml_compile_cmeta(
@@ -1057,6 +1078,7 @@ spec("VoiceXML CMeta session execution") {
             vxml_session_cmeta_collect_prepare(&session, NULL),
             VXML_UNSUPPORTED_FEATURE);
         check_equal(unsupported_probe.prepare_calls, (size_t)0u);
+        check_equal(unsupported_probe.menu_prepare_calls, (size_t)0u);
         vxml_session_destroy(&session);
 
         options = event_session_options(&root, &adapter, &probe);
@@ -1066,19 +1088,15 @@ spec("VoiceXML CMeta session execution") {
         check_equal(vxml_session_start(&session), VXML_OK);
         check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
         check_equal(
-            vxml_session_cmeta_collect_request(&session, &request),
+            vxml_session_cmeta_menu_collect_request(&session, &request),
             VXML_OK);
-        check_equal(request.item_kind, VXML_CMETA_COLLECT_ITEM_MENU);
         check_equal(
             request.required_capabilities,
             VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
-        check_null(request.field.data);
-        check_null(request.grammar_type.data);
-        check_null(request.grammar_src.data);
-        check_equal(request.menu_choice_count, (size_t)2u);
-        check_equal(request.menu_choices[0].dtmf.size, (size_t)1u);
-        check_equal(request.menu_choices[0].dtmf.data[0], '1');
-        check_equal(request.menu_choices[1].dtmf.data[0], '0');
+        check_equal(request.choice_count, (size_t)2u);
+        check_equal(request.choices[0].dtmf.size, (size_t)1u);
+        check_equal(request.choices[0].dtmf.data[0], '1');
+        check_equal(request.choices[1].dtmf.data[0], '0');
         first_generation = request.generation;
 
         completion.generation = first_generation;
@@ -1088,7 +1106,8 @@ spec("VoiceXML CMeta session execution") {
 
         check_equal(
             vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
-        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(probe.prepare_calls, (size_t)0u);
+        check_equal(probe.menu_prepare_calls, (size_t)1u);
         check_equal(probe.item_kind, VXML_CMETA_COLLECT_ITEM_MENU);
         check_equal(probe.menu_choice_count, (size_t)2u);
         check_equal(probe.menu_dtmf[0], "1");
@@ -1122,12 +1141,11 @@ spec("VoiceXML CMeta session execution") {
         check_equal(read.kind, VXML_CMETA_VALUE_SINT);
         check_equal(read.data.sint, INT64_C(2));
 
-        request = (vxml_cmeta_collect_request_v1){0};
+        request = (vxml_cmeta_menu_collect_request_v1){0};
         check_equal(
-            vxml_session_cmeta_collect_request(&session, &request),
+            vxml_session_cmeta_menu_collect_request(&session, &request),
             VXML_OK);
         check_true(request.generation != first_generation);
-        check_equal(request.item_kind, VXML_CMETA_COLLECT_ITEM_MENU);
         check_equal(
             vxml_session_cmeta_menu_try_complete(&session, &completion),
             VXML_CMETA_COLLECT_INGRESS_STALE);
@@ -1178,7 +1196,6 @@ spec("VoiceXML CMeta session execution") {
         check_equal(
             vxml_session_cmeta_collect_request(&session, &request),
             VXML_OK);
-        check_equal(request.item_kind, VXML_CMETA_COLLECT_ITEM_FIELD);
         check_equal(
             vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
         check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
