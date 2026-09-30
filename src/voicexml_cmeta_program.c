@@ -2835,9 +2835,10 @@ done:
 
 static vxml_status cmeta_lower_simple_action(
     cmeta_program_builder *builder, salts_xml_node node,
-    size_t block_index, const vxml_cmeta_expr_compile_scope scopes[3],
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
     size_t first_action) {
-    const vxml_cmeta_block_row *block = &builder->profile->blocks[block_index];
     vxml_cmeta_action_row *action;
     vxml_status status;
     if (builder->action_index >= builder->profile->action_count)
@@ -2859,7 +2860,7 @@ static vxml_status cmeta_lower_simple_action(
             salts_xml_attribute_location(name_attribute), &decoded_name);
         if (status != VXML_OK) return status;
         slot = cmeta_scope_find(
-            &builder->profile->scopes[block->scope].schema,
+            &builder->profile->scopes[execution_scope].schema,
             decoded_name.view.data, decoded_name.view.size, &slot_index);
         if (slot == NULL) {
             cmeta_decoded_value_destroy(&decoded_name);
@@ -2869,24 +2870,24 @@ static vxml_status cmeta_lower_simple_action(
                 "VoiceXML executable declaration changed between passes");
         }
         if (cmeta_prior_var_action(
-                builder, first_action, block->scope, slot_index)) {
+                builder, first_action, execution_scope, slot_index)) {
             action->kind = VXML_CMETA_ACTION_ASSIGN;
-            action->scope = block->scope;
+            action->scope = execution_scope;
             action->slot = slot_index;
             status = cmeta_append_location(
-                builder, name_attribute, scopes, 3u, &action->target);
+                builder, name_attribute, scopes, scope_count, &action->target);
             if (status != VXML_OK) {
                 cmeta_decoded_value_destroy(&decoded_name);
                 return status;
             }
         } else {
             action->kind = VXML_CMETA_ACTION_VAR;
-            action->scope = block->scope;
+            action->scope = execution_scope;
             action->slot = slot_index;
         }
         if (expression.impl != NULL) {
             status = cmeta_append_expression(
-                builder, expression, scopes, 3u, false,
+                builder, expression, scopes, scope_count, false,
                 &action->expression);
             if (status != VXML_OK) {
                 cmeta_decoded_value_destroy(&decoded_name);
@@ -2917,10 +2918,10 @@ static vxml_status cmeta_lower_simple_action(
                     salts_xml_node_location(node),
                     "VoiceXML assign requires name and expr");
             status = cmeta_append_location(
-                builder, name_attribute, scopes, 3u, &action->target);
+                builder, name_attribute, scopes, scope_count, &action->target);
             if (status != VXML_OK) return status;
             status = cmeta_append_expression(
-                builder, expression, scopes, 3u, false,
+                builder, expression, scopes, scope_count, false,
                 &action->expression);
             if (status != VXML_OK) return status;
             if (!cmeta_value_compatible(
@@ -2939,7 +2940,7 @@ static vxml_status cmeta_lower_simple_action(
             action->clear_all_form_items = namelist.impl == NULL;
             if (namelist.impl != NULL) {
                 status = cmeta_lower_namelist(
-                    builder, namelist, scopes, 3u,
+                    builder, namelist, scopes, scope_count,
                     &action->first_location, &action->location_count);
                 if (status != VXML_OK) return status;
             }
@@ -2960,13 +2961,13 @@ static vxml_status cmeta_lower_simple_action(
                     ? VXML_CMETA_EXIT_NAMELIST : VXML_CMETA_EXIT_EMPTY;
             if (expression.impl != NULL) {
                 status = cmeta_append_expression(
-                    builder, expression, scopes, 3u, false,
+                    builder, expression, scopes, scope_count, false,
                     &action->expression);
                 if (status != VXML_OK) return status;
             }
             if (namelist.impl != NULL) {
                 status = cmeta_lower_namelist(
-                    builder, namelist, scopes, 3u,
+                    builder, namelist, scopes, scope_count,
                     &action->first_location, &action->location_count);
                 if (status != VXML_OK) return status;
             }
@@ -2990,12 +2991,16 @@ static vxml_status cmeta_lower_simple_action(
 
 static vxml_status cmeta_lower_executable(
     cmeta_program_builder *builder, salts_xml_node node,
-    size_t block_index, const vxml_cmeta_expr_compile_scope scopes[3],
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
     size_t first_action, size_t conditional_depth);
 
 static vxml_status cmeta_lower_conditional(
     cmeta_program_builder *builder, salts_xml_node node,
-    size_t block_index, const vxml_cmeta_expr_compile_scope scopes[3],
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
     size_t first_action, size_t conditional_depth) {
     const salts_xml_attribute condition = cmeta_attribute(node, "cond");
     vxml_cmeta_action_row *action;
@@ -3047,7 +3052,7 @@ static vxml_status cmeta_lower_conditional(
         branch->location = salts_xml_node_location(node);
         branch->first_action = builder->action_index;
         status = cmeta_append_expression(
-            builder, condition, scopes, 3u, true, &branch->condition);
+            builder, condition, scopes, scope_count, true, &branch->condition);
         if (status != VXML_OK) return status;
     }
     for (child_index = 0u;
@@ -3066,15 +3071,15 @@ static vxml_status cmeta_lower_conditional(
             branch->first_action = builder->action_index;
             if (cmeta_node_named(child, "elseif")) {
                 status = cmeta_append_expression(
-                    builder, cmeta_attribute(child, "cond"), scopes, 3u,
+                    builder, cmeta_attribute(child, "cond"), scopes, scope_count,
                     true, &branch->condition);
                 if (status != VXML_OK) return status;
             }
             continue;
         }
         status = cmeta_lower_executable(
-            builder, child, block_index, scopes, first_action,
-            conditional_depth);
+            builder, child, execution_scope, scopes, scope_count,
+            first_action, conditional_depth);
         if (status != VXML_OK) return status;
     }
     builder->profile->branches[
@@ -3086,7 +3091,9 @@ static vxml_status cmeta_lower_conditional(
 
 static vxml_status cmeta_lower_executable(
     cmeta_program_builder *builder, salts_xml_node node,
-    size_t block_index, const vxml_cmeta_expr_compile_scope scopes[3],
+    size_t execution_scope,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
     size_t first_action, size_t conditional_depth) {
     if (cmeta_node_named(node, "if")) {
         if (conditional_depth == SIZE_MAX)
@@ -3095,11 +3102,12 @@ static vxml_status cmeta_lower_executable(
                 salts_xml_node_location(node),
                 "VoiceXML conditional depth overflow");
         return cmeta_lower_conditional(
-            builder, node, block_index, scopes, first_action,
-            conditional_depth + 1u);
+            builder, node, execution_scope, scopes, scope_count,
+            first_action, conditional_depth + 1u);
     }
     return cmeta_lower_simple_action(
-        builder, node, block_index, scopes, first_action);
+        builder, node, execution_scope, scopes, scope_count,
+        first_action);
 }
 
 static vxml_status cmeta_lower_block_actions(
@@ -3124,7 +3132,7 @@ static vxml_status cmeta_lower_block_actions(
         }
         if (condition.impl != NULL) {
             status = cmeta_append_expression(
-                builder, condition, scopes, 3u, true,
+                builder, condition, scopes, scope_count, true,
                 &block->condition);
             if (status != VXML_OK) return status;
         }
@@ -3138,7 +3146,8 @@ static vxml_status cmeta_lower_block_actions(
             salts_xml_node_child_at(block_node, child_index);
         if (cmeta_node_ignorable(node)) continue;
         status = cmeta_lower_executable(
-            builder, node, block_index, scopes, block->first_action, 0u);
+            builder, node, block->scope, scopes, 3u,
+            block->first_action, 0u);
         if (status != VXML_OK) return status;
     }
     block->action_end = builder->action_index;
