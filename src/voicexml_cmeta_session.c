@@ -4035,7 +4035,14 @@ static vxml_status prompt_media_request_from_impl(
     if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_TEXT)
         out_request->required_capabilities =
             VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
-    else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_AUDIO)
+    else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_SSML) {
+        out_request->required_capabilities =
+            VXML_CMETA_PROMPT_MEDIA_CAP_SSML;
+        out_request->segment.media_type =
+            (vxml_cmeta_name_view){
+                "application/ssml+xml",
+                sizeof("application/ssml+xml") - 1u};
+    } else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_AUDIO)
         out_request->required_capabilities =
             VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
     else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_MARK)
