@@ -2157,8 +2157,21 @@ static vxml_status cmeta_measure_menu(
                 "this VoiceXML menu slice requires literal choice event");
             goto done;
         }
-        status = cmeta_validate_empty_element(child, diagnostic);
-        if (status != VXML_OK) goto done;
+        {
+            size_t nested_index;
+            for (nested_index = 0u;
+                 nested_index < salts_xml_node_child_count(child);
+                 ++nested_index) {
+                const salts_xml_node nested =
+                    salts_xml_node_child_at(child, nested_index);
+                if (cmeta_node_ignorable(nested)) continue;
+                status = cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(nested),
+                    "VoiceXML choice speech/grammar content is deferred");
+                goto done;
+            }
+        }
         if (!cmeta_event_options_valid(options)) {
             status = cmeta_program_fail(
                 diagnostic, VXML_INVALID_CONTRACT,
