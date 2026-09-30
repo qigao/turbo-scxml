@@ -4,6 +4,9 @@
 #include <type_traits>
 
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_view_v1>::value,
+    "prompt view must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
     "collect request must remain C-compatible");
 static_assert(
@@ -38,6 +41,7 @@ int main() {
     const cmeta_type_desc *peer_type =
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
+    vxml_cmeta_prompt_view_v1 prompt_view{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
     vxml_cmeta_collect_result_slot_v1 collect_slot{};
@@ -57,9 +61,13 @@ int main() {
     auto raise_noinput = &vxml_session_cmeta_noinput;
     auto raise_nomatch = &vxml_session_cmeta_nomatch;
     auto take_reprompt = &vxml_session_cmeta_take_reprompt;
+    auto query_prompt = &vxml_session_cmeta_prompt;
     int result = 1;
 
-    if (raise_event == nullptr)
+    prompt_view.abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1;
+    prompt_view.struct_size = sizeof(prompt_view);
+    if (raise_event == nullptr || query_prompt == nullptr ||
+        prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1)
         return 6;
 
     collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
