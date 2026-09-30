@@ -4854,14 +4854,24 @@ static vxml_status cmeta_build_schemas(
     size_t root_child;
     size_t scope_index;
     vxml_status status;
-    if (capacity > SIZE_MAX - measurement->action_count ||
-        capacity + measurement->action_count >
-            SIZE_MAX - measurement->block_count)
+    if (capacity > SIZE_MAX - measurement->action_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
-    capacity += measurement->action_count + measurement->block_count;
+    capacity += measurement->action_count;
+    if (capacity > SIZE_MAX - measurement->block_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->block_count;
+    if (capacity > SIZE_MAX - measurement->initial_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->initial_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -4941,6 +4951,10 @@ static vxml_status cmeta_build_schemas(
             form->declaration_count = 0u;
             form->first_field = builder->field_index;
             form->field_count = 0u;
+            form->first_initial = builder->initial_index;
+            form->initial_count = 0u;
+            form->first_item = builder->form_item_index;
+            form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->filled_count = 0u;
             form->first_block = builder->block_index;
@@ -4966,6 +4980,8 @@ static vxml_status cmeta_build_schemas(
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
             form->first_field = builder->field_index;
+            form->first_initial = builder->initial_index;
+            form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
             form->menu = VXML_CMETA_NO_INDEX;
@@ -5000,6 +5016,36 @@ static vxml_status cmeta_build_schemas(
                     declaration->location = salts_xml_node_location(item);
                     continue;
                 }
+                if (cmeta_node_named(item, "grammar")) {
+                    status = cmeta_compile_form_grammar(
+                        builder, item, form);
+                    if (status != VXML_OK) return status;
+                    continue;
+                }
+                if (cmeta_node_named(item, "initial")) {
+                    vxml_cmeta_initial_row *initial;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->initial_index >=
+                            builder->profile->initial_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial/form-item rows changed between compiler passes");
+                    initial = &builder->profile->initials[
+                        builder->initial_index];
+                    initial->form = form_index;
+                    status = cmeta_register_initial_item(
+                        builder, form_scope, item,
+                        builder->initial_index, initial);
+                    if (status != VXML_OK) return status;
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_INITIAL;
+                    order->index = builder->initial_index++;
+                    continue;
+                }
                 if (cmeta_node_named(item, "field")) {
                     vxml_cmeta_field_row *field;
                     if (builder->field_index >=
@@ -5008,6 +5054,19 @@ static vxml_status cmeta_build_schemas(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
                             "VoiceXML field rows changed between compiler passes");
+                    {
+                        vxml_cmeta_form_item_row *order;
+                        if (builder->form_item_index >=
+                            builder->profile->form_item_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML form-item rows changed between compiler passes");
+                        order = &builder->profile->form_items[
+                            builder->form_item_index++];
+                        order->kind = VXML_CMETA_FORM_ITEM_FIELD;
+                        order->index = builder->field_index;
+                    }
                     field = &builder->profile->fields[
                         builder->field_index];
                     status = cmeta_compile_field_schema(
@@ -5117,6 +5176,10 @@ static vxml_status cmeta_build_schemas(
                 builder->declaration_index - form->first_declaration;
             form->field_count =
                 builder->field_index - form->first_field;
+            form->initial_count =
+                builder->initial_index - form->first_initial;
+            form->item_count =
+                builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
             base_form->block_count = form->block_count;
         }
