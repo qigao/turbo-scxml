@@ -80,6 +80,11 @@ int main(void) {
         .abi_version = VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_mark_view_v1),
         .segment_index = SIZE_MAX};
+    vxml_cmeta_prompt_media_completion_v1 prompt_media_completion = {
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v1),
+        .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED,
+        .failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH};
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name = {0};
@@ -121,6 +126,10 @@ int main(void) {
         prompt_media_fallback.audio_segment_index != 1u ||
         prompt_media_fallback.first_fallback_segment != 2u ||
         prompt_media_fallback.fallback_segment_count != 1u ||
+        prompt_media_completion.failure !=
+            VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH ||
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT == 0 ||
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE == 0 ||
         prompt_media_segment.kind != 0 ||
         prompt_media_ticket.commit != NULL)
         return 6;
