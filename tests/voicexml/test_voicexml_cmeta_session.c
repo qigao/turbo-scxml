@@ -5537,7 +5537,7 @@ spec("VoiceXML CMeta session execution") {
             VXML_CMETA_TERMINAL_RETURN,
             VXML_CMETA_TERMINAL_DISCONNECT
         };
-        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_compile_options_v1 compile = event_compile_options();
         const vxml_cmeta_session_root root = {.value = 17};
         const vxml_cmeta_session_options_v1 options = session_options(&root);
         size_t index;
@@ -5609,7 +5609,7 @@ spec("VoiceXML CMeta session execution") {
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><block>"
             "<return event='child.failed'/></block></form></vxml>";
-        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_compile_options_v1 compile = event_compile_options();
         const vxml_cmeta_session_root root = {.value = 1};
         const vxml_cmeta_session_options_v1 options = session_options(&root);
         vxml_program program = {0};
