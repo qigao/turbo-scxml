@@ -1760,6 +1760,7 @@ static vxml_status cmeta_compile_field_schema(
 
     memset(out, 0, sizeof(*out));
     out->condition = VXML_CMETA_NO_INDEX;
+    out->filled = VXML_CMETA_NO_INDEX;
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
@@ -2298,6 +2299,7 @@ static vxml_status cmeta_build_schemas(
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
             form->first_field = builder->field_index;
+            form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
@@ -2373,7 +2375,63 @@ static vxml_status cmeta_build_schemas(
                         builder, item, form_index, form_scope,
                         form->first_field, field);
                     if (status != VXML_OK) return status;
+                    {
+                        size_t field_child;
+                        for (field_child = 0u;
+                             field_child <
+                                 salts_xml_node_child_count(item);
+                             ++field_child) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, field_child);
+                            if (!cmeta_node_named(nested, "filled"))
+                                continue;
+                            if (builder->filled_index >=
+                                builder->profile->filled_count)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML filled rows changed between compiler passes");
+                            field->filled = builder->filled_index;
+                            builder->profile->filled[
+                                builder->filled_index++] =
+                                (vxml_cmeta_filled_row){
+                                    .form = form_index,
+                                    .field = builder->field_index,
+                                    .mode = VXML_CMETA_FILLED_FIELD};
+                            break;
+                        }
+                    }
                     ++builder->field_index;
+                    continue;
+                }
+                if (cmeta_node_named(item, "filled")) {
+                    vxml_cmeta_filled_row *filled;
+                    const salts_xml_attribute mode =
+                        cmeta_attribute(item, "mode");
+                    if (builder->filled_index >=
+                        builder->profile->filled_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form filled rows changed between compiler passes");
+                    if (form->filled_count == 0u)
+                        form->first_filled =
+                            builder->filled_index;
+                    filled = &builder->profile->filled[
+                        builder->filled_index++];
+                    filled->form = form_index;
+                    filled->field = VXML_CMETA_NO_INDEX;
+                    filled->mode =
+                        mode.impl != NULL &&
+                        cmeta_decoded_equal(
+                            salts_xml_attribute_value(mode),
+                            "any")
+                            ? VXML_CMETA_FILLED_ANY
+                            : VXML_CMETA_FILLED_ALL;
+                    ++form->filled_count;
                     continue;
                 }
                 if (cmeta_node_named(item, "block")) {
