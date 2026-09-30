@@ -283,6 +283,28 @@ typedef struct vxml_cmeta_prompt_media_adapter_v1 {
         const char **out_error);
 } vxml_cmeta_prompt_media_adapter_v1;
 
+typedef enum vxml_cmeta_prompt_media_outcome {
+    VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED = 1,
+    VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED
+} vxml_cmeta_prompt_media_outcome;
+
+typedef enum vxml_cmeta_prompt_media_ingress_result {
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT
+} vxml_cmeta_prompt_media_ingress_result;
+
+typedef struct vxml_cmeta_prompt_media_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_prompt_media_outcome outcome;
+} vxml_cmeta_prompt_media_completion_v1;
+
+#define VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 1u
+
 typedef struct vxml_cmeta_prompt_view_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -421,6 +443,26 @@ vxml_status vxml_session_cmeta_prompt_media_commit(vxml_session *session);
 
 /** Discard the prepared media ticket and restore admission. */
 vxml_status vxml_session_cmeta_prompt_media_discard(vxml_session *session);
+
+/**
+ * MPSC admission of one generation-scoped prompt playback completion.
+ *
+ * The record contains no borrowed provider data. The Session must outlive
+ * concurrent producers; stop producers before close/destroy.
+ */
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v1 *completion);
+
+/**
+ * Single-owner progress point. Settles at most one ready playback completion.
+ * A completed provider generation is not canceled again.
+ */
+vxml_status vxml_session_cmeta_prompt_media_run_ready(
+    vxml_session *session,
+    bool *out_progressed,
+    vxml_cmeta_prompt_media_outcome *out_outcome);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
