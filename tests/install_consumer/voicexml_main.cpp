@@ -6,6 +6,9 @@
 static_assert(
     std::is_standard_layout<vxml_navigation_request_v1>::value,
     "navigation request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_submit_target_v1>::value,
+    "submit target must remain C-compatible");
 
 int main() {
     static constexpr char document[] =
@@ -19,10 +22,15 @@ int main() {
     vxml_session session{};
     vxml_navigation_target target{};
     vxml_navigation_request_v1 navigation{};
+    vxml_submit_target_v1 submit{};
+    auto submit_fn = &vxml_session_submit;
     auto raise_event = &vxml_session_raise_event;
     int result = 1;
 
-    if (raise_event == nullptr)
+    if (raise_event == nullptr || submit_fn == nullptr ||
+        VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
+        VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
+        submit.abi_version != 0u)
         return 2;
 
     if (vxml_compile(document, std::strlen(document), nullptr, &program,
