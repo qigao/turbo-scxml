@@ -102,6 +102,13 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_menus;
     size_t max_menu_choices;
     size_t max_menu_choice_bytes;
+
+    /*
+     * Optional append-only literal menu navigation target bound.
+     * Required only when a static choice uses @next; event-only menu callers
+     * using the historical menu prefix remain valid.
+     */
+    size_t max_menu_target_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
