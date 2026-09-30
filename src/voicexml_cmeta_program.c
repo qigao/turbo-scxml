@@ -3340,6 +3340,7 @@ static vxml_status cmeta_lower_program(
                  &builder->profile->scopes[form->scope].schema},
                 {0u, &builder->profile->scopes[0].schema}};
             size_t form_child;
+            size_t form_filled_offset = 0u;
             for (form_child = 0u;
                  form_child < salts_xml_node_child_count(child);
                  ++form_child) {
@@ -3403,28 +3404,15 @@ static vxml_status cmeta_lower_program(
                         if (status != VXML_OK) return status;
                     }
                 } else if (cmeta_node_named(item, "filled")) {
-                    size_t offset;
-                    vxml_cmeta_filled_row *filled = NULL;
-                    if (form->first_filled == VXML_CMETA_NO_INDEX)
+                    vxml_cmeta_filled_row *filled;
+                    if (form->first_filled == VXML_CMETA_NO_INDEX ||
+                        form_filled_offset >= form->filled_count)
                         return cmeta_program_fail(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
-                            "VoiceXML form filled range is missing");
-                    for (offset = 0u; offset < form->filled_count; ++offset) {
-                        vxml_cmeta_filled_row *candidate =
-                            &builder->profile->filled[
-                                form->first_filled + offset];
-                        if (candidate->action_end == 0u &&
-                            candidate->first_action == 0u) {
-                            filled = candidate;
-                            break;
-                        }
-                    }
-                    if (filled == NULL)
-                        return cmeta_program_fail(
-                            builder->diagnostic, VXML_INVALID_STRUCTURE,
-                            salts_xml_node_location(item),
-                            "VoiceXML form filled rows changed during lowering");
+                            "VoiceXML form filled range is invalid");
+                    filled = &builder->profile->filled[
+                        form->first_filled + form_filled_offset++];
                     status = cmeta_lower_filled_actions(
                         builder, item, form, filled);
                     if (status != VXML_OK) return status;
