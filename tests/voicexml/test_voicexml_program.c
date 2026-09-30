@@ -323,7 +323,7 @@ spec("VoiceXML program compiler") {
             vxml_program_destroy(&program);
         }
 
-        it("rejects missing empty and unknown local goto targets") {
+        it("rejects missing/invalid goto targets and empty fetchaudio") {
             const char *sources[] = {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block><goto/></block></form></vxml>",
@@ -331,10 +331,14 @@ spec("VoiceXML program compiler") {
                 "<form id='a'><block><goto next='#'/></block></form></vxml>",
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
                 "<form id='a'><block><goto next='#missing'/></block></form>"
-                "</vxml>"};
+                "</vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block>"
+                "<goto next='next.vxml' fetchaudio=''/>"
+                "</block></form></vxml>"};
             size_t index;
 
-            for (index = 0u; index < 3u; ++index)
+            for (index = 0u; index < 4u; ++index)
                 check_empty_failure(
                     sources[index], VXML_INVALID_STRUCTURE, NULL, 1u);
         }
