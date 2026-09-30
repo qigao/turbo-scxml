@@ -10,6 +10,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_media_segment_v1>::value,
     "prompt media segment must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_fallback_v1>::value,
+    "prompt media fallback must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_media_ticket_v1>::value,
     "prompt media ticket must remain C-compatible");
 static_assert(
@@ -61,6 +64,8 @@ int main() {
     const turboscxml_install_cmeta_root initial_root{5};
     vxml_cmeta_prompt_view_v1 prompt_view{};
     vxml_cmeta_prompt_media_segment_v1 prompt_media_segment{};
+    vxml_cmeta_prompt_media_fallback_v1 prompt_media_fallback{
+        1u, 2u, 1u};
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket{};
     vxml_cmeta_prompt_media_request_v1 prompt_media_request{};
     vxml_cmeta_prompt_media_batch_request_v1 prompt_media_batch{};
@@ -107,6 +112,7 @@ int main() {
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
+        VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
         prompt_mark.abi_version != VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 ||
         prompt_mark.segment_index != SIZE_MAX ||
@@ -117,6 +123,9 @@ int main() {
             VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
         prompt_media_batch.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 ||
+        prompt_media_fallback.audio_segment_index != 1u ||
+        prompt_media_fallback.first_fallback_segment != 2u ||
+        prompt_media_fallback.fallback_segment_count != 1u ||
         prompt_media_segment.kind !=
             static_cast<vxml_cmeta_prompt_media_segment_kind>(0) ||
         prompt_media_ticket.commit != nullptr)
