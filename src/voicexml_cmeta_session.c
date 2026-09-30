@@ -101,6 +101,24 @@ static bool session_collect_options_valid(
         adapter->cancel != NULL;
 }
 
+
+static bool session_subdialog_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_subdialog_snapshot_bytes) +
+        sizeof(options->max_subdialog_snapshot_bytes);
+    const vxml_cmeta_subdialog_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size ||
+        options->max_subdialog_snapshot_bytes == 0u)
+        return false;
+    adapter = options->subdialog;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
 static bool collect_adapter_has_menu(
     const vxml_cmeta_collect_adapter_v1 *adapter) {
     const size_t tail_size =
@@ -833,6 +851,40 @@ static void settle_prompt_media(
     session->prompt_media_generation = 0u;
 }
 
+
+static void subdialog_snapshot_destroy(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    vxml_free(session->subdialog_snapshot_storage);
+    vxml_free(session->subdialog_snapshot_params);
+    session->subdialog_snapshot_storage = NULL;
+    session->subdialog_snapshot_params = NULL;
+    session->subdialog_snapshot_storage_size = 0u;
+    session->subdialog_snapshot_storage_capacity = 0u;
+    session->subdialog_snapshot_param_count = 0u;
+}
+
+static void settle_subdialog(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    if (session->subdialog_prepared) {
+        vxml_cmeta_subdialog_ticket_v1 ticket =
+            session->subdialog_ticket;
+        session->subdialog_prepared = false;
+        session->subdialog_ticket =
+            (vxml_cmeta_subdialog_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->subdialog_in_flight &&
+               session->subdialog_adapter != NULL) {
+        const uint64_t generation = session->subdialog_generation;
+        session->subdialog_in_flight = false;
+        session->subdialog_adapter->cancel(
+            session->subdialog_user, generation);
+    }
+    subdialog_snapshot_destroy(session);
+}
+
 static void session_data_destroy(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
@@ -850,6 +902,7 @@ static void session_data_destroy(
         &session->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_CLOSED,
         memory_order_release);
+    settle_subdialog(session);
     if (session->collect_prepared) {
         vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
         session->collect_prepared = false;
