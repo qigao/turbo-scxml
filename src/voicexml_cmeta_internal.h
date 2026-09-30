@@ -37,7 +37,8 @@ typedef struct vxml_cmeta_scope_row {
 
 typedef enum vxml_cmeta_form_item_kind {
     VXML_CMETA_FORM_ITEM_FIELD = 1,
-    VXML_CMETA_FORM_ITEM_INITIAL
+    VXML_CMETA_FORM_ITEM_INITIAL,
+    VXML_CMETA_FORM_ITEM_SUBDIALOG
 } vxml_cmeta_form_item_kind;
 
 typedef struct vxml_cmeta_form_item_row {
@@ -56,6 +57,18 @@ typedef struct vxml_cmeta_initial_row {
     size_t prompt_count;
 } vxml_cmeta_initial_row;
 
+typedef struct vxml_cmeta_subdialog_row {
+    size_t form;
+    size_t root_field;
+    size_t field_offset;
+    const cmeta_data_desc *result_data;
+    const char *name;
+    size_t name_size;
+    const char *src;
+    size_t src_size;
+    size_t condition;
+} vxml_cmeta_subdialog_row;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
@@ -64,6 +77,8 @@ typedef struct vxml_cmeta_form_row {
     size_t field_count;
     size_t first_initial;
     size_t initial_count;
+    size_t first_subdialog;
+    size_t subdialog_count;
     size_t first_item;
     size_t item_count;
     size_t first_filled;
@@ -286,6 +301,8 @@ typedef struct vxml_cmeta_program_data {
     size_t field_count;
     vxml_cmeta_initial_row *initials;
     size_t initial_count;
+    vxml_cmeta_subdialog_row *subdialogs;
+    size_t subdialog_count;
     vxml_cmeta_form_item_row *form_items;
     size_t form_item_count;
     vxml_cmeta_prompt_row *prompts;
@@ -409,6 +426,8 @@ typedef struct vxml_cmeta_session_data {
     size_t active_form;
     size_t active_field;
     size_t active_initial;
+    size_t active_subdialog;
+    uint64_t subdialog_generation;
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;
