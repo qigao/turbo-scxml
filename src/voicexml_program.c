@@ -655,47 +655,48 @@ static vxml_status append_goto(
             salts_xml_attribute_value(fetchaudio_attribute);
         size_t fetchaudio_size = 0u;
         size_t retained_size;
-        if (!entry.external) {
-            vxml_free(entry.target);
-            return fail(
-                diagnostic, VXML_INVALID_STRUCTURE,
-                salts_xml_attribute_location(fetchaudio_attribute),
-                "VoiceXML goto fetchaudio requires external navigation");
-        }
         if (!decode_entities(
                 raw_fetchaudio, NULL, 0u, &fetchaudio_size) ||
             fetchaudio_size == 0u ||
-            !checked_add(fetchaudio_size, 1u, &retained_size) ||
-            !checked_add(
-                measurement->name_bytes, retained_size,
-                &measurement->name_bytes) ||
-            measurement->name_bytes > limits->max_name_bytes) {
-            vxml_free(entry.target);
-            return fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
-                salts_xml_attribute_location(fetchaudio_attribute),
-                "VoiceXML goto fetchaudio exceeds max_name_bytes");
-        }
-        entry.fetchaudio = (char *)vxml_malloc(retained_size);
-        if (entry.fetchaudio == NULL) {
-            vxml_free(entry.target);
-            return fail(
-                diagnostic, VXML_ALLOCATION_FAILED,
-                salts_xml_attribute_location(fetchaudio_attribute),
-                "VoiceXML goto fetchaudio allocation failed");
-        }
-        if (!decode_entities(
-                raw_fetchaudio, entry.fetchaudio,
-                fetchaudio_size, &fetchaudio_size)) {
-            vxml_free(entry.fetchaudio);
+            !checked_add(fetchaudio_size, 1u, &retained_size)) {
             vxml_free(entry.target);
             return fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(fetchaudio_attribute),
-                "VoiceXML goto fetchaudio decoding changed between passes");
+                "VoiceXML goto fetchaudio must be one nonempty URI");
         }
-        entry.fetchaudio[fetchaudio_size] = '\0';
-        entry.fetchaudio_size = fetchaudio_size;
+        if (entry.external) {
+            if (!checked_add(
+                    measurement->name_bytes, retained_size,
+                    &measurement->name_bytes) ||
+                measurement->name_bytes > limits->max_name_bytes) {
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio exceeds max_name_bytes");
+            }
+            entry.fetchaudio = (char *)vxml_malloc(retained_size);
+            if (entry.fetchaudio == NULL) {
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_ALLOCATION_FAILED,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio allocation failed");
+            }
+            if (!decode_entities(
+                    raw_fetchaudio, entry.fetchaudio,
+                    fetchaudio_size, &fetchaudio_size)) {
+                vxml_free(entry.fetchaudio);
+                vxml_free(entry.target);
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(fetchaudio_attribute),
+                    "VoiceXML goto fetchaudio decoding changed between passes");
+            }
+            entry.fetchaudio[fetchaudio_size] = '\0';
+            entry.fetchaudio_size = fetchaudio_size;
+        }
     }
 
     if (measurement->goto_count == measurement->goto_capacity) {
