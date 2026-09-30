@@ -1026,8 +1026,8 @@ static vxml_status cmeta_measure_executable(
                 salts_xml_node_location(node),
                 "VoiceXML return requires exactly one literal event or namelist");
         if (status == VXML_OK && event.impl != NULL)
-            status = cmeta_measure_event_name(
-                event, options, measurement, limits, diagnostic);
+            status = cmeta_measure_name(
+                event, measurement, limits, diagnostic);
     } else {
         status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
     }
