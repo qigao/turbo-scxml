@@ -19,6 +19,7 @@ extern "C" {
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
+#define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 
@@ -93,6 +94,9 @@ typedef struct vxml_cmeta_session_options_v1 {
     /* Optional append-only directed collect provider tail. */
     const struct vxml_cmeta_collect_adapter_v1 *collect;
     void *collect_user;
+
+    /* Optional append-only V2 multi-slot completion capacity; zero keeps V1. */
+    size_t max_collect_result_slots;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -171,6 +175,20 @@ typedef struct vxml_cmeta_collect_completion_v1 {
     const void *value;
 } vxml_cmeta_collect_completion_v1;
 
+typedef struct vxml_cmeta_collect_result_slot_v1 {
+    vxml_cmeta_name_view name;
+    const cmeta_data_desc *data;
+    const void *value;
+} vxml_cmeta_collect_result_slot_v1;
+
+typedef struct vxml_cmeta_collect_completion_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    const vxml_cmeta_collect_result_slot_v1 *slots;
+    size_t slot_count;
+} vxml_cmeta_collect_completion_v2;
+
 typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_EMPTY = 0,
     VXML_CMETA_EXIT_EXPRESSION,
@@ -220,6 +238,17 @@ vxml_status vxml_session_cmeta_collect_discard(vxml_session *session);
 vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
     vxml_session *session,
     const vxml_cmeta_collect_completion_v1 *completion);
+
+/**
+ * MPSC admission of one bounded multi-slot fixed-scalar completion.
+ *
+ * Slot names are borrowed only for this call and are resolved immediately to
+ * immutable application-root field indices. No borrowed name/value survives
+ * successful admission.
+ */
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
+    vxml_session *session,
+    const vxml_cmeta_collect_completion_v2 *completion);
 
 /**
  * Single-owner progress point. Applies at most one accepted completion through
