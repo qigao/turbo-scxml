@@ -203,6 +203,36 @@ if(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY OR
     turboscxml_voicexml_install_consumer_cpp PRIVATE cxx_std_17)
   target_link_libraries(
     turboscxml_voicexml_install_consumer_cpp PRIVATE TurboSCXML::VoiceXML)
+
+  if(TARGET TurboSCXML::VoiceXMLScriptResource)
+    get_target_property(
+      TURBOSCXML_VOICEXML_SCRIPT_RESOURCE_LINKS
+      TurboSCXML::VoiceXMLScriptResource INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_VOICEXML_SCRIPT_RESOURCE_LINKS STREQUAL
+       "TurboSCXML::VoiceXMLDocumentStore")
+      message(FATAL_ERROR
+        "Unexpected VoiceXMLScriptResource link closure: "
+        "${TURBOSCXML_VOICEXML_SCRIPT_RESOURCE_LINKS}")
+    endif()
+
+    add_executable(
+      turboscxml_voicexml_script_resource_install_consumer
+      voicexml_script_resource_main.c)
+    target_compile_features(
+      turboscxml_voicexml_script_resource_install_consumer PRIVATE c_std_11)
+    target_link_libraries(
+      turboscxml_voicexml_script_resource_install_consumer
+      PRIVATE TurboSCXML::VoiceXMLScriptResource)
+
+    add_executable(
+      turboscxml_voicexml_script_resource_install_consumer_cpp
+      voicexml_script_resource_main.cpp)
+    target_compile_features(
+      turboscxml_voicexml_script_resource_install_consumer_cpp PRIVATE cxx_std_17)
+    target_link_libraries(
+      turboscxml_voicexml_script_resource_install_consumer_cpp
+      PRIVATE TurboSCXML::VoiceXMLScriptResource)
+  endif()
 elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
   foreach(TURBOSCXML_EXPECTED_TARGET IN ITEMS
       TurboSCXML::VoiceXML
