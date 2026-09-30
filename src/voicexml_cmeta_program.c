@@ -3314,6 +3314,8 @@ typedef struct cmeta_program_builder {
     size_t menu_speech_policy_index;
     size_t menu_grammar_index;
     size_t field_index;
+    size_t initial_index;
+    size_t form_item_index;
     size_t prompt_index;
     size_t prompt_segment_index;
     size_t prompt_fallback_index;
@@ -3384,6 +3386,8 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->prompt_fallbacks);
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
+    vxml_free(profile->form_items);
+    vxml_free(profile->initials);
     vxml_free(profile->fields);
     vxml_free(profile->blocks);
     vxml_free(profile->forms);
@@ -3432,6 +3436,8 @@ static bool cmeta_allocate_rows(
         measurement->menu_speech_policy_count;
     profile->menu_grammar_count = measurement->menu_grammar_count;
     profile->field_count = measurement->field_count;
+    profile->initial_count = measurement->initial_count;
+    profile->form_item_count = measurement->form_item_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
@@ -3475,6 +3481,8 @@ static bool cmeta_allocate_rows(
         menu_speech_policies, measurement->menu_speech_policy_count);
     CMETA_ALLOC_ROWS(menu_grammars, measurement->menu_grammar_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
+    CMETA_ALLOC_ROWS(initials, measurement->initial_count);
+    CMETA_ALLOC_ROWS(form_items, measurement->form_item_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
