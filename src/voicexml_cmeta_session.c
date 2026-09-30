@@ -2949,22 +2949,45 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
     {
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
-        const vxml_cmeta_field_row *field;
-        unsigned state;
-        if (profile->active_field >= program->field_count ||
-            program->fields == NULL)
-            return VXML_INVALID_STRUCTURE;
-        field = &program->fields[profile->active_field];
-        if (!collect_fixed_scalar_data(field->field_data) ||
-            profile->collect_mailbox.storage == NULL ||
-            field->field_data->storage_type->size >
-                profile->collect_mailbox.storage_bytes)
-            return VXML_UNSUPPORTED_FEATURE;
-        state = atomic_load_explicit(
+        unsigned state = atomic_load_explicit(
             &profile->collect_mailbox.state, memory_order_acquire);
         if (state != VXML_CMETA_COLLECT_MAILBOX_DISARMED)
             return VXML_INVALID_STATE;
-        profile->collect_mailbox.data = field->field_data;
+
+        profile->collect_mailbox.data = NULL;
+        profile->collect_mailbox.slot_count = 0u;
+        profile->collect_mailbox.choice_index = SIZE_MAX;
+
+        if (profile->active_menu != VXML_CMETA_NO_INDEX) {
+            const vxml_cmeta_menu_row *menu;
+            if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_menu >= program->menu_count ||
+                program->menus == NULL)
+                return VXML_INVALID_STRUCTURE;
+            menu = &program->menus[profile->active_menu];
+            if (menu->form != profile->active_form ||
+                menu->choice_count == 0u ||
+                !range_valid(
+                    menu->first_choice, menu->choice_count,
+                    program->menu_choice_count))
+                return VXML_INVALID_STRUCTURE;
+            profile->collect_mailbox.item_kind =
+                VXML_CMETA_COLLECT_ITEM_MENU;
+        } else {
+            const vxml_cmeta_field_row *field;
+            if (profile->active_field >= program->field_count ||
+                program->fields == NULL)
+                return VXML_INVALID_STRUCTURE;
+            field = &program->fields[profile->active_field];
+            if (!collect_fixed_scalar_data(field->field_data) ||
+                profile->collect_mailbox.storage == NULL ||
+                field->field_data->storage_type->size >
+                    profile->collect_mailbox.storage_bytes)
+                return VXML_UNSUPPORTED_FEATURE;
+            profile->collect_mailbox.item_kind =
+                VXML_CMETA_COLLECT_ITEM_FIELD;
+            profile->collect_mailbox.data = field->field_data;
+        }
         atomic_store_explicit(
             &profile->collect_mailbox.generation,
             profile->collect_generation,
