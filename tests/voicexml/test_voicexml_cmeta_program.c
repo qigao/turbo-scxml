@@ -347,6 +347,71 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles literal marks into immutable prompt segment order") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Hello<mark name='ad_start'/><audio src='a.wav'/>"
+            "<mark name='ad_end'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_prompt_row *prompt;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_count, (size_t)1u);
+        check_equal(profile->prompt_segment_count, (size_t)4u);
+        check_not_null(profile->prompt_segments);
+        prompt = &profile->prompts[0];
+        check_equal(prompt->segment_count, (size_t)4u);
+        check_equal(prompt->required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        check_equal(profile->prompt_segments[0].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(profile->prompt_segments[1].kind,
+                    VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(profile->prompt_segments[2].kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(profile->prompt_segments[3].kind,
+                    VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(profile->prompt_segments[0].payload.size,
+                    sizeof("Hello") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[0].payload.data,
+                        "Hello", sizeof("Hello") - 1u), 0);
+        check_equal(profile->prompt_segments[1].payload.size,
+                    sizeof("ad_start") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[1].payload.data,
+                        "ad_start", sizeof("ad_start") - 1u), 0);
+        check_equal(profile->prompt_segments[2].payload.size,
+                    sizeof("a.wav") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[2].payload.data,
+                        "a.wav", sizeof("a.wav") - 1u), 0);
+        check_equal(profile->prompt_segments[3].payload.size,
+                    sizeof("ad_end") - 1u);
+        check_equal(memcmp(
+                        profile->prompt_segments[3].payload.data,
+                        "ad_end", sizeof("ad_end") - 1u), 0);
+
+        vxml_program_destroy(&program);
+    }
+
     it("compiles mixed prompt media into immutable ordered segment rows") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -441,6 +506,55 @@ spec("VoiceXML CMeta program compiler") {
                         sizeof("retry.wav") - 1u), 0);
 
         vxml_program_destroy(&program);
+    }
+
+    it("rejects missing empty and dynamic mark names in the literal profile") {
+        static const struct {
+            const char *body;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<form><field name='value'><prompt><mark/></prompt>"
+                "<grammar type='application/srgs+xml' src='a'/></field></form>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<form><field name='value'><prompt><mark name=''/></prompt>"
+                "<grammar type='application/srgs+xml' src='a'/></field></form>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<form><field name='value'><prompt><mark nameexpr='x'/></prompt>"
+                "<grammar type='application/srgs+xml' src='a'/></field></form>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<form><field name='value'><prompt>"
+                "<mark name='x' nameexpr='y'/></prompt>"
+                "<grammar type='application/srgs+xml' src='a'/></field></form>",
+                VXML_UNSUPPORTED_FEATURE
+            }
+        };
+        static const char prefix[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            char source[768];
+            vxml_program program = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s</vxml>",
+                prefix, cases[index].body);
+            check_true(written > 0 && (size_t)written < sizeof(source));
+            check_equal(vxml_compile_cmeta(
+                            source, (size_t)written, NULL, &options,
+                            &program, NULL),
+                        cases[index].expected);
+            check_null(program.impl);
+        }
     }
 
     it("rejects invalid prompt barge-in policy at compile time") {
