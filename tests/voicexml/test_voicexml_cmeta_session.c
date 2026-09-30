@@ -753,7 +753,8 @@ static vxml_status cmeta_prompt_media_prepare(
         request->field.data == NULL ||
         request->field.size >= sizeof(probe->field) ||
         (request->segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
-         request->segment.kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
+         request->segment.kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
+         request->segment.kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
         request->segment.payload.data == NULL ||
         request->segment.payload.size >= sizeof(probe->payload))
         return VXML_INVALID_CONTRACT;
@@ -810,7 +811,8 @@ static vxml_status cmeta_prompt_media_prepare_batch(
         const vxml_cmeta_prompt_media_segment_v1 *segment =
             &request->segments[index];
         if ((segment->kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
-             segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
+             segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
+             segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
             segment->payload.data == NULL ||
             segment->payload.size >=
                 sizeof(probe->batch_payloads[index]))
