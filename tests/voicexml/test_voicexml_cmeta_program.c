@@ -2553,12 +2553,14 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 3u || index == 4u ||
-                    index == 5u ||
-                    index == 7u || index == 8u ||
-                    index == 13u
-                        ? VXML_INVALID_STRUCTURE
-                        : VXML_UNSUPPORTED_FEATURE;
+                    index == 16u
+                        ? VXML_INVALID_CONTRACT
+                        : index == 3u || index == 4u ||
+                          index == 5u ||
+                          index == 7u || index == 8u ||
+                          index == 13u
+                            ? VXML_INVALID_STRUCTURE
+                            : VXML_UNSUPPORTED_FEATURE;
                 check_equal(vxml_compile_cmeta(
                                 source, (size_t)written, NULL, &options,
                                 &program, &diagnostic),
