@@ -222,6 +222,12 @@ typedef enum vxml_cmeta_prompt_media_segment_kind {
     VXML_CMETA_PROMPT_MEDIA_AUDIO
 } vxml_cmeta_prompt_media_segment_kind;
 
+typedef enum vxml_cmeta_prompt_bargein_type {
+    VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED = 0,
+    VXML_CMETA_PROMPT_BARGEIN_SPEECH,
+    VXML_CMETA_PROMPT_BARGEIN_HOTWORD
+} vxml_cmeta_prompt_bargein_type;
+
 typedef struct vxml_cmeta_prompt_media_segment_v1 {
     vxml_cmeta_prompt_media_segment_kind kind;
     vxml_cmeta_name_view payload;
@@ -244,6 +250,10 @@ typedef struct vxml_cmeta_prompt_media_request_v1 {
     unsigned selected_count;
     size_t segment_count;
     vxml_cmeta_prompt_media_segment_v1 segment;
+
+    /* Append-only prompt interruption policy. */
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
 } vxml_cmeta_prompt_media_request_v1;
 
 typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
@@ -256,6 +266,10 @@ typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
     unsigned selected_count;
     const vxml_cmeta_prompt_media_segment_v1 *segments;
     size_t segment_count;
+
+    /* Append-only prompt interruption policy. */
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
 } vxml_cmeta_prompt_media_batch_request_v1;
 
 typedef struct vxml_cmeta_prompt_media_adapter_v1 {
@@ -282,6 +296,36 @@ typedef struct vxml_cmeta_prompt_media_adapter_v1 {
         vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
         const char **out_error);
 } vxml_cmeta_prompt_media_adapter_v1;
+
+typedef enum vxml_cmeta_prompt_barge_result {
+    VXML_CMETA_PROMPT_BARGE_CANCELED = 0,
+    VXML_CMETA_PROMPT_BARGE_DISABLED,
+    VXML_CMETA_PROMPT_BARGE_STALE,
+    VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH,
+    VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT
+} vxml_cmeta_prompt_barge_result;
+
+typedef enum vxml_cmeta_prompt_media_outcome {
+    VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED = 1,
+    VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED
+} vxml_cmeta_prompt_media_outcome;
+
+typedef enum vxml_cmeta_prompt_media_ingress_result {
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE,
+    VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT
+} vxml_cmeta_prompt_media_ingress_result;
+
+typedef struct vxml_cmeta_prompt_media_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_prompt_media_outcome outcome;
+} vxml_cmeta_prompt_media_completion_v1;
+
+#define VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 1u
 
 typedef struct vxml_cmeta_prompt_view_v1 {
     uint32_t abi_version;
@@ -421,6 +465,40 @@ vxml_status vxml_session_cmeta_prompt_media_commit(vxml_session *session);
 
 /** Discard the prepared media ticket and restore admission. */
 vxml_status vxml_session_cmeta_prompt_media_discard(vxml_session *session);
+
+/**
+ * MPSC admission of one generation-scoped prompt playback completion.
+ *
+ * The record contains no borrowed provider data. The Session must outlive
+ * concurrent producers; stop producers before close/destroy.
+ */
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v1 *completion);
+
+/**
+ * Single-owner progress point. Settles at most one ready playback completion.
+ * A completed provider generation is not canceled again.
+ */
+vxml_status vxml_session_cmeta_prompt_media_run_ready(
+    vxml_session *session,
+    bool *out_progressed,
+    vxml_cmeta_prompt_media_outcome *out_outcome);
+
+/**
+ * Notify the prompt owner that input for the active collect generation has
+ * reached a barge-in boundary.
+ *
+ * UNSPECIFIED signal type is invalid. Explicit prompt bargeintype must match;
+ * a prompt with unspecified bargeintype accepts either supported signal type.
+ * Cancellation is generation-scoped and no-fail/nonblocking.
+ */
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in(
+    vxml_session *session,
+    uint64_t collect_generation,
+    vxml_cmeta_prompt_bargein_type signal_type);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);

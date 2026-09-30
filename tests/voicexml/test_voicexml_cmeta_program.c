@@ -443,6 +443,55 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("rejects invalid prompt barge-in policy at compile time") {
+        static const struct {
+            const char *body;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<form><field name='value'>"
+                "<prompt bargein='maybe'>x</prompt>"
+                "<grammar type='application/srgs+xml' src='a'/>"
+                "</field></form>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<form><field name='value'>"
+                "<prompt bargeintype='other'>x</prompt>"
+                "<grammar type='application/srgs+xml' src='a'/>"
+                "</field></form>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<form><field name='value'>"
+                "<prompt bargein='false' bargeintype='speech'>x</prompt>"
+                "<grammar type='application/srgs+xml' src='a'/>"
+                "</field></form>",
+                VXML_INVALID_STRUCTURE
+            }
+        };
+        static const char prefix[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            char source[768];
+            vxml_program program = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s</vxml>",
+                prefix, cases[index].body);
+            check_true(written > 0 && (size_t)written < sizeof(source));
+            check_equal(vxml_compile_cmeta(
+                            source, (size_t)written, NULL, &options,
+                            &program, NULL),
+                        cases[index].expected);
+            check_null(program.impl);
+        }
+    }
+
     it("rejects invalid prompt count text limits and child markup") {
         static const char *const bodies[] = {
             "<form><field name='value'><prompt count='0'>x</prompt>"

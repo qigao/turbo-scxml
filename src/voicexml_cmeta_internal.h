@@ -55,6 +55,8 @@ typedef struct vxml_cmeta_prompt_row {
     size_t first_segment;
     size_t segment_count;
     uint64_t required_capabilities;
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;
@@ -296,6 +298,20 @@ typedef struct vxml_cmeta_collect_mailbox {
     size_t slot_capacity;
 } vxml_cmeta_collect_mailbox;
 
+typedef enum vxml_cmeta_prompt_media_mailbox_state {
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED = 0,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY,
+    VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED
+} vxml_cmeta_prompt_media_mailbox_state;
+
+typedef struct vxml_cmeta_prompt_media_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    vxml_cmeta_prompt_media_outcome outcome;
+} vxml_cmeta_prompt_media_mailbox;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
@@ -329,8 +345,10 @@ typedef struct vxml_cmeta_session_data {
     void *prompt_media_user;
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;
     uint64_t prompt_media_generation;
+    uint64_t prompt_media_barged_generation;
     bool prompt_media_prepared;
     bool prompt_media_in_flight;
+    vxml_cmeta_prompt_media_mailbox prompt_media_mailbox;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;

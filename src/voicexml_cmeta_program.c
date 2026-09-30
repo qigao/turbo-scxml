@@ -1311,10 +1311,15 @@ static vxml_status cmeta_measure_prompt(
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic) {
-    static const char *const allowed[] = {"count", "cond"};
+    static const char *const allowed[] = {
+        "count", "cond", "bargein", "bargeintype"};
     static const char *const audio_allowed[] = {"src"};
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
     const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
+    const salts_xml_attribute bargein =
+        cmeta_attribute(prompt, "bargein");
+    const salts_xml_attribute bargeintype =
+        cmeta_attribute(prompt, "bargeintype");
     size_t child_index;
     size_t text_bytes = 0u;
     size_t text_segment_count = 0u;
@@ -1323,8 +1328,34 @@ static vxml_status cmeta_measure_prompt(
     size_t total_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
     vxml_status status = cmeta_validate_attributes(
-        prompt, allowed, 2u, diagnostic);
+        prompt, allowed, 4u, diagnostic);
     if (status != VXML_OK) return status;
+    if (bargein.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(bargein), "true") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(bargein), "false"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(bargein),
+            "VoiceXML prompt bargein must be true or false");
+    if (bargeintype.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(bargeintype), "speech") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(bargeintype), "hotword"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(bargeintype),
+            "VoiceXML prompt bargeintype must be speech or hotword");
+    if (bargeintype.impl != NULL &&
+        bargein.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(bargein), "false"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(bargeintype),
+            "VoiceXML prompt bargeintype requires bargein enabled");
     if (!cmeta_prompt_options_valid(options))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_CONTRACT,
@@ -2247,6 +2278,10 @@ static vxml_status cmeta_compile_prompt_schema(
     vxml_cmeta_prompt_row *out) {
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
+    const salts_xml_attribute bargein_attribute =
+        cmeta_attribute(prompt, "bargein");
+    const salts_xml_attribute bargeintype_attribute =
+        cmeta_attribute(prompt, "bargeintype");
     size_t child_index;
     unsigned count = 1u;
     vxml_status status = cmeta_parse_prompt_count(
@@ -2258,6 +2293,15 @@ static vxml_status cmeta_compile_prompt_schema(
     out->count = count;
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
+    out->bargein = bargein_attribute.impl == NULL ||
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(bargein_attribute), "true");
+    out->bargein_type = VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED;
+    if (bargeintype_attribute.impl != NULL)
+        out->bargein_type = cmeta_decoded_equal(
+            salts_xml_attribute_value(bargeintype_attribute), "speech")
+            ? VXML_CMETA_PROMPT_BARGEIN_SPEECH
+            : VXML_CMETA_PROMPT_BARGEIN_HOTWORD;
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
