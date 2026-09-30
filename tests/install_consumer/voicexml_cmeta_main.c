@@ -50,6 +50,11 @@ int main(void) {
     vxml_cmeta_menu_collect_request_v1 menu_request = {
         .abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_menu_collect_request_v1)};
+    vxml_cmeta_menu_speech_policy_v1 menu_policy = {0};
+    vxml_cmeta_menu_grammar_ref_v1 menu_grammar = {0};
+    vxml_cmeta_menu_collect_request_v2 menu_request_v2 = {
+        .abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_menu_collect_request_v2)};
     vxml_cmeta_menu_completion_v1 menu_completion = {
         .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_menu_completion_v1)};
@@ -124,6 +129,9 @@ int main(void) {
     vxml_status (*query_menu)(
         const vxml_session *, vxml_cmeta_menu_collect_request_v1 *) =
         vxml_session_cmeta_menu_collect_request;
+    vxml_status (*query_menu_v2)(
+        const vxml_session *, vxml_cmeta_menu_collect_request_v2 *) =
+        vxml_session_cmeta_menu_collect_request_v2;
     vxml_cmeta_collect_ingress_result (*complete_menu)(
         vxml_session *, const vxml_cmeta_menu_completion_v1 *) =
         vxml_session_cmeta_menu_try_complete;
@@ -132,7 +140,8 @@ int main(void) {
     if (raise_event == NULL || query_prompt == NULL ||
         report_mark == NULL || query_mark == NULL ||
         query_terminal == NULL || query_terminal_event == NULL ||
-        query_menu == NULL || complete_menu == NULL ||
+        query_menu == NULL || query_menu_v2 == NULL ||
+        complete_menu == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -173,11 +182,18 @@ int main(void) {
         collect_completion_v2.slot_count != 1u ||
         menu_request.abi_version !=
             VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
+        menu_request_v2.abi_version !=
+            VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 ||
+        menu_policy.mode != 0 ||
+        menu_grammar.media_type.data != NULL ||
+        menu_grammar.src.data != NULL ||
         menu_completion.abi_version != VXML_CMETA_MENU_COMPLETION_ABI_V1 ||
         menu_choice.dtmf.data != NULL ||
         menu_choice.speech.data != NULL ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL == 0u ||
         VXML_CMETA_COLLECT_INGRESS_ACCEPTED != 0)
         return 6;
     if (layout_type ==
