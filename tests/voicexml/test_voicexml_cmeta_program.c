@@ -162,6 +162,16 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_event_handlers = 8u;
+    options.max_event_name_bytes = 64u;
+    options.max_menus = 4u;
+    options.max_menu_choices = 16u;
+    options.max_menu_choice_bytes = 16u;
+    return options;
+}
+
 enum { PROGRAM_ALLOCATION_CAPACITY = 256 };
 
 typedef struct program_allocation_tracker {
@@ -267,6 +277,121 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("compiles an immutable anonymous static DTMF menu without a root field") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu id='main' dtmf='true'>"
+            "<choice event='menu.one'/>"
+            "<choice dtmf='0' event='menu.zero'/>"
+            "<choice event='menu.two'/>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            menu_compile_options();
+        vxml_program program = {0};
+        const vxml_program_impl *impl;
+        const vxml_cmeta_program_data *profile;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, strlen(source), NULL, &options, &program, NULL),
+            VXML_OK);
+        impl = (const vxml_program_impl *)program.impl;
+        profile = impl != NULL
+            ? (const vxml_cmeta_program_data *)impl->profile_data : NULL;
+        memset(source, 'x', sizeof(source) - 1u);
+
+        check_not_null(impl);
+        check_not_null(profile);
+        check_equal(profile->form_count, (size_t)1u);
+        check_equal(profile->field_count, (size_t)0u);
+        check_equal(profile->block_count, (size_t)0u);
+        check_equal(profile->menu_count, (size_t)1u);
+        check_equal(profile->menu_choice_count, (size_t)3u);
+        check_equal(profile->forms[0].menu, (size_t)0u);
+        check_equal(profile->menus[0].form, (size_t)0u);
+        check_equal(profile->menus[0].first_choice, (size_t)0u);
+        check_equal(profile->menus[0].choice_count, (size_t)3u);
+        check_equal(impl->forms[0].id_size, sizeof("main") - 1u);
+        check_equal(
+            memcmp(impl->forms[0].id, "main", sizeof("main") - 1u), 0);
+
+        check_equal(profile->menu_choices[0].dtmf.size, (size_t)1u);
+        check_equal(profile->menu_choices[0].dtmf.data[0], '1');
+        check_equal(profile->menu_choices[1].dtmf.data[0], '0');
+        check_equal(profile->menu_choices[2].dtmf.data[0], '2');
+        check_null(profile->menu_choices[0].speech.data);
+        check_equal(profile->menu_choices[0].speech.size, (size_t)0u);
+        check_equal(
+            profile->menu_choice_targets[0].kind,
+            VXML_CMETA_MENU_CHOICE_EVENT);
+        check_equal(
+            profile->menu_choice_targets[0].target_size,
+            sizeof("menu.one") - 1u);
+        check_equal(
+            memcmp(
+                profile->menu_choice_targets[0].target,
+                "menu.one", sizeof("menu.one") - 1u), 0);
+        check_equal(
+            memcmp(
+                profile->menu_choice_targets[2].target,
+                "menu.two", sizeof("menu.two") - 1u), 0);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("fails closed for invalid or deferred static menu syntax") {
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } cases[] = {
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu><choice dtmf='1' event='a'/>"
+             "<choice dtmf='1' event='b'/></menu></vxml>",
+             VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu dtmf='true'>"
+             "<choice dtmf='1' event='a'/></menu></vxml>",
+             VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu><choice dtmf='1' next='#x'/>"
+             "</menu></vxml>", VXML_UNSUPPORTED_FEATURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu><choice dtmf='1'/></menu></vxml>",
+             VXML_INVALID_STRUCTURE},
+            {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+             "datamodel='cmeta'><menu dtmf='maybe'>"
+             "<choice dtmf='1' event='a'/></menu></vxml>",
+             VXML_INVALID_STRUCTURE}
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            menu_compile_options();
+        size_t index;
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    cases[index].source, strlen(cases[index].source),
+                    NULL, &options, &program, NULL),
+                cases[index].expected);
+            check_null(program.impl);
+        }
+        {
+            static const char disabled[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><menu><choice dtmf='1' event='a'/>"
+                "</menu></vxml>";
+            vxml_program program = {0};
+            const vxml_cmeta_compile_options_v1 disabled_options =
+                compile_options();
+            check_equal(
+                vxml_compile_cmeta(
+                    disabled, sizeof(disabled) - 1u, NULL,
+                    &disabled_options, &program, NULL),
+                VXML_INVALID_CONTRACT);
+            check_null(program.impl);
+        }
+    }
+
     it("rejects reprompt outside scoped Event handler content") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
