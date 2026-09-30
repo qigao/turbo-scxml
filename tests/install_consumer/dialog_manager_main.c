@@ -9,6 +9,8 @@ int main(void) {
         vxml_dialog_manager_default_config_v2();
     vxml_dialog_manager_config_v3 v3 =
         vxml_dialog_manager_default_config_v3();
+    vxml_dialog_manager_config_v4 v4 =
+        vxml_dialog_manager_default_config_v4();
     vxml_document_store store = {0};
     vxml_document_fetch_policy_v1 fetch_policy =
         VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
@@ -36,12 +38,19 @@ int main(void) {
         return 3;
     if (v3.abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V3)
         return 4;
+    if (v4.abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V4)
+        return 40;
     if (v1.capacity == 0u || v1.max_document_bytes == 0u ||
         v2.capacity == 0u || v2.max_source_bytes == 0u ||
         v3.capacity == 0u || v3.max_source_bytes == 0u ||
-        v3.max_navigation_hops == 0u)
+        v3.max_navigation_hops == 0u ||
+        v4.capacity == 0u || v4.max_source_bytes == 0u ||
+        v4.max_navigation_hops == 0u ||
+        v4.max_submit_response_bytes == 0u ||
+        v4.voice_limits.max_forms == 0u)
         return 5;
-    if (v2.document_store != NULL || v3.document_store != NULL)
+    if (v2.document_store != NULL || v3.document_store != NULL ||
+        v4.document_store != NULL || v4.submit != NULL)
         return 6;
     if (fetch_policy.abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
         fetch_policy.struct_size != sizeof(fetch_policy) ||
