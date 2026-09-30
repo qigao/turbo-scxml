@@ -607,6 +607,7 @@ typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
     size_t menu_prepare_calls;
+    size_t menu_v2_prepare_calls;
     size_t batch_prepare_calls;
     size_t commit_calls;
     size_t discard_calls;
@@ -620,6 +621,13 @@ typedef struct cmeta_collect_probe {
     size_t menu_choice_count;
     char menu_dtmf[16][16];
     char menu_speech[16][64];
+    size_t menu_policy_count;
+    size_t menu_policy_choice[16];
+    vxml_cmeta_menu_accept_mode menu_policy_mode[16];
+    size_t menu_grammar_count;
+    size_t menu_grammar_choice[16];
+    char menu_grammar_type[16][64];
+    char menu_grammar_src[16][64];
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
@@ -750,6 +758,95 @@ static vxml_status cmeta_collect_prepare_menu(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_collect_prepare_menu_v2(
+    void *user,
+    const vxml_cmeta_menu_collect_request_v2 *request,
+    vxml_cmeta_collect_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    size_t index;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 ||
+        request->struct_size < sizeof(*request) ||
+        request->choices == NULL || request->choice_count == 0u ||
+        request->choice_count > 16u ||
+        request->speech_policy_count > 16u ||
+        request->grammar_count > 16u ||
+        (request->speech_policy_count != 0u &&
+         request->speech_policies == NULL) ||
+        (request->grammar_count != 0u &&
+         request->grammars == NULL) ||
+        (request->required_capabilities &
+         VXML_CMETA_COLLECT_CAP_MENU_CHOICE) == 0u)
+        return VXML_INVALID_CONTRACT;
+    ++probe->menu_v2_prepare_calls;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    if (probe->prepare_status != VXML_OK)
+        return probe->prepare_status;
+    if (probe->reserved || probe->active)
+        return VXML_INVALID_STATE;
+
+    probe->item_kind = VXML_CMETA_COLLECT_ITEM_MENU;
+    probe->menu_choice_count = request->choice_count;
+    probe->menu_policy_count = request->speech_policy_count;
+    probe->menu_grammar_count = request->grammar_count;
+    memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
+    memset(probe->menu_speech, 0, sizeof(probe->menu_speech));
+    memset(probe->menu_policy_choice, 0, sizeof(probe->menu_policy_choice));
+    memset(probe->menu_policy_mode, 0, sizeof(probe->menu_policy_mode));
+    memset(probe->menu_grammar_choice, 0, sizeof(probe->menu_grammar_choice));
+    memset(probe->menu_grammar_type, 0, sizeof(probe->menu_grammar_type));
+    memset(probe->menu_grammar_src, 0, sizeof(probe->menu_grammar_src));
+
+    for (index = 0u; index < request->choice_count; ++index) {
+        const vxml_cmeta_menu_choice_v1 *choice = &request->choices[index];
+        if ((choice->dtmf.data == NULL) != (choice->dtmf.size == 0u) ||
+            (choice->speech.data == NULL) != (choice->speech.size == 0u) ||
+            choice->dtmf.size >= sizeof(probe->menu_dtmf[index]) ||
+            choice->speech.size >= sizeof(probe->menu_speech[index]))
+            return VXML_INVALID_CONTRACT;
+        if (choice->dtmf.size != 0u)
+            memcpy(probe->menu_dtmf[index],
+                   choice->dtmf.data, choice->dtmf.size);
+        if (choice->speech.size != 0u)
+            memcpy(probe->menu_speech[index],
+                   choice->speech.data, choice->speech.size);
+    }
+    for (index = 0u; index < request->speech_policy_count; ++index) {
+        const vxml_cmeta_menu_speech_policy_v1 *row =
+            &request->speech_policies[index];
+        if (row->choice_index >= request->choice_count ||
+            row->mode != VXML_CMETA_MENU_ACCEPT_APPROXIMATE)
+            return VXML_INVALID_CONTRACT;
+        probe->menu_policy_choice[index] = row->choice_index;
+        probe->menu_policy_mode[index] = row->mode;
+    }
+    for (index = 0u; index < request->grammar_count; ++index) {
+        const vxml_cmeta_menu_grammar_ref_v1 *row =
+            &request->grammars[index];
+        if (row->choice_index >= request->choice_count ||
+            row->media_type.data == NULL || row->media_type.size == 0u ||
+            row->src.data == NULL || row->src.size == 0u ||
+            row->media_type.size >= sizeof(probe->menu_grammar_type[index]) ||
+            row->src.size >= sizeof(probe->menu_grammar_src[index]))
+            return VXML_INVALID_CONTRACT;
+        probe->menu_grammar_choice[index] = row->choice_index;
+        memcpy(probe->menu_grammar_type[index],
+               row->media_type.data, row->media_type.size);
+        memcpy(probe->menu_grammar_src[index],
+               row->src.data, row->src.size);
+    }
+    probe->generation = request->generation;
+    probe->reserved = true;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){
+        .commit = cmeta_collect_commit,
+        .discard = cmeta_collect_discard,
+        .user = probe};
+    return VXML_OK;
+}
+
 static void cmeta_collect_cancel(void *user, uint64_t generation) {
     cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
     if (probe == NULL) return;
@@ -766,7 +863,8 @@ static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
         .capabilities = capabilities,
         .prepare = cmeta_collect_prepare,
         .cancel = cmeta_collect_cancel,
-        .prepare_menu = cmeta_collect_prepare_menu};
+        .prepare_menu = cmeta_collect_prepare_menu,
+        .prepare_menu_v2 = cmeta_collect_prepare_menu_v2};
 }
 
 static vxml_cmeta_session_options_v1 field_session_options(
@@ -979,6 +1077,12 @@ static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
     options.max_menu_choices = 16u;
     options.max_menu_choice_bytes = 16u;
     options.max_menu_target_bytes = 256u;
+    return options;
+}
+
+static vxml_cmeta_compile_options_v1 menu_v2_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = menu_compile_options();
+    options.max_menu_grammar_bytes = 128u;
     return options;
 }
 
@@ -1355,6 +1459,167 @@ spec("VoiceXML CMeta session execution") {
         check_equal(probe.menu_speech[1], "");
         check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
 
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("routes approximate menu speech only through the V2 provider tail") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu accept='approximate'>"
+            "<choice event='menu.approx'> sports   news </choice>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            menu_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_collect_probe old_probe = {.prepare_status = VXML_OK};
+        cmeta_collect_probe missing_probe = {.prepare_status = VXML_OK};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 old_adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE);
+        vxml_cmeta_collect_adapter_v1 missing_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE);
+        vxml_cmeta_session_options_v1 options;
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_menu_collect_request_v1 v1 = {0};
+        vxml_cmeta_menu_collect_request_v2 v2 = {0};
+
+        old_adapter.struct_size =
+            offsetof(vxml_cmeta_collect_adapter_v1, prepare_menu_v2);
+        old_adapter.prepare_menu_v2 = NULL;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+
+        options = event_session_options(&root, &old_adapter, &old_probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request(&session, &v1),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request_v2(&session, &v2),
+            VXML_OK);
+        check_equal(
+            v2.required_capabilities,
+            VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE);
+        check_equal(v2.speech_policy_count, (size_t)1u);
+        check_equal(v2.speech_policies[0].choice_index, (size_t)0u);
+        check_equal(
+            v2.speech_policies[0].mode,
+            VXML_CMETA_MENU_ACCEPT_APPROXIMATE);
+        check_equal(v2.grammar_count, (size_t)0u);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(old_probe.menu_prepare_calls, (size_t)0u);
+        check_equal(old_probe.menu_v2_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        options = event_session_options(
+            &root, &missing_adapter, &missing_probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(missing_probe.menu_prepare_calls, (size_t)0u);
+        check_equal(missing_probe.menu_v2_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        options = event_session_options(&root, &adapter, &probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(probe.menu_prepare_calls, (size_t)0u);
+        check_equal(probe.menu_v2_prepare_calls, (size_t)1u);
+        check_equal(probe.menu_choice_count, (size_t)1u);
+        check_equal(probe.menu_speech[0], "sports news");
+        check_equal(probe.menu_policy_count, (size_t)1u);
+        check_equal(probe.menu_policy_choice[0], (size_t)0u);
+        check_equal(
+            probe.menu_policy_mode[0],
+            VXML_CMETA_MENU_ACCEPT_APPROXIMATE);
+        check_equal(probe.menu_grammar_count, (size_t)0u);
+
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("routes explicit choice grammar through immutable V2 grammar side table") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu>"
+            "<choice dtmf='0' event='menu.sports'>prompt label"
+            "<grammar type='application/srgs+xml' src='sports.grxml'/>"
+            "</choice></menu></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            menu_v2_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL);
+        const vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_menu_collect_request_v2 request = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request_v2(&session, &request),
+            VXML_OK);
+        check_equal(
+            request.required_capabilities,
+            VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL);
+        check_equal(request.grammar_count, (size_t)1u);
+        check_equal(request.grammars[0].choice_index, (size_t)0u);
+        check_equal(request.choices[0].speech.size, (size_t)0u);
+        check_equal(
+            request.grammars[0].media_type.size,
+            sizeof("application/srgs+xml") - 1u);
+        check_equal(
+            request.grammars[0].src.size,
+            sizeof("sports.grxml") - 1u);
+
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(probe.menu_prepare_calls, (size_t)0u);
+        check_equal(probe.menu_v2_prepare_calls, (size_t)1u);
+        check_equal(probe.menu_grammar_count, (size_t)1u);
+        check_equal(probe.menu_grammar_choice[0], (size_t)0u);
+        check_equal(
+            probe.menu_grammar_type[0], "application/srgs+xml");
+        check_equal(probe.menu_grammar_src[0], "sports.grxml");
+        check_equal(probe.menu_speech[0], "");
+
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
     }
