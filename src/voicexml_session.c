@@ -74,6 +74,24 @@ vxml_status vxml_session_start_literal_at(
                 impl->state = VXML_SESSION_EXITED;
                 return VXML_OK;
             }
+            if (action->kind == VXML_ACTION_SUBMIT) {
+                if (!program_uri_view_valid(
+                        program, action->target_uri,
+                        action->target_uri_size) ||
+                    (action->submit_method !=
+                         VXML_SUBMIT_METHOD_GET &&
+                     action->submit_method !=
+                         VXML_SUBMIT_METHOD_POST) ||
+                    action->submit_enctype !=
+                        VXML_SUBMIT_ENCTYPE_URLENCODED)
+                    return fail_structure(impl);
+                impl->submit_uri = action->target_uri;
+                impl->submit_uri_size = action->target_uri_size;
+                impl->submit_method = action->submit_method;
+                impl->submit_enctype = action->submit_enctype;
+                impl->state = VXML_SESSION_SUBMITTING;
+                return VXML_OK;
+            }
             if (action->kind == VXML_ACTION_GOTO_EXTERNAL) {
                 if (!program_uri_view_valid(
                         program, action->target_uri,
@@ -148,10 +166,10 @@ vxml_status vxml_session_init_profile(
     impl->navigation_uri_size = 0u;
     impl->navigation_fetchaudio_uri = NULL;
     impl->navigation_fetchaudio_uri_size = 0u;
-    impl->navigation_fetchaudio_uri = NULL;
-    impl->navigation_fetchaudio_uri_size = 0u;
-    impl->navigation_fetchaudio_uri = NULL;
-    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->submit_uri = NULL;
+    impl->submit_uri_size = 0u;
+    impl->submit_method = 0;
+    impl->submit_enctype = 0;
     impl->profile_data = NULL;
     if (program_impl->profile_session_init != NULL) {
         status = program_impl->profile_session_init(impl, options);
@@ -175,6 +193,12 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->error = VXML_OK;
     impl->navigation_uri = NULL;
     impl->navigation_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->submit_uri = NULL;
+    impl->submit_uri_size = 0u;
+    impl->submit_method = 0;
+    impl->submit_enctype = 0;
     return impl->program->profile_session_start != NULL
         ? impl->program->profile_session_start(impl)
         : vxml_session_start_literal(impl);
@@ -209,6 +233,12 @@ vxml_status vxml_session_start_at_form(
     impl->error = VXML_OK;
     impl->navigation_uri = NULL;
     impl->navigation_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->submit_uri = NULL;
+    impl->submit_uri_size = 0u;
+    impl->submit_method = 0;
+    impl->submit_enctype = 0;
     if (form_index == impl->program->form_count)
         return fail_structure(impl);
     if (impl->program->profile_session_start_at != NULL)
@@ -258,6 +288,35 @@ vxml_status vxml_session_navigation(
     if (status != VXML_OK) return status;
     out_target->uri = request.uri;
     out_target->uri_size = request.uri_size;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_submit(
+    const vxml_session *session,
+    vxml_submit_target_v1 *out_target) {
+    const vxml_session_impl *impl;
+    if (session == NULL || out_target == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_target = (vxml_submit_target_v1){0};
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL) return VXML_INVALID_STATE;
+    if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_SUBMITTING)
+        return VXML_INVALID_STATE;
+    if (impl->submit_uri == NULL ||
+        impl->submit_uri_size == 0u ||
+        (impl->submit_method != VXML_SUBMIT_METHOD_GET &&
+         impl->submit_method != VXML_SUBMIT_METHOD_POST) ||
+        impl->submit_enctype !=
+            VXML_SUBMIT_ENCTYPE_URLENCODED)
+        return VXML_INVALID_CONTRACT;
+    *out_target = (vxml_submit_target_v1){
+        .abi_version = VXML_SUBMIT_TARGET_ABI_V1,
+        .struct_size = sizeof(vxml_submit_target_v1),
+        .uri = impl->submit_uri,
+        .uri_size = impl->submit_uri_size,
+        .method = impl->submit_method,
+        .enctype = impl->submit_enctype};
     return VXML_OK;
 }
 
@@ -311,6 +370,10 @@ vxml_status vxml_session_close(vxml_session *session) {
         impl->navigation_uri_size = 0u;
         impl->navigation_fetchaudio_uri = NULL;
         impl->navigation_fetchaudio_uri_size = 0u;
+        impl->submit_uri = NULL;
+        impl->submit_uri_size = 0u;
+        impl->submit_method = 0;
+        impl->submit_enctype = 0;
         impl->state = VXML_SESSION_CLOSED;
     }
     return VXML_OK;

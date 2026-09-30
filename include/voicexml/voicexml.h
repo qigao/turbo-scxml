@@ -70,8 +70,25 @@ typedef enum vxml_session_state {
     VXML_SESSION_EXITED,
     VXML_SESSION_FAILED,
     VXML_SESSION_CLOSED,
-    VXML_SESSION_NAVIGATING
+    VXML_SESSION_NAVIGATING,
+    VXML_SESSION_SUBMITTING
 } vxml_session_state;
+
+typedef enum vxml_submit_enctype {
+    VXML_SUBMIT_ENCTYPE_URLENCODED = 1,
+    VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA
+} vxml_submit_enctype;
+
+#define VXML_SUBMIT_TARGET_ABI_V1 1u
+
+typedef struct vxml_submit_target_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+} vxml_submit_target_v1;
 
 typedef struct vxml_navigation_target {
     const char *uri;
@@ -148,6 +165,11 @@ vxml_status vxml_session_navigation(
 vxml_status vxml_session_navigation_request(
     const vxml_session *session,
     vxml_navigation_request_v1 *out_request);
+
+/** Borrow the literal submit target while state is VXML_SESSION_SUBMITTING. */
+vxml_status vxml_session_submit(
+    const vxml_session *session,
+    vxml_submit_target_v1 *out_target);
 
 /**
  * Synchronously inject one byte-counted Event into the active runtime profile.

@@ -366,6 +366,98 @@ spec("VoiceXML program compiler") {
         }
     }
 
+    group("literal submit") {
+        it("retains one POST urlencoded submit target in immutable Program storage") {
+            char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'><block>"
+                "<submit next='result.vxml#done' method='post' "
+                "enctype='application/x-www-form-urlencoded' "
+                "namelist='   '/>"
+                "</block></form></vxml>";
+            static const char target[] = "result.vxml#done";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text(source, NULL, &program, NULL), VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->action_count, (size_t)1u);
+                check_equal(
+                    impl->actions[0].kind, VXML_ACTION_SUBMIT);
+                check_equal(
+                    impl->actions[0].target_uri_size,
+                    sizeof(target) - 1u);
+                check_equal(impl->actions[0].target_uri, target);
+                check_equal(
+                    impl->actions[0].submit_method,
+                    VXML_SUBMIT_METHOD_POST);
+                check_equal(
+                    impl->actions[0].submit_enctype,
+                    VXML_SUBMIT_ENCTYPE_URLENCODED);
+                memset(source, 'x', sizeof(source) - 1u);
+                check_equal(impl->actions[0].target_uri, target);
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("defaults submit to GET urlencoded") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit next='next.vxml'/></block></form>"
+                "</vxml>";
+            vxml_program program = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text(source, NULL, &program, NULL), VXML_OK);
+            impl = (vxml_program_impl *)program.impl;
+            check_not_null(impl);
+            if (impl != NULL) {
+                check_equal(
+                    impl->actions[0].submit_method,
+                    VXML_SUBMIT_METHOD_GET);
+                check_equal(
+                    impl->actions[0].submit_enctype,
+                    VXML_SUBMIT_ENCTYPE_URLENCODED);
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("rejects unsupported literal submit shapes before publication") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit/></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit next='x' method='put'/></block></form>"
+                "</vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit next='x' "
+                "enctype='multipart/form-data'/></block></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit next='x' expr='y'/></block></form>"
+                "</vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><submit next='x' namelist='a'/></block></form>"
+                "</vxml>"};
+            static const vxml_status expected[] = {
+                VXML_INVALID_STRUCTURE,
+                VXML_INVALID_STRUCTURE,
+                VXML_UNSUPPORTED_FEATURE,
+                VXML_UNSUPPORTED_FEATURE,
+                VXML_UNSUPPORTED_FEATURE};
+            size_t index;
+
+            for (index = 0u;
+                 index < sizeof(sources) / sizeof(sources[0]);
+                 ++index)
+                check_empty_failure(
+                    sources[index], expected[index], NULL, 1u);
+        }
+    }
+
     group("document validation") {
         it("rejects missing or wrong VoiceXML namespaces") {
             const char *sources[] = {

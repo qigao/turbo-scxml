@@ -426,6 +426,107 @@ static vxml_document_store_status navigation_store_init(
     return vxml_document_store_init(store, &config);
 }
 
+typedef struct submit_probe {
+    vxml_submit_resource_status status;
+    const char *response_body;
+    const char *effective_uri;
+    size_t execute_calls;
+    size_t close_calls;
+    vxml_submit_method method;
+    char uri[256];
+    char content_type[128];
+    char body[256];
+} submit_probe;
+
+static vxml_submit_resource_status submit_execute(
+    void *user,
+    const vxml_submit_wire_request_v1 *request,
+    vxml_submit_response *out_response) {
+    static const char media[] = "application/voicexml+xml";
+    submit_probe *probe = (submit_probe *)user;
+    const size_t body_size =
+        probe != NULL && probe->response_body != NULL
+            ? strlen(probe->response_body) : 0u;
+    if (probe == NULL || request == NULL ||
+        out_response == NULL ||
+        request->abi_version != VXML_SUBMIT_WIRE_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >= sizeof(probe->uri) ||
+        request->content_type_size >=
+            sizeof(probe->content_type) ||
+        request->body_size >= sizeof(probe->body))
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    ++probe->execute_calls;
+    probe->method = request->method;
+    memcpy(probe->uri, request->uri, request->uri_size);
+    probe->uri[request->uri_size] = '\0';
+    if (request->content_type_size != 0u) {
+        memcpy(
+            probe->content_type,
+            request->content_type,
+            request->content_type_size);
+    }
+    probe->content_type[request->content_type_size] = '\0';
+    if (request->body_size != 0u)
+        memcpy(probe->body, request->body, request->body_size);
+    probe->body[request->body_size] = '\0';
+    if (probe->status != VXML_SUBMIT_RESOURCE_OK)
+        return probe->status;
+    *out_response = (vxml_submit_response){
+        .data = probe->response_body,
+        .size = body_size,
+        .media_type = media,
+        .media_type_size = sizeof(media) - 1u,
+        .effective_uri = probe->effective_uri,
+        .effective_uri_size =
+            probe->effective_uri != NULL
+                ? strlen(probe->effective_uri) : 0u,
+        .lease = probe};
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
+static void submit_close(
+    void *user, vxml_submit_response *response) {
+    submit_probe *probe = (submit_probe *)user;
+    if (probe != NULL && response != NULL &&
+        response->lease == probe)
+        ++probe->close_calls;
+    if (response != NULL)
+        *response = (vxml_submit_response){0};
+}
+
+static const vxml_submit_resource_adapter_v1 submit_adapter = {
+    .abi_version = VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_submit_resource_adapter_v1),
+    .execute = submit_execute,
+    .close = submit_close};
+
+static vxml_dialog_manager_status manager_init_v4(
+    vxml_dialog_manager *manager,
+    size_t capacity,
+    size_t max_navigation_hops,
+    upstream_probe *upstream,
+    vxml_document_store *store,
+    submit_probe *submit,
+    event_probe *events) {
+    vxml_dialog_manager_config_v4 config =
+        vxml_dialog_manager_default_config_v4();
+    config.capacity = capacity;
+    config.max_source_bytes = 256u;
+    config.max_navigation_hops = max_navigation_hops;
+    config.max_submit_response_bytes = 2048u;
+    config.upstream = &upstream_adapter;
+    config.upstream_user = upstream;
+    config.document_store = store;
+    config.submit = &submit_adapter;
+    config.submit_user = submit;
+    config.events = &event_sink;
+    config.event_user = events;
+    return vxml_dialog_manager_init_v4(manager, &config);
+}
+
 static vxml_dialog_manager_status manager_init_v3(
     vxml_dialog_manager *manager,
     size_t capacity,
@@ -1411,6 +1512,170 @@ spec("VoiceXML dialog manager") {
         check_equal(stats.hits, UINT64_C(2));
         check_equal(stats.misses, UINT64_C(2));
         check_equal(stats.active_borrows, (size_t)0u);
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V4 executes POST submit once, compiles its response directly, and continues from effective URI") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char next_uri[] =
+            "https://voice.example/app/result/next.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='main'><block>"
+            "<submit next='../submit' method='post'/>"
+            "</block></form></vxml>";
+        static const char submit_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='response'><block>"
+            "<goto next='next.vxml'/>"
+            "</block></form></vxml>";
+        static const char next_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='done'><block><exit/></block></form>"
+            "</vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK},
+            {next_uri, next_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-submit";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 2u};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK,
+            .response_body = submit_body,
+            .effective_uri =
+                "https://voice.example/app/result/response.vxml"};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(
+            navigation_store_init(&store, &documents, 3u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v4(
+                &manager, 1u, 4u, &upstream, &store,
+                &submit, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(submit.execute_calls, (size_t)1u);
+        check_equal(submit.close_calls, (size_t)1u);
+        check_equal(submit.method, VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            strcmp(
+                submit.uri,
+                "https://voice.example/app/submit"), 0);
+        check_equal(
+            strcmp(
+                submit.content_type,
+                "application/x-www-form-urlencoded"), 0);
+        check_equal(strcmp(submit.body, ""), 0);
+        check_equal(documents.open_calls, (size_t)2u);
+        check_equal(documents.close_calls, (size_t)2u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V4 closes a malformed submit response exactly once without retry") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/a.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><submit next='../submit' method='post'/>"
+            "</block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] = "dialogs/a.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-submit-bad";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 1u};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK,
+            .response_body = "<vxml",
+            .effective_uri =
+                "https://voice.example/app/result/bad.vxml"};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(
+            navigation_store_init(&store, &documents, 2u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v4(
+                &manager, 1u, 4u, &upstream, &store,
+                &submit, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(submit.execute_calls, (size_t)1u);
+        check_equal(submit.close_calls, (size_t)1u);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(events.rows[0].voice_status, VXML_XML_ERROR);
 
         manager_close_destroy(&manager, &upstream);
         check_equal(

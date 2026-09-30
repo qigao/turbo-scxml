@@ -23,6 +23,14 @@ typedef struct vxml_decoded_goto {
     bool external;
 } vxml_decoded_goto;
 
+typedef struct vxml_decoded_submit {
+    char *target;
+    size_t target_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    salts_xml_location location;
+} vxml_decoded_submit;
+
 typedef struct vxml_measurement {
     size_t form_count;
     size_t block_count;
@@ -34,6 +42,9 @@ typedef struct vxml_measurement {
     vxml_decoded_goto *gotos;
     size_t goto_count;
     size_t goto_capacity;
+    vxml_decoded_submit *submits;
+    size_t submit_count;
+    size_t submit_capacity;
 } vxml_measurement;
 
 typedef struct vxml_writer {
@@ -43,6 +54,7 @@ typedef struct vxml_writer {
     size_t block_index;
     size_t action_index;
     size_t goto_index;
+    size_t submit_index;
     size_t storage_index;
 } vxml_writer;
 
@@ -398,7 +410,8 @@ static bool node_is_known_profile_element(salts_xml_node node) {
             view_equal(local_name, "form") ||
             view_equal(local_name, "block") ||
             view_equal(local_name, "exit") ||
-            view_equal(local_name, "goto"));
+            view_equal(local_name, "goto") ||
+            view_equal(local_name, "submit"));
 }
 
 static salts_xml_attribute unqualified_attribute(
@@ -432,6 +445,39 @@ static vxml_status validate_attributes(
                 "unsupported or duplicate VoiceXML attribute");
         }
         seen = true;
+    }
+    return VXML_OK;
+}
+
+static vxml_status validate_submit_attributes(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {
+        "next", "method", "enctype", "namelist"};
+    bool seen[4] = {false, false, false, false};
+    size_t index;
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        size_t allowed_index;
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported VoiceXML submit attribute");
+        for (allowed_index = 0u;
+             allowed_index < sizeof(allowed) / sizeof(allowed[0]);
+             ++allowed_index)
+            if (view_equal(local, allowed[allowed_index]))
+                break;
+        if (allowed_index == sizeof(allowed) / sizeof(allowed[0]) ||
+            seen[allowed_index])
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML submit attribute");
+        seen[allowed_index] = true;
     }
     return VXML_OK;
 }
@@ -472,8 +518,11 @@ static void measurement_destroy(vxml_measurement *measurement) {
         vxml_free(measurement->gotos[index].target);
         vxml_free(measurement->gotos[index].fetchaudio);
     }
+    for (index = 0u; index < measurement->submit_count; ++index)
+        vxml_free(measurement->submits[index].target);
     vxml_free(measurement->ids);
     vxml_free(measurement->gotos);
+    vxml_free(measurement->submits);
     memset(measurement, 0, sizeof(*measurement));
 }
 
@@ -732,6 +781,180 @@ static vxml_status append_goto(
     return VXML_OK;
 }
 
+static vxml_status append_submit(
+    vxml_measurement *measurement,
+    salts_xml_attribute next_attribute,
+    salts_xml_attribute method_attribute,
+    salts_xml_attribute enctype_attribute,
+    salts_xml_attribute namelist_attribute,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    vxml_decoded_submit entry = {0};
+    const salts_xml_string_view raw_next =
+        salts_xml_attribute_value(next_attribute);
+    size_t target_size = 0u;
+    size_t retained_size;
+    size_t allocation_size;
+
+    if (next_attribute.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML submit requires next");
+    if (!decode_entities(raw_next, NULL, 0u, &target_size) ||
+        target_size == 0u ||
+        !checked_add(target_size, 1u, &retained_size))
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(next_attribute),
+            "VoiceXML submit next must be one nonempty URI");
+    if (!checked_add(
+            measurement->name_bytes, retained_size,
+            &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes)
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(next_attribute),
+            "VoiceXML retained submit URI exceeds max_name_bytes");
+
+    entry.target = (char *)vxml_malloc(retained_size);
+    if (entry.target == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(next_attribute),
+            "VoiceXML submit target allocation failed");
+    if (!decode_entities(
+            raw_next, entry.target, target_size, &target_size)) {
+        vxml_free(entry.target);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(next_attribute),
+            "VoiceXML submit target decoding changed between passes");
+    }
+    entry.target[target_size] = '\0';
+    entry.target_size = target_size;
+    entry.location = salts_xml_attribute_location(next_attribute);
+    entry.method = VXML_SUBMIT_METHOD_GET;
+    entry.enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+
+    if (method_attribute.impl != NULL) {
+        const salts_xml_string_view raw =
+            salts_xml_attribute_value(method_attribute);
+        if (normalized_view_equal(raw, "get"))
+            entry.method = VXML_SUBMIT_METHOD_GET;
+        else if (normalized_view_equal(raw, "post"))
+            entry.method = VXML_SUBMIT_METHOD_POST;
+        else {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(method_attribute),
+                "VoiceXML submit method must be get or post");
+        }
+    }
+
+    if (enctype_attribute.impl != NULL) {
+        const salts_xml_string_view raw =
+            salts_xml_attribute_value(enctype_attribute);
+        if (!normalized_view_equal(
+                raw, "application/x-www-form-urlencoded")) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(enctype_attribute),
+                "VoiceXML literal submit supports urlencoded enctype only");
+        }
+    }
+
+    if (namelist_attribute.impl != NULL) {
+        const salts_xml_string_view raw =
+            salts_xml_attribute_value(namelist_attribute);
+        if (raw.size != 0u && !text_is_whitespace(raw)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(namelist_attribute),
+                "VoiceXML literal submit cannot bind namelist values");
+        }
+    }
+
+    if (measurement->submit_count == measurement->submit_capacity) {
+        size_t capacity = measurement->submit_capacity == 0u
+            ? 4u : measurement->submit_capacity * 2u;
+        vxml_decoded_submit *rows;
+        if (capacity < measurement->submit_capacity ||
+            capacity > limits->max_actions)
+            capacity = limits->max_actions;
+        if (capacity <= measurement->submit_capacity ||
+            !checked_multiply(
+                capacity, sizeof(*rows), &allocation_size)) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                entry.location,
+                "VoiceXML temporary submit table size overflow");
+        }
+        rows = (vxml_decoded_submit *)vxml_realloc(
+            measurement->submits, allocation_size);
+        if (rows == NULL) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_ALLOCATION_FAILED,
+                entry.location,
+                "VoiceXML temporary submit table allocation failed");
+        }
+        measurement->submits = rows;
+        measurement->submit_capacity = capacity;
+    }
+    measurement->submits[measurement->submit_count++] = entry;
+    return VXML_OK;
+}
+
+static vxml_status measure_submit(
+    salts_xml_node node,
+    vxml_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    const salts_xml_attribute next =
+        unqualified_attribute(node, "next");
+    const salts_xml_attribute method =
+        unqualified_attribute(node, "method");
+    const salts_xml_attribute enctype =
+        unqualified_attribute(node, "enctype");
+    const salts_xml_attribute namelist =
+        unqualified_attribute(node, "namelist");
+    size_t index;
+    vxml_status status =
+        validate_submit_attributes(node, diagnostic);
+    if (status != VXML_OK) return status;
+    if (next.impl == NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML submit requires next");
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (node_is_ignorable(child)) continue;
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+            return reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML submit child element");
+        return reject_non_element(child, diagnostic);
+    }
+    if (measurement->action_count >= limits->max_actions ||
+        !checked_add(
+            measurement->action_count, 1u,
+            &measurement->action_count))
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML action count exceeds max_actions");
+    return append_submit(
+        measurement, next, method, enctype, namelist,
+        limits, diagnostic);
+}
+
 static vxml_status resolve_gotos(
     vxml_measurement *measurement,
     vxml_diagnostic *diagnostic) {
@@ -881,7 +1104,8 @@ static vxml_status measure_block(
         if (!normalized_view_equal(
                 salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
             (!view_equal(local_name, "exit") &&
-             !view_equal(local_name, "goto")))
+             !view_equal(local_name, "goto") &&
+             !view_equal(local_name, "submit")))
             return reject_unexpected_element(
                 child, diagnostic, "unsupported VoiceXML block child element");
         if (actions != 0u)
@@ -892,7 +1116,11 @@ static vxml_status measure_block(
         ++actions;
         status = view_equal(local_name, "goto")
             ? measure_goto(child, measurement, limits, diagnostic)
-            : measure_exit(child, measurement, limits, diagnostic);
+            : view_equal(local_name, "submit")
+                ? measure_submit(
+                    child, measurement, limits, diagnostic)
+                : measure_exit(
+                    child, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1033,6 +1261,26 @@ static void write_exit(vxml_writer *writer) {
     action->fetchaudio_uri_size = 0u;
 }
 
+static void write_submit(vxml_writer *writer) {
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    const vxml_decoded_submit submit =
+        writer->measurement->submits[writer->submit_index++];
+    action->kind = VXML_ACTION_SUBMIT;
+    action->target_form = SIZE_MAX;
+    action->target_uri =
+        writer->impl->storage + writer->storage_index;
+    action->target_uri_size = submit.target_size;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
+    action->submit_method = submit.method;
+    action->submit_enctype = submit.enctype;
+    memcpy(
+        writer->impl->storage + writer->storage_index,
+        submit.target, submit.target_size + 1u);
+    writer->storage_index += submit.target_size + 1u;
+}
+
 static void write_goto(vxml_writer *writer) {
     vxml_action_row *action =
         &writer->impl->actions[writer->action_index++];
@@ -1079,6 +1327,9 @@ static void write_block(vxml_writer *writer, salts_xml_node node) {
         if (salts_xml_node_type(child) == SALTS_XML_ELEMENT) {
             if (view_equal(salts_xml_node_local_name(child), "goto"))
                 write_goto(writer);
+            else if (view_equal(
+                         salts_xml_node_local_name(child), "submit"))
+                write_submit(writer);
             else
                 write_exit(writer);
         }
@@ -1169,7 +1420,8 @@ static vxml_status validate_literal_goto_graph(
                     "VoiceXML literal Program structure is invalid");
             if (action == NULL ||
                 action->kind == VXML_ACTION_EXIT ||
-                action->kind == VXML_ACTION_GOTO_EXTERNAL)
+                action->kind == VXML_ACTION_GOTO_EXTERNAL ||
+                action->kind == VXML_ACTION_SUBMIT)
                 break;
             if (action->kind != VXML_ACTION_GOTO ||
                 action->target_form >= impl->form_count)
@@ -1306,6 +1558,7 @@ vxml_status vxml_compile(const void *bytes, size_t size,
         writer.block_index != measurement.block_count ||
         writer.action_index != measurement.action_count ||
         writer.goto_index != measurement.goto_count ||
+        writer.submit_index != measurement.submit_count ||
         writer.storage_index != measurement.name_bytes) {
         status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,

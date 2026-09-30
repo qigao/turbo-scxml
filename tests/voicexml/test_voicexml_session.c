@@ -318,6 +318,48 @@ spec("VoiceXML session") {
             vxml_program_destroy(&program);
         }
 
+        it("yields one immutable literal submit handoff") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='first'><block>"
+                "<submit next='result.vxml#done' method='post' "
+                "enctype='application/x-www-form-urlencoded'/>"
+                "</block></form></vxml>";
+            static const char expected[] = "result.vxml#done";
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_submit_target_v1 submit = {0};
+
+            check_equal(compile_program(source, &program), VXML_OK);
+            check_equal(vxml_session_init(&session, &program), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_SUBMITTING);
+            check_equal(
+                vxml_session_submit(&session, &submit), VXML_OK);
+            check_equal(
+                submit.abi_version, VXML_SUBMIT_TARGET_ABI_V1);
+            check_equal(
+                submit.struct_size, sizeof(vxml_submit_target_v1));
+            check_equal(submit.uri, expected);
+            check_equal(submit.uri_size, sizeof(expected) - 1u);
+            check_equal(
+                submit.method, VXML_SUBMIT_METHOD_POST);
+            check_equal(
+                submit.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
+            check_equal(
+                vxml_session_navigation(
+                    &session, &(vxml_navigation_target){0}),
+                VXML_INVALID_STATE);
+            check_equal(vxml_session_close(&session), VXML_OK);
+            check_equal(
+                vxml_session_submit(&session, &submit), VXML_CLOSED);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+
         it("starts a literal session at one named form for external fragment handoff") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
