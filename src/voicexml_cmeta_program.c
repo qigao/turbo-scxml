@@ -506,7 +506,9 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
+        cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
         cmeta_node_named(node, "throw") || cmeta_node_named(node, "rethrow") ||
+        cmeta_node_named(node, "reprompt") ||
         cmeta_node_named(node, "var") ||
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
@@ -900,14 +902,16 @@ static vxml_status cmeta_measure_executable(
             "implicit VoiceXML prompt text is unsupported");
     if ((!event_handler &&
          (cmeta_node_named(node, "throw") ||
-          cmeta_node_named(node, "rethrow"))) ||
+          cmeta_node_named(node, "rethrow") ||
+          cmeta_node_named(node, "reprompt"))) ||
         (!cmeta_node_named(node, "var") &&
          !cmeta_node_named(node, "assign") &&
          !cmeta_node_named(node, "clear") &&
          !cmeta_node_named(node, "if") &&
          !cmeta_node_named(node, "exit") &&
          !cmeta_node_named(node, "throw") &&
-         !cmeta_node_named(node, "rethrow")))
+         !cmeta_node_named(node, "rethrow") &&
+         !cmeta_node_named(node, "reprompt")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -936,7 +940,8 @@ static vxml_status cmeta_measure_executable(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(node),
                 "VoiceXML throw requires event");
-    } else if (cmeta_node_named(node, "rethrow")) {
+    } else if (cmeta_node_named(node, "rethrow") ||
+               cmeta_node_named(node, "reprompt")) {
         status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
     } else {
         static const char *const allowed[] = {"expr", "namelist"};
@@ -1023,26 +1028,42 @@ static vxml_status cmeta_measure_catch(
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     static const char *const catch_allowed[] = {"event", "count"};
-    static const char *const help_allowed[] = {"count"};
+    static const char *const shorthand_allowed[] = {"count"};
     const bool help = cmeta_node_named(node, "help");
+    const bool noinput = cmeta_node_named(node, "noinput");
+    const bool nomatch = cmeta_node_named(node, "nomatch");
+    const bool shorthand = help || noinput || nomatch;
     const salts_xml_attribute event = cmeta_attribute(node, "event");
     const salts_xml_attribute count = cmeta_attribute(node, "count");
     unsigned parsed_count = 1u;
     size_t index;
     vxml_status status = cmeta_validate_attributes(
         node,
-        help ? help_allowed : catch_allowed,
-        help ? 1u : 2u, diagnostic);
+        shorthand ? shorthand_allowed : catch_allowed,
+        shorthand ? 1u : 2u, diagnostic);
     if (status != VXML_OK) return status;
     if (!cmeta_event_options_valid(options))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(node),
             "VoiceXML catch requires enabled Event limits");
-    if (help) {
-        if (sizeof("help") - 1u > options->max_event_name_bytes ||
+    if (shorthand) {
+        const size_t shorthand_size = help
+            ? sizeof("help") - 1u
+            : noinput
+                ? sizeof("noinput") - 1u
+                : sizeof("nomatch") - 1u;
+        if (shorthand_size > options->max_event_name_bytes ||
             measurement->name_bytes >
-                SIZE_MAX - sizeof("help") ||
+                SIZE_MAX - (shorthand_size + 1u) ||
+            measurement->name_bytes + shorthand_size + 1u >
+                limits->max_name_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(node),
+                "VoiceXML shorthand Event exceeds configured name limits");
+        measurement->name_bytes += shorthand_size + 1u;
+    } else {
             measurement->name_bytes + sizeof("help") >
                 limits->max_name_bytes)
             return cmeta_program_fail(
