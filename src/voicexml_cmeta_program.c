@@ -3705,7 +3705,8 @@ static vxml_status cmeta_lower_program(
                             declaration_index++],
                         scopes, 2u);
                     if (status != VXML_OK) return status;
-                } else if (cmeta_node_named(item, "catch")) {
+                } else if (cmeta_node_named(item, "catch") ||
+                           cmeta_node_named(item, "help")) {
                     status = cmeta_lower_catch(
                         builder, item,
                         VXML_CMETA_EVENT_FORM, form_index,
