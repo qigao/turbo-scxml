@@ -1553,7 +1553,7 @@ spec("VoiceXML CMeta program compiler") {
              "</block></form></vxml>", VXML_UNSUPPORTED_FEATURE},
             {"<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
              "datamodel='cmeta'><form><block><disconnect reason='x'/>"
-             "</block></form></vxml>", VXML_INVALID_STRUCTURE}
+             "</block></form></vxml>", VXML_UNSUPPORTED_FEATURE}
         };
         vxml_cmeta_compile_options_v1 options = compile_options();
         size_t index;
