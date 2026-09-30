@@ -1368,8 +1368,10 @@ spec("VoiceXML dialog manager") {
         check_equal(documents.policy_open_calls, (size_t)1u);
         check_equal(
             documents.fetchaudio_size,
-            sizeof("media/wait.wav") - 1u);
-        check_equal(documents.fetchaudio, "media/wait.wav");
+            sizeof("https://voice.example/app/dialogs/media/wait.wav") - 1u);
+        check_equal(
+            documents.fetchaudio,
+            "https://voice.example/app/dialogs/media/wait.wav");
         check_equal(documents.close_calls, (size_t)2u);
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
