@@ -1028,14 +1028,13 @@ spec("VoiceXML CMeta session execution") {
                     VXML_OK);
         check_equal(vxml_session_init_cmeta(
                         &session, &program, &options),
-                    VXML_OK);
-        check_equal(vxml_session_start(&session), VXML_OK);
-        check_equal(vxml_session_cmeta_collect_prepare(
-                        &session, NULL),
                     VXML_UNSUPPORTED_FEATURE);
+        check_null(session.impl);
         check_equal(probe.prepare_calls, (size_t)0u);
+        check_equal(probe.commit_calls, (size_t)0u);
+        check_equal(probe.discard_calls, (size_t)0u);
+        check_equal(probe.cancel_calls, (size_t)0u);
 
-        vxml_session_destroy(&session);
         vxml_program_destroy(&program);
     }
 
