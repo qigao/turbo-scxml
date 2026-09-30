@@ -125,6 +125,8 @@ int main(void) {
             VXML_CMETA_COLLECT_ADAPTER_ABI_V1 ||
         collect_ticket.commit != NULL ||
         collect_request.abi_version != 0u ||
+        collect_request.has_timeout ||
+        collect_request.timeout_us != UINT64_C(0) ||
         collect_completion.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
         collect_completion_v2.abi_version !=
