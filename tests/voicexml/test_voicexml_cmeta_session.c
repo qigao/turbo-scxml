@@ -1591,6 +1591,199 @@ spec("VoiceXML CMeta session execution") {
         check_equal(media_probe.cancel_calls, (size_t)0u);
     }
 
+    it("raises scoped Events for media queue refusal and unsupported capability") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>hello</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='error.noresource'>"
+            "<assign name='other' expr='11'/></catch>"
+            "<catch event='error.unsupported.format'>"
+            "<assign name='other' expr='22'/></catch>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_LIMIT_EXCEEDED};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const vxml_cmeta_session_root *committed;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_LIMIT_EXCEEDED);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_false(media_probe.reserved);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_not_null(committed);
+        check_equal(committed->other, 11);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+
+        media_probe.prepare_status = VXML_OK;
+        media_adapter.capabilities = 0u;
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        committed = (const vxml_cmeta_session_root *)
+            session_data(&session)->committed_root.storage;
+        check_equal(committed->other, 22);
+        check_equal(vxml_session_get_state(&session),
+                    VXML_SESSION_RUNNING);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("maps exact and historical FAILED prompt completions to scoped Events") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>hello</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='error.badfetch'>"
+            "<assign name='other' expr='1'/></catch>"
+            "<catch event='error.unsupported.format'>"
+            "<assign name='other' expr='2'/></catch>"
+            "<catch event='error.noresource'>"
+            "<assign name='other' expr='3'/></catch>"
+            "</field></form></vxml>";
+        static const struct {
+            vxml_cmeta_prompt_media_failure failure;
+            size_t struct_size;
+            int expected_other;
+        } cases[] = {
+            {
+                VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH,
+                sizeof(vxml_cmeta_prompt_media_completion_v1), 1
+            },
+            {
+                VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT,
+                sizeof(vxml_cmeta_prompt_media_completion_v1), 2
+            },
+            {
+                VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE,
+                sizeof(vxml_cmeta_prompt_media_completion_v1), 3
+            },
+            {
+                VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH,
+                offsetof(vxml_cmeta_prompt_media_completion_v1, failure), 3
+            }
+        };
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        vxml_program program = {0};
+        size_t index;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+
+        for (index = 0u;
+             index < sizeof(cases) / sizeof(cases[0]);
+             ++index) {
+            cmeta_collect_probe collect_probe = {
+                .prepare_status = VXML_OK};
+            vxml_cmeta_collect_adapter_v1 collect_adapter =
+                cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+            cmeta_prompt_media_probe media_probe = {
+                .prepare_status = VXML_OK};
+            vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+                cmeta_prompt_media_adapter(
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+            vxml_cmeta_session_options_v1 options =
+                event_session_options(
+                    &root, &collect_adapter, &collect_probe);
+            vxml_session session = {0};
+            vxml_cmeta_prompt_media_request_v1 request = {0};
+            vxml_cmeta_prompt_media_completion_v1 completion = {
+                .abi_version =
+                    VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+                .struct_size = cases[index].struct_size,
+                .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED,
+                .failure = cases[index].failure};
+            vxml_cmeta_prompt_media_outcome outcome = 0;
+            const vxml_cmeta_session_root *committed;
+            bool progressed = false;
+
+            attach_prompt_media(
+                &options, &media_adapter, &media_probe);
+            options.initially_undefined = undefined;
+            options.initially_undefined_count = 1u;
+            check_equal(vxml_session_init_cmeta(
+                            &session, &program, &options),
+                        VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(vxml_session_cmeta_prompt_media_request(
+                            &session, &request),
+                        VXML_OK);
+            check_equal(vxml_session_cmeta_prompt_media_prepare(
+                            &session, NULL),
+                        VXML_OK);
+            check_equal(vxml_session_cmeta_prompt_media_commit(
+                            &session),
+                        VXML_OK);
+
+            completion.generation = request.generation;
+            check_equal(vxml_session_cmeta_prompt_media_try_complete(
+                            &session, &completion),
+                        VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+            check_equal(vxml_session_cmeta_prompt_media_run_ready(
+                            &session, &progressed, &outcome),
+                        VXML_OK);
+            check_true(progressed);
+            check_equal(outcome,
+                        VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED);
+            committed = (const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage;
+            check_not_null(committed);
+            check_equal(
+                committed->other, cases[index].expected_other);
+            check_equal(vxml_session_get_state(&session),
+                        VXML_SESSION_RUNNING);
+
+            check_equal(vxml_session_cmeta_prompt_media_try_complete(
+                            &session, &completion),
+                        VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE);
+            committed = (const vxml_cmeta_session_root *)
+                session_data(&session)->committed_root.storage;
+            check_equal(
+                committed->other, cases[index].expected_other);
+
+            vxml_session_destroy(&session);
+        }
+
+        vxml_program_destroy(&program);
+    }
+
     it("closes prompt completion ingress and cancels an active generation on destroy") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
