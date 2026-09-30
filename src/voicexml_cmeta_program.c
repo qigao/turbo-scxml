@@ -2792,6 +2792,8 @@ static bool cmeta_allocate_rows(
         return false;
     candidate_count = measurement->location_count * 4u;
     string_capacity = input_size + 1u;
+    if (measurement->name_bytes > string_capacity)
+        string_capacity = measurement->name_bytes;
     impl = (vxml_program_impl *)vxml_calloc(1u, sizeof(*impl));
     profile = (vxml_cmeta_program_data *)vxml_calloc(1u, sizeof(*profile));
     if (impl == NULL || profile == NULL) goto failure;
