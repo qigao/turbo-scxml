@@ -385,6 +385,8 @@ typedef struct cmeta_program_measurement {
     size_t menu_speech_policy_count;
     size_t menu_grammar_count;
     size_t field_count;
+    size_t initial_count;
+    size_t form_item_count;
     size_t prompt_count;
     size_t prompt_segment_count;
     size_t prompt_fallback_count;
@@ -548,6 +550,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
         cmeta_node_named(node, "menu") || cmeta_node_named(node, "choice") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
+        cmeta_node_named(node, "initial") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -602,6 +605,16 @@ static bool cmeta_menu_options_valid(
         options->max_menus != 0u &&
         options->max_menu_choices != 0u &&
         options->max_menu_choice_bytes != 0u;
+}
+
+static bool cmeta_initial_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_initials) +
+        sizeof(options->max_initials);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_initials != 0u &&
+        cmeta_field_options_valid(options);
 }
 
 static bool cmeta_menu_target_options_valid(
