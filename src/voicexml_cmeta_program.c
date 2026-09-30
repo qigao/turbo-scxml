@@ -5034,6 +5034,127 @@ static vxml_status cmeta_compile_menu_schema(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_compile_subdialog_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    size_t form_index,
+    size_t form_scope,
+    size_t first_subdialog,
+    vxml_cmeta_subdialog_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    const salts_xml_attribute src_attribute =
+        cmeta_attribute(node, "src");
+    cmeta_decoded_value decoded_name = {0};
+    const cmeta_data_field_desc *root_field;
+    size_t root_field_index = 0u;
+    size_t prior;
+    vxml_status status;
+
+    memset(out, 0, sizeof(*out));
+    out->condition = VXML_CMETA_NO_INDEX;
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded_name);
+    if (status != VXML_OK) return status;
+    if (!cmeta_is_ncname(decoded_name.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name must be a decoded XML NCName");
+        goto done;
+    }
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            decoded_name.view.data, decoded_name.view.size, NULL) != NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name collides with a form lexical variable");
+        goto done;
+    }
+
+    root_field = cmeta_root_field(
+        builder->profile->root, decoded_name.view, &root_field_index);
+    if (root_field == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog name has no matching application-root field");
+        goto done;
+    }
+    if (root_field->value == NULL ||
+        root_field->value->kind != CMETA_DATA_STRUCT ||
+        root_field->value->storage_type == NULL ||
+        root_field->value->shape == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML subdialog result target must be a CMeta STRUCT");
+        goto done;
+    }
+
+    for (prior = 0u; prior < builder->field_index; ++prior) {
+        const vxml_cmeta_field_row *field =
+            &builder->profile->fields[prior];
+        if (field->form == form_index &&
+            field->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML subdialog result target duplicates a field form item");
+            goto done;
+        }
+    }
+    for (prior = first_subdialog;
+         prior < builder->subdialog_index;
+         ++prior) {
+        const vxml_cmeta_subdialog_row *previous =
+            &builder->profile->subdialogs[prior];
+        if (previous->form == form_index &&
+            previous->root_field == root_field_index) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML subdialog result target");
+            goto done;
+        }
+    }
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(src_attribute),
+        salts_xml_attribute_location(src_attribute),
+        &out->src, &out->src_size);
+    if (status != VXML_OK) goto done;
+    if (out->src_size == 0u ||
+        out->src_size > builder->options->max_subdialog_uri_bytes) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(src_attribute),
+            "VoiceXML subdialog src changed between compiler passes");
+        goto done;
+    }
+
+    out->form = form_index;
+    out->root_field = root_field_index;
+    out->field_offset = root_field->offset;
+    out->result_data = root_field->value;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded_name);
+    if (status != VXML_OK)
+        memset(out, 0, sizeof(*out));
+    return status;
+}
+
 static vxml_status cmeta_build_schemas(
     cmeta_program_builder *builder, salts_xml_node root,
     const cmeta_program_measurement *measurement) {
@@ -5140,6 +5261,8 @@ static vxml_status cmeta_build_schemas(
             form->field_count = 0u;
             form->first_initial = builder->initial_index;
             form->initial_count = 0u;
+            form->first_subdialog = builder->subdialog_index;
+            form->subdialog_count = 0u;
             form->first_item = builder->form_item_index;
             form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
@@ -5168,6 +5291,7 @@ static vxml_status cmeta_build_schemas(
             form->first_declaration = builder->declaration_index;
             form->first_field = builder->field_index;
             form->first_initial = builder->initial_index;
+            form->first_subdialog = builder->subdialog_index;
             form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
@@ -5261,6 +5385,30 @@ static vxml_status cmeta_build_schemas(
                         builder->form_item_index++];
                     order->kind = VXML_CMETA_FORM_ITEM_INITIAL;
                     order->index = builder->initial_index++;
+                    continue;
+                }
+                if (cmeta_node_named(item, "subdialog")) {
+                    vxml_cmeta_subdialog_row *subdialog;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->subdialog_index >=
+                            builder->profile->subdialog_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count ||
+                        builder->profile->subdialogs == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog/form-item rows changed between compiler passes");
+                    subdialog = &builder->profile->subdialogs[
+                        builder->subdialog_index];
+                    status = cmeta_compile_subdialog_schema(
+                        builder, item, form_index, form_scope,
+                        form->first_subdialog, subdialog);
+                    if (status != VXML_OK) return status;
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_SUBDIALOG;
+                    order->index = builder->subdialog_index++;
                     continue;
                 }
                 if (cmeta_node_named(item, "field")) {
@@ -5396,6 +5544,8 @@ static vxml_status cmeta_build_schemas(
                 builder->field_index - form->first_field;
             form->initial_count =
                 builder->initial_index - form->first_initial;
+            form->subdialog_count =
+                builder->subdialog_index - form->first_subdialog;
             form->item_count =
                 builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
