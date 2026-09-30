@@ -4005,6 +4005,59 @@ static vxml_status cmeta_lower_program(
                             &field->condition);
                         if (status != VXML_OK) return status;
                     }
+                    {
+                        size_t nested_index;
+                        size_t prompt_offset = 0u;
+                        if (!range_valid(
+                                field->first_prompt, field->prompt_count,
+                                builder->profile->prompt_count) ||
+                            (field->prompt_count != 0u &&
+                             builder->profile->prompts == NULL))
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML prompt range is invalid");
+                        for (nested_index = 0u;
+                             nested_index <
+                                 salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(item, nested_index);
+                            vxml_cmeta_prompt_row *prompt;
+                            const salts_xml_attribute prompt_cond =
+                                cmeta_attribute(nested, "cond");
+                            if (!cmeta_node_named(nested, "prompt"))
+                                continue;
+                            if (prompt_offset >= field->prompt_count)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML prompt count changed during lowering");
+                            prompt = &builder->profile->prompts[
+                                field->first_prompt + prompt_offset++];
+                            if (prompt->field != current_field_index)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML prompt ownership changed during lowering");
+                            if (prompt_cond.impl != NULL) {
+                                status = cmeta_append_expression(
+                                    builder, prompt_cond,
+                                    scopes, 2u, true,
+                                    &prompt->condition);
+                                if (status != VXML_OK) return status;
+                            }
+                        }
+                        if (prompt_offset != field->prompt_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML prompt rows changed between compiler passes");
+                    }
                     if (field->filled != VXML_CMETA_NO_INDEX) {
                         size_t nested_index;
                         salts_xml_node filled_node = {0};
