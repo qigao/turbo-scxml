@@ -510,6 +510,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
         cmeta_node_named(node, "throw") || cmeta_node_named(node, "rethrow") ||
         cmeta_node_named(node, "reprompt") ||
+        cmeta_node_named(node, "audio") ||
         cmeta_node_named(node, "var") ||
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
@@ -1310,10 +1311,14 @@ static vxml_status cmeta_measure_prompt(
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {"count", "cond"};
+    static const char *const audio_allowed[] = {"src"};
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
     const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
     size_t child_index;
     size_t text_bytes = 0u;
+    size_t audio_count = 0u;
+    size_t audio_src_bytes = 0u;
+    bool non_whitespace_text = false;
     unsigned parsed_count = 1u;
     vxml_status status = cmeta_validate_attributes(
         prompt, allowed, 2u, diagnostic);
@@ -1339,6 +1344,7 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_attribute_location(cond),
             "VoiceXML prompt condition count overflow");
+
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
          ++child_index) {
@@ -1357,6 +1363,42 @@ static vxml_status cmeta_measure_prompt(
                     salts_xml_node_location(child),
                     "VoiceXML prompt text size overflow");
             text_bytes += text.size;
+            if (!cmeta_text_whitespace(text))
+                non_whitespace_text = true;
+            continue;
+        }
+        if (cmeta_node_named(child, "audio")) {
+            const salts_xml_attribute src =
+                cmeta_attribute(child, "src");
+            if (++audio_count > 1u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML V1 media prompt accepts one audio element");
+            status = cmeta_validate_attributes(
+                child, audio_allowed, 1u, diagnostic);
+            if (status == VXML_OK)
+                status = cmeta_validate_empty_element(
+                    child, diagnostic);
+            if (status != VXML_OK) return status;
+            if (src.impl == NULL)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML audio requires literal src in this profile");
+            if (!cmeta_decode_entities(
+                    salts_xml_attribute_value(src),
+                    NULL, 0u, &audio_src_bytes))
+                return cmeta_program_fail(
+                    diagnostic, VXML_XML_ERROR,
+                    salts_xml_attribute_location(src),
+                    "VoiceXML audio src has an invalid XML reference");
+            if (audio_src_bytes == 0u ||
+                audio_src_bytes > options->max_prompt_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(src),
+                    "VoiceXML audio src exceeds max_prompt_bytes");
             continue;
         }
         return cmeta_program_fail(
@@ -1364,11 +1406,21 @@ static vxml_status cmeta_measure_prompt(
             salts_xml_node_location(child),
             "VoiceXML prompt child markup is deferred to the media profile");
     }
+
+    if (audio_count != 0u) {
+        if (non_whitespace_text)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(prompt),
+                "mixed VoiceXML text/audio prompt requires media V2");
+        return VXML_OK;
+    }
+
     if (text_bytes == 0u)
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(prompt),
-            "VoiceXML prompt requires literal text");
+            "VoiceXML prompt requires literal text or audio");
     if (text_bytes > options->max_prompt_bytes)
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
@@ -2150,6 +2202,7 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "count");
     size_t child_index;
     size_t text_bytes = 0u;
+    salts_xml_node audio = {0};
     char *destination;
     unsigned count = 1u;
     vxml_status status = cmeta_parse_prompt_count(
@@ -2174,8 +2227,33 @@ static vxml_status cmeta_compile_prompt_schema(
                     salts_xml_node_location(child),
                     "VoiceXML prompt text size changed between passes");
             text_bytes += text.size;
+        } else if (cmeta_node_named(child, "audio")) {
+            if (audio.impl != NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML audio count changed between passes");
+            audio = child;
         }
     }
+
+    if (audio.impl != NULL) {
+        const salts_xml_attribute src =
+            cmeta_attribute(audio, "src");
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(src),
+            salts_xml_attribute_location(src),
+            &out->media_payload, &out->media_payload_size);
+        if (status != VXML_OK) return status;
+        if (out->media_payload_size == 0u)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(src),
+                "VoiceXML audio src disappeared between passes");
+        out->media_kind = VXML_CMETA_PROMPT_MEDIA_AUDIO;
+        return VXML_OK;
+    }
+
     if (text_bytes == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -2207,6 +2285,9 @@ static vxml_status cmeta_compile_prompt_schema(
     destination[text_bytes] = '\0';
     out->text = destination;
     out->text_size = text_bytes;
+    out->media_kind = VXML_CMETA_PROMPT_MEDIA_TEXT;
+    out->media_payload = out->text;
+    out->media_payload_size = out->text_size;
     builder->string_index += text_bytes + 1u;
     return VXML_OK;
 }

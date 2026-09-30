@@ -747,7 +747,8 @@ static vxml_status cmeta_prompt_media_prepare(
         request->segment_count != 1u ||
         request->field.data == NULL ||
         request->field.size >= sizeof(probe->field) ||
-        request->segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT ||
+        (request->segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
+         request->segment.kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
         request->segment.payload.data == NULL ||
         request->segment.payload.size >= sizeof(probe->payload))
         return VXML_INVALID_CONTRACT;
@@ -948,6 +949,95 @@ spec("VoiceXML CMeta session execution") {
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
         check_equal(media_probe.cancel_calls, (size_t)1u);
+    }
+
+    it("selects a tapered AUDIO prompt and enforces AUDIO capability before callback") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt>"
+            "<prompt count='2'><audio src='retry.wav'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_view_v1 prompt = {0};
+        vxml_cmeta_prompt_media_request_v1 request = {0};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.count, (unsigned)1u);
+        check_equal(prompt.text.size, sizeof("first") - 1u);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt(
+                        &session, &prompt), VXML_OK);
+        check_equal(prompt.prompt_count, (unsigned)2u);
+        check_equal(prompt.count, (unsigned)2u);
+        check_null(prompt.text.data);
+        check_equal(prompt.text.size, (size_t)0u);
+
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.segment_count, (size_t)1u);
+        check_equal(request.segment.kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(request.required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO);
+        check_equal(request.segment.payload.size,
+                    sizeof("retry.wav") - 1u);
+        check_equal(memcmp(
+                        request.segment.payload.data,
+                        "retry.wav",
+                        request.segment.payload.size), 0);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_UNSUPPORTED_FEATURE);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+
+        media_adapter.capabilities =
+            VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_equal(media_probe.kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(media_probe.payload, "retry.wav");
+        check_equal(vxml_session_cmeta_prompt_media_commit(
+                        &session), VXML_OK);
+        check_true(media_probe.active);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+        check_false(media_probe.active);
     }
 
     it("cancels committed prompt media when collect completion advances the generation") {

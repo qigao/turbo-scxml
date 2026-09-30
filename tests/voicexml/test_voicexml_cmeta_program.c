@@ -325,6 +325,12 @@ spec("VoiceXML CMeta program compiler") {
                         sizeof("First prompt") - 1u), 0);
         check_equal(profile->prompts[0].condition,
                     VXML_CMETA_NO_INDEX);
+        check_equal(profile->prompts[0].media_kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_true(profile->prompts[0].media_payload ==
+                   profile->prompts[0].text);
+        check_equal(profile->prompts[0].media_payload_size,
+                    profile->prompts[0].text_size);
         check_equal(profile->prompts[1].count, (unsigned)2u);
         check_equal(profile->prompts[1].text_size,
                     sizeof("Second prompt") - 1u);
@@ -334,6 +340,47 @@ spec("VoiceXML CMeta program compiler") {
                         sizeof("Second prompt") - 1u), 0);
         check_true(profile->prompts[1].condition !=
                    VXML_CMETA_NO_INDEX);
+        check_equal(profile->prompts[1].media_kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("compiles a literal audio prompt into one immutable AUDIO row") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt count='2' cond='flag'><audio src='retry.wav'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_prompt_row *prompt;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_count, (size_t)1u);
+        prompt = &profile->prompts[0];
+        check_equal(prompt->count, (unsigned)2u);
+        check_true(prompt->condition != VXML_CMETA_NO_INDEX);
+        check_equal(prompt->media_kind, VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_null(prompt->text);
+        check_equal(prompt->text_size, (size_t)0u);
+        check_equal(prompt->media_payload_size,
+                    sizeof("retry.wav") - 1u);
+        check_equal(memcmp(
+                        prompt->media_payload,
+                        "retry.wav",
+                        sizeof("retry.wav") - 1u), 0);
 
         vxml_program_destroy(&program);
     }
@@ -344,20 +391,31 @@ spec("VoiceXML CMeta program compiler") {
             "<grammar type='application/srgs+xml' src='a'/></field></form>",
             "<form><field name='value'><prompt>toolong</prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>",
-            "<form><field name='value'><prompt><audio src='a'/></prompt>"
+            "<form><field name='value'><prompt><audio expr='x'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>",
+            "<form><field name='value'><prompt>hello<audio src='a'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>",
+            "<form><field name='value'><prompt><audio src='a'>fallback</audio></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form>",
+            "<form><field name='value'><prompt><audio src='a'/><audio src='b'/></prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>"
         };
         static const vxml_status expected[] = {
             VXML_INVALID_STRUCTURE,
             VXML_LIMIT_EXCEEDED,
-            VXML_UNSUPPORTED_FEATURE
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_INVALID_STRUCTURE
         };
         static const char prefix[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'>";
         size_t index;
 
-        for (index = 0u; index < 3u; ++index) {
+        for (index = 0u;
+             index < sizeof(bodies) / sizeof(bodies[0]);
+             ++index) {
             char source[768];
             vxml_cmeta_compile_options_v1 options =
                 prompt_compile_options();
@@ -1162,8 +1220,9 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 4u || index == 5u ||
-                    index == 6u || index == 13u
+                    index == 3u || index == 4u ||
+                    index == 5u || index == 6u ||
+                    index == 13u
                         ? VXML_INVALID_STRUCTURE
                         : VXML_UNSUPPORTED_FEATURE;
                 check_equal(vxml_compile_cmeta(

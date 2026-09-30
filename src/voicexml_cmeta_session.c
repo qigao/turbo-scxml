@@ -3794,10 +3794,11 @@ static unsigned field_prompt_count(
     return count;
 }
 
-vxml_status vxml_session_cmeta_prompt(
-    const vxml_session *session,
-    vxml_cmeta_prompt_view_v1 *out_prompt) {
-    const vxml_session_impl *impl;
+static vxml_status selected_prompt_row(
+    const vxml_session_impl *impl,
+    const vxml_cmeta_field_row **out_field,
+    const vxml_cmeta_prompt_row **out_prompt,
+    unsigned *out_prompt_count) {
     const vxml_cmeta_program_data *program;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_form_row *form;
@@ -3805,13 +3806,12 @@ vxml_status vxml_session_cmeta_prompt(
     const vxml_cmeta_prompt_row *best = NULL;
     unsigned prompt_count;
     size_t offset;
-    if (out_prompt != NULL)
-        *out_prompt = (vxml_cmeta_prompt_view_v1){0};
-    if (session == NULL || out_prompt == NULL)
+    if (out_field != NULL) *out_field = NULL;
+    if (out_prompt != NULL) *out_prompt = NULL;
+    if (out_prompt_count != NULL) *out_prompt_count = 0u;
+    if (impl == NULL || out_field == NULL ||
+        out_prompt == NULL || out_prompt_count == NULL)
         return VXML_INVALID_ARGUMENT;
-    impl = cmeta_session(session);
-    if (impl == NULL)
-        return VXML_INVALID_CONTRACT;
     if (impl->state != VXML_SESSION_RUNNING ||
         impl->program == NULL ||
         impl->program->profile_data == NULL ||
@@ -3844,9 +3844,21 @@ vxml_status vxml_session_cmeta_prompt(
         bool eligible = true;
         if (row->field != profile->active_field ||
             row->count == 0u ||
-            row->text == NULL ||
-            row->text_size == 0u)
+            row->media_payload == NULL ||
+            row->media_payload_size == 0u)
             return VXML_INVALID_STRUCTURE;
+        if (row->media_kind == VXML_CMETA_PROMPT_MEDIA_TEXT) {
+            if (row->text == NULL || row->text_size == 0u ||
+                row->media_payload != row->text ||
+                row->media_payload_size != row->text_size)
+                return VXML_INVALID_STRUCTURE;
+        } else if (row->media_kind ==
+                   VXML_CMETA_PROMPT_MEDIA_AUDIO) {
+            if (row->text != NULL || row->text_size != 0u)
+                return VXML_INVALID_STRUCTURE;
+        } else {
+            return VXML_INVALID_STRUCTURE;
+        }
         if (row->count > prompt_count)
             continue;
         if (row->condition != VXML_CMETA_NO_INDEX) {
@@ -3861,17 +3873,44 @@ vxml_status vxml_session_cmeta_prompt(
         if (best == NULL || row->count > best->count)
             best = row;
     }
+    *out_field = field;
+    *out_prompt = best;
+    *out_prompt_count = prompt_count;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_prompt(
+    const vxml_session *session,
+    vxml_cmeta_prompt_view_v1 *out_prompt) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_field_row *field = NULL;
+    const vxml_cmeta_prompt_row *best = NULL;
+    unsigned prompt_count = 0u;
+    vxml_status status;
+    if (out_prompt != NULL)
+        *out_prompt = (vxml_cmeta_prompt_view_v1){0};
+    if (session == NULL || out_prompt == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL)
+        return VXML_INVALID_CONTRACT;
+    status = selected_prompt_row(
+        impl, &field, &best, &prompt_count);
+    if (status != VXML_OK) return status;
 
     *out_prompt = (vxml_cmeta_prompt_view_v1){
         .abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_view_v1),
         .field = {field->name, field->name_size},
-        .text = best != NULL
+        .text = best != NULL &&
+                best->media_kind == VXML_CMETA_PROMPT_MEDIA_TEXT
             ? (vxml_cmeta_name_view){best->text, best->text_size}
             : (vxml_cmeta_name_view){0},
         .count = best != NULL ? best->count : 0u,
         .prompt_count = prompt_count,
-        .generation = profile->collect_generation
+        .generation =
+            ((const vxml_cmeta_session_data *)impl->profile_data)
+                ->collect_generation
     };
     return VXML_OK;
 }
@@ -3879,33 +3918,46 @@ vxml_status vxml_session_cmeta_prompt(
 static vxml_status prompt_media_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_prompt_media_request_v1 *out_request) {
-    vxml_session wrapper = {0};
-    vxml_cmeta_prompt_view_v1 prompt = {0};
+    const vxml_cmeta_field_row *field = NULL;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    const vxml_cmeta_session_data *profile;
+    unsigned prompt_count = 0u;
     vxml_status status;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     *out_request = (vxml_cmeta_prompt_media_request_v1){0};
     if (impl == NULL) return VXML_INVALID_CONTRACT;
-    wrapper.impl = (void *)impl;
-    status = vxml_session_cmeta_prompt(&wrapper, &prompt);
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
 
     out_request->abi_version = VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1;
     out_request->struct_size =
         sizeof(vxml_cmeta_prompt_media_request_v1);
-    out_request->generation = prompt.generation;
-    out_request->field = prompt.field;
-    out_request->prompt_count = prompt.prompt_count;
-    out_request->selected_count = prompt.count;
-    if (prompt.text.data == NULL || prompt.text.size == 0u)
+    out_request->generation = profile->collect_generation;
+    out_request->field =
+        (vxml_cmeta_name_view){field->name, field->name_size};
+    out_request->prompt_count = prompt_count;
+    out_request->selected_count =
+        prompt != NULL ? prompt->count : 0u;
+    if (prompt == NULL)
         return VXML_OK;
 
-    out_request->required_capabilities =
-        VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
     out_request->segment_count = 1u;
-    out_request->segment.kind = VXML_CMETA_PROMPT_MEDIA_TEXT;
-    out_request->segment.payload = prompt.text;
+    out_request->segment.kind = prompt->media_kind;
+    out_request->segment.payload =
+        (vxml_cmeta_name_view){
+            prompt->media_payload, prompt->media_payload_size};
     out_request->segment.media_type =
         (vxml_cmeta_name_view){0};
+    if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_TEXT)
+        out_request->required_capabilities =
+            VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+    else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_AUDIO)
+        out_request->required_capabilities =
+            VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+    else
+        return VXML_INVALID_STRUCTURE;
     return VXML_OK;
 }
 
@@ -3952,7 +4004,8 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if (request.segment_count == 0u)
         return VXML_INVALID_STATE;
     if (request.segment_count != 1u ||
-        request.segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT ||
+        (request.segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
+         request.segment.kind != VXML_CMETA_PROMPT_MEDIA_AUDIO) ||
         request.segment.payload.data == NULL ||
         request.segment.payload.size == 0u)
         return VXML_INVALID_STRUCTURE;
