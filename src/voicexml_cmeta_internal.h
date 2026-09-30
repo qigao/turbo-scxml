@@ -45,6 +45,14 @@ typedef struct vxml_cmeta_form_row {
     size_t block_count;
 } vxml_cmeta_form_row;
 
+typedef struct vxml_cmeta_prompt_row {
+    size_t field;
+    const char *text;
+    size_t text_size;
+    unsigned count;
+    size_t condition;
+} vxml_cmeta_prompt_row;
+
 typedef struct vxml_cmeta_field_row {
     size_t form;
     size_t root_field;
@@ -58,6 +66,8 @@ typedef struct vxml_cmeta_field_row {
     const char *grammar_src;
     size_t grammar_src_size;
     uint64_t required_capabilities;
+    size_t first_prompt;
+    size_t prompt_count;
     size_t filled;
 } vxml_cmeta_field_row;
 
@@ -192,6 +202,8 @@ typedef struct vxml_cmeta_program_data {
     size_t form_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
+    vxml_cmeta_prompt_row *prompts;
+    size_t prompt_count;
     vxml_cmeta_filled_row *filled;
     size_t filled_count;
     size_t *filled_root_fields;
