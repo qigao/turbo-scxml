@@ -3939,6 +3939,54 @@ static vxml_status selected_prompt_row(
                     return VXML_INVALID_STRUCTURE;
             }
         }
+        if (row->fallback_count != 0u) {
+            size_t fallback_offset;
+            if ((row->required_capabilities &
+                 VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK) == 0u ||
+                row->segment_count < 2u ||
+                !range_valid(
+                    row->first_fallback, row->fallback_count,
+                    program->prompt_fallback_count) ||
+                program->prompt_fallbacks == NULL)
+                return VXML_INVALID_STRUCTURE;
+            for (fallback_offset = 0u;
+                 fallback_offset < row->fallback_count;
+                 ++fallback_offset) {
+                const vxml_cmeta_prompt_media_fallback_v1 *fallback =
+                    &program->prompt_fallbacks[
+                        row->first_fallback + fallback_offset];
+                size_t fallback_segment_offset;
+                if (fallback->audio_segment_index >= row->segment_count ||
+                    fallback->first_fallback_segment !=
+                        fallback->audio_segment_index + 1u ||
+                    fallback->fallback_segment_count == 0u ||
+                    fallback->first_fallback_segment >= row->segment_count ||
+                    fallback->fallback_segment_count >
+                        row->segment_count -
+                            fallback->first_fallback_segment ||
+                    program->prompt_segments[
+                        row->first_segment +
+                        fallback->audio_segment_index].kind !=
+                            VXML_CMETA_PROMPT_MEDIA_AUDIO)
+                    return VXML_INVALID_STRUCTURE;
+                for (fallback_segment_offset = 0u;
+                     fallback_segment_offset <
+                        fallback->fallback_segment_count;
+                     ++fallback_segment_offset) {
+                    const vxml_cmeta_prompt_media_segment_kind kind =
+                        program->prompt_segments[
+                            row->first_segment +
+                            fallback->first_fallback_segment +
+                            fallback_segment_offset].kind;
+                    if (kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
+                        kind != VXML_CMETA_PROMPT_MEDIA_SSML)
+                        return VXML_INVALID_STRUCTURE;
+                }
+            }
+        } else if ((row->required_capabilities &
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK) != 0u) {
+            return VXML_INVALID_STRUCTURE;
+        }
         if (row->count > prompt_count)
             continue;
         if (row->condition != VXML_CMETA_NO_INDEX) {
@@ -4114,6 +4162,16 @@ static vxml_status prompt_media_batch_request_from_impl(
     out_request->segments =
         &program->prompt_segments[prompt->first_segment];
     out_request->segment_count = prompt->segment_count;
+    if (prompt->fallback_count != 0u) {
+        if (!range_valid(
+                prompt->first_fallback, prompt->fallback_count,
+                program->prompt_fallback_count) ||
+            program->prompt_fallbacks == NULL)
+            return VXML_INVALID_STRUCTURE;
+        out_request->fallbacks =
+            &program->prompt_fallbacks[prompt->first_fallback];
+        out_request->fallback_count = prompt->fallback_count;
+    }
     return VXML_OK;
 }
 

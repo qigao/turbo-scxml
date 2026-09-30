@@ -30,6 +30,7 @@ extern "C" {
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_BATCH UINT64_C(8)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_MARK UINT64_C(16)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK UINT64_C(32)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -246,6 +247,19 @@ typedef struct vxml_cmeta_prompt_media_segment_v1 {
     vxml_cmeta_name_view media_type;
 } vxml_cmeta_prompt_media_segment_v1;
 
+/**
+ * Batch-relative conditional alternate range for one AUDIO segment.
+ *
+ * The provider plays the fallback range only when the referenced AUDIO
+ * segment cannot be played. The range belongs to the same immutable segments
+ * array and is borrowed for prepare_batch only.
+ */
+typedef struct vxml_cmeta_prompt_media_fallback_v1 {
+    size_t audio_segment_index;
+    size_t first_fallback_segment;
+    size_t fallback_segment_count;
+} vxml_cmeta_prompt_media_fallback_v1;
+
 typedef struct vxml_cmeta_prompt_media_ticket_v1 {
     void (*commit)(void *user);
     void (*discard)(void *user);
@@ -282,6 +296,10 @@ typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
     /* Append-only prompt interruption policy. */
     bool bargein;
     vxml_cmeta_prompt_bargein_type bargein_type;
+
+    /* Append-only conditional AUDIO alternate-content metadata. */
+    const vxml_cmeta_prompt_media_fallback_v1 *fallbacks;
+    size_t fallback_count;
 } vxml_cmeta_prompt_media_batch_request_v1;
 
 typedef struct vxml_cmeta_prompt_media_adapter_v1 {
