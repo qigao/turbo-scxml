@@ -1680,6 +1680,7 @@ typedef struct cmeta_program_builder {
     size_t field_index;
     size_t filled_index;
     size_t filled_target_index;
+    size_t event_handler_index;
     size_t block_index;
     size_t declaration_index;
     size_t action_index;
@@ -1733,6 +1734,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->branches);
     vxml_free(profile->actions);
     vxml_free(profile->declarations);
+    vxml_free(profile->event_handlers);
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->fields);
@@ -1769,6 +1771,7 @@ static bool cmeta_allocate_rows(
     profile->field_count = measurement->field_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
+    profile->event_handler_count = measurement->event_handler_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
     profile->action_count = measurement->action_count;
@@ -1802,6 +1805,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
+    CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
     CMETA_ALLOC_ROWS(actions, measurement->action_count);
@@ -3687,6 +3691,7 @@ static vxml_status cmeta_write_program(
          builder.field_index != measurement->field_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index != measurement->filled_target_count ||
+         builder.event_handler_index != measurement->event_handler_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
          builder.action_index != measurement->action_count ||
