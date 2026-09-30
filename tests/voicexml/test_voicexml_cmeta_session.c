@@ -1461,6 +1461,7 @@ spec("VoiceXML CMeta session execution") {
             "<noinput count='1'><assign name='other' expr='1'/><reprompt/></noinput>"
             "<noinput count='2'><assign name='other' expr='2'/></noinput>"
             "<catch event='route'><assign name='late' expr='11'/></catch>"
+            "<catch event='reset'><clear namelist='first'/></catch>"
             "</initial>"
             "<initial name='second'>"
             "<noinput count='1'><assign name='other' expr='7'/></noinput>"
@@ -1539,13 +1540,20 @@ spec("VoiceXML CMeta session execution") {
                 &session, "route", sizeof("route") - 1u),
             VXML_OK);
         check_equal(committed->late, 11);
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session, "reset", sizeof("reset") - 1u),
+            VXML_OK);
+        check_equal(
+            initial_recovery_count(&session, first_initial, "noinput"),
+            (unsigned)0u);
 
         runtime->active_initial = second_initial;
         check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
         check_equal(committed->other, 7);
         check_equal(
             initial_recovery_count(&session, first_initial, "noinput"),
-            (unsigned)2u);
+            (unsigned)0u);
         check_equal(
             initial_recovery_count(&session, second_initial, "noinput"),
             (unsigned)1u);
