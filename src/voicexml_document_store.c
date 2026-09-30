@@ -745,6 +745,12 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
     vxml_status voice_status;
     vxml_document_entry *slot = NULL;
     size_t slot_index;
+    const size_t policy_prefix =
+        offsetof(vxml_document_fetch_policy_v1, fetchaudio_uri);
+    const size_t fetchaudio_tail =
+        offsetof(vxml_document_fetch_policy_v1, fetchaudio_uri_size) +
+        sizeof(((vxml_document_fetch_policy_v1 *)0)->fetchaudio_uri_size);
+    bool has_fetchaudio = false;
 
     if (out_ref != NULL) *out_ref = (vxml_document_ref){0};
     error_clear(out_error);
@@ -753,8 +759,19 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
         document_uri_size > impl->max_uri_bytes ||
         (policy != NULL &&
          (policy->abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
-          policy->struct_size < sizeof(*policy))))
+          policy->struct_size < policy_prefix)))
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (policy != NULL && policy->struct_size >= fetchaudio_tail) {
+        if ((policy->fetchaudio_uri == NULL) !=
+            (policy->fetchaudio_uri_size == 0u))
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        if (policy->fetchaudio_uri_size != 0u &&
+            !uri_bytes_valid(
+                policy->fetchaudio_uri,
+                policy->fetchaudio_uri_size))
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        has_fetchaudio = policy->fetchaudio_uri_size != 0u;
+    }
 
     if (impl->active_borrows >= impl->capacity) {
         error_set(out_error, VXML_DOCUMENT_STORE_FULL,
@@ -802,25 +819,38 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
         return VXML_DOCUMENT_STORE_FULL;
     }
 
-    if (policy != NULL && policy->has_timeout) {
+    if (policy != NULL &&
+        (policy->has_timeout || has_fetchaudio)) {
         const size_t policy_tail =
             offsetof(vxml_dialog_document_adapter_v1, open_with_policy) +
             sizeof(impl->documents.open_with_policy);
-        if (impl->documents.struct_size < policy_tail ||
-            impl->documents.open_with_policy == NULL) {
+        const bool can_open_with_policy =
+            impl->documents.struct_size >= policy_tail &&
+            impl->documents.open_with_policy != NULL;
+        if (policy->has_timeout && !can_open_with_policy) {
             free(canonical);
             error_set(out_error, VXML_DOCUMENT_STORE_RESOURCE_ERROR,
                       VXML_DIALOG_MANAGER_DOCUMENT_ERROR, VXML_OK);
             return VXML_DOCUMENT_STORE_RESOURCE_ERROR;
         }
-        resource_status = impl->documents.open_with_policy(
-            impl->document_user,
-            canonical, canonical_size,
-            "application/voicexml+xml",
-            sizeof("application/voicexml+xml") - 1u,
-            impl->max_document_bytes,
-            policy,
-            &document);
+        if (can_open_with_policy) {
+            resource_status = impl->documents.open_with_policy(
+                impl->document_user,
+                canonical, canonical_size,
+                "application/voicexml+xml",
+                sizeof("application/voicexml+xml") - 1u,
+                impl->max_document_bytes,
+                policy,
+                &document);
+        } else {
+            resource_status = impl->documents.open(
+                impl->document_user,
+                canonical, canonical_size,
+                "application/voicexml+xml",
+                sizeof("application/voicexml+xml") - 1u,
+                impl->max_document_bytes,
+                &document);
+        }
     } else {
         resource_status = impl->documents.open(
             impl->document_user,
