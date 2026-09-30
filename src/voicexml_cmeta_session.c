@@ -9,6 +9,7 @@
 #include <data_bind_xml_provider.h>
 #include <data_bind_yaml_provider.h>
 
+#include <limits.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -47,6 +48,19 @@ static bool session_data_options_valid(
         adapter->abi_version == VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
         adapter->struct_size >= sizeof(*adapter) &&
         adapter->open != NULL && adapter->close != NULL;
+}
+
+static bool session_event_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_event_dispatch_depth) +
+        sizeof(options->max_event_dispatch_depth);
+    return options != NULL &&
+        options->struct_size >= tail_size &&
+        options->max_event_counters != 0u &&
+        options->max_event_name_bytes != 0u &&
+        options->max_event_dispatch_depth != 0u &&
+        options->max_event_name_bytes != SIZE_MAX;
 }
 
 static bool session_collect_options_valid(
@@ -700,6 +714,8 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->event_counter_names);
+    vxml_free(session->event_counters);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
@@ -1890,6 +1906,42 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    if (program->event_handler_count != 0u) {
+        size_t name_bytes;
+        size_t index;
+        if (program->event_handlers == NULL ||
+            !session_event_options_valid(options) ||
+            !checked_multiply(
+                options->max_event_counters,
+                options->max_event_name_bytes + 1u,
+                &name_bytes)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->event_counter_capacity =
+            options->max_event_counters;
+        profile->event_name_stride =
+            options->max_event_name_bytes + 1u;
+        profile->max_event_dispatch_depth =
+            options->max_event_dispatch_depth;
+        profile->event_counters =
+            (vxml_cmeta_event_counter *)vxml_calloc(
+                profile->event_counter_capacity,
+                sizeof(*profile->event_counters));
+        profile->event_counter_names =
+            (char *)vxml_calloc(name_bytes, 1u);
+        if (profile->event_counters == NULL ||
+            profile->event_counter_names == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        for (index = 0u;
+             index < profile->event_counter_capacity;
+             ++index)
+            profile->event_counters[index].event =
+                profile->event_counter_names +
+                index * profile->event_name_stride;
+    }
     if (program->field_count != 0u) {
         if (program->fields == NULL ||
             !session_collect_options_valid(options)) {
