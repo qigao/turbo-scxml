@@ -5263,6 +5263,17 @@ static vxml_status cmeta_lower_program(
             if (status != VXML_OK) return status;
             continue;
         }
+        if (cmeta_node_named(child, "menu")) {
+            if (form_index >= builder->profile->form_count ||
+                builder->profile->forms[form_index].menu ==
+                    VXML_CMETA_NO_INDEX)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu form ownership changed during lowering");
+            ++form_index;
+            continue;
+        }
         if (cmeta_node_named(child, "form")) {
             const vxml_cmeta_form_row *form =
                 &builder->profile->forms[form_index];
@@ -5496,6 +5507,8 @@ static vxml_status cmeta_write_program(
     if (status == VXML_OK &&
         (builder.external_data_index != measurement->external_data_count ||
          builder.form_index != measurement->form_count ||
+         builder.menu_index != measurement->menu_count ||
+         builder.menu_choice_index != measurement->menu_choice_count ||
          builder.field_index != measurement->field_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
