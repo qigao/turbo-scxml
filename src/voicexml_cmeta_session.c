@@ -323,11 +323,49 @@ static bool session_root_fields_valid(
     return true;
 }
 
+
+static bool session_subdialogs_valid(
+    const vxml_cmeta_program_data *program) {
+    const cmeta_data_struct_shape *shape = session_root_shape(program);
+    size_t index;
+    if (program == NULL || shape == NULL ||
+        (program->subdialog_count != 0u && program->subdialogs == NULL))
+        return false;
+    for (index = 0u; index < program->subdialog_count; ++index) {
+        const vxml_cmeta_subdialog_row *row =
+            &program->subdialogs[index];
+        const cmeta_data_field_desc *field;
+        size_t field_name_size;
+        if (row->form >= program->form_count ||
+            row->root_field >= shape->field_count ||
+            row->name == NULL || row->name_size == 0u ||
+            row->src == NULL || row->src_size == 0u ||
+            row->result_data == NULL ||
+            row->result_data->kind != CMETA_DATA_STRUCT ||
+            row->result_data->storage_type == NULL ||
+            row->result_data->shape == NULL ||
+            (row->condition != VXML_CMETA_NO_INDEX &&
+             row->condition >= program->expression_count))
+            return false;
+        field = &shape->fields[row->root_field];
+        if (field->name == NULL ||
+            field->value != row->result_data ||
+            field->offset != row->field_offset)
+            return false;
+        field_name_size = strlen(field->name);
+        if (field_name_size != row->name_size ||
+            memcmp(field->name, row->name, row->name_size) != 0)
+            return false;
+    }
+    return true;
+}
+
 static bool session_root_contract_valid(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_session_options_v1 *options) {
     const cmeta_data_struct_shape *shape = session_root_shape(program);
-    return session_root_fields_valid(program) && shape != NULL &&
+    return session_root_fields_valid(program) &&
+        session_subdialogs_valid(program) && shape != NULL &&
         (shape->field_count == 0u || options->initial_root != NULL);
 }
 
