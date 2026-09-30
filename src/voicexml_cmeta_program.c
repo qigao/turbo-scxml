@@ -2868,11 +2868,12 @@ static vxml_status cmeta_measure_initial(
                 if (status != VXML_OK) return status;
                 continue;
             }
-            if (cmeta_node_named(child, "prompt"))
-                return cmeta_program_fail(
-                    diagnostic, VXML_UNSUPPORTED_FEATURE,
-                    salts_xml_node_location(child),
-                    "initial prompt content is deferred to the prompt-owner slice");
+            if (cmeta_node_named(child, "prompt")) {
+                status = cmeta_measure_prompt(
+                    child, options, measurement, diagnostic);
+                if (status != VXML_OK) return status;
+                continue;
+            }
             return cmeta_program_fail(
                 diagnostic,
                 cmeta_known_profile_element(child)
@@ -3661,7 +3662,8 @@ static const cmeta_data_field_desc *cmeta_root_field(
 static vxml_status cmeta_compile_prompt_schema(
     cmeta_program_builder *builder,
     salts_xml_node prompt,
-    size_t field_index,
+    vxml_cmeta_prompt_owner_kind owner_kind,
+    size_t owner_index,
     vxml_cmeta_prompt_row *out) {
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
@@ -3684,7 +3686,8 @@ static vxml_status cmeta_compile_prompt_schema(
         builder->diagnostic);
     if (status != VXML_OK) return status;
     memset(out, 0, sizeof(*out));
-    out->field = field_index;
+    out->owner_kind = owner_kind;
+    out->owner_index = owner_index;
     out->count = count;
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
@@ -5137,6 +5140,7 @@ static vxml_status cmeta_build_schemas(
                                         "VoiceXML prompt rows changed between compiler passes");
                                 status = cmeta_compile_prompt_schema(
                                     builder, nested,
+                                    VXML_CMETA_PROMPT_OWNER_FIELD,
                                     builder->field_index,
                                     &builder->profile->prompts[
                                         builder->prompt_index++]);
@@ -6424,7 +6428,9 @@ static vxml_status cmeta_lower_program(
                                     "VoiceXML prompt count changed during lowering");
                             prompt = &builder->profile->prompts[
                                 field->first_prompt + prompt_offset++];
-                            if (prompt->field != current_field_index)
+                            if (prompt->owner_kind !=
+                                    VXML_CMETA_PROMPT_OWNER_FIELD ||
+                                prompt->owner_index != current_field_index)
                                 return cmeta_program_fail(
                                     builder->diagnostic,
                                     VXML_INVALID_STRUCTURE,
