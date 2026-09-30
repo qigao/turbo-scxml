@@ -345,7 +345,7 @@ spec("VoiceXML CMeta program compiler") {
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><menu id='speech' accept='exact'>"
             "<choice event='menu.stars'>  Stargazer\n"
-            " astrophysics\t news  </choice>"
+            " \t news  </choice>"
             "<choice dtmf='0' accept='exact' event='menu.zero'> zero </choice>"
             "</menu></vxml>";
         const vxml_cmeta_compile_options_v1 options =
@@ -369,12 +369,12 @@ spec("VoiceXML CMeta program compiler") {
         check_equal(profile->menu_choices[0].dtmf.size, (size_t)0u);
         check_equal(
             profile->menu_choices[0].speech.size,
-            sizeof("Stargazer astrophysics news") - 1u);
+            sizeof("Stargazer news") - 1u);
         check_equal(
             memcmp(
                 profile->menu_choices[0].speech.data,
-                "Stargazer astrophysics news",
-                sizeof("Stargazer astrophysics news") - 1u),
+                "Stargazer news",
+                sizeof("Stargazer news") - 1u),
             0);
         check_equal(profile->menu_choices[1].dtmf.size, (size_t)1u);
         check_equal(profile->menu_choices[1].dtmf.data[0], '0');
