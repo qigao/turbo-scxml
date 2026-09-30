@@ -382,6 +382,7 @@ typedef struct cmeta_program_measurement {
     size_t form_count;
     size_t field_count;
     size_t prompt_count;
+    size_t prompt_segment_count;
     size_t filled_count;
     size_t filled_target_count;
     size_t event_handler_count;
@@ -1978,6 +1979,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->event_handlers);
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
+    vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
     vxml_free(profile->fields);
     vxml_free(profile->blocks);
@@ -2012,6 +2014,7 @@ static bool cmeta_allocate_rows(
     profile->form_count = measurement->form_count;
     profile->field_count = measurement->field_count;
     profile->prompt_count = measurement->prompt_count;
+    profile->prompt_segment_count = measurement->prompt_segment_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
     profile->event_handler_count = measurement->event_handler_count;
@@ -2047,6 +2050,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(forms, measurement->form_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
+    CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
     CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
