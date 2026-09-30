@@ -3037,7 +3037,7 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
 
 static vxml_status selected_prompt_row(
     const vxml_session_impl *impl,
-    const vxml_cmeta_field_row **out_field,
+    vxml_cmeta_name_view *out_owner,
     const vxml_cmeta_prompt_row **out_prompt,
     unsigned *out_prompt_count);
 
@@ -3047,6 +3047,7 @@ static vxml_status collect_request_from_impl(
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_session_data *profile;
     const vxml_cmeta_field_row *field;
+    vxml_cmeta_name_view prompt_owner = {0};
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
     vxml_status status;
@@ -3068,10 +3069,12 @@ static vxml_status collect_request_from_impl(
         return VXML_INVALID_STATE;
     field = &program->fields[profile->active_field];
     status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
+        impl, &prompt_owner, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
     (void)prompt_count;
-    if (field->name == NULL || field->name_size == 0u ||
+    if (prompt_owner.data != field->name ||
+        prompt_owner.size != field->name_size ||
+        field->name == NULL || field->name_size == 0u ||
         field->grammar_type == NULL || field->grammar_type_size == 0u ||
         field->grammar_src == NULL || field->grammar_src_size == 0u)
         return VXML_INVALID_STRUCTURE;
@@ -5042,17 +5045,18 @@ vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
         session, "nomatch", sizeof("nomatch") - 1u);
 }
 
-static unsigned field_prompt_count(
+static unsigned prompt_retry_count(
     const vxml_cmeta_session_data *profile,
-    size_t field_index) {
+    vxml_cmeta_event_scope_kind scope_kind,
+    size_t owner_index) {
     size_t index;
     unsigned count = 1u;
     if (profile == NULL) return count;
     for (index = 0u; index < profile->event_counter_count; ++index) {
         const vxml_cmeta_event_counter *counter =
             &profile->event_counters[index];
-        if (counter->scope_kind != VXML_CMETA_EVENT_FIELD ||
-            counter->owner != field_index ||
+        if (counter->scope_kind != scope_kind ||
+            counter->owner != owner_index ||
             !recovery_event_name(counter))
             continue;
         if (counter->count > UINT_MAX - count)
@@ -5064,20 +5068,25 @@ static unsigned field_prompt_count(
 
 static vxml_status selected_prompt_row(
     const vxml_session_impl *impl,
-    const vxml_cmeta_field_row **out_field,
+    vxml_cmeta_name_view *out_owner,
     const vxml_cmeta_prompt_row **out_prompt,
     unsigned *out_prompt_count) {
     const vxml_cmeta_program_data *program;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_form_row *form;
-    const vxml_cmeta_field_row *field;
+    vxml_cmeta_name_view owner_name = {0};
+    vxml_cmeta_prompt_owner_kind owner_kind;
+    vxml_cmeta_event_scope_kind event_scope_kind;
+    size_t owner_index;
+    size_t first_prompt;
+    size_t prompt_row_count;
     const vxml_cmeta_prompt_row *best = NULL;
     unsigned prompt_count;
     size_t offset;
-    if (out_field != NULL) *out_field = NULL;
+    if (out_owner != NULL) *out_owner = (vxml_cmeta_name_view){0};
     if (out_prompt != NULL) *out_prompt = NULL;
     if (out_prompt_count != NULL) *out_prompt_count = 0u;
-    if (impl == NULL || out_field == NULL ||
+    if (impl == NULL || out_owner == NULL ||
         out_prompt == NULL || out_prompt_count == NULL)
         return VXML_INVALID_ARGUMENT;
     if (impl->state != VXML_SESSION_RUNNING ||
@@ -5090,27 +5099,64 @@ static vxml_status selected_prompt_row(
     profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_form == VXML_CMETA_NO_INDEX ||
         profile->active_form >= program->form_count ||
-        program->forms == NULL ||
-        profile->active_field == VXML_CMETA_NO_INDEX ||
-        profile->active_field >= program->field_count ||
-        program->fields == NULL)
+        program->forms == NULL)
         return VXML_INVALID_STATE;
     form = &program->forms[profile->active_form];
-    field = &program->fields[profile->active_field];
-    if (field->form != profile->active_form ||
-        !range_valid(
-            field->first_prompt, field->prompt_count,
-            program->prompt_count) ||
-        (field->prompt_count != 0u && program->prompts == NULL))
-        return VXML_INVALID_STRUCTURE;
 
-    prompt_count = field_prompt_count(
-        profile, profile->active_field);
-    for (offset = 0u; offset < field->prompt_count; ++offset) {
+    if (profile->active_initial != VXML_CMETA_NO_INDEX) {
+        const vxml_cmeta_initial_row *initial;
+        if (profile->active_field != VXML_CMETA_NO_INDEX ||
+            profile->active_menu != VXML_CMETA_NO_INDEX ||
+            profile->active_block != VXML_CMETA_NO_INDEX ||
+            profile->active_initial >= program->initial_count ||
+            program->initials == NULL)
+            return VXML_INVALID_STATE;
+        initial = &program->initials[profile->active_initial];
+        if (initial->form != profile->active_form ||
+            !range_valid(
+                initial->first_prompt, initial->prompt_count,
+                program->prompt_count))
+            return VXML_INVALID_STRUCTURE;
+        owner_name = (vxml_cmeta_name_view){
+            initial->name, initial->name_size};
+        owner_kind = VXML_CMETA_PROMPT_OWNER_INITIAL;
+        event_scope_kind = VXML_CMETA_EVENT_INITIAL;
+        owner_index = profile->active_initial;
+        first_prompt = initial->first_prompt;
+        prompt_row_count = initial->prompt_count;
+    } else {
+        const vxml_cmeta_field_row *field;
+        if (profile->active_field == VXML_CMETA_NO_INDEX ||
+            profile->active_field >= program->field_count ||
+            program->fields == NULL ||
+            profile->active_menu != VXML_CMETA_NO_INDEX ||
+            profile->active_block != VXML_CMETA_NO_INDEX)
+            return VXML_INVALID_STATE;
+        field = &program->fields[profile->active_field];
+        if (field->form != profile->active_form ||
+            !range_valid(
+                field->first_prompt, field->prompt_count,
+                program->prompt_count))
+            return VXML_INVALID_STRUCTURE;
+        owner_name = (vxml_cmeta_name_view){
+            field->name, field->name_size};
+        owner_kind = VXML_CMETA_PROMPT_OWNER_FIELD;
+        event_scope_kind = VXML_CMETA_EVENT_FIELD;
+        owner_index = profile->active_field;
+        first_prompt = field->first_prompt;
+        prompt_row_count = field->prompt_count;
+    }
+
+    if (prompt_row_count != 0u && program->prompts == NULL)
+        return VXML_INVALID_STRUCTURE;
+    prompt_count = prompt_retry_count(
+        profile, event_scope_kind, owner_index);
+    for (offset = 0u; offset < prompt_row_count; ++offset) {
         const vxml_cmeta_prompt_row *row =
-            &program->prompts[field->first_prompt + offset];
+            &program->prompts[first_prompt + offset];
         bool eligible = true;
-        if (row->field != profile->active_field ||
+        if (row->owner_kind != owner_kind ||
+            row->owner_index != owner_index ||
             row->count == 0u ||
             row->segment_count == 0u ||
             !range_valid(
@@ -5221,7 +5267,7 @@ static vxml_status selected_prompt_row(
         if (best == NULL || row->count > best->count)
             best = row;
     }
-    *out_field = field;
+    *out_owner = owner_name;
     *out_prompt = best;
     *out_prompt_count = prompt_count;
     return VXML_OK;
