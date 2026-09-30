@@ -18,13 +18,16 @@ extern "C" {
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
+#define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
+#define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
+#define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
@@ -94,6 +97,11 @@ typedef struct vxml_cmeta_compile_options_v1 {
 
     /* Optional append-only mixed prompt batch bound. Zero keeps V1-only. */
     size_t max_prompt_segments;
+
+    /* Optional append-only static menu admission tail. Zero disables <menu>. */
+    size_t max_menus;
+    size_t max_menu_choices;
+    size_t max_menu_choice_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -161,6 +169,16 @@ typedef struct vxml_cmeta_collect_ticket_v1 {
     void *user;
 } vxml_cmeta_collect_ticket_v1;
 
+/*
+ * Stable array element: do not append fields. Future menu metadata must use a
+ * parallel side table or a new ABI, because providers traverse this array by
+ * sizeof(vxml_cmeta_menu_choice_v1).
+ */
+typedef struct vxml_cmeta_menu_choice_v1 {
+    vxml_cmeta_name_view dtmf;
+    vxml_cmeta_name_view speech;
+} vxml_cmeta_menu_choice_v1;
+
 typedef struct vxml_cmeta_collect_request_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -181,6 +199,22 @@ typedef struct vxml_cmeta_collect_request_v1 {
     uint64_t timeout_us;
 } vxml_cmeta_collect_request_v1;
 
+/**
+ * Menu-specific collect request.
+ *
+ * This is intentionally separate from vxml_cmeta_collect_request_v1 because
+ * that type is also a caller-owned output struct. Extending it would make an
+ * old binary caller's allocation smaller than a new library write.
+ */
+typedef struct vxml_cmeta_menu_collect_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    const vxml_cmeta_menu_choice_v1 *choices;
+    size_t choice_count;
+} vxml_cmeta_menu_collect_request_v1;
+
 typedef struct vxml_cmeta_collect_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -195,6 +229,16 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
      * The provider must ignore an already-settled generation.
      */
     void (*cancel)(void *user, uint64_t generation);
+
+    /*
+     * Optional append-only menu admission tail. Historical adapters end after
+     * cancel and remain valid for directed fields.
+     */
+    vxml_status (*prepare_menu)(
+        void *user,
+        const vxml_cmeta_menu_collect_request_v1 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
 } vxml_cmeta_collect_adapter_v1;
 
 typedef enum vxml_cmeta_collect_ingress_result {
@@ -227,6 +271,13 @@ typedef struct vxml_cmeta_collect_completion_v2 {
     const vxml_cmeta_collect_result_slot_v1 *slots;
     size_t slot_count;
 } vxml_cmeta_collect_completion_v2;
+
+typedef struct vxml_cmeta_menu_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    size_t choice_index;
+} vxml_cmeta_menu_completion_v1;
 
 typedef enum vxml_cmeta_prompt_media_segment_kind {
     VXML_CMETA_PROMPT_MEDIA_TEXT = 1,
@@ -431,6 +482,11 @@ vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request);
 
+/** Borrow the currently selected static-menu collect request. */
+vxml_status vxml_session_cmeta_menu_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_menu_collect_request_v1 *out_request);
+
 /**
  * Ask the configured provider to reserve the selected collect operation.
  * Success stores the provider ticket inside the session; no provider work is
@@ -466,6 +522,14 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
 vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     vxml_session *session,
     const vxml_cmeta_collect_completion_v2 *completion);
+
+/**
+ * MPSC admission of one menu choice ordinal for the active menu generation.
+ * No provider-owned choice bytes survive admission.
+ */
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_menu_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_menu_completion_v1 *completion);
 
 /**
  * Single-owner progress point. Applies at most one accepted completion through

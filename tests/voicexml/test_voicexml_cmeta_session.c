@@ -606,6 +606,7 @@ static vxml_cmeta_compile_options_v1 field_compile_options(void) {
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
+    size_t menu_prepare_calls;
     size_t batch_prepare_calls;
     size_t commit_calls;
     size_t discard_calls;
@@ -615,6 +616,9 @@ typedef struct cmeta_collect_probe {
     uint64_t generation;
     bool has_timeout;
     uint64_t timeout_us;
+    vxml_cmeta_collect_item_kind item_kind;
+    size_t menu_choice_count;
+    char menu_dtmf[16][16];
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
@@ -658,6 +662,9 @@ static vxml_status cmeta_collect_prepare(
         return probe->prepare_status;
     if (probe->reserved || probe->active)
         return VXML_INVALID_STATE;
+    probe->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+    probe->menu_choice_count = 0u;
+    memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
     memcpy(probe->field, request->field.data, request->field.size);
     probe->field[request->field.size] = '\0';
     memcpy(probe->grammar_type,
@@ -669,6 +676,63 @@ static vxml_status cmeta_collect_prepare(
     probe->generation = request->generation;
     probe->has_timeout = request->has_timeout;
     probe->timeout_us = request->timeout_us;
+    probe->reserved = true;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){
+        .commit = cmeta_collect_commit,
+        .discard = cmeta_collect_discard,
+        .user = probe};
+    return VXML_OK;
+}
+
+static vxml_status cmeta_collect_prepare_menu(
+    void *user,
+    const vxml_cmeta_menu_collect_request_v1 *request,
+    vxml_cmeta_collect_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    size_t choice_index;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->choices == NULL ||
+        request->choice_count == 0u ||
+        request->choice_count > 16u ||
+        (request->required_capabilities &
+         VXML_CMETA_COLLECT_CAP_MENU_CHOICE) == 0u)
+        return VXML_INVALID_CONTRACT;
+    ++probe->menu_prepare_calls;
+    *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    if (probe->prepare_status != VXML_OK)
+        return probe->prepare_status;
+    if (probe->reserved || probe->active)
+        return VXML_INVALID_STATE;
+
+    probe->item_kind = VXML_CMETA_COLLECT_ITEM_MENU;
+    probe->menu_choice_count = request->choice_count;
+    memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
+    memset(probe->field, 0, sizeof(probe->field));
+    memset(probe->grammar_type, 0, sizeof(probe->grammar_type));
+    memset(probe->grammar_src, 0, sizeof(probe->grammar_src));
+    for (choice_index = 0u;
+         choice_index < request->choice_count;
+         ++choice_index) {
+        const vxml_cmeta_menu_choice_v1 *choice =
+            &request->choices[choice_index];
+        if ((choice->dtmf.size != 0u && choice->dtmf.data == NULL) ||
+            choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
+            choice->speech.data != NULL ||
+            choice->speech.size != 0u)
+            return VXML_INVALID_CONTRACT;
+        if (choice->dtmf.size != 0u)
+            memcpy(
+                probe->menu_dtmf[choice_index],
+                choice->dtmf.data, choice->dtmf.size);
+        probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
+    }
+    probe->generation = request->generation;
+    probe->has_timeout = false;
+    probe->timeout_us = 0u;
     probe->reserved = true;
     *out_ticket = (vxml_cmeta_collect_ticket_v1){
         .commit = cmeta_collect_commit,
@@ -692,7 +756,8 @@ static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1),
         .capabilities = capabilities,
         .prepare = cmeta_collect_prepare,
-        .cancel = cmeta_collect_cancel};
+        .cancel = cmeta_collect_cancel,
+        .prepare_menu = cmeta_collect_prepare_menu};
 }
 
 static vxml_cmeta_session_options_v1 field_session_options(
@@ -899,6 +964,14 @@ static vxml_cmeta_compile_options_v1 event_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = event_compile_options();
+    options.max_menus = 4u;
+    options.max_menu_choices = 16u;
+    options.max_menu_choice_bytes = 16u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = event_compile_options();
     options.max_prompts = 16u;
@@ -948,6 +1021,215 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("projects static menus through collect ABI and re-arms after a handled Event") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='menu.one'>"
+            "<assign name='value' expr='value + 1'/></catch>"
+            "<catch event='menu.zero'><exit namelist='value'/></catch>"
+            "<menu id='main' dtmf='true'>"
+            "<choice event='menu.one'/>"
+            "<choice dtmf='0' event='menu.zero'/>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            menu_compile_options();
+        vxml_cmeta_session_root root = {.value = 1};
+        cmeta_collect_probe unsupported_probe = {
+            .prepare_status = VXML_OK};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 unsupported_adapter =
+            cmeta_collect_adapter(0u);
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        vxml_cmeta_session_options_v1 options;
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_menu_collect_request_v1 request = {0};
+        vxml_cmeta_collect_completion_v1 field_completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
+        vxml_cmeta_menu_completion_v1 completion = {
+            .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_menu_completion_v1),
+            .choice_index = 0u};
+        bool progressed = false;
+        uint64_t first_generation;
+        int field_value = 9;
+        vxml_cmeta_value_view read = {0};
+
+        unsupported_adapter.struct_size =
+            offsetof(vxml_cmeta_collect_adapter_v1, cancel) +
+            sizeof(unsupported_adapter.cancel);
+        unsupported_adapter.prepare_menu = NULL;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+
+        options = event_session_options(
+            &root, &unsupported_adapter, &unsupported_probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(unsupported_probe.prepare_calls, (size_t)0u);
+        check_equal(unsupported_probe.menu_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        options = event_session_options(&root, &adapter, &probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request(&session, &request),
+            VXML_OK);
+        check_equal(
+            request.required_capabilities,
+            VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        check_equal(request.choice_count, (size_t)2u);
+        check_equal(request.choices[0].dtmf.size, (size_t)1u);
+        check_equal(request.choices[0].dtmf.data[0], '1');
+        check_equal(request.choices[1].dtmf.data[0], '0');
+        first_generation = request.generation;
+
+        completion.generation = first_generation;
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_STALE);
+
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)0u);
+        check_equal(probe.menu_prepare_calls, (size_t)1u);
+        check_equal(probe.item_kind, VXML_CMETA_COLLECT_ITEM_MENU);
+        check_equal(probe.menu_choice_count, (size_t)2u);
+        check_equal(probe.menu_dtmf[0], "1");
+        check_equal(probe.menu_dtmf[1], "0");
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+
+        field_completion.generation = first_generation;
+        field_completion.data = &cmeta_data_int;
+        field_completion.value = &field_value;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete(
+                &session, &field_completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_FULL);
+        probe.active = false;
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(&session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+
+        request = (vxml_cmeta_menu_collect_request_v1){0};
+        check_equal(
+            vxml_session_cmeta_menu_collect_request(&session, &request),
+            VXML_OK);
+        check_true(request.generation != first_generation);
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_STALE);
+
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        completion.generation = request.generation;
+        completion.choice_index = 1u;
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        probe.active = false;
+        progressed = false;
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(&session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "value", sizeof("value") - 1u, &read),
+            VXML_OK);
+        check_equal(read.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(read.data.sint, INT64_C(2));
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_CLOSED);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects a menu completion for an active directed field generation") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+        vxml_cmeta_menu_completion_v1 completion = {
+            .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_menu_completion_v1),
+            .choice_index = 0u};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_request(&session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        completion.generation = request.generation;
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+
+        probe.active = false;
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("admits a single MARK prompt through the legacy media prepare path") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
