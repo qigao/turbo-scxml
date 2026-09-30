@@ -1671,7 +1671,7 @@ spec("VoiceXML CMeta session execution") {
         check_equal(prompt.field.size, (size_t)0u);
         check_equal(prompt.count, (unsigned)2u);
         check_equal(prompt.prompt_count, (unsigned)2u);
-        check_true(prompt.generation != first_generation);
+        check_equal(prompt.generation, first_generation);
         check_equal(prompt.text.size, sizeof("retry initial") - 1u);
         check_equal(
             memcmp(
