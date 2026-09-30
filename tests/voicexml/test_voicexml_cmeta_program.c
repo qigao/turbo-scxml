@@ -147,6 +147,13 @@ static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 field_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_fields = 8u;
+    options.max_grammar_bytes = 256u;
+    return options;
+}
+
 enum { PROGRAM_ALLOCATION_CAPACITY = 256 };
 
 typedef struct program_allocation_tracker {
@@ -252,6 +259,135 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("compiles one directed field and literal SRGS grammar into immutable rows") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='order'>"
+            "<field name='value' cond='flag'>"
+            "<grammar type='application/srgs+xml' src='value.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            field_compile_options();
+        vxml_program program = {0};
+        const vxml_program_impl *impl;
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_field_row *field;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        impl = (const vxml_program_impl *)program.impl;
+        profile = (const vxml_cmeta_program_data *)impl->profile_data;
+        check_not_null(profile);
+        check_equal(profile->field_count, (size_t)1u);
+        check_not_null(profile->fields);
+        check_equal(profile->forms[0].first_field, (size_t)0u);
+        check_equal(profile->forms[0].field_count, (size_t)1u);
+        check_equal(profile->forms[0].block_count, (size_t)0u);
+        field = &profile->fields[0];
+        check_equal(field->form, (size_t)0u);
+        check_equal(field->root_field, (size_t)0u);
+        check_equal(field->field_offset,
+                    offsetof(vxml_cmeta_program_root, value));
+        check_true(field->field_data == &cmeta_data_int);
+        check_equal(field->name, "value");
+        check_equal(field->grammar_type, "application/srgs+xml");
+        check_equal(field->grammar_src, "value.grxml");
+        check_equal(field->required_capabilities,
+                    VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        check_true(field->condition != VXML_CMETA_NO_INDEX);
+        check_equal(profile->expression_count, (size_t)1u);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("requires explicit field and grammar limits") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' "
+            "src='value.grxml'/></field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options = compile_options();
+        vxml_program program = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_INVALID_CONTRACT);
+        check_null(program.impl);
+    }
+
+    it("rejects malformed or unsupported directed field grammars") {
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><field name='value'/>"
+                "</form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><field name='value'>"
+                "<grammar type='text/jsgf' src='value.jsgf'/>"
+                "</field></form></vxml>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><field name='value'>"
+                "<grammar type='application/srgs+xml' src='a'/>"
+                "<grammar type='application/srgs+xml' src='b'/>"
+                "</field></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            }
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            field_compile_options();
+        size_t index;
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(vxml_compile_cmeta(
+                            cases[index].source, strlen(cases[index].source),
+                            NULL, &options, &program, NULL),
+                        cases[index].expected);
+            check_null(program.impl);
+        }
+    }
+
+    it("rejects duplicate field names lexical collisions and mixed block forms") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<field name='value'><grammar type='application/srgs+xml' src='b'/></field>"
+            "</form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><var name='value'/>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "</form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<block/>"
+            "</form></vxml>"
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            field_compile_options();
+        size_t index;
+        for (index = 0u; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(vxml_compile_cmeta(
+                            sources[index], strlen(sources[index]),
+                            NULL, &options, &program, NULL),
+                        VXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+    }
+
     it("compiles document data into one pre-admitted NativePlan") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -824,7 +960,7 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 13u
+                    index == 4u || index == 6u || index == 13u
                         ? VXML_INVALID_STRUCTURE
                         : VXML_UNSUPPORTED_FEATURE;
                 check_equal(vxml_compile_cmeta(

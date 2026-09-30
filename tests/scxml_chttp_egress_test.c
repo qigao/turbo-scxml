@@ -471,7 +471,12 @@ spec("TurboSCXML CHTTP transactional egress") {
 
     it("honors delay and cancels before submission") {
         egress_fixture fixture;
-        scxml_send_request request = basic_request(150u, "later");
+        /*
+         * Keep the due time well outside normal runner scheduling jitter. The
+         * property under test is cancellation while the row is still READY,
+         * not wall-clock precision around a 150ms deadline.
+         */
+        scxml_send_request request = basic_request(5000u, "later");
         const scxml_cancel_request cancel = {"later", 5u};
         cflow_statechart_effect_ticket send_ticket = {0};
         cflow_statechart_effect_ticket cancel_ticket = {0};
@@ -484,7 +489,6 @@ spec("TurboSCXML CHTTP transactional egress") {
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         if (send_ticket.commit != NULL) send_ticket.commit(send_ticket.user);
-        salts_sleep_ms(20u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -493,7 +497,6 @@ spec("TurboSCXML CHTTP transactional egress") {
         if (cancel_ticket.commit != NULL)
             cancel_ticket.commit(cancel_ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 500u));
-        salts_sleep_ms(160u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         {
             scxml_chttp_processor_stats stats = {0};

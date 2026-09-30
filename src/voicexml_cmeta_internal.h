@@ -33,9 +33,26 @@ typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
     size_t declaration_count;
+    size_t first_field;
+    size_t field_count;
     size_t first_block;
     size_t block_count;
 } vxml_cmeta_form_row;
+
+typedef struct vxml_cmeta_field_row {
+    size_t form;
+    size_t root_field;
+    size_t field_offset;
+    const cmeta_data_desc *field_data;
+    const char *name;
+    size_t name_size;
+    size_t condition;
+    const char *grammar_type;
+    size_t grammar_type_size;
+    const char *grammar_src;
+    size_t grammar_src_size;
+    uint64_t required_capabilities;
+} vxml_cmeta_field_row;
 
 typedef struct vxml_cmeta_block_row {
     size_t form;
@@ -124,6 +141,8 @@ typedef struct vxml_cmeta_program_data {
     size_t document_scope;
     vxml_cmeta_form_row *forms;
     size_t form_count;
+    vxml_cmeta_field_row *fields;
+    size_t field_count;
     vxml_cmeta_block_row *blocks;
     size_t block_count;
     vxml_cmeta_declaration_row *declarations;
@@ -186,7 +205,14 @@ typedef struct vxml_cmeta_session_data {
     size_t transaction_bytes_required;
     size_t execution_steps;
     size_t active_form;
+    size_t active_field;
     size_t active_block;
+    uint64_t collect_generation;
+    const vxml_cmeta_collect_adapter_v1 *collect_adapter;
+    void *collect_user;
+    vxml_cmeta_collect_ticket_v1 collect_ticket;
+    bool collect_prepared;
+    bool collect_in_flight;
     vxml_cmeta_root_storage committed_root;
     vxml_cmeta_root_storage staged_root;
     cmeta_scope_storage *committed_scopes;

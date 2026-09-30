@@ -49,6 +49,22 @@ static bool session_data_options_valid(
         adapter->open != NULL && adapter->close != NULL;
 }
 
+static bool session_collect_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, collect_user) +
+        sizeof(options->collect_user);
+    const vxml_cmeta_collect_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size)
+        return false;
+    adapter = options->collect;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_COLLECT_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
 static const DataBindFormatProvider *data_format_provider(
     vxml_cmeta_data_format format) {
     switch (format) {
@@ -657,6 +673,19 @@ static void session_data_destroy(
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    if (session->collect_prepared) {
+        vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
+        session->collect_prepared = false;
+        session->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->collect_in_flight &&
+               session->collect_adapter != NULL) {
+        const uint64_t generation = session->collect_generation;
+        session->collect_in_flight = false;
+        session->collect_adapter->cancel(
+            session->collect_user, generation);
+    }
     exit_snapshot_destroy(&session->terminal_exit);
     exit_snapshot_destroy(&session->pending_exit);
     root_storage_destroy(&session->staged_root, program);
@@ -1792,7 +1821,17 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->max_transaction_bytes = options->max_transaction_bytes;
     profile->max_execution_steps = options->max_execution_steps;
     profile->active_form = VXML_CMETA_NO_INDEX;
+    profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    if (program->field_count != 0u) {
+        if (program->fields == NULL ||
+            !session_collect_options_valid(options)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->collect_adapter = options->collect;
+        profile->collect_user = options->collect_user;
+    }
     if (root_shape->field_count != 0u) {
         undefined = (unsigned char *)vxml_calloc(
             root_shape->field_count, sizeof(*undefined));
@@ -1968,14 +2007,19 @@ vxml_status vxml_cmeta_session_start_profile_at(
     program = (const vxml_cmeta_program_data *)session->program->profile_data;
     profile = (vxml_cmeta_session_data *)session->profile_data;
     if (program->form_count == 0u || program->forms == NULL ||
-        form_index >= program->form_count ||
-        program->block_count == 0u || program->blocks == NULL)
+        form_index >= program->form_count)
         return session_fail(session, VXML_INVALID_STRUCTURE);
     form = &program->forms[form_index];
     if (program->document_scope >= program->scope_count ||
         form->scope >= program->scope_count ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count) ||
         !range_valid(form->first_block, form->block_count,
-                     program->block_count))
+                     program->block_count) ||
+        (form->field_count != 0u &&
+         (program->fields == NULL || form->block_count != 0u)) ||
+        (form->block_count != 0u && program->blocks == NULL) ||
+        (form->field_count == 0u && form->block_count == 0u))
         return session_fail(session, VXML_INVALID_STRUCTURE);
     profile->active_form = form_index;
     if (!transaction_begin(profile, program))
@@ -1986,6 +2030,53 @@ vxml_status vxml_cmeta_session_start_profile_at(
         return session_fail(session, status);
     }
     transaction_commit(profile, program);
+    if (form->field_count != 0u) {
+        const cmeta_data_struct_shape *root_shape =
+            session_root_shape(program);
+        size_t field_offset;
+        profile->active_field = VXML_CMETA_NO_INDEX;
+        profile->active_block = VXML_CMETA_NO_INDEX;
+        if (root_shape == NULL ||
+            (root_shape->field_count != 0u &&
+             profile->committed_root.bound == NULL))
+            return session_fail(session, VXML_INVALID_STRUCTURE);
+        for (field_offset = 0u;
+             field_offset < form->field_count;
+             ++field_offset) {
+            const size_t field_index =
+                form->first_field + field_offset;
+            const vxml_cmeta_field_row *field =
+                &program->fields[field_index];
+            bool eligible = true;
+            if (field->form != form_index ||
+                field->root_field >= root_shape->field_count ||
+                root_shape->fields[field->root_field].value !=
+                    field->field_data ||
+                root_shape->fields[field->root_field].offset !=
+                    field->field_offset)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (profile->committed_root.bound[field->root_field] != 0u)
+                continue;
+            if (field->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    field->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            }
+            if (!eligible) continue;
+            profile->active_field = field_index;
+            ++profile->collect_generation;
+            if (profile->collect_generation == 0u)
+                profile->collect_generation = 1u;
+            return VXML_OK;
+        }
+        session->state = VXML_SESSION_EXITED;
+        session->error = VXML_OK;
+        return VXML_OK;
+    }
     for (;;) {
         const vxml_cmeta_block_row *selected = NULL;
         profile->active_block = VXML_CMETA_NO_INDEX;
@@ -2095,6 +2186,151 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
     return impl->program != NULL &&
             impl->program->profile_kind == VXML_PROFILE_CMETA
         ? impl : NULL;
+}
+
+static vxml_status collect_request_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_collect_request_v1 *out_request) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_field_row *field;
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_collect_request_v1){0};
+    if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
+        impl->program == NULL || impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_field == VXML_CMETA_NO_INDEX ||
+        profile->active_field >= program->field_count ||
+        program->fields == NULL ||
+        profile->collect_generation == 0u)
+        return VXML_INVALID_STATE;
+    field = &program->fields[profile->active_field];
+    if (field->name == NULL || field->name_size == 0u ||
+        field->grammar_type == NULL || field->grammar_type_size == 0u ||
+        field->grammar_src == NULL || field->grammar_src_size == 0u)
+        return VXML_INVALID_STRUCTURE;
+    *out_request = (vxml_cmeta_collect_request_v1){
+        .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_collect_request_v1),
+        .generation = profile->collect_generation,
+        .required_capabilities = field->required_capabilities,
+        .field = {field->name, field->name_size},
+        .grammar_type = {field->grammar_type, field->grammar_type_size},
+        .grammar_src = {field->grammar_src, field->grammar_src_size}
+    };
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_collect_request_v1 *out_request) {
+    const vxml_session_impl *impl = cmeta_session(session);
+    if (out_request != NULL)
+        *out_request = (vxml_cmeta_collect_request_v1){0};
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    return collect_request_from_impl(impl, out_request);
+}
+
+vxml_status vxml_session_cmeta_collect_prepare(
+    vxml_session *session, const char **out_error) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_collect_request_v1 request;
+    vxml_cmeta_collect_ticket_v1 ticket = {0};
+    vxml_status status;
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->collect_adapter == NULL ||
+        profile->collect_adapter->prepare == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (profile->collect_prepared || profile->collect_in_flight)
+        return VXML_INVALID_STATE;
+    status = collect_request_from_impl(impl, &request);
+    if (status != VXML_OK) return status;
+    if ((profile->collect_adapter->capabilities &
+         request.required_capabilities) !=
+        request.required_capabilities)
+        return VXML_UNSUPPORTED_FEATURE;
+
+    status = profile->collect_adapter->prepare(
+        profile->collect_user, &request, &ticket, out_error);
+    if (status != VXML_OK) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return status;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return VXML_INVALID_CONTRACT;
+    }
+    profile->collect_ticket = ticket;
+    profile->collect_prepared = true;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_collect_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->collect_prepared || profile->collect_in_flight ||
+        profile->collect_ticket.commit == NULL ||
+        profile->collect_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->collect_ticket;
+    profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    profile->collect_prepared = false;
+    profile->collect_in_flight = true;
+    ticket.commit(ticket.user);
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_collect_discard(vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_collect_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->collect_prepared ||
+        profile->collect_ticket.commit == NULL ||
+        profile->collect_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->collect_ticket;
+    profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
+    profile->collect_prepared = false;
+    ticket.discard(ticket.user);
+    return VXML_OK;
 }
 
 static bool read_sint_value(
