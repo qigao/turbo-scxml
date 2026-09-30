@@ -78,6 +78,10 @@ typedef struct vxml_cmeta_compile_options_v1 {
     /* Optional append-only scoped-Event admission tail. */
     size_t max_event_handlers;
     size_t max_event_name_bytes;
+
+    /* Optional append-only literal prompt admission tail. */
+    size_t max_prompts;
+    size_t max_prompt_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -198,6 +202,18 @@ typedef struct vxml_cmeta_collect_completion_v2 {
     size_t slot_count;
 } vxml_cmeta_collect_completion_v2;
 
+typedef struct vxml_cmeta_prompt_view_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_cmeta_name_view field;
+    vxml_cmeta_name_view text;
+    unsigned count;
+    unsigned prompt_count;
+    uint64_t generation;
+} vxml_cmeta_prompt_view_v1;
+
+#define VXML_CMETA_PROMPT_VIEW_ABI_V1 1u
+
 typedef enum vxml_cmeta_exit_kind {
     VXML_CMETA_EXIT_EMPTY = 0,
     VXML_CMETA_EXIT_EXPRESSION,
@@ -291,6 +307,14 @@ vxml_status vxml_session_cmeta_nomatch(vxml_session *session);
  */
 vxml_status vxml_session_cmeta_take_reprompt(
     vxml_session *session, bool *out_requested);
+
+/**
+ * Borrow the tapered prompt selected for the current directed field/retry
+ * state. Text bytes are immutable Program-owned storage.
+ */
+vxml_status vxml_session_cmeta_prompt(
+    const vxml_session *session,
+    vxml_cmeta_prompt_view_v1 *out_prompt);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
