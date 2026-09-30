@@ -719,6 +719,8 @@ typedef struct cmeta_prompt_media_probe {
     unsigned selected_count;
     vxml_cmeta_prompt_media_segment_kind kind;
     size_t batch_segment_count;
+    size_t batch_fallback_count;
+    vxml_cmeta_prompt_media_fallback_v1 batch_fallbacks[4];
     vxml_cmeta_prompt_media_segment_kind batch_kinds[8];
     char batch_payloads[8][128];
     char field[32];
@@ -803,6 +805,9 @@ static vxml_status cmeta_prompt_media_prepare_batch(
         request->segments == NULL ||
         request->segment_count < 2u ||
         request->segment_count > 8u ||
+        request->fallback_count > 4u ||
+        (request->fallback_count != 0u &&
+         request->fallbacks == NULL) ||
         request->field.data == NULL ||
         request->field.size >= sizeof(probe->field))
         return VXML_INVALID_CONTRACT;
@@ -828,6 +833,21 @@ static vxml_status cmeta_prompt_media_prepare_batch(
                segment->payload.data, segment->payload.size);
         probe->batch_payloads[index][segment->payload.size] = '\0';
     }
+    for (index = 0u; index < request->fallback_count; ++index) {
+        const vxml_cmeta_prompt_media_fallback_v1 *fallback =
+            &request->fallbacks[index];
+        if (fallback->audio_segment_index >= request->segment_count ||
+            request->segments[fallback->audio_segment_index].kind !=
+                VXML_CMETA_PROMPT_MEDIA_AUDIO ||
+            fallback->first_fallback_segment >= request->segment_count ||
+            fallback->fallback_segment_count == 0u ||
+            fallback->fallback_segment_count >
+                request->segment_count -
+                    fallback->first_fallback_segment)
+            return VXML_INVALID_CONTRACT;
+        probe->batch_fallbacks[index] = *fallback;
+    }
+    probe->batch_fallback_count = request->fallback_count;
     probe->generation = request->generation;
     probe->prompt_count = request->prompt_count;
     probe->selected_count = request->selected_count;
@@ -1731,6 +1751,86 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
         check_equal(media_probe.cancel_calls, (size_t)1u);
         check_false(media_probe.active);
+    }
+
+    it("projects audio fallback metadata and gates the new capability") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Before<audio src='a.wav'>fallback</audio>After</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 batch = {0};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt_media_batch_request(
+                        &session, &batch), VXML_OK);
+        check_equal(batch.segment_count, (size_t)4u);
+        check_equal(batch.fallback_count, (size_t)1u);
+        check_not_null(batch.fallbacks);
+        check_equal(batch.fallbacks[0].audio_segment_index, (size_t)1u);
+        check_equal(batch.fallbacks[0].first_fallback_segment, (size_t)2u);
+        check_equal(batch.fallbacks[0].fallback_segment_count, (size_t)1u);
+        check_equal(batch.segments[0].kind, VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(batch.segments[1].kind, VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(batch.segments[2].kind, VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(batch.segments[3].kind, VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_true((batch.required_capabilities &
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK) != 0u);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_UNSUPPORTED_FEATURE);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+
+        media_adapter.capabilities |=
+            VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK;
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(media_probe.batch_prepare_calls, (size_t)1u);
+        check_equal(media_probe.batch_fallback_count, (size_t)1u);
+        check_equal(
+            media_probe.batch_fallbacks[0].audio_segment_index,
+            (size_t)1u);
+        check_equal(
+            media_probe.batch_fallbacks[0].first_fallback_segment,
+            (size_t)2u);
+        check_equal(
+            media_probe.batch_fallbacks[0].fallback_segment_count,
+            (size_t)1u);
+        check_equal(vxml_session_cmeta_prompt_media_discard(
+                        &session), VXML_OK);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
     }
 
     it("propagates the timeout from the actually selected tapered prompt") {
