@@ -160,6 +160,14 @@ static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 initial_prompt_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = initial_compile_options();
+    options.max_prompts = 8u;
+    options.max_prompt_bytes = 256u;
+    options.max_prompt_segments = 8u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_prompts = 8u;
@@ -768,6 +776,64 @@ spec("VoiceXML CMeta program compiler") {
         check_equal(diagnostic.status, VXML_INVALID_STRUCTURE);
     }
 
+    it("compiles immutable initial-owned prompt ranges without a root field") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<initial name='welcome'>"
+            "<prompt>First initial</prompt>"
+            "<prompt count='2' cond='flag'>Second initial</prompt>"
+            "</initial><field name='value'>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            initial_prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_initial_row *initial;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->initial_count, (size_t)1u);
+        check_equal(profile->prompt_count, (size_t)2u);
+        initial = &profile->initials[0];
+        check_equal(initial->form, (size_t)0u);
+        check_equal(initial->first_prompt, (size_t)0u);
+        check_equal(initial->prompt_count, (size_t)2u);
+        check_equal(
+            profile->prompts[0].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_INITIAL);
+        check_equal(profile->prompts[0].owner_index, (size_t)0u);
+        check_equal(profile->prompts[0].count, (unsigned)1u);
+        check_equal(profile->prompts[0].text_size,
+                    sizeof("First initial") - 1u);
+        check_equal(memcmp(
+                        profile->prompts[0].text,
+                        "First initial",
+                        sizeof("First initial") - 1u), 0);
+        check_equal(
+            profile->prompts[1].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_INITIAL);
+        check_equal(profile->prompts[1].owner_index, (size_t)0u);
+        check_equal(profile->prompts[1].count, (unsigned)2u);
+        check_true(profile->prompts[1].condition !=
+                   VXML_CMETA_NO_INDEX);
+        check_equal(memcmp(
+                        profile->prompts[1].text,
+                        "Second initial",
+                        sizeof("Second initial") - 1u), 0);
+
+        vxml_program_destroy(&program);
+    }
+
     it("compiles tapered literal prompts into immutable field-owned rows") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -796,7 +862,10 @@ spec("VoiceXML CMeta program compiler") {
         field = &profile->fields[0];
         check_equal(field->first_prompt, (size_t)0u);
         check_equal(field->prompt_count, (size_t)2u);
-        check_equal(profile->prompts[0].field, (size_t)0u);
+        check_equal(
+            profile->prompts[0].owner_kind,
+            VXML_CMETA_PROMPT_OWNER_FIELD);
+        check_equal(profile->prompts[0].owner_index, (size_t)0u);
         check_equal(profile->prompts[0].count, (unsigned)1u);
         check_equal(profile->prompts[0].text_size,
                     sizeof("First prompt") - 1u);
