@@ -1,8 +1,8 @@
 # VoiceXML directed field collect admission
 
-This document describes the first Directed FIA slice delivered by the CMeta
-profile. It intentionally stops before recognition completion and `filled`
-processing.
+This document describes the delivered Directed FIA collect admission and
+fixed-scalar completion slices for the CMeta profile. `filled` processing
+remains a later slice.
 
 ## Supported form shape
 
@@ -90,8 +90,73 @@ storage:
 The adapter and provider user remain host-owned and must outlive any Session
 that borrows them.
 
+## Completion ingress and owner progress
+
+After provider commit, the Session arms one fixed mailbox with the active
+collect generation and exact selected-field CMeta descriptor.
+
+Completion admission is separate from semantic mutation:
+
+```text
+provider/host completion producer(s)
+    |
+    | generation + exact cmeta_data_desc* + native object
+    v
+vxml_session_cmeta_collect_try_complete()
+    |
+    +-- MPSC one-slot admission
+    +-- fixed byte copy only
+    +-- FULL / CLOSED / STALE / INCOMPATIBLE_RESULT
+    |
+    v
+READY mailbox
+    |
+    | exactly one Session owner
+    v
+vxml_session_cmeta_collect_run_ready()
+    |
+    +-- CMeta transaction begin
+    +-- semantic copy into staged root field
+    +-- transaction commit
+    +-- disarm generation
+    +-- Directed FIA SELECT
+```
+
+The mailbox accepts only exact fixed scalar CMeta descriptors:
+`BOOL`, `SINT`, `UINT`, and `FLOAT`. The native object is copied using
+the descriptor's fixed `storage_type->size` into preallocated aligned
+Session storage. No string, bytes, aggregate, or provider-owned view is retained
+by this slice.
+
+A wrong descriptor or stale generation does not claim the slot. A second
+producer after one accepted completion sees `FULL`; no overwrite or drop is
+performed.
+
+The Session must outlive concurrent `try_complete` calls. Lifecycle
+operations are control-plane operations: stop/cancel producers before destroy.
+Exactly one owner thread calls `run_ready`, close, and destroy.
+
+A successful progress turn makes the selected field defined before scanning the
+form again. The next undefined/true-cond field receives a new nonzero
+generation. If no field remains eligible the form exits normally.
+
+## Completion shutdown
+
+Close/destruction first closes completion admission, then settles provider
+ownership:
+
+- prepared tickets are discarded;
+- committed generations are cancelled through the existing no-fail provider
+  cancel callback;
+- any copied but unprocessed fixed-scalar completion is simply discarded with
+  Session-owned mailbox storage.
+
+The provider must treat cancel of an already-completed generation as an
+idempotent settlement.
+
 ## Deferred to the next #45 slice
 
-Recognition completion, copied bounded completion ingress, typed semantic-slot
-assignment, stale-completion rejection, `filled` handlers and return-to-SELECT
-processing are intentionally not approximated in this slice.
+Field/form `filled` handlers, multi-slot recognition results, managed
+STRING/BYTES/aggregate semantic payloads, noinput/nomatch Events and prompt
+media remain deferred. Managed results require an independent retained-byte
+budget and are not approximated by unbounded copies.
