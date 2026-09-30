@@ -3680,6 +3680,38 @@ vxml_status vxml_session_cmeta_raise(
     }
 }
 
+vxml_status vxml_session_cmeta_noinput(vxml_session *session) {
+    return vxml_session_cmeta_raise(
+        session, "noinput", sizeof("noinput") - 1u);
+}
+
+vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
+    return vxml_session_cmeta_raise(
+        session, "nomatch", sizeof("nomatch") - 1u);
+}
+
+vxml_status vxml_session_cmeta_take_reprompt(
+    vxml_session *session, bool *out_requested) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    if (out_requested != NULL) *out_requested = false;
+    if (session == NULL || out_requested == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    *out_requested = profile->reprompt_requested;
+    profile->reprompt_requested = false;
+    return VXML_OK;
+}
+
 static bool read_sint_value(
     const cmeta_data_desc *data, const void *object,
     vxml_cmeta_value_view *out_value) {
