@@ -4568,8 +4568,27 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
         segment->payload.size == 0u)
         return VXML_INVALID_STRUCTURE;
 
-    out_mark->segment_index =
-        profile->prompt_media_last_mark_segment;
+    {
+        size_t prompt_index;
+        bool found = false;
+        for (prompt_index = 0u;
+             prompt_index < program->prompt_count;
+             ++prompt_index) {
+            const vxml_cmeta_prompt_row *prompt =
+                &program->prompts[prompt_index];
+            if (profile->prompt_media_last_mark_segment >=
+                    prompt->first_segment &&
+                profile->prompt_media_last_mark_segment <
+                    prompt->first_segment + prompt->segment_count) {
+                out_mark->segment_index =
+                    profile->prompt_media_last_mark_segment -
+                    prompt->first_segment;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return VXML_INVALID_STRUCTURE;
+    }
     out_mark->name = segment->payload;
     return VXML_OK;
 }
