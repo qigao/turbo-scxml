@@ -349,6 +349,10 @@ vxml_status vxml_cmeta_session_init_profile(
 vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session);
 vxml_status vxml_cmeta_session_start_profile_at(
     vxml_session_impl *session, size_t form_index);
+vxml_status vxml_cmeta_session_raise_event_profile(
+    vxml_session_impl *session,
+    const char *event_name,
+    size_t event_name_size);
 void vxml_cmeta_session_destroy_profile(vxml_session_impl *session);
 void vxml_cmeta_program_destroy_profile(vxml_program_impl *program);
 
