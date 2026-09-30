@@ -203,7 +203,8 @@ typedef struct vxml_cmeta_branch_row {
 typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_DOCUMENT = 0,
     VXML_CMETA_EVENT_FORM,
-    VXML_CMETA_EVENT_FIELD
+    VXML_CMETA_EVENT_FIELD,
+    VXML_CMETA_EVENT_INITIAL
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
