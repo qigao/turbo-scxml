@@ -29,6 +29,8 @@ int main() {
            v3.abi_version == VXML_DIALOG_MANAGER_CONFIG_ABI_V3 &&
            v3.max_navigation_hops != 0u &&
            policy.abi_version == VXML_DOCUMENT_FETCH_POLICY_ABI_V1 &&
-           policy.struct_size == sizeof(policy)
+           policy.struct_size == sizeof(policy) &&
+           policy.fetchaudio_uri == nullptr &&
+           policy.fetchaudio_uri_size == 0u
         ? 0 : 1;
 }
