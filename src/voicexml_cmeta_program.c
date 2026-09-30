@@ -1464,7 +1464,7 @@ static vxml_status cmeta_measure_prompt(
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {
-        "count", "cond", "bargein", "bargeintype"};
+        "count", "cond", "bargein", "bargeintype", "timeout"};
     static const char *const audio_allowed[] = {"src"};
     static const char *const mark_allowed[] = {"name"};
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
@@ -1473,6 +1473,8 @@ static vxml_status cmeta_measure_prompt(
         cmeta_attribute(prompt, "bargein");
     const salts_xml_attribute bargeintype =
         cmeta_attribute(prompt, "bargeintype");
+    const salts_xml_attribute timeout =
+        cmeta_attribute(prompt, "timeout");
     size_t child_index;
     size_t text_bytes = 0u;
     size_t text_segment_count = 0u;
@@ -1481,8 +1483,10 @@ static vxml_status cmeta_measure_prompt(
     size_t mark_count = 0u;
     size_t total_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        prompt, allowed, 4u, diagnostic);
+        prompt, allowed, 5u, diagnostic);
     if (status != VXML_OK) return status;
     if (bargein.impl != NULL &&
         !cmeta_decoded_equal(
@@ -1518,7 +1522,12 @@ static vxml_status cmeta_measure_prompt(
     status = cmeta_parse_prompt_count(
         count, &parsed_count, diagnostic);
     if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        timeout, &has_timeout, &timeout_us, diagnostic);
+    if (status != VXML_OK) return status;
     (void)parsed_count;
+    (void)has_timeout;
+    (void)timeout_us;
     if (measurement->prompt_count >= options->max_prompts ||
         !cmeta_measure_increment(&measurement->prompt_count))
         return cmeta_program_fail(
@@ -2487,11 +2496,19 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "bargein");
     const salts_xml_attribute bargeintype_attribute =
         cmeta_attribute(prompt, "bargeintype");
+    const salts_xml_attribute timeout_attribute =
+        cmeta_attribute(prompt, "timeout");
     size_t child_index;
     unsigned count = 1u;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
     vxml_status status = cmeta_parse_prompt_count(
         count_attribute, &count, builder->diagnostic);
 
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        timeout_attribute, &has_timeout, &timeout_us,
+        builder->diagnostic);
     if (status != VXML_OK) return status;
     memset(out, 0, sizeof(*out));
     out->field = field_index;
@@ -2507,6 +2524,8 @@ static vxml_status cmeta_compile_prompt_schema(
             salts_xml_attribute_value(bargeintype_attribute), "speech")
             ? VXML_CMETA_PROMPT_BARGEIN_SPEECH
             : VXML_CMETA_PROMPT_BARGEIN_HOTWORD;
+    out->has_timeout = has_timeout;
+    out->timeout_us = timeout_us;
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
