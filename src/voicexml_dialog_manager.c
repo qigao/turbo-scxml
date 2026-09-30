@@ -12,6 +12,8 @@ static const char EVENT_DIALOG_EXIT[] = "dialog.exit";
 static const char EVENT_ERROR_PREPARE[] = "error.dialog.prepare";
 static const char EVENT_ERROR_START[] = "error.dialog.start";
 static const char EVENT_ERROR_TERMINATE[] = "error.dialog.terminate";
+static const char EVENT_CONNECTION_DISCONNECT_HANGUP[] =
+    "connection.disconnect.hangup";
 
 typedef enum vxml_dialog_row_state {
     VXML_DIALOG_ROW_EMPTY = 0,
@@ -1015,6 +1017,22 @@ static vxml_dialog_manager_status start_session(
         row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
 }
 
+static vxml_status raise_normal_termination_event(
+    vxml_dialog_row *row) {
+    vxml_status status;
+    if (row == NULL || !row->session_live)
+        return VXML_OK;
+    if (vxml_session_get_state(&row->session) !=
+        VXML_SESSION_RUNNING)
+        return VXML_OK;
+    status = vxml_session_raise_event(
+        &row->session,
+        EVENT_CONNECTION_DISCONNECT_HANGUP,
+        sizeof(EVENT_CONNECTION_DISCONNECT_HANGUP) - 1u);
+    return status == VXML_UNSUPPORTED_FEATURE
+        ? VXML_OK : status;
+}
+
 static vxml_dialog_manager_status progress_row(
     vxml_dialog_row *row) {
     vxml_dialog_manager_status status;
@@ -1045,10 +1063,14 @@ static vxml_dialog_manager_status progress_row(
             return status;
         break;
 
-    case VXML_DIALOG_ROW_PENDING_TERMINATE:
+    case VXML_DIALOG_ROW_PENDING_TERMINATE: {
+        const vxml_status voice_status =
+            raise_normal_termination_event(row);
         row_destroy_runtime(row);
-        (void)queue_event(row, VXML_DIALOG_EVENT_EXIT, VXML_OK);
+        (void)queue_event(
+            row, VXML_DIALOG_EVENT_EXIT, voice_status);
         break;
+    }
 
     case VXML_DIALOG_ROW_EVENT_PENDING:
         break;
