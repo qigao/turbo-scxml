@@ -281,6 +281,17 @@ vxml_status vxml_session_cmeta_raise(
     const char *event_name,
     size_t event_name_size);
 
+/** Raise the standard field recovery Events through the scoped selector. */
+vxml_status vxml_session_cmeta_noinput(vxml_session *session);
+vxml_status vxml_session_cmeta_nomatch(vxml_session *session);
+
+/**
+ * Consume the one-shot reprompt control bit published by the last successful
+ * Event handler. A successful call clears the bit.
+ */
+vxml_status vxml_session_cmeta_take_reprompt(
+    vxml_session *session, bool *out_requested);
+
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
 

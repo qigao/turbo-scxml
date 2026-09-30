@@ -714,6 +714,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
     vxml_free(session->collect_mailbox.root_fields);
@@ -746,6 +747,66 @@ static unsigned char *session_declared(
     return base != NULL ? base + session->declared_offsets[scope] : NULL;
 }
 
+static bool recovery_event_name(
+    const vxml_cmeta_event_counter *counter) {
+    return counter != NULL && counter->event != NULL &&
+        ((counter->event_size == sizeof("noinput") - 1u &&
+          memcmp(counter->event, "noinput", sizeof("noinput") - 1u) == 0) ||
+         (counter->event_size == sizeof("nomatch") - 1u &&
+          memcmp(counter->event, "nomatch", sizeof("nomatch") - 1u) == 0));
+}
+
+static void reset_field_retry_counters(
+    vxml_cmeta_session_data *session, size_t field_index) {
+    size_t index;
+    if (session == NULL) return;
+    for (index = 0u; index < session->event_counter_count; ++index) {
+        vxml_cmeta_event_counter *counter =
+            &session->event_counters[index];
+        if (counter->scope_kind == VXML_CMETA_EVENT_FIELD &&
+            counter->owner == field_index &&
+            recovery_event_name(counter))
+            counter->count = 0u;
+    }
+}
+
+static void reset_form_retry_counters(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form) {
+    size_t offset;
+    if (session == NULL || program == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count))
+        return;
+    for (offset = 0u; offset < form->field_count; ++offset)
+        reset_field_retry_counters(
+            session, form->first_field + offset);
+}
+
+static void mark_field_retry_reset(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t field_index) {
+    if (session == NULL || program == NULL ||
+        session->retry_reset_pending == NULL ||
+        field_index >= program->field_count)
+        return;
+    session->retry_reset_pending[field_index] = 1u;
+}
+
+static void apply_retry_resets(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program) {
+    size_t index;
+    if (session == NULL || program == NULL ||
+        session->retry_reset_pending == NULL)
+        return;
+    for (index = 0u; index < program->field_count; ++index)
+        if (session->retry_reset_pending[index] != 0u)
+            reset_field_retry_counters(session, index);
+}
+
 static void transaction_reset(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
@@ -755,6 +816,9 @@ static void transaction_reset(
         cmeta_scope_view_clear(&session->staged_scopes[index].view);
     if (session->declared_count != 0u)
         memset(session->staged_declared, 0, session->declared_count);
+    if (program->field_count != 0u &&
+        session->retry_reset_pending != NULL)
+        memset(session->retry_reset_pending, 0, program->field_count);
 }
 
 static bool transaction_begin(
@@ -794,6 +858,7 @@ static void transaction_commit(
     }
     session->committed_declared = session->staged_declared;
     session->staged_declared = declared_swap;
+    apply_retry_resets(session, program);
     transaction_reset(session, program);
 }
 
@@ -1316,6 +1381,24 @@ static vxml_status assign_resolved_location(
     return status;
 }
 
+static void mark_form_retry_reset_by_root(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    size_t root_field) {
+    size_t offset;
+    if (session == NULL || program == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count) ||
+        program->fields == NULL)
+        return;
+    for (offset = 0u; offset < form->field_count; ++offset) {
+        const size_t field_index = form->first_field + offset;
+        if (program->fields[field_index].root_field == root_field)
+            mark_field_retry_reset(session, program, field_index);
+    }
+}
+
 static vxml_status execute_clear(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1323,7 +1406,8 @@ static vxml_status execute_clear(
     const vxml_cmeta_action_row *action) {
     size_t index;
     if (action->clear_all_form_items) {
-        if (!range_valid(form->first_block, form->block_count,
+        if (form == NULL ||
+            !range_valid(form->first_block, form->block_count,
                          program->block_count) ||
             !range_valid(form->first_field, form->field_count,
                          program->field_count))
@@ -1343,6 +1427,8 @@ static vxml_status execute_clear(
                 &program->fields[form->first_field + index];
             root_storage_clear_field(
                 &session->staged_root, program, field->root_field);
+            mark_field_retry_reset(
+                session, program, form->first_field + index);
         }
         return VXML_OK;
     }
@@ -1361,6 +1447,9 @@ static vxml_status execute_clear(
         } else {
             root_storage_clear_field(
                 resolved.root, program, resolved.candidate->root_field);
+            mark_form_retry_reset_by_root(
+                session, program, form,
+                resolved.candidate->root_field);
         }
     }
     return VXML_OK;
@@ -1484,6 +1573,14 @@ static vxml_status execute_rethrow(
     if (session == NULL || !session->event_dispatch_active)
         return VXML_INVALID_STATE;
     session->rethrow_requested = true;
+    return VXML_OK;
+}
+
+static vxml_status execute_reprompt(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL || !session->event_dispatch_active)
+        return VXML_INVALID_STATE;
+    session->handler_reprompt_requested = true;
     return VXML_OK;
 }
 
@@ -1621,6 +1718,12 @@ static vxml_status execute_action_range(
                     execute_rethrow(session);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_REPROMPT: {
+                const vxml_status status =
+                    execute_reprompt(session);
+                if (status != VXML_OK) return status;
+                break;
             }
             default:
                 return VXML_INVALID_STRUCTURE;
@@ -1983,6 +2086,13 @@ vxml_status vxml_cmeta_session_init_profile(
         }
         profile->collect_adapter = options->collect;
         profile->collect_user = options->collect_user;
+        profile->retry_reset_pending =
+            (unsigned char *)vxml_calloc(
+                program->field_count, sizeof(unsigned char));
+        if (profile->retry_reset_pending == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
     }
     if (root_shape->field_count != 0u) {
         undefined = (unsigned char *)vxml_calloc(
@@ -2304,6 +2414,9 @@ vxml_status vxml_cmeta_session_start_profile_at(
         (form->field_count == 0u && form->block_count == 0u))
         return session_fail(session, VXML_INVALID_STRUCTURE);
     profile->active_form = form_index;
+    reset_form_retry_counters(profile, program, form);
+    profile->reprompt_requested = false;
+    profile->handler_reprompt_requested = false;
     if (!transaction_begin(profile, program))
         return session_fail(session, VXML_ALLOCATION_FAILED);
     status = initialize_form(profile, program, form, form_index);
@@ -3231,7 +3344,11 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         return session_fail(impl, status);
     }
 
+    mark_field_retry_reset(
+        profile, program, profile->active_field);
     transaction_commit(profile, program);
+    profile->reprompt_requested = false;
+    profile->handler_reprompt_requested = false;
 
     profile->collect_in_flight = false;
     mailbox->data = NULL;
@@ -3424,6 +3541,7 @@ static vxml_status execute_event_handler(
     profile->exit_requested = false;
     profile->throw_requested = false;
     profile->rethrow_requested = false;
+    profile->handler_reprompt_requested = false;
     profile->thrown_event = NULL;
     profile->thrown_event_size = 0u;
     profile->event_dispatch_active = true;
@@ -3442,11 +3560,15 @@ static vxml_status execute_event_handler(
         exit_snapshot_destroy(&profile->pending_exit);
         profile->throw_requested = false;
         profile->rethrow_requested = false;
+        profile->handler_reprompt_requested = false;
         profile->thrown_event = NULL;
         profile->thrown_event_size = 0u;
         return status;
     }
     transaction_commit(profile, program);
+    if (profile->handler_reprompt_requested)
+        profile->reprompt_requested = true;
+    profile->handler_reprompt_requested = false;
     if (profile->exit_requested) {
         exit_snapshot_publish(profile);
         impl->state = VXML_SESSION_EXITED;
@@ -3556,6 +3678,38 @@ vxml_status vxml_session_cmeta_raise(
             continue;
         return session_fail(impl, VXML_SEMANTIC_ERROR);
     }
+}
+
+vxml_status vxml_session_cmeta_noinput(vxml_session *session) {
+    return vxml_session_cmeta_raise(
+        session, "noinput", sizeof("noinput") - 1u);
+}
+
+vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
+    return vxml_session_cmeta_raise(
+        session, "nomatch", sizeof("nomatch") - 1u);
+}
+
+vxml_status vxml_session_cmeta_take_reprompt(
+    vxml_session *session, bool *out_requested) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    if (out_requested != NULL) *out_requested = false;
+    if (session == NULL || out_requested == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    *out_requested = profile->reprompt_requested;
+    profile->reprompt_requested = false;
+    return VXML_OK;
 }
 
 static bool read_sint_value(

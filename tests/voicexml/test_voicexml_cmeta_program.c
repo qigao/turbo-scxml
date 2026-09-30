@@ -259,6 +259,27 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("rejects reprompt outside scoped Event handler content") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block><reprompt/></block></form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            compile_options();
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+        options.max_fields = 4u;
+        options.max_grammar_bytes = 128u;
+        options.max_event_handlers = 4u;
+        options.max_event_name_bytes = 64u;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, &diagnostic),
+                    VXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(diagnostic.status, VXML_INVALID_STRUCTURE);
+    }
+
     it("compiles one directed field and literal SRGS grammar into immutable rows") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
