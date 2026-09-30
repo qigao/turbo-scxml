@@ -811,11 +811,13 @@ static vxml_status cmeta_measure_repeated_vars(
 
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
+    bool event_handler,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic);
 
 static vxml_status cmeta_measure_conditional(
-    salts_xml_node node, cmeta_program_measurement *measurement,
+    salts_xml_node node, bool event_handler,
+    cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const salts_xml_attribute condition = cmeta_attribute(node, "cond");
     size_t index;
@@ -874,7 +876,8 @@ static vxml_status cmeta_measure_conditional(
         }
         {
             const vxml_status status = cmeta_measure_executable(
-                child, node, index, measurement, limits, diagnostic);
+                child, node, index, event_handler,
+                measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
@@ -883,6 +886,7 @@ static vxml_status cmeta_measure_conditional(
 
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
+    bool event_handler,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     salts_xml_attribute expression;
@@ -894,13 +898,16 @@ static vxml_status cmeta_measure_executable(
             diagnostic, VXML_UNSUPPORTED_FEATURE,
             salts_xml_node_location(node),
             "implicit VoiceXML prompt text is unsupported");
-    if (!cmeta_node_named(node, "var") &&
-        !cmeta_node_named(node, "assign") &&
-        !cmeta_node_named(node, "clear") &&
-        !cmeta_node_named(node, "if") &&
-        !cmeta_node_named(node, "exit") &&
-        !cmeta_node_named(node, "throw") &&
-        !cmeta_node_named(node, "rethrow"))
+    if ((!event_handler &&
+         (cmeta_node_named(node, "throw") ||
+          cmeta_node_named(node, "rethrow"))) ||
+        (!cmeta_node_named(node, "var") &&
+         !cmeta_node_named(node, "assign") &&
+         !cmeta_node_named(node, "clear") &&
+         !cmeta_node_named(node, "if") &&
+         !cmeta_node_named(node, "exit") &&
+         !cmeta_node_named(node, "throw") &&
+         !cmeta_node_named(node, "rethrow")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -993,7 +1000,7 @@ static vxml_status cmeta_measure_executable(
     }
     if (cmeta_node_named(node, "if"))
         return cmeta_measure_conditional(
-            node, measurement, limits, diagnostic);
+            node, event_handler, measurement, limits, diagnostic);
     return VXML_OK;
 }
 
@@ -1071,7 +1078,8 @@ static vxml_status cmeta_measure_catch(
             salts_xml_node_child_at(node, index);
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
-            child, node, index, measurement, limits, diagnostic);
+            child, node, index, true,
+            measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1175,7 +1183,8 @@ static vxml_status cmeta_measure_filled_content(
             salts_xml_node_child_at(filled, index);
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
-            child, filled, index, measurement, limits, diagnostic);
+            child, filled, index, false,
+            measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1217,7 +1226,8 @@ static vxml_status cmeta_measure_block(
         if (cmeta_node_ignorable(child)) continue;
         {
             const vxml_status status = cmeta_measure_executable(
-                child, block, index, measurement, limits, diagnostic);
+                child, block, index, false,
+                measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
