@@ -2123,6 +2123,11 @@ static vxml_status cmeta_normalize_menu_choice_phrase(
     }
 
     if (total == 0u) return VXML_OK;
+    if (total == SIZE_MAX)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(choice),
+            "VoiceXML choice phrase size overflow");
     buffer = (char *)vxml_malloc(total + 1u);
     if (buffer == NULL)
         return cmeta_program_fail(
@@ -2367,10 +2372,6 @@ static vxml_status cmeta_measure_menu(
         status = cmeta_menu_choice_accept_exact(
             menu, child, diagnostic);
         if (status != VXML_OK) goto done;
-        status = cmeta_normalize_menu_choice_phrase(
-            child, options->max_menu_choice_bytes,
-            &speech, &speech_size, diagnostic);
-        if (status != VXML_OK) goto done;
         if (event.impl != NULL) {
             if (!cmeta_event_options_valid(options)) {
                 status = cmeta_program_fail(
@@ -2385,6 +2386,10 @@ static vxml_status cmeta_measure_menu(
             status = cmeta_measure_menu_next(
                 next, options, measurement, limits, diagnostic);
         }
+        if (status != VXML_OK) goto done;
+        status = cmeta_normalize_menu_choice_phrase(
+            child, options->max_menu_choice_bytes,
+            &speech, &speech_size, diagnostic);
         if (status != VXML_OK) goto done;
         status = cmeta_decode_menu_dtmf(
             explicit_dtmf, auto_dtmf, implicit_count,
@@ -2413,6 +2418,7 @@ static vxml_status cmeta_measure_menu(
                         seen_dtmf[prior], normalized,
                         normalized_size) == 0) {
                     vxml_free(normalized);
+                    vxml_free(speech);
                     status = cmeta_program_fail(
                         diagnostic, VXML_INVALID_STRUCTURE,
                         salts_xml_node_location(child),
@@ -2425,6 +2431,7 @@ static vxml_status cmeta_measure_menu(
                 measurement->name_bytes + normalized_size + 1u >
                     limits->max_name_bytes) {
                 vxml_free(normalized);
+                vxml_free(speech);
                 status = cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
@@ -4205,6 +4212,7 @@ static vxml_status cmeta_compile_menu_schema(
                 (salts_xml_string_view){normalized, normalized_size});
             if (retained == NULL) {
                 vxml_free(normalized);
+                vxml_free(speech);
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
@@ -4221,6 +4229,7 @@ static vxml_status cmeta_compile_menu_schema(
                         prior_dtmf.data, retained,
                         normalized_size) == 0) {
                     vxml_free(normalized);
+                    vxml_free(speech);
                     return cmeta_program_fail(
                         builder->diagnostic, VXML_INVALID_STRUCTURE,
                         salts_xml_node_location(child),
