@@ -83,6 +83,10 @@ typedef struct vxml_cmeta_menu_row {
     size_t form;
     size_t first_choice;
     size_t choice_count;
+    size_t first_speech_policy;
+    size_t speech_policy_count;
+    size_t first_grammar;
+    size_t grammar_count;
 } vxml_cmeta_menu_row;
 
 typedef struct vxml_cmeta_field_row {
@@ -237,6 +241,10 @@ typedef struct vxml_cmeta_program_data {
     vxml_cmeta_menu_choice_v1 *menu_choices;
     vxml_cmeta_menu_choice_target_row *menu_choice_targets;
     size_t menu_choice_count;
+    vxml_cmeta_menu_speech_policy_v1 *menu_speech_policies;
+    size_t menu_speech_policy_count;
+    vxml_cmeta_menu_grammar_ref_v1 *menu_grammars;
+    size_t menu_grammar_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
     vxml_cmeta_prompt_row *prompts;

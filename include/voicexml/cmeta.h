@@ -19,6 +19,7 @@ extern "C" {
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 1u
+#define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 2u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 #define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
@@ -29,6 +30,8 @@ extern "C" {
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
 #define VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT UINT64_C(4)
+#define VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE UINT64_C(8)
+#define VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL UINT64_C(16)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
@@ -110,6 +113,9 @@ typedef struct vxml_cmeta_compile_options_v1 {
      * using the historical menu prefix remain valid.
      */
     size_t max_menu_target_bytes;
+
+    /* Optional append-only explicit menu grammar bound. Zero disables V2 grammar refs. */
+    size_t max_menu_grammar_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -223,6 +229,46 @@ typedef struct vxml_cmeta_menu_collect_request_v1 {
     size_t choice_count;
 } vxml_cmeta_menu_collect_request_v1;
 
+typedef enum vxml_cmeta_menu_accept_mode {
+    VXML_CMETA_MENU_ACCEPT_EXACT = 1,
+    VXML_CMETA_MENU_ACCEPT_APPROXIMATE
+} vxml_cmeta_menu_accept_mode;
+
+/*
+ * Fixed-stride side-table element. Do not tail-extend.
+ * choice_index is relative to the active menu's V1 choices array.
+ */
+typedef struct vxml_cmeta_menu_speech_policy_v1 {
+    size_t choice_index;
+    vxml_cmeta_menu_accept_mode mode;
+} vxml_cmeta_menu_speech_policy_v1;
+
+/*
+ * Fixed-stride external grammar side-table element. Do not tail-extend.
+ * media_type/src borrow immutable Program-owned storage.
+ */
+typedef struct vxml_cmeta_menu_grammar_ref_v1 {
+    size_t choice_index;
+    vxml_cmeta_name_view media_type;
+    vxml_cmeta_name_view src;
+} vxml_cmeta_menu_grammar_ref_v1;
+
+/*
+ * V2 is a separate caller-owned output object. V1 stays byte-for-byte stable.
+ */
+typedef struct vxml_cmeta_menu_collect_request_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    const vxml_cmeta_menu_choice_v1 *choices;
+    size_t choice_count;
+    const vxml_cmeta_menu_speech_policy_v1 *speech_policies;
+    size_t speech_policy_count;
+    const vxml_cmeta_menu_grammar_ref_v1 *grammars;
+    size_t grammar_count;
+} vxml_cmeta_menu_collect_request_v2;
+
 typedef struct vxml_cmeta_collect_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -245,6 +291,16 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
     vxml_status (*prepare_menu)(
         void *user,
         const vxml_cmeta_menu_collect_request_v1 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
+
+    /*
+     * Optional append-only V2 menu admission tail. Required only for
+     * approximate speech policy or explicit external grammar rows.
+     */
+    vxml_status (*prepare_menu_v2)(
+        void *user,
+        const vxml_cmeta_menu_collect_request_v2 *request,
         vxml_cmeta_collect_ticket_v1 *out_ticket,
         const char **out_error);
 } vxml_cmeta_collect_adapter_v1;
@@ -494,6 +550,14 @@ vxml_status vxml_session_cmeta_collect_request(
 vxml_status vxml_session_cmeta_menu_collect_request(
     const vxml_session *session,
     vxml_cmeta_menu_collect_request_v1 *out_request);
+
+/**
+ * Borrow the active menu including V2 speech-policy / external-grammar side tables.
+ * V1 callers remain valid for menus that require no V2-only semantics.
+ */
+vxml_status vxml_session_cmeta_menu_collect_request_v2(
+    const vxml_session *session,
+    vxml_cmeta_menu_collect_request_v2 *out_request);
 
 /**
  * Ask the configured provider to reserve the selected collect operation.

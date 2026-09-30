@@ -49,6 +49,15 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_menu_collect_request_v1>::value,
     "menu collect request must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_menu_speech_policy_v1>::value,
+    "menu speech policy must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_menu_grammar_ref_v1>::value,
+    "menu grammar ref must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_menu_collect_request_v2>::value,
+    "menu collect request V2 must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_menu_completion_v1>::value,
     "menu completion must remain C-compatible");
 static_assert(
@@ -89,6 +98,9 @@ int main() {
     vxml_cmeta_collect_result_slot_v1 collect_slot{};
     vxml_cmeta_menu_choice_v1 menu_choice{};
     vxml_cmeta_menu_collect_request_v1 menu_request{};
+    vxml_cmeta_menu_speech_policy_v1 menu_policy{};
+    vxml_cmeta_menu_grammar_ref_v1 menu_grammar{};
+    vxml_cmeta_menu_collect_request_v2 menu_request_v2{};
     vxml_cmeta_menu_completion_v1 menu_completion{};
     vxml_cmeta_collect_completion_v2 collect_completion_v2{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
@@ -113,6 +125,7 @@ int main() {
     auto query_terminal = &vxml_session_cmeta_terminal_kind;
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
     auto query_menu = &vxml_session_cmeta_menu_collect_request;
+    auto query_menu_v2 = &vxml_session_cmeta_menu_collect_request_v2;
     auto complete_menu = &vxml_session_cmeta_menu_try_complete;
     int result = 1;
 
@@ -139,7 +152,8 @@ int main() {
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
         query_terminal == nullptr || query_terminal_event == nullptr ||
-        query_menu == nullptr || complete_menu == nullptr ||
+        query_menu == nullptr || query_menu_v2 == nullptr ||
+        complete_menu == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -171,6 +185,8 @@ int main() {
     collect_completion.struct_size = sizeof(collect_completion);
     menu_request.abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1;
     menu_request.struct_size = sizeof(menu_request);
+    menu_request_v2.abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2;
+    menu_request_v2.struct_size = sizeof(menu_request_v2);
     menu_completion.abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1;
     menu_completion.struct_size = sizeof(menu_completion);
     collect_completion_v2.abi_version =
@@ -188,11 +204,18 @@ int main() {
         collect_completion_v2.slot_count != 1u ||
         menu_request.abi_version !=
             VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
+        menu_request_v2.abi_version !=
+            VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 ||
+        menu_policy.mode != static_cast<vxml_cmeta_menu_accept_mode>(0) ||
+        menu_grammar.media_type.data != nullptr ||
+        menu_grammar.src.data != nullptr ||
         menu_completion.abi_version != VXML_CMETA_MENU_COMPLETION_ABI_V1 ||
         menu_choice.dtmf.data != nullptr ||
         menu_choice.speech.data != nullptr ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL == 0u ||
         collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
         return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
