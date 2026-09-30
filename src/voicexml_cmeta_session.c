@@ -111,6 +111,16 @@ static bool collect_adapter_has_menu(
         adapter->prepare_menu != NULL;
 }
 
+static bool collect_adapter_has_menu_v2(
+    const vxml_cmeta_collect_adapter_v1 *adapter) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_collect_adapter_v1, prepare_menu_v2) +
+        sizeof(((vxml_cmeta_collect_adapter_v1 *)0)->prepare_menu_v2);
+    return adapter != NULL &&
+        adapter->struct_size >= tail_size &&
+        adapter->prepare_menu_v2 != NULL;
+}
+
 static const DataBindFormatProvider *data_format_provider(
     vxml_cmeta_data_format format) {
     switch (format) {
@@ -2872,8 +2882,17 @@ static vxml_status menu_collect_request_from_impl(
         menu->choice_count == 0u ||
         !range_valid(
             menu->first_choice, menu->choice_count,
-            program->menu_choice_count))
+            program->menu_choice_count) ||
+        !range_valid(
+            menu->first_speech_policy, menu->speech_policy_count,
+            program->menu_speech_policy_count) ||
+        !range_valid(
+            menu->first_grammar, menu->grammar_count,
+            program->menu_grammar_count))
         return VXML_INVALID_STRUCTURE;
+    if (menu->speech_policy_count != 0u ||
+        menu->grammar_count != 0u)
+        return VXML_UNSUPPORTED_FEATURE;
     for (choice_offset = 0u;
          choice_offset < menu->choice_count;
          ++choice_offset) {
@@ -2902,6 +2921,154 @@ static vxml_status menu_collect_request_from_impl(
     return VXML_OK;
 }
 
+
+static vxml_status menu_collect_request_v2_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_menu_collect_request_v2 *out_request) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_menu_row *menu;
+    uint64_t required_capabilities =
+        VXML_CMETA_COLLECT_CAP_MENU_CHOICE;
+    size_t choice_offset;
+    size_t policy_offset;
+    size_t grammar_offset;
+
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_menu_collect_request_v2){0};
+    if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
+        impl->program == NULL || impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_field != VXML_CMETA_NO_INDEX ||
+        profile->active_menu == VXML_CMETA_NO_INDEX ||
+        profile->active_menu >= program->menu_count ||
+        program->menus == NULL ||
+        program->menu_choices == NULL ||
+        profile->collect_generation == 0u)
+        return VXML_INVALID_STATE;
+    menu = &program->menus[profile->active_menu];
+    if (menu->form != profile->active_form ||
+        menu->choice_count == 0u ||
+        !range_valid(
+            menu->first_choice, menu->choice_count,
+            program->menu_choice_count) ||
+        !range_valid(
+            menu->first_speech_policy, menu->speech_policy_count,
+            program->menu_speech_policy_count) ||
+        !range_valid(
+            menu->first_grammar, menu->grammar_count,
+            program->menu_grammar_count) ||
+        (menu->speech_policy_count != 0u &&
+         program->menu_speech_policies == NULL) ||
+        (menu->grammar_count != 0u &&
+         program->menu_grammars == NULL))
+        return VXML_INVALID_STRUCTURE;
+
+    for (policy_offset = 0u;
+         policy_offset < menu->speech_policy_count;
+         ++policy_offset) {
+        const vxml_cmeta_menu_speech_policy_v1 *row =
+            &program->menu_speech_policies[
+                menu->first_speech_policy + policy_offset];
+        if (row->choice_index >= menu->choice_count ||
+            row->mode != VXML_CMETA_MENU_ACCEPT_APPROXIMATE ||
+            (policy_offset != 0u &&
+             program->menu_speech_policies[
+                 menu->first_speech_policy + policy_offset - 1u]
+                 .choice_index >= row->choice_index))
+            return VXML_INVALID_STRUCTURE;
+    }
+    for (grammar_offset = 0u;
+         grammar_offset < menu->grammar_count;
+         ++grammar_offset) {
+        const vxml_cmeta_menu_grammar_ref_v1 *row =
+            &program->menu_grammars[
+                menu->first_grammar + grammar_offset];
+        if (row->choice_index >= menu->choice_count ||
+            row->media_type.data == NULL || row->media_type.size == 0u ||
+            row->src.data == NULL || row->src.size == 0u ||
+            (grammar_offset != 0u &&
+             program->menu_grammars[
+                 menu->first_grammar + grammar_offset - 1u]
+                 .choice_index >= row->choice_index))
+            return VXML_INVALID_STRUCTURE;
+    }
+
+    for (choice_offset = 0u;
+         choice_offset < menu->choice_count;
+         ++choice_offset) {
+        const vxml_cmeta_menu_choice_v1 *choice =
+            &program->menu_choices[
+                menu->first_choice + choice_offset];
+        bool approximate = false;
+        bool explicit_grammar = false;
+        if ((choice->dtmf.data == NULL) !=
+                (choice->dtmf.size == 0u) ||
+            (choice->speech.data == NULL) !=
+                (choice->speech.size == 0u))
+            return VXML_INVALID_STRUCTURE;
+        for (policy_offset = 0u;
+             policy_offset < menu->speech_policy_count;
+             ++policy_offset) {
+            const vxml_cmeta_menu_speech_policy_v1 *row =
+                &program->menu_speech_policies[
+                    menu->first_speech_policy + policy_offset];
+            if (row->choice_index == choice_offset) {
+                approximate = true;
+                break;
+            }
+            if (row->choice_index > choice_offset) break;
+        }
+        for (grammar_offset = 0u;
+             grammar_offset < menu->grammar_count;
+             ++grammar_offset) {
+            const vxml_cmeta_menu_grammar_ref_v1 *row =
+                &program->menu_grammars[
+                    menu->first_grammar + grammar_offset];
+            if (row->choice_index == choice_offset) {
+                explicit_grammar = true;
+                break;
+            }
+            if (row->choice_index > choice_offset) break;
+        }
+        if (approximate && explicit_grammar)
+            return VXML_INVALID_STRUCTURE;
+        if (explicit_grammar) {
+            if (choice->speech.size != 0u)
+                return VXML_INVALID_STRUCTURE;
+            required_capabilities |=
+                VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL;
+        } else if (choice->speech.size != 0u) {
+            required_capabilities |= approximate
+                ? VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE
+                : VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT;
+        } else if (choice->dtmf.size == 0u) {
+            return VXML_INVALID_STRUCTURE;
+        }
+    }
+
+    *out_request = (vxml_cmeta_menu_collect_request_v2){
+        .abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_menu_collect_request_v2),
+        .generation = profile->collect_generation,
+        .required_capabilities = required_capabilities,
+        .choices = &program->menu_choices[menu->first_choice],
+        .choice_count = menu->choice_count,
+        .speech_policies = menu->speech_policy_count != 0u
+            ? &program->menu_speech_policies[menu->first_speech_policy]
+            : NULL,
+        .speech_policy_count = menu->speech_policy_count,
+        .grammars = menu->grammar_count != 0u
+            ? &program->menu_grammars[menu->first_grammar]
+            : NULL,
+        .grammar_count = menu->grammar_count
+    };
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request) {
@@ -2922,6 +3089,17 @@ vxml_status vxml_session_cmeta_menu_collect_request(
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     if (impl == NULL) return VXML_INVALID_CONTRACT;
     return menu_collect_request_from_impl(impl, out_request);
+}
+
+vxml_status vxml_session_cmeta_menu_collect_request_v2(
+    const vxml_session *session,
+    vxml_cmeta_menu_collect_request_v2 *out_request) {
+    const vxml_session_impl *impl = cmeta_session(session);
+    if (out_request != NULL)
+        *out_request = (vxml_cmeta_menu_collect_request_v2){0};
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    return menu_collect_request_v2_from_impl(impl, out_request);
 }
 
 vxml_status vxml_session_cmeta_collect_prepare(
@@ -2947,17 +3125,39 @@ vxml_status vxml_session_cmeta_collect_prepare(
         return VXML_INVALID_STATE;
 
     if (profile->active_menu != VXML_CMETA_NO_INDEX) {
-        vxml_cmeta_menu_collect_request_v1 request = {0};
-        status = menu_collect_request_from_impl(impl, &request);
-        if (status != VXML_OK) return status;
-        if ((profile->collect_adapter->capabilities &
-             request.required_capabilities) !=
-            request.required_capabilities)
-            return VXML_UNSUPPORTED_FEATURE;
-        if (!collect_adapter_has_menu(profile->collect_adapter))
-            return VXML_UNSUPPORTED_FEATURE;
-        status = profile->collect_adapter->prepare_menu(
-            profile->collect_user, &request, &ticket, out_error);
+        const vxml_cmeta_program_data *program =
+            (const vxml_cmeta_program_data *)impl->program->profile_data;
+        const vxml_cmeta_menu_row *menu;
+        if (profile->active_menu >= program->menu_count ||
+            program->menus == NULL)
+            return VXML_INVALID_STRUCTURE;
+        menu = &program->menus[profile->active_menu];
+        if (menu->speech_policy_count != 0u ||
+            menu->grammar_count != 0u) {
+            vxml_cmeta_menu_collect_request_v2 request = {0};
+            status = menu_collect_request_v2_from_impl(impl, &request);
+            if (status != VXML_OK) return status;
+            if ((profile->collect_adapter->capabilities &
+                 request.required_capabilities) !=
+                request.required_capabilities)
+                return VXML_UNSUPPORTED_FEATURE;
+            if (!collect_adapter_has_menu_v2(profile->collect_adapter))
+                return VXML_UNSUPPORTED_FEATURE;
+            status = profile->collect_adapter->prepare_menu_v2(
+                profile->collect_user, &request, &ticket, out_error);
+        } else {
+            vxml_cmeta_menu_collect_request_v1 request = {0};
+            status = menu_collect_request_from_impl(impl, &request);
+            if (status != VXML_OK) return status;
+            if ((profile->collect_adapter->capabilities &
+                 request.required_capabilities) !=
+                request.required_capabilities)
+                return VXML_UNSUPPORTED_FEATURE;
+            if (!collect_adapter_has_menu(profile->collect_adapter))
+                return VXML_UNSUPPORTED_FEATURE;
+            status = profile->collect_adapter->prepare_menu(
+                profile->collect_user, &request, &ticket, out_error);
+        }
     } else {
         vxml_cmeta_collect_request_v1 request = {0};
         const vxml_cmeta_program_data *program =
