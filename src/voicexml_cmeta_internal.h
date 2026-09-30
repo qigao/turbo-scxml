@@ -316,6 +316,7 @@ typedef struct vxml_cmeta_prompt_media_mailbox {
     atomic_uint state;
     atomic_uint_fast64_t generation;
     vxml_cmeta_prompt_media_outcome outcome;
+    vxml_cmeta_prompt_media_failure failure;
 } vxml_cmeta_prompt_media_mailbox;
 
 typedef struct vxml_cmeta_session_data {
