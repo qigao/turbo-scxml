@@ -356,6 +356,7 @@ typedef struct vxml_cmeta_program_data {
     size_t max_conditional_depth;
     size_t max_data_bind_depth;
     size_t max_data_bind_items;
+    size_t max_subdialog_param_value_bytes;
 } vxml_cmeta_program_data;
 
 typedef struct vxml_cmeta_root_storage {
