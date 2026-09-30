@@ -874,8 +874,10 @@ static vxml_dialog_manager_status follow_external_navigation(
         vxml_document_ref next_ref = {0};
         vxml_document_store_error error = {0};
         vxml_resolved_uri_v1 resolved;
+        vxml_resolved_uri_v1 fetchaudio_resolved;
         vxml_document_store_status store_status;
         vxml_status voice_status;
+        bool have_fetchaudio = false;
 
         if (!impl->navigation_enabled ||
             !impl->store_backed ||
@@ -935,12 +937,59 @@ static vxml_dialog_manager_status follow_external_navigation(
         }
 
         if (navigation.fetchaudio_uri_size != 0u) {
+            fetchaudio_resolved = (vxml_resolved_uri_v1){
+                .abi_version = 1u,
+                .struct_size = sizeof(vxml_resolved_uri_v1),
+                .document_uri =
+                    impl->resolve_fetchaudio_uri_scratch,
+                .document_uri_capacity =
+                    impl->max_source_bytes + 1u,
+                .fragment =
+                    impl->resolve_fetchaudio_fragment_scratch,
+                .fragment_capacity =
+                    impl->max_source_bytes + 1u};
+            if (vxml_document_store_resolve(
+                    impl->document_store,
+                    current_view.document_uri,
+                    current_view.document_uri_size,
+                    navigation.fetchaudio_uri,
+                    navigation.fetchaudio_uri_size,
+                    &fetchaudio_resolved) ==
+                VXML_DOCUMENT_STORE_OK) {
+                size_t full_size =
+                    fetchaudio_resolved.document_uri_size;
+                if (fetchaudio_resolved.fragment_size != 0u) {
+                    if (full_size < impl->max_source_bytes &&
+                        fetchaudio_resolved.fragment_size <=
+                            impl->max_source_bytes - full_size - 1u) {
+                        impl->resolve_fetchaudio_uri_scratch[
+                            full_size++] = '#';
+                        memcpy(
+                            impl->resolve_fetchaudio_uri_scratch +
+                                full_size,
+                            impl->resolve_fetchaudio_fragment_scratch,
+                            fetchaudio_resolved.fragment_size);
+                        full_size +=
+                            fetchaudio_resolved.fragment_size;
+                        impl->resolve_fetchaudio_uri_scratch[
+                            full_size] = '\0';
+                        fetchaudio_resolved.document_uri_size =
+                            full_size;
+                        have_fetchaudio = true;
+                    }
+                } else {
+                    have_fetchaudio = true;
+                }
+            }
+        }
+
+        if (have_fetchaudio) {
             vxml_document_fetch_policy_v1 policy =
                 VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
             policy.fetchaudio_uri =
-                navigation.fetchaudio_uri;
+                fetchaudio_resolved.document_uri;
             policy.fetchaudio_uri_size =
-                navigation.fetchaudio_uri_size;
+                fetchaudio_resolved.document_uri_size;
             store_status =
                 vxml_document_store_acquire_with_policy(
                     impl->document_store,
