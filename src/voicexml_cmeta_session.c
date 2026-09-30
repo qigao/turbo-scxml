@@ -3081,6 +3081,9 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
         &mailbox->generation, memory_order_relaxed);
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD ||
+        profile->active_menu != VXML_CMETA_NO_INDEX)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     if (!cmeta_data_desc_equal(completion->data, mailbox->data) ||
         !collect_fixed_scalar_data(completion->data))
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
@@ -3190,6 +3193,8 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     mailbox = &profile->collect_mailbox;
+    if (profile->active_menu != VXML_CMETA_NO_INDEX)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     if (profile->active_field >= program->field_count ||
         program->fields == NULL)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
@@ -3219,6 +3224,8 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
         &mailbox->generation, memory_order_relaxed);
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 
     expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
     if (!atomic_compare_exchange_strong_explicit(
@@ -3466,6 +3473,113 @@ static vxml_status execute_filled_process(
             return status;
     }
     return VXML_OK;
+}
+
+
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_menu_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_menu_completion_v1 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_menu_row *menu;
+    vxml_cmeta_collect_mailbox *mailbox;
+    uint64_t generation;
+    unsigned state;
+    unsigned expected;
+
+    if (session == NULL || completion == NULL ||
+        completion->abi_version != VXML_CMETA_MENU_COMPLETION_ABI_V1 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_COLLECT_INGRESS_CLOSED
+            : VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    mailbox = &profile->collect_mailbox;
+
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_WRITING ||
+        state == VXML_CMETA_COLLECT_MAILBOX_READY)
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    if (state != VXML_CMETA_COLLECT_MAILBOX_EMPTY)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (completion->generation != generation)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_MENU ||
+        profile->active_field != VXML_CMETA_NO_INDEX)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    if (profile->active_menu == VXML_CMETA_NO_INDEX ||
+        profile->active_menu >= program->menu_count ||
+        program->menus == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    menu = &program->menus[profile->active_menu];
+    if (menu->form != profile->active_form ||
+        completion->choice_index >= menu->choice_count)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
+    expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+            return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    }
+
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+            completion->generation ||
+        mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_MENU ||
+        profile->active_menu == VXML_CMETA_NO_INDEX ||
+        profile->active_menu >= program->menu_count ||
+        program->menus == NULL ||
+        completion->choice_index >=
+            program->menus[profile->active_menu].choice_count) {
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+            memory_order_release);
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    }
+
+    mailbox->choice_index = completion->choice_index;
+    expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+            return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    }
+    return VXML_CMETA_COLLECT_INGRESS_ACCEPTED;
 }
 
 vxml_status vxml_session_cmeta_collect_run_ready(
