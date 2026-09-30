@@ -2212,7 +2212,10 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    profile->collect_mailbox.item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+    profile->collect_mailbox.choice_index = SIZE_MAX;
     {
         const size_t prompt_tail =
             offsetof(vxml_cmeta_session_options_v1, prompt_media_user) +
@@ -2263,20 +2266,26 @@ vxml_status vxml_cmeta_session_init_profile(
                 profile->event_counter_names +
                 index * profile->event_name_stride;
     }
-    if (program->field_count != 0u) {
-        if (program->fields == NULL ||
+    if (program->field_count != 0u || program->menu_count != 0u) {
+        if ((program->field_count != 0u && program->fields == NULL) ||
+            (program->menu_count != 0u &&
+             (program->menus == NULL ||
+              program->menu_choices == NULL ||
+              program->menu_choice_targets == NULL)) ||
             !session_collect_options_valid(options)) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
         }
         profile->collect_adapter = options->collect;
         profile->collect_user = options->collect_user;
-        profile->retry_reset_pending =
-            (unsigned char *)vxml_calloc(
-                program->field_count, sizeof(unsigned char));
-        if (profile->retry_reset_pending == NULL) {
-            status = VXML_ALLOCATION_FAILED;
-            goto failure;
+        if (program->field_count != 0u) {
+            profile->retry_reset_pending =
+                (unsigned char *)vxml_calloc(
+                    program->field_count, sizeof(unsigned char));
+            if (profile->retry_reset_pending == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
         }
     }
     if (root_shape->field_count != 0u) {
@@ -2526,6 +2535,7 @@ static vxml_status select_directed_field(
 
     settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     if (root_shape == NULL ||
         (root_shape->field_count != 0u &&
@@ -2571,6 +2581,36 @@ static vxml_status select_directed_field(
     return VXML_OK;
 }
 
+
+static vxml_status select_menu(
+    vxml_session_impl *session,
+    const vxml_cmeta_program_data *program,
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_form_row *form,
+    size_t form_index) {
+    const vxml_cmeta_menu_row *menu;
+    if (session == NULL || program == NULL || profile == NULL ||
+        form == NULL || form->menu == VXML_CMETA_NO_INDEX ||
+        form->menu >= program->menu_count || program->menus == NULL)
+        return session_fail(session, VXML_INVALID_STRUCTURE);
+    menu = &program->menus[form->menu];
+    if (menu->form != form_index || menu->choice_count == 0u ||
+        !range_valid(
+            menu->first_choice, menu->choice_count,
+            program->menu_choice_count) ||
+        program->menu_choices == NULL ||
+        program->menu_choice_targets == NULL)
+        return session_fail(session, VXML_INVALID_STRUCTURE);
+    settle_prompt_media(profile);
+    profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_menu = form->menu;
+    profile->active_block = VXML_CMETA_NO_INDEX;
+    ++profile->collect_generation;
+    if (profile->collect_generation == 0u)
+        profile->collect_generation = 1u;
+    return VXML_OK;
+}
+
 vxml_status vxml_cmeta_session_start_profile_at(
     vxml_session_impl *session, size_t form_index) {
     const vxml_cmeta_program_data *program;
@@ -2595,9 +2635,17 @@ vxml_status vxml_cmeta_session_start_profile_at(
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
         (form->field_count != 0u &&
-         (program->fields == NULL || form->block_count != 0u)) ||
-        (form->block_count != 0u && program->blocks == NULL) ||
-        (form->field_count == 0u && form->block_count == 0u))
+         (program->fields == NULL || form->block_count != 0u ||
+          form->menu != VXML_CMETA_NO_INDEX)) ||
+        (form->block_count != 0u &&
+         (program->blocks == NULL ||
+          form->menu != VXML_CMETA_NO_INDEX)) ||
+        (form->menu != VXML_CMETA_NO_INDEX &&
+         (form->field_count != 0u || form->block_count != 0u ||
+          form->menu >= program->menu_count ||
+          program->menus == NULL)) ||
+        (form->field_count == 0u && form->block_count == 0u &&
+         form->menu == VXML_CMETA_NO_INDEX))
         return session_fail(session, VXML_INVALID_STRUCTURE);
     profile->active_form = form_index;
     reset_form_retry_counters(profile, program, form);
@@ -2613,6 +2661,9 @@ vxml_status vxml_cmeta_session_start_profile_at(
     transaction_commit(profile, program);
     if (form->field_count != 0u)
         return select_directed_field(
+            session, program, profile, form, form_index);
+    if (form->menu != VXML_CMETA_NO_INDEX)
+        return select_menu(
             session, program, profile, form, form_index);
     for (;;) {
         const vxml_cmeta_block_row *selected = NULL;
