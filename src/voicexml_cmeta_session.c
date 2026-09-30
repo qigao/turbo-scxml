@@ -3921,6 +3921,7 @@ static vxml_status selected_prompt_row(
             }
         } else {
             size_t segment_offset;
+            size_t fallback_offset;
             if ((row->required_capabilities &
                  VXML_CMETA_PROMPT_MEDIA_CAP_BATCH) == 0u)
                 return VXML_INVALID_STRUCTURE;
@@ -3937,6 +3938,37 @@ static vxml_status selected_prompt_row(
                     segment->payload.data == NULL ||
                     segment->payload.size == 0u)
                     return VXML_INVALID_STRUCTURE;
+            }
+            if (row->fallback_count != 0u) {
+                if ((row->required_capabilities &
+                     VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK) == 0u ||
+                    !range_valid(
+                        row->first_fallback, row->fallback_count,
+                        program->prompt_fallback_count) ||
+                    program->prompt_fallbacks == NULL)
+                    return VXML_INVALID_STRUCTURE;
+                for (fallback_offset = 0u;
+                     fallback_offset < row->fallback_count;
+                     ++fallback_offset) {
+                    const vxml_cmeta_prompt_media_fallback_v1 *fallback =
+                        &program->prompt_fallbacks[
+                            row->first_fallback + fallback_offset];
+                    if (fallback->audio_segment_index >=
+                            row->segment_count ||
+                        program->prompt_segments[
+                            row->first_segment +
+                            fallback->audio_segment_index].kind !=
+                            VXML_CMETA_PROMPT_MEDIA_AUDIO ||
+                        fallback->fallback_segment_count == 0u ||
+                        fallback->first_fallback_segment >=
+                            row->segment_count ||
+                        fallback->fallback_segment_count >
+                            row->segment_count -
+                            fallback->first_fallback_segment ||
+                        fallback->first_fallback_segment <=
+                            fallback->audio_segment_index)
+                        return VXML_INVALID_STRUCTURE;
+                }
             }
         }
         if (row->fallback_count != 0u) {
