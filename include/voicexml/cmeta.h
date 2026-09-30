@@ -27,6 +27,8 @@ extern "C" {
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 1u
+#define VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 1u
+#define VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
@@ -125,6 +127,11 @@ typedef struct vxml_cmeta_compile_options_v1 {
     /* Optional append-only static subdialog bounds. Zero disables <subdialog>. */
     size_t max_subdialogs;
     size_t max_subdialog_uri_bytes;
+
+    /* Optional append-only subdialog parameter compile bounds. */
+    size_t max_subdialog_params;
+    size_t max_subdialog_param_name_bytes;
+    size_t max_subdialog_param_value_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -157,6 +164,11 @@ typedef struct vxml_cmeta_session_options_v1 {
     /* Optional append-only prompt-media provider tail. */
     const struct vxml_cmeta_prompt_media_adapter_v1 *prompt_media;
     void *prompt_media_user;
+
+    /* Optional append-only subdialog child-owner admission tail. */
+    const struct vxml_cmeta_subdialog_adapter_v1 *subdialog;
+    void *subdialog_user;
+    size_t max_subdialog_snapshot_bytes;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -191,6 +203,51 @@ typedef struct vxml_cmeta_collect_ticket_v1 {
     void (*discard)(void *user);
     void *user;
 } vxml_cmeta_collect_ticket_v1;
+
+
+typedef enum vxml_cmeta_subdialog_param_source {
+    VXML_CMETA_SUBDIALOG_PARAM_TYPED = 1,
+    VXML_CMETA_SUBDIALOG_PARAM_LITERAL
+} vxml_cmeta_subdialog_param_source;
+
+/*
+ * Fixed-stride public parameter element. Do not tail-extend.
+ * TYPED uses value; LITERAL uses literal. STRING value bytes and literal bytes
+ * borrow the parent Session-owned snapshot and never the expression scratch.
+ */
+typedef struct vxml_cmeta_subdialog_param_v1 {
+    vxml_cmeta_name_view name;
+    vxml_cmeta_subdialog_param_source source;
+    vxml_cmeta_value_view value;
+    vxml_cmeta_name_view literal;
+} vxml_cmeta_subdialog_param_v1;
+
+typedef struct vxml_cmeta_subdialog_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_name_view src;
+    const vxml_cmeta_subdialog_param_v1 *params;
+    size_t param_count;
+} vxml_cmeta_subdialog_request_v1;
+
+typedef struct vxml_cmeta_subdialog_ticket_v1 {
+    void (*commit)(void *user);
+    void (*discard)(void *user);
+    void *user;
+} vxml_cmeta_subdialog_ticket_v1;
+
+typedef struct vxml_cmeta_subdialog_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_status (*prepare)(
+        void *user,
+        const vxml_cmeta_subdialog_request_v1 *request,
+        vxml_cmeta_subdialog_ticket_v1 *out_ticket,
+        const char **out_error);
+    /* No-fail/nonblocking cancellation of one committed child generation. */
+    void (*cancel)(void *user, uint64_t generation);
+} vxml_cmeta_subdialog_adapter_v1;
 
 /*
  * Stable array element: do not append fields. Future menu metadata must use a
@@ -574,6 +631,21 @@ vxml_status vxml_session_init_cmeta(
 vxml_status vxml_session_cmeta_read(
     const vxml_session *session, const char *name, size_t name_size,
     vxml_cmeta_value_view *out_value);
+
+
+/**
+ * Build the active subdialog's parent-owned parameter snapshot and ask the
+ * configured child owner to reserve admission. Provider callbacks borrow all
+ * request views only for prepare().
+ */
+vxml_status vxml_session_cmeta_subdialog_prepare(
+    vxml_session *session, const char **out_error);
+
+/** Commit the prepared child-owner ticket; provider callback is no-fail. */
+vxml_status vxml_session_cmeta_subdialog_commit(vxml_session *session);
+
+/** Discard the prepared child-owner ticket and release the owned snapshot. */
+vxml_status vxml_session_cmeta_subdialog_discard(vxml_session *session);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(
