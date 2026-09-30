@@ -2849,6 +2849,9 @@ static vxml_status menu_collect_request_from_impl(
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_session_data *profile;
     const vxml_cmeta_menu_row *menu;
+    uint64_t required_capabilities =
+        VXML_CMETA_COLLECT_CAP_MENU_CHOICE;
+    size_t choice_offset;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     *out_request = (vxml_cmeta_menu_collect_request_v1){0};
     if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
@@ -2871,11 +2874,28 @@ static vxml_status menu_collect_request_from_impl(
             menu->first_choice, menu->choice_count,
             program->menu_choice_count))
         return VXML_INVALID_STRUCTURE;
+    for (choice_offset = 0u;
+         choice_offset < menu->choice_count;
+         ++choice_offset) {
+        const vxml_cmeta_menu_choice_v1 *choice =
+            &program->menu_choices[
+                menu->first_choice + choice_offset];
+        if ((choice->dtmf.data == NULL) !=
+                (choice->dtmf.size == 0u) ||
+            (choice->speech.data == NULL) !=
+                (choice->speech.size == 0u) ||
+            (choice->dtmf.size == 0u &&
+             choice->speech.size == 0u))
+            return VXML_INVALID_STRUCTURE;
+        if (choice->speech.size != 0u)
+            required_capabilities |=
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT;
+    }
     *out_request = (vxml_cmeta_menu_collect_request_v1){
         .abi_version = VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_menu_collect_request_v1),
         .generation = profile->collect_generation,
-        .required_capabilities = VXML_CMETA_COLLECT_CAP_MENU_CHOICE,
+        .required_capabilities = required_capabilities,
         .choices = &program->menu_choices[menu->first_choice],
         .choice_count = menu->choice_count
     };

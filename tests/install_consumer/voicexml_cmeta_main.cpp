@@ -192,6 +192,7 @@ int main() {
         menu_choice.dtmf.data != nullptr ||
         menu_choice.speech.data != nullptr ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
         collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
         return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;

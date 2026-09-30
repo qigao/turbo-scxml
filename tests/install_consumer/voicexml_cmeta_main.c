@@ -177,6 +177,7 @@ int main(void) {
         menu_choice.dtmf.data != NULL ||
         menu_choice.speech.data != NULL ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
+        VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
         VXML_CMETA_COLLECT_INGRESS_ACCEPTED != 0)
         return 6;
     if (layout_type ==

@@ -1944,10 +1944,7 @@ static vxml_status cmeta_decode_menu_dtmf(
 
     if (attribute.impl == NULL) {
         if (!auto_dtmf)
-            return cmeta_program_fail(
-                diagnostic, VXML_INVALID_STRUCTURE,
-                (salts_xml_location){0},
-                "VoiceXML choice requires dtmf unless menu dtmf=true");
+            return VXML_OK;
         /*
          * VoiceXML assigns implicit digits only to the first nine choices
          * lacking explicit DTMF. Later choices remain valid but have no DTMF.
@@ -2041,6 +2038,144 @@ static vxml_status cmeta_decode_menu_dtmf(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_menu_choice_accept_exact(
+    salts_xml_node menu,
+    salts_xml_node choice,
+    vxml_diagnostic *diagnostic) {
+    const salts_xml_attribute choice_accept =
+        cmeta_attribute(choice, "accept");
+    const salts_xml_attribute menu_accept =
+        cmeta_attribute(menu, "accept");
+    const salts_xml_attribute effective =
+        choice_accept.impl != NULL ? choice_accept : menu_accept;
+    if (effective.impl == NULL ||
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(effective), "exact"))
+        return VXML_OK;
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(effective), "approximate"))
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(effective),
+            "VoiceXML approximate menu speech requires a platform grammar capability");
+    return cmeta_program_fail(
+        diagnostic, VXML_INVALID_STRUCTURE,
+        salts_xml_attribute_location(effective),
+        "VoiceXML menu accept must be exact or approximate");
+}
+
+static bool cmeta_choice_space(unsigned char value) {
+    return value == ' ' || value == '\t' ||
+        value == '\r' || value == '\n';
+}
+
+static vxml_status cmeta_normalize_menu_choice_phrase(
+    salts_xml_node choice,
+    size_t max_bytes,
+    char **out_data,
+    size_t *out_size,
+    vxml_diagnostic *diagnostic) {
+    size_t total = 0u;
+    size_t child_index;
+    char *buffer;
+    size_t write_index = 0u;
+    bool pending_space = false;
+
+    if (out_data == NULL || out_size == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_data = NULL;
+    *out_size = 0u;
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(choice);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(choice, child_index);
+        const salts_xml_node_kind kind = salts_xml_node_type(child);
+        if (kind == SALTS_XML_COMMENT ||
+            kind == SALTS_XML_PROCESSING_INSTRUCTION)
+            continue;
+        if (kind == SALTS_XML_TEXT) {
+            const salts_xml_string_view text =
+                salts_xml_node_text_view(child);
+            if (text.size > SIZE_MAX - total)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML choice phrase size overflow");
+            total += text.size;
+            continue;
+        }
+        if (cmeta_node_named(child, "grammar"))
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(child),
+                "explicit VoiceXML choice grammar is deferred");
+        return cmeta_program_fail(
+            diagnostic,
+            cmeta_known_profile_element(child)
+                ? VXML_INVALID_STRUCTURE : VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(child),
+            cmeta_known_profile_element(child)
+                ? "VoiceXML element has invalid choice placement"
+                : "unsupported VoiceXML choice child element");
+    }
+
+    if (total == 0u) return VXML_OK;
+    if (total == SIZE_MAX)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(choice),
+            "VoiceXML choice phrase size overflow");
+    buffer = (char *)vxml_malloc(total + 1u);
+    if (buffer == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(choice),
+            "VoiceXML choice phrase allocation failed");
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(choice);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(choice, child_index);
+        const salts_xml_string_view text =
+            salts_xml_node_type(child) == SALTS_XML_TEXT
+                ? salts_xml_node_text_view(child)
+                : (salts_xml_string_view){0};
+        size_t read_index;
+        for (read_index = 0u; read_index < text.size; ++read_index) {
+            const unsigned char ch =
+                (unsigned char)text.data[read_index];
+            if (cmeta_choice_space(ch)) {
+                if (write_index != 0u) pending_space = true;
+                continue;
+            }
+            if (pending_space) {
+                buffer[write_index++] = ' ';
+                pending_space = false;
+            }
+            buffer[write_index++] = (char)ch;
+        }
+    }
+    buffer[write_index] = '\0';
+    if (write_index == 0u) {
+        vxml_free(buffer);
+        return VXML_OK;
+    }
+    if (write_index > max_bytes) {
+        vxml_free(buffer);
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(choice),
+            "VoiceXML choice phrase exceeds max_menu_choice_bytes");
+    }
+    *out_data = buffer;
+    *out_size = write_index;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_menu_next(
     salts_xml_attribute attribute,
     const vxml_cmeta_compile_options_v1 *options,
@@ -2114,7 +2249,7 @@ static vxml_status cmeta_measure_menu(
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
-    static const char *const menu_allowed[] = {"id", "dtmf"};
+    static const char *const menu_allowed[] = {"id", "dtmf", "accept"};
     static const char *const choice_allowed[] = {
         "dtmf", "event", "eventexpr", "next", "expr",
         "message", "messageexpr", "accept"};
@@ -2134,7 +2269,7 @@ static vxml_status cmeta_measure_menu(
             salts_xml_node_location(menu),
             "VoiceXML menu requires enabled menu limits");
     status = cmeta_validate_attributes(
-        menu, menu_allowed, 2u, diagnostic);
+        menu, menu_allowed, 3u, diagnostic);
     if (status != VXML_OK) return status;
     status = cmeta_measure_name(
         cmeta_attribute(menu, "id"), measurement, limits, diagnostic);
@@ -2207,6 +2342,8 @@ static vxml_status cmeta_measure_menu(
             cmeta_attribute(child, "dtmf");
         char *normalized = NULL;
         size_t normalized_size = 0u;
+        char *speech = NULL;
+        size_t speech_size = 0u;
         size_t prior;
         if (cmeta_node_ignorable(child)) continue;
 
@@ -2218,8 +2355,7 @@ static vxml_status cmeta_measure_menu(
         if (cmeta_attribute(child, "expr").impl != NULL ||
             cmeta_attribute(child, "eventexpr").impl != NULL ||
             cmeta_attribute(child, "message").impl != NULL ||
-            cmeta_attribute(child, "messageexpr").impl != NULL ||
-            cmeta_attribute(child, "accept").impl != NULL) {
+            cmeta_attribute(child, "messageexpr").impl != NULL) {
             status = cmeta_program_fail(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
                 salts_xml_node_location(child),
@@ -2233,21 +2369,9 @@ static vxml_status cmeta_measure_menu(
                 "VoiceXML choice requires exactly one literal event or next");
             goto done;
         }
-        {
-            size_t nested_index;
-            for (nested_index = 0u;
-                 nested_index < salts_xml_node_child_count(child);
-                 ++nested_index) {
-                const salts_xml_node nested =
-                    salts_xml_node_child_at(child, nested_index);
-                if (cmeta_node_ignorable(nested)) continue;
-                status = cmeta_program_fail(
-                    diagnostic, VXML_UNSUPPORTED_FEATURE,
-                    salts_xml_node_location(nested),
-                    "VoiceXML choice speech/grammar content is deferred");
-                goto done;
-            }
-        }
+        status = cmeta_menu_choice_accept_exact(
+            menu, child, diagnostic);
+        if (status != VXML_OK) goto done;
         if (event.impl != NULL) {
             if (!cmeta_event_options_valid(options)) {
                 status = cmeta_program_fail(
@@ -2263,11 +2387,27 @@ static vxml_status cmeta_measure_menu(
                 next, options, measurement, limits, diagnostic);
         }
         if (status != VXML_OK) goto done;
+        status = cmeta_normalize_menu_choice_phrase(
+            child, options->max_menu_choice_bytes,
+            &speech, &speech_size, diagnostic);
+        if (status != VXML_OK) goto done;
         status = cmeta_decode_menu_dtmf(
             explicit_dtmf, auto_dtmf, implicit_count,
             options->max_menu_choice_bytes,
             &normalized, &normalized_size, diagnostic);
-        if (status != VXML_OK) goto done;
+        if (status != VXML_OK) {
+            vxml_free(speech);
+            goto done;
+        }
+        if (normalized_size == 0u && speech_size == 0u) {
+            vxml_free(normalized);
+            vxml_free(speech);
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML choice requires DTMF or an exact speech phrase");
+            goto done;
+        }
         if (explicit_dtmf.impl == NULL)
             ++implicit_count;
         if (normalized_size != 0u) {
@@ -2278,6 +2418,7 @@ static vxml_status cmeta_measure_menu(
                         seen_dtmf[prior], normalized,
                         normalized_size) == 0) {
                     vxml_free(normalized);
+                    vxml_free(speech);
                     status = cmeta_program_fail(
                         diagnostic, VXML_INVALID_STRUCTURE,
                         salts_xml_node_location(child),
@@ -2290,6 +2431,7 @@ static vxml_status cmeta_measure_menu(
                 measurement->name_bytes + normalized_size + 1u >
                     limits->max_name_bytes) {
                 vxml_free(normalized);
+                vxml_free(speech);
                 status = cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
@@ -2298,6 +2440,22 @@ static vxml_status cmeta_measure_menu(
             }
             measurement->name_bytes += normalized_size + 1u;
         }
+        if (speech_size != 0u) {
+            if (measurement->name_bytes >
+                    SIZE_MAX - (speech_size + 1u) ||
+                measurement->name_bytes + speech_size + 1u >
+                    limits->max_name_bytes) {
+                vxml_free(normalized);
+                vxml_free(speech);
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu speech bytes exceed max_name_bytes");
+                goto done;
+            }
+            measurement->name_bytes += speech_size + 1u;
+        }
+        vxml_free(speech);
         seen_dtmf[choice_count] = normalized;
         seen_sizes[choice_count] = normalized_size;
         ++choice_count;
@@ -4004,7 +4162,10 @@ static vxml_status cmeta_compile_menu_schema(
         vxml_cmeta_menu_choice_target_row *target;
         char *normalized = NULL;
         size_t normalized_size = 0u;
+        char *speech = NULL;
+        size_t speech_size = 0u;
         const char *retained;
+        const char *retained_speech = NULL;
         size_t prior;
         if (cmeta_node_ignorable(child)) continue;
         if (!cmeta_node_named(child, "choice"))
@@ -4019,11 +4180,29 @@ static vxml_status cmeta_compile_menu_schema(
                 salts_xml_node_location(child),
                 "VoiceXML menu choice rows changed between compiler passes");
 
+        status = cmeta_menu_choice_accept_exact(
+            menu_node, child, builder->diagnostic);
+        if (status != VXML_OK) return status;
+        status = cmeta_normalize_menu_choice_phrase(
+            child, builder->options->max_menu_choice_bytes,
+            &speech, &speech_size, builder->diagnostic);
+        if (status != VXML_OK) return status;
         status = cmeta_decode_menu_dtmf(
             explicit_dtmf, auto_dtmf, implicit_count,
             builder->options->max_menu_choice_bytes,
             &normalized, &normalized_size, builder->diagnostic);
-        if (status != VXML_OK) return status;
+        if (status != VXML_OK) {
+            vxml_free(speech);
+            return status;
+        }
+        if (normalized_size == 0u && speech_size == 0u) {
+            vxml_free(normalized);
+            vxml_free(speech);
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML choice input modes changed between compiler passes");
+        }
         if (explicit_dtmf.impl == NULL)
             ++implicit_count;
 
@@ -4034,6 +4213,7 @@ static vxml_status cmeta_compile_menu_schema(
                 (salts_xml_string_view){normalized, normalized_size});
             if (retained == NULL) {
                 vxml_free(normalized);
+                vxml_free(speech);
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
@@ -4050,6 +4230,7 @@ static vxml_status cmeta_compile_menu_schema(
                         prior_dtmf.data, retained,
                         normalized_size) == 0) {
                     vxml_free(normalized);
+                    vxml_free(speech);
                     return cmeta_program_fail(
                         builder->diagnostic, VXML_INVALID_STRUCTURE,
                         salts_xml_node_location(child),
@@ -4058,6 +4239,19 @@ static vxml_status cmeta_compile_menu_schema(
             }
         }
         vxml_free(normalized);
+        if (speech_size != 0u) {
+            retained_speech = cmeta_retain_view(
+                builder,
+                (salts_xml_string_view){speech, speech_size});
+            if (retained_speech == NULL) {
+                vxml_free(speech);
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu speech retention overflow");
+            }
+        }
+        vxml_free(speech);
 
         view = &builder->profile->menu_choices[
             builder->menu_choice_index];
@@ -4065,7 +4259,8 @@ static vxml_status cmeta_compile_menu_schema(
             builder->menu_choice_index];
         view->dtmf = (vxml_cmeta_name_view){
             retained, normalized_size};
-        view->speech = (vxml_cmeta_name_view){0};
+        view->speech = (vxml_cmeta_name_view){
+            retained_speech, speech_size};
 
         if (event.impl != NULL) {
             status = cmeta_retain_decoded_view(
