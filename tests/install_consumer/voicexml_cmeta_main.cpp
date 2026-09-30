@@ -16,6 +16,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_media_request_v1>::value,
     "prompt media request must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_batch_request_v1>::value,
+    "prompt media batch request must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_prompt_media_adapter_v1>::value,
     "prompt media adapter must remain C-compatible");
 static_assert(
@@ -57,6 +60,7 @@ int main() {
     vxml_cmeta_prompt_media_segment_v1 prompt_media_segment{};
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket{};
     vxml_cmeta_prompt_media_request_v1 prompt_media_request{};
+    vxml_cmeta_prompt_media_batch_request_v1 prompt_media_batch{};
     vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
@@ -85,6 +89,9 @@ int main() {
     prompt_media_request.abi_version =
         VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1;
     prompt_media_request.struct_size = sizeof(prompt_media_request);
+    prompt_media_batch.abi_version =
+        VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1;
+    prompt_media_batch.struct_size = sizeof(prompt_media_batch);
     prompt_media_adapter.abi_version =
         VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1;
     prompt_media_adapter.struct_size = sizeof(prompt_media_adapter);
@@ -94,6 +101,8 @@ int main() {
             VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
         prompt_media_adapter.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 ||
+        prompt_media_batch.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 ||
         prompt_media_segment.kind !=
             static_cast<vxml_cmeta_prompt_media_segment_kind>(0) ||
         prompt_media_ticket.commit != nullptr)
