@@ -63,6 +63,22 @@ static bool session_event_options_valid(
         options->max_event_name_bytes != SIZE_MAX;
 }
 
+static bool session_prompt_media_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, prompt_media_user) +
+        sizeof(options->prompt_media_user);
+    const vxml_cmeta_prompt_media_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size)
+        return false;
+    adapter = options->prompt_media;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
 static bool session_collect_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     const size_t tail_size =
@@ -682,11 +698,34 @@ static void exit_snapshot_publish(vxml_cmeta_session_data *session) {
     memset(&session->pending_exit, 0, sizeof(session->pending_exit));
 }
 
+static void settle_prompt_media(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    if (session->prompt_media_prepared) {
+        vxml_cmeta_prompt_media_ticket_v1 ticket =
+            session->prompt_media_ticket;
+        session->prompt_media_prepared = false;
+        session->prompt_media_ticket =
+            (vxml_cmeta_prompt_media_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->prompt_media_in_flight &&
+               session->prompt_media_adapter != NULL) {
+        const uint64_t generation =
+            session->prompt_media_generation;
+        session->prompt_media_in_flight = false;
+        session->prompt_media_adapter->cancel(
+            session->prompt_media_user, generation);
+    }
+    session->prompt_media_generation = 0u;
+}
+
 static void session_data_destroy(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    settle_prompt_media(session);
     atomic_store_explicit(
         &session->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_CLOSED,
@@ -2042,6 +2081,20 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+    {
+        const size_t prompt_tail =
+            offsetof(vxml_cmeta_session_options_v1, prompt_media_user) +
+            sizeof(options->prompt_media_user);
+        if (options->struct_size >= prompt_tail &&
+            options->prompt_media != NULL) {
+            if (!session_prompt_media_options_valid(options)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->prompt_media_adapter = options->prompt_media;
+            profile->prompt_media_user = options->prompt_media_user;
+        }
+    }
     if (program->event_handler_count != 0u) {
         size_t name_bytes;
         size_t index;
@@ -2339,6 +2392,7 @@ static vxml_status select_directed_field(
     size_t field_offset;
     vxml_status status;
 
+    settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     if (root_shape == NULL ||
@@ -3693,11 +3747,29 @@ vxml_status vxml_cmeta_session_raise_event_profile(
 }
 
 vxml_status vxml_session_cmeta_noinput(vxml_session *session) {
+    vxml_session_impl *impl;
+    if (session != NULL && session->impl != NULL) {
+        impl = (vxml_session_impl *)session->impl;
+        if (impl->program != NULL &&
+            impl->program->profile_kind == VXML_PROFILE_CMETA &&
+            impl->profile_data != NULL)
+            settle_prompt_media(
+                (vxml_cmeta_session_data *)impl->profile_data);
+    }
     return vxml_session_cmeta_raise(
         session, "noinput", sizeof("noinput") - 1u);
 }
 
 vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
+    vxml_session_impl *impl;
+    if (session != NULL && session->impl != NULL) {
+        impl = (vxml_session_impl *)session->impl;
+        if (impl->program != NULL &&
+            impl->program->profile_kind == VXML_PROFILE_CMETA &&
+            impl->profile_data != NULL)
+            settle_prompt_media(
+                (vxml_cmeta_session_data *)impl->profile_data);
+    }
     return vxml_session_cmeta_raise(
         session, "nomatch", sizeof("nomatch") - 1u);
 }
