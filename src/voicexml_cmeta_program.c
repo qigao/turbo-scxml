@@ -6353,7 +6353,9 @@ static vxml_status cmeta_lower_program(
                             status = cmeta_lower_catch(
                                 builder, nested,
                                 VXML_CMETA_EVENT_INITIAL,
-                                initial_index - 1u,
+                                (size_t)(
+                                    initial -
+                                    builder->profile->initials),
                                 form->scope, scopes, 2u);
                             if (status != VXML_OK) return status;
                         }
