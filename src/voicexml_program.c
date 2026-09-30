@@ -826,10 +826,12 @@ static vxml_status measure_goto(
     salts_xml_node node, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     salts_xml_attribute next;
+    salts_xml_attribute fetchaudio;
     size_t index;
-    vxml_status status = validate_attributes(node, "next", diagnostic);
+    vxml_status status = validate_goto_attributes(node, diagnostic);
     if (status != VXML_OK) return status;
     next = unqualified_attribute(node, "next");
+    fetchaudio = unqualified_attribute(node, "fetchaudio");
     if (next.impl == NULL)
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
@@ -850,7 +852,8 @@ static vxml_status measure_goto(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(node),
             "VoiceXML action count exceeds max_actions");
-    return append_goto(measurement, next, limits, diagnostic);
+    return append_goto(
+        measurement, next, fetchaudio, limits, diagnostic);
 }
 
 static vxml_status measure_block(
@@ -1026,6 +1029,8 @@ static void write_exit(vxml_writer *writer) {
     action->target_form = SIZE_MAX;
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
 }
 
 static void write_goto(vxml_writer *writer) {
@@ -1035,6 +1040,8 @@ static void write_goto(vxml_writer *writer) {
         writer->measurement->gotos[writer->goto_index++];
     action->target_uri = NULL;
     action->target_uri_size = 0u;
+    action->fetchaudio_uri = NULL;
+    action->fetchaudio_uri_size = 0u;
     if (target.external) {
         action->kind = VXML_ACTION_GOTO_EXTERNAL;
         action->target_form = SIZE_MAX;
@@ -1045,6 +1052,16 @@ static void write_goto(vxml_writer *writer) {
             writer->impl->storage + writer->storage_index,
             target.target, target.target_size + 1u);
         writer->storage_index += target.target_size + 1u;
+        if (target.fetchaudio != NULL &&
+            target.fetchaudio_size != 0u) {
+            action->fetchaudio_uri =
+                writer->impl->storage + writer->storage_index;
+            action->fetchaudio_uri_size = target.fetchaudio_size;
+            memcpy(
+                writer->impl->storage + writer->storage_index,
+                target.fetchaudio, target.fetchaudio_size + 1u);
+            writer->storage_index += target.fetchaudio_size + 1u;
+        }
     } else {
         action->kind = VXML_ACTION_GOTO;
         action->target_form = target.target_form;
