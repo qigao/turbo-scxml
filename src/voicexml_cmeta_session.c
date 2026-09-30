@@ -2555,7 +2555,7 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
             VXML_CMETA_COLLECT_MAILBOX_READY,
-            memory_order_release, memory_order_acquire))
+            memory_order_acq_rel, memory_order_acquire))
         return expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED
             ? VXML_CMETA_COLLECT_INGRESS_CLOSED
             : VXML_CMETA_COLLECT_INGRESS_FULL;
