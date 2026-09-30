@@ -1731,6 +1731,115 @@ spec("VoiceXML CMeta session execution") {
         check_false(media_probe.active);
     }
 
+    it("propagates the timeout from the actually selected tapered prompt") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt timeout='250ms'>first</prompt>"
+            "<prompt count='2' cond='flag' timeout='1.5s'>second</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {.flag = true};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_true(request.has_timeout);
+        check_equal(request.timeout_us, UINT64_C(250000));
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_true(probe.has_timeout);
+        check_equal(probe.timeout_us, UINT64_C(250000));
+        check_equal(vxml_session_cmeta_collect_discard(
+                        &session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_true(request.has_timeout);
+        check_equal(request.timeout_us, UINT64_C(1500000));
+        check_equal(vxml_session_cmeta_collect_prepare(
+                        &session, NULL), VXML_OK);
+        check_true(probe.has_timeout);
+        check_equal(probe.timeout_us, UINT64_C(1500000));
+        check_equal(vxml_session_cmeta_collect_discard(
+                        &session), VXML_OK);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("distinguishes an absent prompt timeout from explicit zero") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>first</prompt>"
+            "<prompt count='2' timeout='0ms'>second</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<noinput><reprompt/></noinput>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 request = {0};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_false(request.has_timeout);
+        check_equal(request.timeout_us, UINT64_C(0));
+
+        check_equal(vxml_session_cmeta_noinput(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_request(
+                        &session, &request), VXML_OK);
+        check_true(request.has_timeout);
+        check_equal(request.timeout_us, UINT64_C(0));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("projects the tapered prompt into one transactional TEXT media segment") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
