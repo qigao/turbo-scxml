@@ -54,6 +54,8 @@ typedef struct vxml_cmeta_prompt_row {
     size_t media_payload_size;
     size_t first_segment;
     size_t segment_count;
+    size_t first_fallback;
+    size_t fallback_count;
     uint64_t required_capabilities;
     bool bargein;
     vxml_cmeta_prompt_bargein_type bargein_type;
@@ -216,6 +218,8 @@ typedef struct vxml_cmeta_program_data {
     size_t prompt_count;
     vxml_cmeta_prompt_media_segment_v1 *prompt_segments;
     size_t prompt_segment_count;
+    vxml_cmeta_prompt_media_fallback_v1 *prompt_fallbacks;
+    size_t prompt_fallback_count;
     vxml_cmeta_filled_row *filled;
     size_t filled_count;
     size_t *filled_root_fields;
