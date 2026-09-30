@@ -26,7 +26,9 @@ int main(void) {
         .max_string_bytes = 1024u,
         .max_scope_slots = 32u,
         .max_scope_storage_bytes = 4096u,
-        .max_conditional_depth = 8u
+        .max_conditional_depth = 8u,
+        .max_subdialogs = 1u,
+        .max_subdialog_uri_bytes = 128u
     };
     const vxml_cmeta_session_options_v1 session_options = {
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
