@@ -3,6 +3,7 @@
 
 #include <voicexml/voicexml.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
