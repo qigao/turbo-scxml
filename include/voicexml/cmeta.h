@@ -18,6 +18,7 @@ extern "C" {
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
+#define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 #define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
@@ -168,11 +169,6 @@ typedef struct vxml_cmeta_collect_ticket_v1 {
     void *user;
 } vxml_cmeta_collect_ticket_v1;
 
-typedef enum vxml_cmeta_collect_item_kind {
-    VXML_CMETA_COLLECT_ITEM_FIELD = 0,
-    VXML_CMETA_COLLECT_ITEM_MENU
-} vxml_cmeta_collect_item_kind;
-
 /*
  * Stable array element: do not append fields. Future menu metadata must use a
  * parallel side table or a new ABI, because providers traverse this array by
@@ -201,12 +197,23 @@ typedef struct vxml_cmeta_collect_request_v1 {
      */
     bool has_timeout;
     uint64_t timeout_us;
-
-    /* Optional append-only menu projection. FIELD is the historical default. */
-    vxml_cmeta_collect_item_kind item_kind;
-    const vxml_cmeta_menu_choice_v1 *menu_choices;
-    size_t menu_choice_count;
 } vxml_cmeta_collect_request_v1;
+
+/**
+ * Menu-specific collect request.
+ *
+ * This is intentionally separate from vxml_cmeta_collect_request_v1 because
+ * that type is also a caller-owned output struct. Extending it would make an
+ * old binary caller's allocation smaller than a new library write.
+ */
+typedef struct vxml_cmeta_menu_collect_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    const vxml_cmeta_menu_choice_v1 *choices;
+    size_t choice_count;
+} vxml_cmeta_menu_collect_request_v1;
 
 typedef struct vxml_cmeta_collect_adapter_v1 {
     uint32_t abi_version;
@@ -222,6 +229,16 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
      * The provider must ignore an already-settled generation.
      */
     void (*cancel)(void *user, uint64_t generation);
+
+    /*
+     * Optional append-only menu admission tail. Historical adapters end after
+     * cancel and remain valid for directed fields.
+     */
+    vxml_status (*prepare_menu)(
+        void *user,
+        const vxml_cmeta_menu_collect_request_v1 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
 } vxml_cmeta_collect_adapter_v1;
 
 typedef enum vxml_cmeta_collect_ingress_result {
@@ -464,6 +481,11 @@ vxml_status vxml_session_cmeta_read(
 vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request);
+
+/** Borrow the currently selected static-menu collect request. */
+vxml_status vxml_session_cmeta_menu_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_menu_collect_request_v1 *out_request);
 
 /**
  * Ask the configured provider to reserve the selected collect operation.
