@@ -136,6 +136,7 @@ set(TurboSCXML_VoiceXML_FOUND TRUE)
 set(TurboSCXML_VoiceXMLDialogManager_FOUND TRUE)
 set(TurboSCXML_VoiceXMLDocumentStore_FOUND TRUE)
 set(TurboSCXML_VoiceXMLScriptResource_FOUND TRUE)
+set(TurboSCXML_VoiceXMLSubmitResource_FOUND TRUE)
 set(TurboSCXML_VoiceXMLCHttpResource_FOUND
   @TURBOSCXML_PACKAGE_HAS_VOICEXML_CHTTP_RESOURCE@)
 set(TurboSCXML_VoiceXMLCMeta_FOUND

@@ -59,6 +59,11 @@ typedef struct vxml_program {
     void *impl;
 } vxml_program;
 
+typedef enum vxml_submit_method {
+    VXML_SUBMIT_METHOD_GET = 1,
+    VXML_SUBMIT_METHOD_POST
+} vxml_submit_method;
+
 typedef enum vxml_session_state {
     VXML_SESSION_READY = 0,
     VXML_SESSION_RUNNING,

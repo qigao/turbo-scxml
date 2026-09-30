@@ -123,6 +123,11 @@ turboscxml_add_test(
   voicexml_script_resource_test.c
   LIBS TurboSCXML::VoiceXMLScriptResource)
 
+turboscxml_add_test(
+  voicexml_submit_resource_test
+  voicexml_submit_resource_test.c
+  LIBS TurboSCXML::VoiceXMLSubmitResource)
+
 add_executable(voicexml_dialog_manager_test
   voicexml_dialog_manager_test.c)
 target_compile_features(voicexml_dialog_manager_test PRIVATE c_std_11)
