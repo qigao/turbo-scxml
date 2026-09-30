@@ -65,6 +65,12 @@ int main(void) {
     vxml_status (*raise_event)(
         vxml_session *, const char *, size_t) =
         vxml_session_cmeta_raise;
+    vxml_status (*raise_noinput)(vxml_session *) =
+        vxml_session_cmeta_noinput;
+    vxml_status (*raise_nomatch)(vxml_session *) =
+        vxml_session_cmeta_nomatch;
+    vxml_status (*take_reprompt)(vxml_session *, bool *) =
+        vxml_session_cmeta_take_reprompt;
     int result = 1;
 
     if (raise_event == NULL)
