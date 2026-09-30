@@ -2110,6 +2110,7 @@ vxml_status vxml_cmeta_session_init_profile(
         VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED);
     atomic_init(
         &profile->prompt_media_mailbox.generation, UINT64_C(0));
+    profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
@@ -4020,6 +4021,9 @@ static vxml_status prompt_media_request_from_impl(
     else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_AUDIO)
         out_request->required_capabilities =
             VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+    else if (prompt->media_kind == VXML_CMETA_PROMPT_MEDIA_MARK)
+        out_request->required_capabilities =
+            VXML_CMETA_PROMPT_MEDIA_CAP_MARK;
     else
         return VXML_INVALID_STRUCTURE;
     return VXML_OK;
@@ -4201,6 +4205,9 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
             memory_order_acquire) !=
             VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
         return VXML_INVALID_STATE;
+    profile->prompt_media_mark_generation =
+        profile->prompt_media_generation;
+    profile->prompt_media_last_mark_segment = SIZE_MAX;
     atomic_store_explicit(
         &profile->prompt_media_mailbox.generation,
         profile->prompt_media_generation,
@@ -4457,6 +4464,115 @@ vxml_session_cmeta_prompt_media_barge_in(
     return VXML_CMETA_PROMPT_BARGE_CANCELED;
 }
 
+
+
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark(
+    vxml_session *session,
+    uint64_t generation,
+    size_t segment_index) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_field_row *field = NULL;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    unsigned prompt_count = 0u;
+    size_t absolute_index;
+    vxml_status status;
+
+    if (session == NULL || generation == 0u)
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_PROMPT_MARK_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL ||
+        impl->state != VXML_SESSION_RUNNING)
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->prompt_media_in_flight ||
+        profile->prompt_media_generation != generation ||
+        profile->prompt_media_mark_generation != generation)
+        return VXML_CMETA_PROMPT_MARK_STALE;
+
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
+    (void)field;
+    (void)prompt_count;
+    if (status != VXML_OK || prompt == NULL)
+        return VXML_CMETA_PROMPT_MARK_STALE;
+    if (segment_index >= prompt->segment_count)
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    if (!range_valid(
+            prompt->first_segment, prompt->segment_count,
+            program->prompt_segment_count) ||
+        program->prompt_segments == NULL)
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+    absolute_index = prompt->first_segment + segment_index;
+    if (program->prompt_segments[absolute_index].kind !=
+        VXML_CMETA_PROMPT_MEDIA_MARK)
+        return VXML_CMETA_PROMPT_MARK_NOT_MARK;
+
+    if (profile->prompt_media_last_mark_segment != SIZE_MAX &&
+        absolute_index <= profile->prompt_media_last_mark_segment)
+        return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
+    profile->prompt_media_last_mark_segment = absolute_index;
+    return VXML_CMETA_PROMPT_MARK_ACCEPTED;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_last_mark(
+    const vxml_session *session,
+    vxml_cmeta_prompt_mark_view_v1 *out_mark) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_prompt_media_segment_v1 *segment;
+    if (out_mark != NULL)
+        *out_mark = (vxml_cmeta_prompt_mark_view_v1){0};
+    if (session == NULL || out_mark == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL) return VXML_CLOSED;
+    if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    out_mark->abi_version = VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1;
+    out_mark->struct_size = sizeof(*out_mark);
+    out_mark->generation = profile->prompt_media_mark_generation;
+    out_mark->segment_index = SIZE_MAX;
+    if (profile->prompt_media_mark_generation == 0u ||
+        profile->prompt_media_last_mark_segment == SIZE_MAX)
+        return VXML_OK;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    if (program->prompt_segments == NULL ||
+        profile->prompt_media_last_mark_segment >=
+            program->prompt_segment_count)
+        return VXML_INVALID_STRUCTURE;
+    segment = &program->prompt_segments[
+        profile->prompt_media_last_mark_segment];
+    if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK ||
+        segment->payload.data == NULL ||
+        segment->payload.size == 0u)
+        return VXML_INVALID_STRUCTURE;
+
+    out_mark->segment_index =
+        profile->prompt_media_last_mark_segment;
+    out_mark->name = segment->payload;
+    return VXML_OK;
+}
 
 
 vxml_status vxml_session_cmeta_take_reprompt(
