@@ -2920,6 +2920,101 @@ static vxml_status cmeta_measure_initial(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_measure_subdialog(
+    salts_xml_node subdialog,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {
+        "name", "src", "srcexpr", "expr", "cond"};
+    const salts_xml_attribute name = cmeta_attribute(subdialog, "name");
+    const salts_xml_attribute src = cmeta_attribute(subdialog, "src");
+    const salts_xml_attribute srcexpr =
+        cmeta_attribute(subdialog, "srcexpr");
+    const salts_xml_attribute expr = cmeta_attribute(subdialog, "expr");
+    const salts_xml_attribute cond = cmeta_attribute(subdialog, "cond");
+    size_t uri_size = 0u;
+    vxml_status status;
+
+    if (!cmeta_subdialog_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires enabled subdialog bounds");
+
+    status = cmeta_validate_attributes(
+        subdialog, allowed,
+        sizeof(allowed) / sizeof(allowed[0]), diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (name.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires name");
+    if (src.impl != NULL && srcexpr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog src and srcexpr are mutually exclusive");
+    if (srcexpr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(srcexpr),
+            "dynamic VoiceXML subdialog srcexpr is deferred");
+    if (src.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog requires literal src");
+    if (expr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(expr),
+            "STRUCT-valued VoiceXML subdialog expr is not supported by the current CMeta expression ABI");
+
+    status = cmeta_validate_empty_element(subdialog, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (measurement->subdialog_count >= options->max_subdialogs ||
+        !cmeta_measure_increment(&measurement->subdialog_count) ||
+        !cmeta_measure_increment(&measurement->form_item_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(subdialog),
+            "VoiceXML subdialog/form-item count exceeds configured bounds");
+
+    status = cmeta_measure_name(
+        name, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_measure_name(
+        src, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (!cmeta_decode_entities(
+            salts_xml_attribute_value(src), NULL, 0u, &uri_size))
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(src),
+            "VoiceXML subdialog src contains an invalid XML reference");
+    if (uri_size == 0u ||
+        uri_size > options->max_subdialog_uri_bytes)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(src),
+            "VoiceXML subdialog src exceeds max_subdialog_uri_bytes");
+
+    if (cond.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(cond),
+            "VoiceXML subdialog cond count overflow");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_form(
     salts_xml_node form,
     const vxml_cmeta_compile_options_v1 *options,
@@ -2929,6 +3024,7 @@ static vxml_status cmeta_measure_form(
     size_t pre_index;
     size_t form_field_count = 0u;
     size_t form_initial_count = 0u;
+    size_t form_subdialog_count = 0u;
     size_t grammar_count = 0u;
     bool saw_block = false;
     bool saw_directed = false;
@@ -2936,6 +3032,7 @@ static vxml_status cmeta_measure_form(
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
     const size_t first_initial = measurement->initial_count;
+    const size_t first_subdialog = measurement->subdialog_count;
 
     for (pre_index = 0u;
          pre_index < salts_xml_node_child_count(form);
@@ -2946,6 +3043,8 @@ static vxml_status cmeta_measure_form(
             ++form_field_count;
         else if (cmeta_node_named(child, "initial"))
             ++form_initial_count;
+        else if (cmeta_node_named(child, "subdialog"))
+            ++form_subdialog_count;
         else if (cmeta_node_named(child, "grammar"))
             ++grammar_count;
     }
@@ -3061,6 +3160,23 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "subdialog")) {
+            if (saw_block || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "subdialog and block form items cannot mix in this profile");
+            saw_directed = true;
+            {
+                const vxml_status subdialog_status =
+                    cmeta_measure_subdialog(
+                        child, options, measurement, limits, diagnostic);
+                if (subdialog_status != VXML_OK)
+                    return subdialog_status;
+            }
+            continue;
+        }
+
         if (cmeta_node_named(child, "field")) {
             if (saw_block || saw_filled)
                 return cmeta_program_fail(
@@ -3082,10 +3198,17 @@ static vxml_status cmeta_measure_form(
         }
 
         if (cmeta_node_named(child, "filled")) {
+            if (form_subdialog_count != 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "form-level filled with subdialog is deferred to RETURN_DATA processing");
             if (saw_block || !saw_directed ||
                 measurement->field_count - first_field != form_field_count ||
                 measurement->initial_count - first_initial !=
-                    form_initial_count)
+                    form_initial_count ||
+                measurement->subdialog_count - first_subdialog !=
+                    form_subdialog_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
@@ -3126,7 +3249,8 @@ static vxml_status cmeta_measure_form(
 
     if (measurement->block_count == first_block &&
         measurement->field_count == first_field &&
-        measurement->initial_count == first_initial)
+        measurement->initial_count == first_initial &&
+        measurement->subdialog_count == first_subdialog)
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(form),
