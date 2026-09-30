@@ -3441,6 +3441,141 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
         ? impl : NULL;
 }
 
+
+vxml_status vxml_session_cmeta_subdialog_prepare(
+    vxml_session *session, const char **out_error) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_subdialog_row *subdialog;
+    vxml_cmeta_subdialog_request_v1 request = {0};
+    vxml_cmeta_subdialog_ticket_v1 ticket = {0};
+    vxml_status status;
+
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_subdialog == VXML_CMETA_NO_INDEX ||
+        profile->active_subdialog >= program->subdialog_count ||
+        program->subdialogs == NULL ||
+        profile->subdialog_generation == 0u)
+        return VXML_INVALID_STATE;
+    if (profile->subdialog_adapter == NULL ||
+        profile->max_subdialog_snapshot_bytes == 0u)
+        return VXML_INVALID_CONTRACT;
+    if (profile->subdialog_prepared || profile->subdialog_in_flight)
+        return VXML_INVALID_STATE;
+
+    subdialog = &program->subdialogs[profile->active_subdialog];
+    if (subdialog->form != profile->active_form ||
+        subdialog->src == NULL || subdialog->src_size == 0u ||
+        !range_valid(
+            subdialog->first_param, subdialog->param_count,
+            program->subdialog_param_count))
+        return VXML_INVALID_STRUCTURE;
+
+    status = build_subdialog_snapshot(
+        profile, program, subdialog);
+    if (status != VXML_OK)
+        return status;
+
+    request = (vxml_cmeta_subdialog_request_v1){
+        .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_subdialog_request_v1),
+        .generation = profile->subdialog_generation,
+        .src = {subdialog->src, subdialog->src_size},
+        .params = profile->subdialog_snapshot_param_count != 0u
+            ? profile->subdialog_snapshot_params : NULL,
+        .param_count = profile->subdialog_snapshot_param_count
+    };
+    status = profile->subdialog_adapter->prepare(
+        profile->subdialog_user, &request, &ticket, out_error);
+    if (status != VXML_OK) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        subdialog_snapshot_destroy(profile);
+        return status;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        subdialog_snapshot_destroy(profile);
+        return VXML_INVALID_CONTRACT;
+    }
+    profile->subdialog_ticket = ticket;
+    profile->subdialog_prepared = true;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_subdialog_commit(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_subdialog_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->subdialog_prepared ||
+        profile->subdialog_in_flight ||
+        profile->subdialog_ticket.commit == NULL ||
+        profile->subdialog_ticket.discard == NULL ||
+        profile->active_subdialog == VXML_CMETA_NO_INDEX ||
+        profile->subdialog_generation == 0u)
+        return VXML_INVALID_STATE;
+    ticket = profile->subdialog_ticket;
+    profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
+    profile->subdialog_prepared = false;
+    profile->subdialog_in_flight = true;
+    ticket.commit(ticket.user);
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_subdialog_discard(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_subdialog_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->subdialog_prepared ||
+        profile->subdialog_in_flight ||
+        profile->subdialog_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->subdialog_ticket;
+    profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
+    profile->subdialog_prepared = false;
+    ticket.discard(ticket.user);
+    subdialog_snapshot_destroy(profile);
+    return VXML_OK;
+}
+
 static vxml_status selected_prompt_row(
     const vxml_session_impl *impl,
     const vxml_cmeta_field_row **out_field,
