@@ -14,11 +14,18 @@ int main(void) {
     vxml_session session = {0};
     vxml_navigation_target target = {0};
     vxml_navigation_request_v1 navigation = {0};
+    vxml_submit_target_v1 submit = {0};
+    vxml_status (*submit_fn)(
+        const vxml_session *,
+        vxml_submit_target_v1 *) = vxml_session_submit;
     vxml_status (*raise_event)(
         vxml_session *, const char *, size_t) = vxml_session_raise_event;
     int result = 1;
 
-    if (raise_event == NULL)
+    if (raise_event == NULL || submit_fn == NULL ||
+        VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
+        VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
+        submit.abi_version != 0u)
         return 2;
 
     if (vxml_compile(document, strlen(document), NULL, &program, NULL) !=
