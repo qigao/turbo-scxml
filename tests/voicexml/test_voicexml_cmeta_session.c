@@ -757,6 +757,7 @@ static vxml_status cmeta_prompt_media_prepare(
         request->field.data == NULL ||
         request->field.size >= sizeof(probe->field) ||
         (request->segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
+         request->segment.kind != VXML_CMETA_PROMPT_MEDIA_SSML &&
          request->segment.kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
          request->segment.kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
         request->segment.payload.data == NULL ||
@@ -815,6 +816,7 @@ static vxml_status cmeta_prompt_media_prepare_batch(
         const vxml_cmeta_prompt_media_segment_v1 *segment =
             &request->segments[index];
         if ((segment->kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
+             segment->kind != VXML_CMETA_PROMPT_MEDIA_SSML &&
              segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
              segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
             segment->payload.data == NULL ||
@@ -1929,6 +1931,68 @@ spec("VoiceXML CMeta session execution") {
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
         check_equal(media_probe.cancel_calls, (size_t)1u);
+    }
+
+    it("projects one static SSML prompt and enforces SSML capability") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><emphasis level='strong'>hello</emphasis></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(&root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_request_v1 request = {0};
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &compile,
+                        &program, NULL),
+                    VXML_OK);
+        check_equal(vxml_session_init_cmeta(
+                        &session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(vxml_session_cmeta_prompt_media_request(
+                        &session, &request), VXML_OK);
+        check_equal(request.segment_count, (size_t)1u);
+        check_equal(request.segment.kind, VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_equal(request.required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_SSML);
+        check_equal(request.segment.media_type.size,
+                    sizeof("application/ssml+xml") - 1u);
+
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_UNSUPPORTED_FEATURE);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+
+        media_adapter.capabilities = VXML_CMETA_PROMPT_MEDIA_CAP_SSML;
+        check_equal(vxml_session_cmeta_prompt_media_prepare(
+                        &session, NULL), VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_equal(media_probe.kind, VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_not_null(strstr(media_probe.payload, "<emphasis"));
+        check_equal(vxml_session_cmeta_prompt_media_discard(
+                        &session), VXML_OK);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
     }
 
     it("selects a tapered AUDIO prompt and enforces AUDIO capability before callback") {

@@ -347,6 +347,78 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles static SSML subtrees into Program-owned ordered segments") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Hello <emphasis level='strong'>very "
+            "<prosody rate='slow'>careful</prosody></emphasis>"
+            "<audio src='tone.wav'/></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_prompt_row *prompt;
+        const vxml_cmeta_prompt_media_segment_v1 *ssml;
+
+        check_equal(vxml_compile_cmeta(
+                        source, strlen(source), NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        memset(source, 'X', sizeof(source) - 1u);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->prompt_segment_count, (size_t)3u);
+        prompt = &profile->prompts[0];
+        check_equal(prompt->segment_count, (size_t)3u);
+        check_equal(prompt->required_capabilities,
+                    VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_SSML |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                    VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        check_equal(profile->prompt_segments[0].kind,
+                    VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(profile->prompt_segments[1].kind,
+                    VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_equal(profile->prompt_segments[2].kind,
+                    VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        ssml = &profile->prompt_segments[1];
+        check_not_null(ssml->payload.data);
+        check_true(ssml->payload.size != 0u);
+        check_not_null(strstr(ssml->payload.data, "<emphasis"));
+        check_not_null(strstr(ssml->payload.data, "<prosody"));
+        check_not_null(strstr(ssml->payload.data, "careful"));
+        check_equal(ssml->media_type.size,
+                    sizeof("application/ssml+xml") - 1u);
+        check_equal(memcmp(
+                        ssml->media_type.data, "application/ssml+xml",
+                        ssml->media_type.size), 0);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects dynamic or unsupported speech markup instead of flattening it") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><metadata><x xmlns='urn:test'>y</x></metadata></prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            prompt_compile_options();
+        vxml_program program = {0};
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
+    }
+
     it("compiles literal marks into immutable prompt segment order") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
