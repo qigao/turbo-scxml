@@ -222,6 +222,12 @@ typedef enum vxml_cmeta_prompt_media_segment_kind {
     VXML_CMETA_PROMPT_MEDIA_AUDIO
 } vxml_cmeta_prompt_media_segment_kind;
 
+typedef enum vxml_cmeta_prompt_bargein_type {
+    VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED = 0,
+    VXML_CMETA_PROMPT_BARGEIN_SPEECH,
+    VXML_CMETA_PROMPT_BARGEIN_HOTWORD
+} vxml_cmeta_prompt_bargein_type;
+
 typedef struct vxml_cmeta_prompt_media_segment_v1 {
     vxml_cmeta_prompt_media_segment_kind kind;
     vxml_cmeta_name_view payload;
@@ -244,6 +250,10 @@ typedef struct vxml_cmeta_prompt_media_request_v1 {
     unsigned selected_count;
     size_t segment_count;
     vxml_cmeta_prompt_media_segment_v1 segment;
+
+    /* Append-only prompt interruption policy. */
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
 } vxml_cmeta_prompt_media_request_v1;
 
 typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
@@ -256,6 +266,10 @@ typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
     unsigned selected_count;
     const vxml_cmeta_prompt_media_segment_v1 *segments;
     size_t segment_count;
+
+    /* Append-only prompt interruption policy. */
+    bool bargein;
+    vxml_cmeta_prompt_bargein_type bargein_type;
 } vxml_cmeta_prompt_media_batch_request_v1;
 
 typedef struct vxml_cmeta_prompt_media_adapter_v1 {
@@ -282,6 +296,14 @@ typedef struct vxml_cmeta_prompt_media_adapter_v1 {
         vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
         const char **out_error);
 } vxml_cmeta_prompt_media_adapter_v1;
+
+typedef enum vxml_cmeta_prompt_barge_result {
+    VXML_CMETA_PROMPT_BARGE_CANCELED = 0,
+    VXML_CMETA_PROMPT_BARGE_DISABLED,
+    VXML_CMETA_PROMPT_BARGE_STALE,
+    VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH,
+    VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT
+} vxml_cmeta_prompt_barge_result;
 
 typedef enum vxml_cmeta_prompt_media_outcome {
     VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED = 1,
@@ -463,6 +485,20 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     vxml_session *session,
     bool *out_progressed,
     vxml_cmeta_prompt_media_outcome *out_outcome);
+
+/**
+ * Notify the prompt owner that input for the active collect generation has
+ * reached a barge-in boundary.
+ *
+ * UNSPECIFIED signal type is invalid. Explicit prompt bargeintype must match;
+ * a prompt with unspecified bargeintype accepts either supported signal type.
+ * Cancellation is generation-scoped and no-fail/nonblocking.
+ */
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in(
+    vxml_session *session,
+    uint64_t collect_generation,
+    vxml_cmeta_prompt_bargein_type signal_type);
 
 vxml_status vxml_session_cmeta_exit_kind(
     const vxml_session *session, vxml_cmeta_exit_kind *out_kind);
