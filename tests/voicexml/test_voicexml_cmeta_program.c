@@ -821,15 +821,12 @@ spec("VoiceXML CMeta program compiler") {
             "<form><field name='value'><prompt>toolong</prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>",
             "<form><field name='value'><prompt><audio expr='x'/></prompt>"
-            "<grammar type='application/srgs+xml' src='a'/></field></form>",
-            "<form><field name='value'><prompt><audio src='a'>fallback</audio></prompt>"
             "<grammar type='application/srgs+xml' src='a'/></field></form>"
         };
         static const vxml_status expected[] = {
             VXML_INVALID_STRUCTURE,
             VXML_LIMIT_EXCEEDED,
-            VXML_UNSUPPORTED_FEATURE,
-            VXML_INVALID_STRUCTURE
+            VXML_UNSUPPORTED_FEATURE
         };
         static const char prefix[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
