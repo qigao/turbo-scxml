@@ -1047,35 +1047,29 @@ static vxml_status cmeta_measure_catch(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(node),
             "VoiceXML catch requires enabled Event limits");
+
     if (shorthand) {
-        const size_t shorthand_size = help
+        const size_t event_size = help
             ? sizeof("help") - 1u
             : noinput
                 ? sizeof("noinput") - 1u
                 : sizeof("nomatch") - 1u;
-        if (shorthand_size > options->max_event_name_bytes ||
+        if (event_size > options->max_event_name_bytes ||
             measurement->name_bytes >
-                SIZE_MAX - (shorthand_size + 1u) ||
-            measurement->name_bytes + shorthand_size + 1u >
+                SIZE_MAX - (event_size + 1u) ||
+            measurement->name_bytes + event_size + 1u >
                 limits->max_name_bytes)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(node),
                 "VoiceXML shorthand Event exceeds configured name limits");
-        measurement->name_bytes += shorthand_size + 1u;
-    } else {
-            measurement->name_bytes + sizeof("help") >
-                limits->max_name_bytes)
-            return cmeta_program_fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
-                salts_xml_node_location(node),
-                "VoiceXML help Event name exceeds configured limits");
-        measurement->name_bytes += sizeof("help");
+        measurement->name_bytes += event_size + 1u;
     } else {
         status = cmeta_measure_event_name(
             event, options, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
+
     status = cmeta_parse_count_attribute(
         count, &parsed_count, diagnostic);
     if (status != VXML_OK) return status;
@@ -1093,6 +1087,7 @@ static vxml_status cmeta_measure_catch(
             diagnostic, VXML_UNSUPPORTED_FEATURE,
             salts_xml_node_location(node),
             "local var inside VoiceXML catch is deferred");
+
     for (index = 0u;
          index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child =
