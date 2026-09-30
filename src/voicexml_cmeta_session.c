@@ -5243,13 +5243,24 @@ static bool terminal_control_valid(
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
     switch (profile->terminal_kind) {
     case VXML_CMETA_TERMINAL_NONE:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY;
     case VXML_CMETA_TERMINAL_EXIT:
-    case VXML_CMETA_TERMINAL_RETURN:
-    case VXML_CMETA_TERMINAL_DISCONNECT:
         return profile->terminal_event == NULL &&
             profile->terminal_event_size == 0u;
+    case VXML_CMETA_TERMINAL_RETURN:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_NAMELIST &&
+            profile->terminal_exit.count != 0u;
+    case VXML_CMETA_TERMINAL_DISCONNECT:
+        return profile->terminal_event == NULL &&
+            profile->terminal_event_size == 0u &&
+            profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY;
     case VXML_CMETA_TERMINAL_RETURN_EVENT:
-        return profile->terminal_event != NULL &&
+        return profile->terminal_exit.kind == VXML_CMETA_EXIT_EMPTY &&
+            profile->terminal_event != NULL &&
             profile->terminal_event_size != 0u &&
             terminal_span_valid(
                 program->strings, program->string_size,
