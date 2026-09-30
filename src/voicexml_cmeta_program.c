@@ -5175,6 +5175,96 @@ static vxml_status cmeta_compile_menu_schema(
 }
 
 
+
+static vxml_status cmeta_compile_subdialog_param_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node param,
+    size_t subdialog_index,
+    size_t first_param,
+    vxml_cmeta_subdialog_param_row *out) {
+    const salts_xml_attribute name = cmeta_attribute(param, "name");
+    const salts_xml_attribute expr = cmeta_attribute(param, "expr");
+    const salts_xml_attribute value = cmeta_attribute(param, "value");
+    cmeta_decoded_value decoded_name = {0};
+    size_t prior;
+    vxml_status status;
+
+    memset(out, 0, sizeof(*out));
+    out->expression = VXML_CMETA_NO_INDEX;
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name),
+        salts_xml_attribute_location(name), &decoded_name);
+    if (status != VXML_OK) return status;
+    if (!cmeta_is_ncname(decoded_name.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name),
+            "VoiceXML param name must be a decoded XML NCName");
+        goto done;
+    }
+    if (decoded_name.view.size >
+            builder->options->max_subdialog_param_name_bytes) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(name),
+            "VoiceXML param name changed beyond configured bound");
+        goto done;
+    }
+    for (prior = first_param;
+         prior < builder->subdialog_param_index;
+         ++prior) {
+        const vxml_cmeta_subdialog_param_row *previous =
+            &builder->profile->subdialog_params[prior];
+        if (previous->name != NULL &&
+            previous->name_size == decoded_name.view.size &&
+            memcmp(previous->name, decoded_name.view.data,
+                   decoded_name.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML subdialog param name");
+            goto done;
+        }
+    }
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name),
+        salts_xml_attribute_location(name),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+    out->subdialog = subdialog_index;
+    if (expr.impl != NULL) {
+        out->source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+    } else if (value.impl != NULL) {
+        out->source = VXML_CMETA_SUBDIALOG_PARAM_LITERAL;
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(value),
+            salts_xml_attribute_location(value),
+            &out->literal, &out->literal_size);
+        if (status != VXML_OK) goto done;
+        if (out->literal_size >
+            builder->options->max_subdialog_param_value_bytes) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML param literal changed beyond configured bound");
+            goto done;
+        }
+    } else {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(param),
+            "VoiceXML param source changed between compiler passes");
+        goto done;
+    }
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded_name);
+    if (status != VXML_OK)
+        memset(out, 0, sizeof(*out));
+    return status;
+}
+
 static vxml_status cmeta_compile_subdialog_schema(
     cmeta_program_builder *builder,
     salts_xml_node node,
@@ -5286,6 +5376,50 @@ static vxml_status cmeta_compile_subdialog_schema(
     out->root_field = root_field_index;
     out->field_offset = root_field->offset;
     out->result_data = root_field->value;
+    out->first_param = builder->subdialog_param_index;
+    {
+        size_t child_index;
+        for (child_index = 0u;
+             child_index < salts_xml_node_child_count(node);
+             ++child_index) {
+            const salts_xml_node child =
+                salts_xml_node_child_at(node, child_index);
+            vxml_cmeta_subdialog_param_row *param;
+            if (cmeta_node_ignorable(child)) continue;
+            if (!cmeta_node_named(child, "param")) {
+                status = cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML subdialog child changed between compiler passes");
+                goto done;
+            }
+            if (builder->subdialog_param_index >=
+                    builder->profile->subdialog_param_count ||
+                builder->profile->subdialog_params == NULL) {
+                status = cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML subdialog parameter rows changed between compiler passes");
+                goto done;
+            }
+            param = &builder->profile->subdialog_params[
+                builder->subdialog_param_index];
+            status = cmeta_compile_subdialog_param_schema(
+                builder, child, builder->subdialog_index,
+                out->first_param, param);
+            if (status != VXML_OK) goto done;
+            ++builder->subdialog_param_index;
+        }
+    }
+    out->param_count =
+        builder->subdialog_param_index - out->first_param;
+    if (out->param_count > builder->options->max_subdialog_params) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node),
+            "VoiceXML subdialog parameter count changed beyond configured bound");
+        goto done;
+    }
     status = VXML_OK;
 
 done:
