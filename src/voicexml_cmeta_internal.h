@@ -35,17 +35,45 @@ typedef struct vxml_cmeta_scope_row {
     cmeta_scope_schema schema;
 } vxml_cmeta_scope_row;
 
+typedef enum vxml_cmeta_form_item_kind {
+    VXML_CMETA_FORM_ITEM_FIELD = 1,
+    VXML_CMETA_FORM_ITEM_INITIAL
+} vxml_cmeta_form_item_kind;
+
+typedef struct vxml_cmeta_form_item_row {
+    vxml_cmeta_form_item_kind kind;
+    size_t index;
+} vxml_cmeta_form_item_row;
+
+typedef struct vxml_cmeta_initial_row {
+    size_t form;
+    size_t form_item_slot;
+    const char *name;
+    size_t name_size;
+    size_t initial_expression;
+    size_t condition;
+} vxml_cmeta_initial_row;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
     size_t declaration_count;
     size_t first_field;
     size_t field_count;
+    size_t first_initial;
+    size_t initial_count;
+    size_t first_item;
+    size_t item_count;
     size_t first_filled;
     size_t filled_count;
     size_t first_block;
     size_t block_count;
     size_t menu;
+    const char *grammar_type;
+    size_t grammar_type_size;
+    const char *grammar_src;
+    size_t grammar_src_size;
+    uint64_t grammar_required_capabilities;
 } vxml_cmeta_form_row;
 
 typedef struct vxml_cmeta_prompt_row {
@@ -247,6 +275,10 @@ typedef struct vxml_cmeta_program_data {
     size_t menu_grammar_count;
     vxml_cmeta_field_row *fields;
     size_t field_count;
+    vxml_cmeta_initial_row *initials;
+    size_t initial_count;
+    vxml_cmeta_form_item_row *form_items;
+    size_t form_item_count;
     vxml_cmeta_prompt_row *prompts;
     size_t prompt_count;
     vxml_cmeta_prompt_media_segment_v1 *prompt_segments;
@@ -317,7 +349,8 @@ typedef struct vxml_cmeta_exit_snapshot {
 
 typedef enum vxml_cmeta_collect_item_kind {
     VXML_CMETA_COLLECT_ITEM_FIELD = 0,
-    VXML_CMETA_COLLECT_ITEM_MENU
+    VXML_CMETA_COLLECT_ITEM_MENU,
+    VXML_CMETA_COLLECT_ITEM_INITIAL
 } vxml_cmeta_collect_item_kind;
 
 typedef enum vxml_cmeta_collect_mailbox_state {
@@ -366,6 +399,7 @@ typedef struct vxml_cmeta_session_data {
     size_t execution_steps;
     size_t active_form;
     size_t active_field;
+    size_t active_initial;
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;

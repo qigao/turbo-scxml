@@ -154,6 +154,12 @@ static vxml_cmeta_compile_options_v1 field_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = field_compile_options();
+    options.max_initials = 8u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_prompts = 8u;
@@ -2136,6 +2142,128 @@ spec("VoiceXML CMeta program compiler") {
         }
     }
 
+    it("compiles form grammar and preserves FIELD INITIAL source order") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='mixed'>"
+            "<grammar type='application/srgs+xml' src='form.grxml'/>"
+            "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+            "<initial name='start'/>"
+            "<field name='flag'><grammar type='application/srgs+xml' src='f.grxml'/></field>"
+            "<initial/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            initial_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_form_row *form;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->form_count, (size_t)1u);
+        check_equal(profile->field_count, (size_t)2u);
+        check_equal(profile->initial_count, (size_t)2u);
+        check_equal(profile->form_item_count, (size_t)4u);
+        form = &profile->forms[0];
+        check_equal(form->field_count, (size_t)2u);
+        check_equal(form->initial_count, (size_t)2u);
+        check_equal(form->item_count, (size_t)4u);
+        check_equal(form->grammar_type_size,
+                    sizeof("application/srgs+xml") - 1u);
+        check_equal(
+            memcmp(form->grammar_type, "application/srgs+xml",
+                   form->grammar_type_size), 0);
+        check_equal(form->grammar_src_size,
+                    sizeof("form.grxml") - 1u);
+        check_equal(
+            memcmp(form->grammar_src, "form.grxml",
+                   form->grammar_src_size), 0);
+        check_equal(profile->form_items[form->first_item + 0u].kind,
+                    VXML_CMETA_FORM_ITEM_FIELD);
+        check_equal(profile->form_items[form->first_item + 0u].index,
+                    form->first_field);
+        check_equal(profile->form_items[form->first_item + 1u].kind,
+                    VXML_CMETA_FORM_ITEM_INITIAL);
+        check_equal(profile->form_items[form->first_item + 1u].index,
+                    form->first_initial);
+        check_equal(profile->form_items[form->first_item + 2u].kind,
+                    VXML_CMETA_FORM_ITEM_FIELD);
+        check_equal(profile->form_items[form->first_item + 3u].kind,
+                    VXML_CMETA_FORM_ITEM_INITIAL);
+        check_equal(
+            form->grammar_required_capabilities,
+            VXML_CMETA_COLLECT_CAP_SRGS_XML |
+            VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid mixed-initiative form contracts without approximation") {
+        static const struct {
+            const char *source;
+            vxml_status expected;
+        } cases[] = {
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form><initial/>"
+                "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+                "</form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<grammar type='application/srgs+xml' src='form.grxml'/>"
+                "<initial/></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<grammar type='text/plain' src='form.grxml'/>"
+                "<initial/><field name='value'>"
+                "<grammar type='application/srgs+xml' src='v.grxml'/>"
+                "</field></form></vxml>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<grammar type='application/srgs+xml' src='form.grxml'/>"
+                "<initial><prompt>hello</prompt></initial>"
+                "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+                "</form></vxml>",
+                VXML_UNSUPPORTED_FEATURE
+            },
+            {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+                "datamodel='cmeta'><form>"
+                "<grammar type='application/srgs+xml' src='form.grxml'/>"
+                "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+                "<initial name='value'/></form></vxml>",
+                VXML_INVALID_STRUCTURE
+            }
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            initial_compile_options();
+        size_t index;
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    cases[index].source, strlen(cases[index].source),
+                    NULL, &options, &program, NULL),
+                cases[index].expected);
+            check_null(program.impl);
+        }
+    }
+
     it("explicitly rejects deferred syntax and implicit prompt text") {
         static const char *const bodies[] = {
             "<form><block><value expr='value'/></block></form>",
@@ -2173,7 +2301,7 @@ spec("VoiceXML CMeta program compiler") {
             {
                 const vxml_status expected =
                     index == 3u || index == 4u ||
-                    index == 5u || index == 6u ||
+                    index == 5u ||
                     index == 7u || index == 8u ||
                     index == 13u
                         ? VXML_INVALID_STRUCTURE

@@ -121,6 +121,16 @@ static bool collect_adapter_has_menu_v2(
         adapter->prepare_menu_v2 != NULL;
 }
 
+static bool collect_adapter_has_initial(
+    const vxml_cmeta_collect_adapter_v1 *adapter) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_collect_adapter_v1, prepare_initial) +
+        sizeof(((vxml_cmeta_collect_adapter_v1 *)0)->prepare_initial);
+    return adapter != NULL &&
+        adapter->struct_size >= tail_size &&
+        adapter->prepare_initial != NULL;
+}
+
 static const DataBindFormatProvider *data_format_provider(
     vxml_cmeta_data_format format) {
     switch (format) {
@@ -1271,6 +1281,7 @@ static vxml_status initialize_form(
     size_t form_index) {
     const size_t document_scopes[1] = {program->document_scope};
     const size_t form_scopes[2] = {form->scope, program->document_scope};
+    size_t initial_offset;
     size_t block_offset;
     vxml_status status = initialize_declarations(
         session, program,
@@ -1282,6 +1293,40 @@ static vxml_status initialize_form(
         session, program, form->first_declaration, form->declaration_count,
         form_scopes, 2u);
     if (status != VXML_OK) return status;
+
+    if (!range_valid(
+            form->first_initial, form->initial_count,
+            program->initial_count) ||
+        (form->initial_count != 0u && program->initials == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (initial_offset = 0u;
+         initial_offset < form->initial_count;
+         ++initial_offset) {
+        const vxml_cmeta_initial_row *initial =
+            &program->initials[form->first_initial + initial_offset];
+        unsigned char *form_declared;
+        if (initial->form != form_index ||
+            initial->form_item_slot >=
+                program->scopes[form->scope].schema.slot_count)
+            return VXML_INVALID_STRUCTURE;
+        form_declared = session_declared(
+            session, program, true, form->scope);
+        if (form_declared == NULL) return VXML_INVALID_STRUCTURE;
+        form_declared[initial->form_item_slot] = 1u;
+        if (initial->initial_expression != VXML_CMETA_NO_INDEX) {
+            vxml_cmeta_value_view value;
+            status = evaluate_expression(
+                session, program, true,
+                initial->initial_expression,
+                form_scopes, 2u, &value);
+            if (status != VXML_OK) return status;
+            status = assign_scope_slot(
+                session, program, true, form->scope,
+                initial->form_item_slot, &value);
+            if (status != VXML_OK) return status;
+        }
+    }
+
     for (block_offset = 0u; block_offset < form->block_count; ++block_offset) {
         const size_t block_index = form->first_block + block_offset;
         const vxml_cmeta_block_row *block = &program->blocks[block_index];
@@ -1521,7 +1566,11 @@ static vxml_status execute_clear(
             !range_valid(form->first_block, form->block_count,
                          program->block_count) ||
             !range_valid(form->first_field, form->field_count,
-                         program->field_count))
+                         program->field_count) ||
+            !range_valid(form->first_initial, form->initial_count,
+                         program->initial_count) ||
+            (form->field_count != 0u && program->fields == NULL) ||
+            (form->initial_count != 0u && program->initials == NULL))
             return VXML_INVALID_STRUCTURE;
         for (index = 0u; index < form->block_count; ++index) {
             const vxml_cmeta_block_row *block =
@@ -1540,6 +1589,17 @@ static vxml_status execute_clear(
                 &session->staged_root, program, field->root_field);
             mark_field_retry_reset(
                 session, program, form->first_field + index);
+        }
+        for (index = 0u; index < form->initial_count; ++index) {
+            const vxml_cmeta_initial_row *initial =
+                &program->initials[form->first_initial + index];
+            if (initial->form != session->active_form ||
+                initial->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                initial->form_item_slot);
         }
         return VXML_OK;
     }
@@ -2235,6 +2295,7 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     profile->collect_mailbox.item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -2545,7 +2606,29 @@ failure:
     return status;
 }
 
-static vxml_status select_directed_field(
+static bool form_has_bound_input(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_form_row *form) {
+    size_t offset;
+    if (program == NULL || profile == NULL || form == NULL ||
+        !range_valid(form->first_field, form->field_count,
+                     program->field_count) ||
+        (form->field_count != 0u && program->fields == NULL))
+        return true;
+    for (offset = 0u; offset < form->field_count; ++offset) {
+        const vxml_cmeta_field_row *field =
+            &program->fields[form->first_field + offset];
+        if (field->root_field >=
+            session_root_shape(program)->field_count)
+            return true;
+        if (profile->committed_root.bound[field->root_field] != 0u)
+            return true;
+    }
+    return false;
+}
+
+static vxml_status select_directed_item(
     vxml_session_impl *session,
     const vxml_cmeta_program_data *program,
     vxml_cmeta_session_data *profile,
@@ -2553,46 +2636,103 @@ static vxml_status select_directed_field(
     size_t form_index) {
     const cmeta_data_struct_shape *root_shape =
         session_root_shape(program);
-    size_t field_offset;
+    const cmeta_scope_storage *form_scope;
+    size_t item_offset;
     vxml_status status;
 
     settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
+
     if (root_shape == NULL ||
         (root_shape->field_count != 0u &&
-         profile->committed_root.bound == NULL))
+         profile->committed_root.bound == NULL) ||
+        form->scope >= program->scope_count ||
+        profile->committed_scopes == NULL ||
+        !range_valid(
+            form->first_item, form->item_count,
+            program->form_item_count) ||
+        (form->item_count != 0u && program->form_items == NULL))
         return session_fail(session, VXML_INVALID_STRUCTURE);
+    form_scope = &profile->committed_scopes[form->scope];
 
-    for (field_offset = 0u;
-         field_offset < form->field_count;
-         ++field_offset) {
-        const size_t field_index =
-            form->first_field + field_offset;
-        const vxml_cmeta_field_row *field =
-            &program->fields[field_index];
+    for (item_offset = 0u;
+         item_offset < form->item_count;
+         ++item_offset) {
+        const vxml_cmeta_form_item_row *item =
+            &program->form_items[form->first_item + item_offset];
         bool eligible = true;
-        if (field->form != form_index ||
-            field->root_field >= root_shape->field_count ||
-            root_shape->fields[field->root_field].value !=
-                field->field_data ||
-            root_shape->fields[field->root_field].offset !=
-                field->field_offset)
+
+        if (item->kind == VXML_CMETA_FORM_ITEM_FIELD) {
+            const vxml_cmeta_field_row *field;
+            if (item->index >= program->field_count ||
+                program->fields == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            field = &program->fields[item->index];
+            if (field->form != form_index ||
+                item->index < form->first_field ||
+                item->index - form->first_field >= form->field_count ||
+                field->root_field >= root_shape->field_count ||
+                root_shape->fields[field->root_field].value !=
+                    field->field_data ||
+                root_shape->fields[field->root_field].offset !=
+                    field->field_offset)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (profile->committed_root.bound[field->root_field] != 0u)
+                continue;
+            if (field->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    field->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            }
+            if (!eligible) continue;
+            profile->active_field = item->index;
+        } else if (item->kind == VXML_CMETA_FORM_ITEM_INITIAL) {
+            const vxml_cmeta_initial_row *initial;
+            if (item->index >= program->initial_count ||
+                program->initials == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            initial = &program->initials[item->index];
+            if (initial->form != form_index ||
+                item->index < form->first_initial ||
+                item->index - form->first_initial >=
+                    form->initial_count ||
+                initial->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count ||
+                form_scope->view.bound == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (form_scope->view.bound[initial->form_item_slot] != 0u)
+                continue;
+            if (initial->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    initial->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            } else {
+                eligible = !form_has_bound_input(
+                    program, profile, form);
+            }
+            if (!eligible) continue;
+            if (form->grammar_type == NULL ||
+                form->grammar_type_size == 0u ||
+                form->grammar_src == NULL ||
+                form->grammar_src_size == 0u ||
+                form->grammar_required_capabilities == 0u)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            profile->active_initial = item->index;
+        } else {
             return session_fail(session, VXML_INVALID_STRUCTURE);
-        if (profile->committed_root.bound[field->root_field] != 0u)
-            continue;
-        if (field->condition != VXML_CMETA_NO_INDEX) {
-            const size_t scopes[2] = {
-                form->scope, program->document_scope};
-            status = evaluate_condition(
-                profile, program, false,
-                field->condition, scopes, 2u, &eligible);
-            if (status != VXML_OK)
-                return session_fail(session, status);
         }
-        if (!eligible) continue;
-        profile->active_field = field_index;
+
         ++profile->collect_generation;
         if (profile->collect_generation == 0u)
             profile->collect_generation = 1u;
@@ -2603,7 +2743,6 @@ static vxml_status select_directed_field(
     session->error = VXML_OK;
     return VXML_OK;
 }
-
 
 static vxml_status select_menu(
     vxml_session_impl *session,
@@ -2626,6 +2765,7 @@ static vxml_status select_menu(
         return session_fail(session, VXML_INVALID_STRUCTURE);
     settle_prompt_media(profile);
     profile->active_field = VXML_CMETA_NO_INDEX;
+    profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_menu = form->menu;
     profile->active_block = VXML_CMETA_NO_INDEX;
     ++profile->collect_generation;
@@ -2655,19 +2795,29 @@ vxml_status vxml_cmeta_session_start_profile_at(
         form->scope >= program->scope_count ||
         !range_valid(form->first_field, form->field_count,
                      program->field_count) ||
+        !range_valid(form->first_initial, form->initial_count,
+                     program->initial_count) ||
+        !range_valid(form->first_item, form->item_count,
+                     program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
-        (form->field_count != 0u &&
-         (program->fields == NULL || form->block_count != 0u ||
+        (form->item_count != form->field_count + form->initial_count) ||
+        ((form->field_count != 0u || form->initial_count != 0u) &&
+         ((form->field_count != 0u && program->fields == NULL) ||
+          (form->initial_count != 0u && program->initials == NULL) ||
+          program->form_items == NULL ||
+          form->block_count != 0u ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
         (form->block_count != 0u &&
          (program->blocks == NULL ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
         (form->menu != VXML_CMETA_NO_INDEX &&
-         (form->field_count != 0u || form->block_count != 0u ||
+         (form->field_count != 0u || form->initial_count != 0u ||
+          form->item_count != 0u || form->block_count != 0u ||
           form->menu >= program->menu_count ||
           program->menus == NULL)) ||
-        (form->field_count == 0u && form->block_count == 0u &&
+        (form->field_count == 0u && form->initial_count == 0u &&
+         form->block_count == 0u &&
          form->menu == VXML_CMETA_NO_INDEX))
         return session_fail(session, VXML_INVALID_STRUCTURE);
     profile->active_form = form_index;
@@ -2682,8 +2832,8 @@ vxml_status vxml_cmeta_session_start_profile_at(
         return session_fail(session, status);
     }
     transaction_commit(profile, program);
-    if (form->field_count != 0u)
-        return select_directed_field(
+    if (form->item_count != 0u)
+        return select_directed_item(
             session, program, profile, form, form_index);
     if (form->menu != VXML_CMETA_NO_INDEX)
         return select_menu(
@@ -2823,7 +2973,8 @@ static vxml_status collect_request_from_impl(
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
     profile = (const vxml_cmeta_session_data *)impl->profile_data;
-    if (profile->active_menu != VXML_CMETA_NO_INDEX)
+    if (profile->active_initial != VXML_CMETA_NO_INDEX ||
+        profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_INVALID_STATE;
     if (profile->active_field == VXML_CMETA_NO_INDEX ||
         profile->active_field >= program->field_count ||
@@ -2871,6 +3022,7 @@ static vxml_status menu_collect_request_from_impl(
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
     profile = (const vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_field != VXML_CMETA_NO_INDEX ||
+        profile->active_initial != VXML_CMETA_NO_INDEX ||
         profile->active_menu == VXML_CMETA_NO_INDEX ||
         profile->active_menu >= program->menu_count ||
         program->menus == NULL ||
@@ -3069,6 +3221,55 @@ static vxml_status menu_collect_request_v2_from_impl(
     return VXML_OK;
 }
 
+
+static vxml_status initial_collect_request_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_initial_collect_request_v1 *out_request) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_initial_row *initial;
+    const vxml_cmeta_form_row *form;
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_initial_collect_request_v1){0};
+    if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
+        impl->program == NULL || impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_field != VXML_CMETA_NO_INDEX ||
+        profile->active_menu != VXML_CMETA_NO_INDEX ||
+        profile->active_initial == VXML_CMETA_NO_INDEX ||
+        profile->active_initial >= program->initial_count ||
+        profile->active_form >= program->form_count ||
+        program->initials == NULL || program->forms == NULL ||
+        profile->collect_generation == 0u)
+        return VXML_INVALID_STATE;
+    initial = &program->initials[profile->active_initial];
+    form = &program->forms[profile->active_form];
+    if (initial->form != profile->active_form ||
+        profile->active_initial < form->first_initial ||
+        profile->active_initial - form->first_initial >=
+            form->initial_count ||
+        form->grammar_type == NULL || form->grammar_type_size == 0u ||
+        form->grammar_src == NULL || form->grammar_src_size == 0u ||
+        form->grammar_required_capabilities !=
+            (VXML_CMETA_COLLECT_CAP_SRGS_XML |
+             VXML_CMETA_COLLECT_CAP_INITIAL_MULTI))
+        return VXML_INVALID_STRUCTURE;
+    *out_request = (vxml_cmeta_initial_collect_request_v1){
+        .abi_version = VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_initial_collect_request_v1),
+        .generation = profile->collect_generation,
+        .required_capabilities = form->grammar_required_capabilities,
+        .grammar_type = {
+            form->grammar_type, form->grammar_type_size},
+        .grammar_src = {
+            form->grammar_src, form->grammar_src_size}
+    };
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request) {
@@ -3102,6 +3303,17 @@ vxml_status vxml_session_cmeta_menu_collect_request_v2(
     return menu_collect_request_v2_from_impl(impl, out_request);
 }
 
+vxml_status vxml_session_cmeta_initial_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_initial_collect_request_v1 *out_request) {
+    const vxml_session_impl *impl = cmeta_session(session);
+    if (out_request != NULL)
+        *out_request = (vxml_cmeta_initial_collect_request_v1){0};
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    return initial_collect_request_from_impl(impl, out_request);
+}
+
 vxml_status vxml_session_cmeta_collect_prepare(
     vxml_session *session, const char **out_error) {
     vxml_session_impl *impl;
@@ -3124,7 +3336,19 @@ vxml_status vxml_session_cmeta_collect_prepare(
     if (profile->collect_prepared || profile->collect_in_flight)
         return VXML_INVALID_STATE;
 
-    if (profile->active_menu != VXML_CMETA_NO_INDEX) {
+    if (profile->active_initial != VXML_CMETA_NO_INDEX) {
+        vxml_cmeta_initial_collect_request_v1 request = {0};
+        status = initial_collect_request_from_impl(impl, &request);
+        if (status != VXML_OK) return status;
+        if ((profile->collect_adapter->capabilities &
+             request.required_capabilities) !=
+            request.required_capabilities)
+            return VXML_UNSUPPORTED_FEATURE;
+        if (!collect_adapter_has_initial(profile->collect_adapter))
+            return VXML_UNSUPPORTED_FEATURE;
+        status = profile->collect_adapter->prepare_initial(
+            profile->collect_user, &request, &ticket, out_error);
+    } else if (profile->active_menu != VXML_CMETA_NO_INDEX) {
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
         const vxml_cmeta_menu_row *menu;
@@ -3224,7 +3448,28 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
         profile->collect_mailbox.slot_count = 0u;
         profile->collect_mailbox.choice_index = SIZE_MAX;
 
-        if (profile->active_menu != VXML_CMETA_NO_INDEX) {
+        if (profile->active_initial != VXML_CMETA_NO_INDEX) {
+            const vxml_cmeta_form_row *form;
+            const vxml_cmeta_initial_row *initial;
+            if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_menu != VXML_CMETA_NO_INDEX ||
+                profile->active_form >= program->form_count ||
+                profile->active_initial >= program->initial_count ||
+                program->forms == NULL || program->initials == NULL ||
+                profile->collect_mailbox.storage == NULL ||
+                profile->collect_mailbox.root_fields == NULL ||
+                profile->collect_mailbox.slot_capacity == 0u)
+                return VXML_INVALID_STRUCTURE;
+            form = &program->forms[profile->active_form];
+            initial = &program->initials[profile->active_initial];
+            if (initial->form != profile->active_form ||
+                form->grammar_required_capabilities !=
+                    (VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                     VXML_CMETA_COLLECT_CAP_INITIAL_MULTI))
+                return VXML_INVALID_STRUCTURE;
+            profile->collect_mailbox.item_kind =
+                VXML_CMETA_COLLECT_ITEM_INITIAL;
+        } else if (profile->active_menu != VXML_CMETA_NO_INDEX) {
             const vxml_cmeta_menu_row *menu;
             if (profile->active_field != VXML_CMETA_NO_INDEX ||
                 profile->active_menu >= program->menu_count ||
@@ -3425,8 +3670,10 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
     const cmeta_data_struct_shape *root_shape;
-    const vxml_cmeta_field_row *selected;
+    const vxml_cmeta_field_row *selected = NULL;
+    const vxml_cmeta_form_row *form = NULL;
     vxml_cmeta_collect_mailbox *mailbox;
+    bool initial_mode;
     uint64_t generation;
     unsigned state;
     unsigned expected;
@@ -3459,12 +3706,37 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     mailbox = &profile->collect_mailbox;
+
     if (profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
-    if (profile->active_field >= program->field_count ||
-        program->fields == NULL)
-        return VXML_CMETA_COLLECT_INGRESS_STALE;
-    selected = &program->fields[profile->active_field];
+    initial_mode = profile->active_initial != VXML_CMETA_NO_INDEX;
+
+    if (initial_mode) {
+        const vxml_cmeta_initial_row *initial;
+        if (profile->active_field != VXML_CMETA_NO_INDEX ||
+            profile->active_initial >= program->initial_count ||
+            profile->active_form >= program->form_count ||
+            program->initials == NULL || program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        initial = &program->initials[profile->active_initial];
+        form = &program->forms[profile->active_form];
+        if (initial->form != profile->active_form ||
+            form->initial_count == 0u ||
+            form->field_count == 0u)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    } else {
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        selected = &program->fields[profile->active_field];
+        if (profile->active_form >= program->form_count ||
+            program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        form = &program->forms[profile->active_form];
+        if (selected->form != profile->active_form)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    }
+
     root_shape = session_root_shape(program);
     if (root_shape == NULL || mailbox->root_fields == NULL ||
         mailbox->slot_capacity == 0u ||
@@ -3490,7 +3762,10 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
         &mailbox->generation, memory_order_relaxed);
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
-    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD)
+    if ((!initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD) ||
+        (initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_INITIAL))
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 
     expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
@@ -3518,9 +3793,9 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
 
         if (slot->name.data == NULL || slot->name.size == 0u ||
             memchr(slot->name.data, '\0', slot->name.size) != NULL ||
-            slot->data == NULL || slot->value == NULL) {
+            slot->data == NULL || slot->value == NULL)
             goto incompatible;
-        }
+
         for (root_field = 0u;
              root_field < root_shape->field_count;
              ++root_field) {
@@ -3536,6 +3811,30 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
             !cmeta_data_desc_equal(slot->data, target->value) ||
             !collect_fixed_scalar_data(target->value))
             goto incompatible;
+
+        if (initial_mode) {
+            size_t field_offset;
+            bool same_form = false;
+            if (!range_valid(
+                    form->first_field, form->field_count,
+                    program->field_count) ||
+                program->fields == NULL)
+                goto incompatible;
+            for (field_offset = 0u;
+                 field_offset < form->field_count;
+                 ++field_offset) {
+                const vxml_cmeta_field_row *candidate =
+                    &program->fields[form->first_field + field_offset];
+                if (candidate->form != profile->active_form)
+                    goto incompatible;
+                if (candidate->root_field == root_field) {
+                    same_form = true;
+                    break;
+                }
+            }
+            if (!same_form) goto incompatible;
+        }
+
         type = target->value->storage_type;
         if (type == NULL ||
             type->size > mailbox->storage_stride)
@@ -3543,7 +3842,7 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
         for (prior = 0u; prior < slot_index; ++prior)
             if (mailbox->root_fields[prior] == root_field)
                 goto incompatible;
-        if (root_field == selected->root_field)
+        if (!initial_mode && root_field == selected->root_field)
             ++selected_count;
 
         mailbox->root_fields[slot_index] = root_field;
@@ -3552,15 +3851,16 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
                 slot_index * mailbox->storage_stride,
             slot->value, type->size);
     }
-    if (selected_count != 1u)
+
+    if (!initial_mode && selected_count != 1u)
         goto incompatible;
     if (atomic_load_explicit(
             &mailbox->generation, memory_order_relaxed) !=
-        completion->generation)
+            completion->generation)
         goto stale_after_claim;
 
     mailbox->slot_count = completion->slot_count;
-    mailbox->data = selected->field_data;
+    mailbox->data = initial_mode ? NULL : selected->field_data;
     expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
@@ -3851,6 +4151,98 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_menu_try_complete(
     return VXML_CMETA_COLLECT_INGRESS_ACCEPTED;
 }
 
+
+static vxml_status mark_initial_controls_filled(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form) {
+    size_t offset;
+    const bool completed = true;
+    cmeta_scope_view *scope;
+    if (profile == NULL || program == NULL || form == NULL ||
+        form->scope >= program->scope_count ||
+        profile->staged_scopes == NULL ||
+        !range_valid(
+            form->first_initial, form->initial_count,
+            program->initial_count) ||
+        form->initial_count == 0u ||
+        program->initials == NULL)
+        return VXML_INVALID_STRUCTURE;
+    scope = &profile->staged_scopes[form->scope].view;
+    for (offset = 0u; offset < form->initial_count; ++offset) {
+        const vxml_cmeta_initial_row *initial =
+            &program->initials[form->first_initial + offset];
+        if (initial->form != profile->active_form ||
+            initial->form_item_slot >= scope->schema->slot_count)
+            return VXML_INVALID_STRUCTURE;
+        if (!cmeta_scope_view_assign(
+                scope, initial->form_item_slot, &completed))
+            return VXML_ALLOCATION_FAILED;
+    }
+    return VXML_OK;
+}
+
+static vxml_status execute_initial_filled_process(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_collect_mailbox *mailbox) {
+    size_t offset;
+    vxml_status status;
+    bool run = false;
+
+    if (profile == NULL || program == NULL || form == NULL ||
+        mailbox == NULL ||
+        !range_valid(
+            form->first_field, form->field_count,
+            program->field_count) ||
+        form->field_count == 0u ||
+        program->fields == NULL)
+        return VXML_INVALID_STRUCTURE;
+
+    for (offset = 0u; offset < form->field_count; ++offset) {
+        const vxml_cmeta_field_row *field =
+            &program->fields[form->first_field + offset];
+        if (field->form != profile->active_form)
+            return VXML_INVALID_STRUCTURE;
+        if (!completion_contains_root_field(mailbox, field->root_field))
+            continue;
+        if (field->filled == VXML_CMETA_NO_INDEX)
+            continue;
+        if (field->filled >= program->filled_count ||
+            program->filled == NULL)
+            return VXML_INVALID_STRUCTURE;
+        status = execute_filled_handler(
+            profile, program, form,
+            &program->filled[field->filled]);
+        if (status != VXML_OK || profile->exit_requested)
+            return status;
+    }
+
+    if (form->filled_count == 0u)
+        return VXML_OK;
+    if (form->first_filled == VXML_CMETA_NO_INDEX ||
+        !range_valid(
+            form->first_filled, form->filled_count,
+            program->filled_count) ||
+        program->filled == NULL)
+        return VXML_INVALID_STRUCTURE;
+
+    for (offset = 0u; offset < form->filled_count; ++offset) {
+        const vxml_cmeta_filled_row *filled =
+            &program->filled[form->first_filled + offset];
+        status = filled_should_run(
+            profile, program, form, filled, mailbox, &run);
+        if (status != VXML_OK) return status;
+        if (!run) continue;
+        status = execute_filled_handler(
+            profile, program, form, filled);
+        if (status != VXML_OK || profile->exit_requested)
+            return status;
+    }
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_collect_run_ready(
     vxml_session *session,
     bool *out_progressed) {
@@ -3994,162 +4386,208 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         return session_fail(impl, VXML_INVALID_STRUCTURE);
     }
 
-    if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD ||
-        profile->active_menu != VXML_CMETA_NO_INDEX ||
-        profile->active_field >= program->field_count ||
-        program->fields == NULL)
-        return session_fail(impl, VXML_INVALID_STRUCTURE);
-
-    field = &program->fields[profile->active_field];
-    root_shape = session_root_shape(program);
-    if (root_shape == NULL ||
-        mailbox->root_fields == NULL ||
-        mailbox->slot_count == 0u ||
-        mailbox->slot_count > mailbox->slot_capacity ||
-        mailbox->storage == NULL ||
-        mailbox->storage_stride == 0u) {
-        profile->collect_in_flight = false;
-        mailbox->data = NULL;
-        mailbox->slot_count = 0u;
-        atomic_store_explicit(
-            &mailbox->state,
-            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-            memory_order_release);
-        return session_fail(impl, VXML_INVALID_STRUCTURE);
-    }
-
-    if (!transaction_begin(profile, program)) {
-        profile->collect_in_flight = false;
-        mailbox->data = NULL;
-        mailbox->slot_count = 0u;
-        atomic_store_explicit(
-            &mailbox->state,
-            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-            memory_order_release);
-        return session_fail(impl, VXML_ALLOCATION_FAILED);
-    }
-
     {
-        size_t slot_index;
-        bool selected_seen = false;
-        for (slot_index = 0u;
-             slot_index < mailbox->slot_count;
-             ++slot_index) {
-            const size_t root_field =
-                mailbox->root_fields[slot_index];
-            const cmeta_data_field_desc *target;
-            const cmeta_type_desc *type;
-            unsigned char *payload;
+        const bool initial_mode =
+            mailbox->item_kind == VXML_CMETA_COLLECT_ITEM_INITIAL;
+        if ((!initial_mode &&
+             mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD) ||
+            profile->active_menu != VXML_CMETA_NO_INDEX)
+            return session_fail(impl, VXML_INVALID_STRUCTURE);
 
-            if (root_field >= root_shape->field_count) {
-                transaction_reset(profile, program);
-                profile->collect_in_flight = false;
-                mailbox->data = NULL;
-                mailbox->slot_count = 0u;
-                atomic_store_explicit(
-                    &mailbox->state,
-                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-                    memory_order_release);
+        if (initial_mode) {
+            const vxml_cmeta_initial_row *initial;
+            if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_initial == VXML_CMETA_NO_INDEX ||
+                profile->active_initial >= program->initial_count ||
+                program->initials == NULL)
                 return session_fail(impl, VXML_INVALID_STRUCTURE);
-            }
-            target = &root_shape->fields[root_field];
-            type = target->value != NULL
-                ? target->value->storage_type : NULL;
-            if (!collect_fixed_scalar_data(target->value) ||
-                type == NULL ||
-                type->size > mailbox->storage_stride ||
-                profile->staged_root.bound[root_field] != 0u) {
-                transaction_reset(profile, program);
-                profile->collect_in_flight = false;
-                mailbox->data = NULL;
-                mailbox->slot_count = 0u;
-                atomic_store_explicit(
-                    &mailbox->state,
-                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-                    memory_order_release);
-                return session_fail(impl, VXML_SEMANTIC_ERROR);
-            }
-            payload = mailbox->storage +
-                slot_index * mailbox->storage_stride;
-            destination =
-                profile->staged_root.storage + target->offset;
-            meta_status = cmeta_data_value_init_zero(
-                target->value, destination);
-            if (meta_status == CMETA_OK)
-                meta_status = cmeta_data_value_copy(
-                    target->value, destination, payload);
-            if (meta_status != CMETA_OK) {
-                (void)cmeta_data_value_restore_zero(
-                    target->value, destination);
-                transaction_reset(profile, program);
-                profile->collect_in_flight = false;
-                mailbox->data = NULL;
-                mailbox->slot_count = 0u;
-                atomic_store_explicit(
-                    &mailbox->state,
-                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-                    memory_order_release);
-                return session_fail(
-                    impl,
-                    meta_status == CMETA_OUT_OF_MEMORY
-                        ? VXML_ALLOCATION_FAILED
-                        : VXML_SEMANTIC_ERROR);
-            }
-            profile->staged_root.bound[root_field] = 1u;
-            if (root_field == field->root_field)
-                selected_seen = true;
+            initial = &program->initials[profile->active_initial];
+            if (initial->form != profile->active_form ||
+                form->initial_count == 0u)
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
+            field = NULL;
+        } else {
+            if (profile->active_initial != VXML_CMETA_NO_INDEX ||
+                profile->active_field >= program->field_count ||
+                program->fields == NULL)
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
+            field = &program->fields[profile->active_field];
+            if (field->form != profile->active_form)
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
         }
-        if (!selected_seen) {
-            transaction_reset(profile, program);
+
+        root_shape = session_root_shape(program);
+        if (root_shape == NULL ||
+            mailbox->root_fields == NULL ||
+            mailbox->slot_count == 0u ||
+            mailbox->slot_count > mailbox->slot_capacity ||
+            mailbox->storage == NULL ||
+            mailbox->storage_stride == 0u) {
             profile->collect_in_flight = false;
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
+            mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
             atomic_store_explicit(
                 &mailbox->state,
                 VXML_CMETA_COLLECT_MAILBOX_DISARMED,
                 memory_order_release);
             return session_fail(impl, VXML_INVALID_STRUCTURE);
         }
-    }
 
-    status = execute_filled_process(
-        profile, program, form, mailbox);
-    if (status != VXML_OK) {
-        transaction_reset(profile, program);
+        if (!transaction_begin(profile, program)) {
+            profile->collect_in_flight = false;
+            mailbox->data = NULL;
+            mailbox->slot_count = 0u;
+            mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, VXML_ALLOCATION_FAILED);
+        }
+
+        {
+            size_t slot_index;
+            bool selected_seen = false;
+            for (slot_index = 0u;
+                 slot_index < mailbox->slot_count;
+                 ++slot_index) {
+                const size_t root_field =
+                    mailbox->root_fields[slot_index];
+                const cmeta_data_field_desc *target;
+                const cmeta_type_desc *type;
+                unsigned char *payload;
+
+                if (root_field >= root_shape->field_count) {
+                    transaction_reset(profile, program);
+                    goto invalid_ready;
+                }
+                target = &root_shape->fields[root_field];
+                type = target->value != NULL
+                    ? target->value->storage_type : NULL;
+                if (!collect_fixed_scalar_data(target->value) ||
+                    type == NULL ||
+                    type->size > mailbox->storage_stride ||
+                    profile->staged_root.bound[root_field] != 0u) {
+                    transaction_reset(profile, program);
+                    goto semantic_ready;
+                }
+                payload = mailbox->storage +
+                    slot_index * mailbox->storage_stride;
+                destination =
+                    profile->staged_root.storage + target->offset;
+                meta_status = cmeta_data_value_init_zero(
+                    target->value, destination);
+                if (meta_status == CMETA_OK)
+                    meta_status = cmeta_data_value_copy(
+                        target->value, destination, payload);
+                if (meta_status != CMETA_OK) {
+                    (void)cmeta_data_value_restore_zero(
+                        target->value, destination);
+                    transaction_reset(profile, program);
+                    profile->collect_in_flight = false;
+                    mailbox->data = NULL;
+                    mailbox->slot_count = 0u;
+                    mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+                    atomic_store_explicit(
+                        &mailbox->state,
+                        VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                        memory_order_release);
+                    return session_fail(
+                        impl,
+                        meta_status == CMETA_OUT_OF_MEMORY
+                            ? VXML_ALLOCATION_FAILED
+                            : VXML_SEMANTIC_ERROR);
+                }
+                profile->staged_root.bound[root_field] = 1u;
+                if (!initial_mode &&
+                    root_field == field->root_field)
+                    selected_seen = true;
+            }
+            if (!initial_mode && !selected_seen) {
+                transaction_reset(profile, program);
+                goto invalid_ready;
+            }
+        }
+
+        if (initial_mode) {
+            status = mark_initial_controls_filled(
+                profile, program, form);
+            if (status == VXML_OK)
+                status = execute_initial_filled_process(
+                    profile, program, form, mailbox);
+        } else {
+            status = execute_filled_process(
+                profile, program, form, mailbox);
+        }
+        if (status != VXML_OK) {
+            transaction_reset(profile, program);
+            profile->collect_in_flight = false;
+            mailbox->data = NULL;
+            mailbox->slot_count = 0u;
+            mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, status);
+        }
+
+        {
+            size_t slot_index;
+            for (slot_index = 0u;
+                 slot_index < mailbox->slot_count;
+                 ++slot_index)
+                mark_form_retry_reset_by_root(
+                    profile, program, form,
+                    mailbox->root_fields[slot_index]);
+        }
+
+        transaction_commit(profile, program);
+        profile->reprompt_requested = false;
+        profile->handler_reprompt_requested = false;
+
         profile->collect_in_flight = false;
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
+        mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
         atomic_store_explicit(
             &mailbox->state,
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
-        return session_fail(impl, status);
+
+        if (profile->exit_requested) {
+            terminal_publish(profile);
+            impl->state = VXML_SESSION_EXITED;
+            impl->error = VXML_OK;
+            return VXML_OK;
+        }
+
+        return select_directed_item(
+            impl, program, profile, form, profile->active_form);
+
+invalid_ready:
+        profile->collect_in_flight = false;
+        mailbox->data = NULL;
+        mailbox->slot_count = 0u;
+        mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+
+semantic_ready:
+        profile->collect_in_flight = false;
+        mailbox->data = NULL;
+        mailbox->slot_count = 0u;
+        mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_SEMANTIC_ERROR);
     }
-
-    mark_field_retry_reset(
-        profile, program, profile->active_field);
-    transaction_commit(profile, program);
-    profile->reprompt_requested = false;
-    profile->handler_reprompt_requested = false;
-
-    profile->collect_in_flight = false;
-    mailbox->data = NULL;
-    mailbox->slot_count = 0u;
-    atomic_store_explicit(
-        &mailbox->state,
-        VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-        memory_order_release);
-
-    if (profile->exit_requested) {
-        terminal_publish(profile);
-        impl->state = VXML_SESSION_EXITED;
-        impl->error = VXML_OK;
-        return VXML_OK;
-    }
-
-    status = select_directed_field(
-        impl, program, profile, form, profile->active_form);
-    return status;
 }
 
 static bool event_prefix_match(

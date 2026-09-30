@@ -385,6 +385,8 @@ typedef struct cmeta_program_measurement {
     size_t menu_speech_policy_count;
     size_t menu_grammar_count;
     size_t field_count;
+    size_t initial_count;
+    size_t form_item_count;
     size_t prompt_count;
     size_t prompt_segment_count;
     size_t prompt_fallback_count;
@@ -548,6 +550,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
         cmeta_node_named(node, "menu") || cmeta_node_named(node, "choice") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
+        cmeta_node_named(node, "initial") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -602,6 +605,16 @@ static bool cmeta_menu_options_valid(
         options->max_menus != 0u &&
         options->max_menu_choices != 0u &&
         options->max_menu_choice_bytes != 0u;
+}
+
+static bool cmeta_initial_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_initials) +
+        sizeof(options->max_initials);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_initials != 0u &&
+        cmeta_field_options_valid(options);
 }
 
 static bool cmeta_menu_target_options_valid(
@@ -2766,6 +2779,108 @@ static vxml_status cmeta_measure_field(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_measure_form_grammar(
+    salts_xml_node grammar,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"type", "src"};
+    const salts_xml_attribute type = cmeta_attribute(grammar, "type");
+    const salts_xml_attribute src = cmeta_attribute(grammar, "src");
+    size_t type_size = 0u;
+    size_t src_size = 0u;
+    vxml_status status = cmeta_validate_attributes(
+        grammar, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(grammar, diagnostic);
+    if (status != VXML_OK) return status;
+    if (!cmeta_field_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(grammar),
+            "form-level grammar requires enabled grammar bounds");
+    if (type.impl == NULL || src.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(grammar),
+            "form-level grammar requires type and src");
+    if (!cmeta_decoded_equal(
+            salts_xml_attribute_value(type), "application/srgs+xml"))
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(type),
+            "form-level grammar supports application/srgs+xml only");
+    if (!cmeta_decode_entities(
+            salts_xml_attribute_value(type), NULL, 0u, &type_size) ||
+        !cmeta_decode_entities(
+            salts_xml_attribute_value(src), NULL, 0u, &src_size))
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_node_location(grammar),
+            "form-level grammar attribute has an invalid XML reference");
+    if (type_size == 0u || src_size == 0u ||
+        type_size > options->max_grammar_bytes ||
+        src_size > options->max_grammar_bytes)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(grammar),
+            "form-level grammar exceeds max_grammar_bytes");
+    status = cmeta_measure_name(type, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    return cmeta_measure_name(src, measurement, limits, diagnostic);
+}
+
+static vxml_status cmeta_measure_initial(
+    salts_xml_node initial,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "expr", "cond"};
+    const salts_xml_attribute name = cmeta_attribute(initial, "name");
+    const salts_xml_attribute expr = cmeta_attribute(initial, "expr");
+    const salts_xml_attribute cond = cmeta_attribute(initial, "cond");
+    vxml_status status;
+    if (!cmeta_initial_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(initial),
+            "VoiceXML initial requires enabled initial/grammar bounds");
+    status = cmeta_validate_attributes(
+        initial, allowed, 3u, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_validate_empty_element(initial, diagnostic);
+    if (status != VXML_OK)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(initial),
+            "initial prompt/Event content is deferred to the initial recovery slice");
+    if (measurement->initial_count >= options->max_initials ||
+        !cmeta_measure_increment(&measurement->initial_count) ||
+        !cmeta_measure_increment(&measurement->form_item_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(initial),
+            "VoiceXML initial/form-item count exceeds configured bounds");
+    status = cmeta_measure_name(name, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    if (expr.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(expr),
+            "VoiceXML initial expr count overflow");
+    if (cond.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(cond),
+            "VoiceXML initial cond count overflow");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_form(
     salts_xml_node form,
     const vxml_cmeta_compile_options_v1 *options,
@@ -2774,11 +2889,15 @@ static vxml_status cmeta_measure_form(
     size_t index;
     size_t pre_index;
     size_t form_field_count = 0u;
+    size_t form_initial_count = 0u;
+    size_t grammar_count = 0u;
     bool saw_block = false;
-    bool saw_field = false;
+    bool saw_directed = false;
     bool saw_filled = false;
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
+    const size_t first_initial = measurement->initial_count;
+
     for (pre_index = 0u;
          pre_index < salts_xml_node_child_count(form);
          ++pre_index) {
@@ -2786,7 +2905,12 @@ static vxml_status cmeta_measure_form(
             salts_xml_node_child_at(form, pre_index);
         if (cmeta_node_named(child, "field"))
             ++form_field_count;
+        else if (cmeta_node_named(child, "initial"))
+            ++form_initial_count;
+        else if (cmeta_node_named(child, "grammar"))
+            ++grammar_count;
     }
+
     {
         static const char *const allowed[] = {"id"};
         const vxml_status status = cmeta_validate_attributes(
@@ -2804,9 +2928,34 @@ static vxml_status cmeta_measure_form(
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(form), "VoiceXML form limit exceeded");
+
+    if (form_initial_count != 0u) {
+        if (!cmeta_initial_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_node_location(form),
+                "VoiceXML initial requires enabled initial limits");
+        if (form_field_count == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(form),
+                "VoiceXML mixed-initiative form requires at least one field");
+        if (grammar_count != 1u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(form),
+                "VoiceXML form with initial requires exactly one form grammar");
+    } else if (grammar_count != 0u) {
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(form),
+            "form-level grammar is enabled only for mixed-initiative initial");
+    }
+
     for (index = 0u; index < salts_xml_node_child_count(form); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(form, index);
         if (cmeta_node_ignorable(child)) continue;
+
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
@@ -2817,7 +2966,7 @@ static vxml_status cmeta_measure_form(
                 cmeta_attribute(child, "name"), measurement,
                 limits, diagnostic);
             if (declaration_status != VXML_OK) return declaration_status;
-            if (saw_block || saw_field || saw_filled)
+            if (saw_block || saw_directed || saw_filled)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
@@ -2831,6 +2980,23 @@ static vxml_status cmeta_measure_form(
                     "VoiceXML declaration count overflow");
             continue;
         }
+
+        if (cmeta_node_named(child, "grammar")) {
+            if (saw_block || saw_directed || saw_filled ||
+                form_initial_count == 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form grammar must precede mixed-initiative form items");
+            {
+                const vxml_status grammar_status =
+                    cmeta_measure_form_grammar(
+                        child, options, measurement, limits, diagnostic);
+                if (grammar_status != VXML_OK) return grammar_status;
+            }
+            continue;
+        }
+
         if (cmeta_node_named(child, "catch") ||
             cmeta_node_named(child, "help") ||
             cmeta_node_named(child, "noinput") ||
@@ -2840,28 +3006,51 @@ static vxml_status cmeta_measure_form(
             if (catch_status != VXML_OK) return catch_status;
             continue;
         }
+
+        if (cmeta_node_named(child, "initial")) {
+            if (saw_block || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "initial and block form items cannot mix in this profile");
+            saw_directed = true;
+            {
+                const vxml_status initial_status = cmeta_measure_initial(
+                    child, options, measurement, limits, diagnostic);
+                if (initial_status != VXML_OK) return initial_status;
+            }
+            continue;
+        }
+
         if (cmeta_node_named(child, "field")) {
             if (saw_block || saw_filled)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
-                    "field and block form items cannot mix in this profile");
-            saw_field = true;
+                    "directed and block form items cannot mix in this profile");
+            saw_directed = true;
             {
                 const vxml_status field_status = cmeta_measure_field(
                     child, options, measurement, limits, diagnostic);
                 if (field_status != VXML_OK) return field_status;
             }
+            if (!cmeta_measure_increment(&measurement->form_item_count))
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML form-item count overflow");
             continue;
         }
+
         if (cmeta_node_named(child, "filled")) {
-            if (saw_block || !saw_field ||
-                measurement->field_count - first_field !=
-                    form_field_count)
+            if (saw_block || !saw_directed ||
+                measurement->field_count - first_field != form_field_count ||
+                measurement->initial_count - first_initial !=
+                    form_initial_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
-                    "form filled must follow all directed fields");
+                    "form filled must follow all directed form items");
             saw_filled = true;
             {
                 const vxml_status filled_status =
@@ -2873,6 +3062,7 @@ static vxml_status cmeta_measure_form(
             }
             continue;
         }
+
         if (!cmeta_node_named(child, "block"))
             return cmeta_program_fail(
                 diagnostic,
@@ -2882,11 +3072,11 @@ static vxml_status cmeta_measure_form(
                 cmeta_known_profile_element(child)
                     ? "VoiceXML element has invalid form placement"
                     : "unsupported VoiceXML form child element");
-        if (saw_field)
+        if (saw_directed)
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "field and block form items cannot mix in this profile");
+                "directed and block form items cannot mix in this profile");
         saw_block = true;
         {
             const vxml_status status = cmeta_measure_block(
@@ -2894,8 +3084,10 @@ static vxml_status cmeta_measure_form(
             if (status != VXML_OK) return status;
         }
     }
+
     if (measurement->block_count == first_block &&
-        measurement->field_count == first_field)
+        measurement->field_count == first_field &&
+        measurement->initial_count == first_initial)
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(form),
@@ -3122,6 +3314,8 @@ typedef struct cmeta_program_builder {
     size_t menu_speech_policy_index;
     size_t menu_grammar_index;
     size_t field_index;
+    size_t initial_index;
+    size_t form_item_index;
     size_t prompt_index;
     size_t prompt_segment_index;
     size_t prompt_fallback_index;
@@ -3192,6 +3386,8 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->prompt_fallbacks);
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
+    vxml_free(profile->form_items);
+    vxml_free(profile->initials);
     vxml_free(profile->fields);
     vxml_free(profile->blocks);
     vxml_free(profile->forms);
@@ -3240,6 +3436,8 @@ static bool cmeta_allocate_rows(
         measurement->menu_speech_policy_count;
     profile->menu_grammar_count = measurement->menu_grammar_count;
     profile->field_count = measurement->field_count;
+    profile->initial_count = measurement->initial_count;
+    profile->form_item_count = measurement->form_item_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
@@ -3283,6 +3481,8 @@ static bool cmeta_allocate_rows(
         menu_speech_policies, measurement->menu_speech_policy_count);
     CMETA_ALLOC_ROWS(menu_grammars, measurement->menu_grammar_count);
     CMETA_ALLOC_ROWS(fields, measurement->field_count);
+    CMETA_ALLOC_ROWS(initials, measurement->initial_count);
+    CMETA_ALLOC_ROWS(form_items, measurement->form_item_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
@@ -4219,6 +4419,136 @@ static vxml_status cmeta_register_form_item(
     return VXML_OK;
 }
 
+
+static vxml_status cmeta_register_initial_item(
+    cmeta_program_builder *builder,
+    size_t form_scope,
+    salts_xml_node initial,
+    size_t initial_index,
+    vxml_cmeta_initial_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(initial, "name");
+    salts_xml_string_view name;
+    char anonymous_name[48];
+    bool conflict = false;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    vxml_status status = VXML_OK;
+
+    memset(out, 0, sizeof(*out));
+    out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->initial_expression = VXML_CMETA_NO_INDEX;
+    out->condition = VXML_CMETA_NO_INDEX;
+
+    if (name_attribute.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(name_attribute),
+            salts_xml_attribute_location(name_attribute),
+            &out->name, &out->name_size);
+        if (status != VXML_OK) return status;
+        name = (salts_xml_string_view){out->name, out->name_size};
+        if (!cmeta_ascii_ncname(name))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML initial name must be a decoded XML NCName");
+    } else {
+        const int written = snprintf(
+            anonymous_name, sizeof(anonymous_name),
+            "\x1f" "initial:%zu", initial_index);
+        if (written <= 0 || (size_t)written >= sizeof(anonymous_name))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(initial),
+                "VoiceXML anonymous initial identity overflow");
+        name = (salts_xml_string_view){
+            anonymous_name, (size_t)written};
+    }
+
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            name.data, name.size, NULL) != NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            name_attribute.impl != NULL
+                ? salts_xml_attribute_location(name_attribute)
+                : salts_xml_node_location(initial),
+            "VoiceXML initial collides with the dialog namespace");
+
+    if (name_attribute.impl != NULL) {
+        const size_t form_index =
+            builder->profile->scopes[form_scope].owner;
+        size_t prior;
+        for (prior = 0u; prior < builder->field_index; ++prior) {
+            const vxml_cmeta_field_row *field =
+                &builder->profile->fields[prior];
+            if (field->form == form_index &&
+                field->name != NULL &&
+                field->name_size == name.size &&
+                memcmp(field->name, name.data, name.size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name_attribute),
+                    "VoiceXML initial name collides with a field");
+        }
+    }
+
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &cmeta_data_bool))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(initial),
+            "VoiceXML dialog scope exceeds configured bounds");
+
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            name.data, name.size, &cmeta_data_bool,
+            &slot, &conflict))
+        return cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(initial),
+            conflict ? "VoiceXML initial form-item type conflict"
+                     : "VoiceXML initial schema allocation failed");
+    out->form_item_slot = slot;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_compile_form_grammar(
+    cmeta_program_builder *builder,
+    salts_xml_node grammar,
+    vxml_cmeta_form_row *form) {
+    const salts_xml_attribute type = cmeta_attribute(grammar, "type");
+    const salts_xml_attribute src = cmeta_attribute(grammar, "src");
+    vxml_status status;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(type),
+        salts_xml_attribute_location(type),
+        &form->grammar_type, &form->grammar_type_size);
+    if (status != VXML_OK) return status;
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(src),
+        salts_xml_attribute_location(src),
+        &form->grammar_src, &form->grammar_src_size);
+    if (status != VXML_OK) return status;
+    if (form->grammar_type_size == 0u ||
+        form->grammar_src_size == 0u ||
+        !cmeta_decoded_equal(
+            (salts_xml_string_view){
+                form->grammar_type, form->grammar_type_size},
+            "application/srgs+xml"))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(grammar),
+            "form-level grammar changed between compiler passes");
+    form->grammar_required_capabilities =
+        VXML_CMETA_COLLECT_CAP_SRGS_XML |
+        VXML_CMETA_COLLECT_CAP_INITIAL_MULTI;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_register_executable_variables(
     cmeta_program_builder *builder, size_t scope_index,
     salts_xml_node container) {
@@ -4542,14 +4872,24 @@ static vxml_status cmeta_build_schemas(
     size_t root_child;
     size_t scope_index;
     vxml_status status;
-    if (capacity > SIZE_MAX - measurement->action_count ||
-        capacity + measurement->action_count >
-            SIZE_MAX - measurement->block_count)
+    if (capacity > SIZE_MAX - measurement->action_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
-    capacity += measurement->action_count + measurement->block_count;
+    capacity += measurement->action_count;
+    if (capacity > SIZE_MAX - measurement->block_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->block_count;
+    if (capacity > SIZE_MAX - measurement->initial_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->initial_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -4629,6 +4969,10 @@ static vxml_status cmeta_build_schemas(
             form->declaration_count = 0u;
             form->first_field = builder->field_index;
             form->field_count = 0u;
+            form->first_initial = builder->initial_index;
+            form->initial_count = 0u;
+            form->first_item = builder->form_item_index;
+            form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->filled_count = 0u;
             form->first_block = builder->block_index;
@@ -4654,6 +4998,8 @@ static vxml_status cmeta_build_schemas(
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
             form->first_field = builder->field_index;
+            form->first_initial = builder->initial_index;
+            form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
             form->menu = VXML_CMETA_NO_INDEX;
@@ -4688,6 +5034,36 @@ static vxml_status cmeta_build_schemas(
                     declaration->location = salts_xml_node_location(item);
                     continue;
                 }
+                if (cmeta_node_named(item, "grammar")) {
+                    status = cmeta_compile_form_grammar(
+                        builder, item, form);
+                    if (status != VXML_OK) return status;
+                    continue;
+                }
+                if (cmeta_node_named(item, "initial")) {
+                    vxml_cmeta_initial_row *initial;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->initial_index >=
+                            builder->profile->initial_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial/form-item rows changed between compiler passes");
+                    initial = &builder->profile->initials[
+                        builder->initial_index];
+                    initial->form = form_index;
+                    status = cmeta_register_initial_item(
+                        builder, form_scope, item,
+                        builder->initial_index, initial);
+                    if (status != VXML_OK) return status;
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_INITIAL;
+                    order->index = builder->initial_index++;
+                    continue;
+                }
                 if (cmeta_node_named(item, "field")) {
                     vxml_cmeta_field_row *field;
                     if (builder->field_index >=
@@ -4696,6 +5072,19 @@ static vxml_status cmeta_build_schemas(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
                             "VoiceXML field rows changed between compiler passes");
+                    {
+                        vxml_cmeta_form_item_row *order;
+                        if (builder->form_item_index >=
+                            builder->profile->form_item_count)
+                            return cmeta_program_fail(
+                                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                                salts_xml_node_location(item),
+                                "VoiceXML form-item rows changed between compiler passes");
+                        order = &builder->profile->form_items[
+                            builder->form_item_index++];
+                        order->kind = VXML_CMETA_FORM_ITEM_FIELD;
+                        order->index = builder->field_index;
+                    }
                     field = &builder->profile->fields[
                         builder->field_index];
                     status = cmeta_compile_field_schema(
@@ -4805,6 +5194,10 @@ static vxml_status cmeta_build_schemas(
                 builder->declaration_index - form->first_declaration;
             form->field_count =
                 builder->field_index - form->first_field;
+            form->initial_count =
+                builder->initial_index - form->first_initial;
+            form->item_count =
+                builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
             base_form->block_count = form->block_count;
         }
@@ -5818,6 +6211,7 @@ static vxml_status cmeta_lower_program(
     size_t declaration_index = 0u;
     size_t form_index = 0u;
     size_t field_index = 0u;
+    size_t initial_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -5882,6 +6276,38 @@ static vxml_status cmeta_lower_program(
                             declaration_index++],
                         scopes, 2u);
                     if (status != VXML_OK) return status;
+                } else if (cmeta_node_named(item, "grammar")) {
+                    continue;
+                } else if (cmeta_node_named(item, "initial")) {
+                    vxml_cmeta_initial_row *initial;
+                    const salts_xml_attribute expression =
+                        cmeta_attribute(item, "expr");
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    if (initial_index >= builder->profile->initial_count ||
+                        builder->profile->initials == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial rows changed during lowering");
+                    initial = &builder->profile->initials[initial_index++];
+                    if (initial->form != form_index)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial form ownership changed during lowering");
+                    if (expression.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, expression, scopes, 2u, true,
+                            &initial->initial_expression);
+                        if (status != VXML_OK) return status;
+                    }
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &initial->condition);
+                        if (status != VXML_OK) return status;
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -6038,11 +6464,12 @@ static vxml_status cmeta_lower_program(
             ++form_index;
         }
     }
-    if (field_index != builder->profile->field_count)
+    if (field_index != builder->profile->field_count ||
+        initial_index != builder->profile->initial_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
-            "VoiceXML field rows changed between compiler passes");
+            "VoiceXML directed form-item rows changed between compiler passes");
     return VXML_OK;
 }
 
@@ -6099,6 +6526,8 @@ static vxml_status cmeta_write_program(
              measurement->menu_speech_policy_count ||
          builder.menu_grammar_index != measurement->menu_grammar_count ||
          builder.field_index != measurement->field_count ||
+         builder.initial_index != measurement->initial_count ||
+         builder.form_item_index != measurement->form_item_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||

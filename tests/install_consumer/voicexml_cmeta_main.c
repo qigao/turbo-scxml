@@ -58,6 +58,9 @@ int main(void) {
     vxml_cmeta_menu_completion_v1 menu_completion = {
         .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_menu_completion_v1)};
+    vxml_cmeta_initial_collect_request_v1 initial_request = {
+        .abi_version = VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_initial_collect_request_v1)};
     vxml_cmeta_collect_completion_v2 collect_completion_v2 = {
         .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
         .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
@@ -132,6 +135,9 @@ int main(void) {
     vxml_status (*query_menu_v2)(
         const vxml_session *, vxml_cmeta_menu_collect_request_v2 *) =
         vxml_session_cmeta_menu_collect_request_v2;
+    vxml_status (*query_initial)(
+        const vxml_session *, vxml_cmeta_initial_collect_request_v1 *) =
+        vxml_session_cmeta_initial_collect_request;
     vxml_cmeta_collect_ingress_result (*complete_menu)(
         vxml_session *, const vxml_cmeta_menu_completion_v1 *) =
         vxml_session_cmeta_menu_try_complete;
@@ -141,7 +147,7 @@ int main(void) {
         report_mark == NULL || query_mark == NULL ||
         query_terminal == NULL || query_terminal_event == NULL ||
         query_menu == NULL || query_menu_v2 == NULL ||
-        complete_menu == NULL ||
+        query_initial == NULL || complete_menu == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK == 0u ||
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
@@ -188,12 +194,15 @@ int main(void) {
         menu_grammar.media_type.data != NULL ||
         menu_grammar.src.data != NULL ||
         menu_completion.abi_version != VXML_CMETA_MENU_COMPLETION_ABI_V1 ||
+        initial_request.abi_version !=
+            VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1 ||
         menu_choice.dtmf.data != NULL ||
         menu_choice.speech.data != NULL ||
         VXML_CMETA_COLLECT_CAP_MENU_CHOICE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE == 0u ||
         VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL == 0u ||
+        VXML_CMETA_COLLECT_CAP_INITIAL_MULTI == 0u ||
         VXML_CMETA_COLLECT_INGRESS_ACCEPTED != 0)
         return 6;
     if (layout_type ==
