@@ -615,6 +615,9 @@ typedef struct cmeta_collect_probe {
     uint64_t generation;
     bool has_timeout;
     uint64_t timeout_us;
+    vxml_cmeta_collect_item_kind item_kind;
+    size_t menu_choice_count;
+    char menu_dtmf[16][16];
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
@@ -641,16 +644,11 @@ static vxml_status cmeta_collect_prepare(
     vxml_cmeta_collect_ticket_v1 *out_ticket,
     const char **out_error) {
     cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    size_t choice_index;
     if (out_error != NULL) *out_error = NULL;
     if (probe == NULL || request == NULL || out_ticket == NULL ||
         request->abi_version != VXML_CMETA_COLLECT_REQUEST_ABI_V1 ||
-        request->struct_size < sizeof(*request) ||
-        request->field.data == NULL ||
-        request->field.size >= sizeof(probe->field) ||
-        request->grammar_type.data == NULL ||
-        request->grammar_type.size >= sizeof(probe->grammar_type) ||
-        request->grammar_src.data == NULL ||
-        request->grammar_src.size >= sizeof(probe->grammar_src))
+        request->struct_size < sizeof(*request))
         return VXML_INVALID_CONTRACT;
     ++probe->prepare_calls;
     *out_ticket = (vxml_cmeta_collect_ticket_v1){0};
@@ -658,14 +656,64 @@ static vxml_status cmeta_collect_prepare(
         return probe->prepare_status;
     if (probe->reserved || probe->active)
         return VXML_INVALID_STATE;
-    memcpy(probe->field, request->field.data, request->field.size);
-    probe->field[request->field.size] = '\0';
-    memcpy(probe->grammar_type,
-           request->grammar_type.data, request->grammar_type.size);
-    probe->grammar_type[request->grammar_type.size] = '\0';
-    memcpy(probe->grammar_src,
-           request->grammar_src.data, request->grammar_src.size);
-    probe->grammar_src[request->grammar_src.size] = '\0';
+
+    probe->item_kind = request->item_kind;
+    probe->menu_choice_count = 0u;
+    memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
+    memset(probe->field, 0, sizeof(probe->field));
+    memset(probe->grammar_type, 0, sizeof(probe->grammar_type));
+    memset(probe->grammar_src, 0, sizeof(probe->grammar_src));
+
+    if (request->item_kind == VXML_CMETA_COLLECT_ITEM_MENU) {
+        if (request->field.data != NULL || request->field.size != 0u ||
+            request->grammar_type.data != NULL ||
+            request->grammar_type.size != 0u ||
+            request->grammar_src.data != NULL ||
+            request->grammar_src.size != 0u ||
+            request->menu_choices == NULL ||
+            request->menu_choice_count == 0u ||
+            request->menu_choice_count > 16u ||
+            (request->required_capabilities &
+             VXML_CMETA_COLLECT_CAP_MENU_CHOICE) == 0u)
+            return VXML_INVALID_CONTRACT;
+        for (choice_index = 0u;
+             choice_index < request->menu_choice_count;
+             ++choice_index) {
+            const vxml_cmeta_menu_choice_v1 *choice =
+                &request->menu_choices[choice_index];
+            if (choice->dtmf.data == NULL ||
+                choice->dtmf.size == 0u ||
+                choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
+                choice->speech.data != NULL ||
+                choice->speech.size != 0u)
+                return VXML_INVALID_CONTRACT;
+            memcpy(
+                probe->menu_dtmf[choice_index],
+                choice->dtmf.data, choice->dtmf.size);
+            probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
+        }
+        probe->menu_choice_count = request->menu_choice_count;
+    } else if (request->item_kind == VXML_CMETA_COLLECT_ITEM_FIELD) {
+        if (request->field.data == NULL ||
+            request->field.size >= sizeof(probe->field) ||
+            request->grammar_type.data == NULL ||
+            request->grammar_type.size >= sizeof(probe->grammar_type) ||
+            request->grammar_src.data == NULL ||
+            request->grammar_src.size >= sizeof(probe->grammar_src) ||
+            request->menu_choices != NULL ||
+            request->menu_choice_count != 0u)
+            return VXML_INVALID_CONTRACT;
+        memcpy(probe->field, request->field.data, request->field.size);
+        probe->field[request->field.size] = '\0';
+        memcpy(probe->grammar_type,
+               request->grammar_type.data, request->grammar_type.size);
+        probe->grammar_type[request->grammar_type.size] = '\0';
+        memcpy(probe->grammar_src,
+               request->grammar_src.data, request->grammar_src.size);
+        probe->grammar_src[request->grammar_src.size] = '\0';
+    } else {
+        return VXML_INVALID_CONTRACT;
+    }
     probe->generation = request->generation;
     probe->has_timeout = request->has_timeout;
     probe->timeout_us = request->timeout_us;
@@ -896,6 +944,14 @@ static vxml_cmeta_compile_options_v1 event_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_event_handlers = 16u;
     options.max_event_name_bytes = 64u;
+    return options;
+}
+
+static vxml_cmeta_compile_options_v1 menu_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = event_compile_options();
+    options.max_menus = 4u;
+    options.max_menu_choices = 16u;
+    options.max_menu_choice_bytes = 16u;
     return options;
 }
 
