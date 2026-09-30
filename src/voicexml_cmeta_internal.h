@@ -293,6 +293,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_collect_mailbox collect_mailbox;
     vxml_cmeta_event_counter *event_counters;
     size_t event_counter_count;
+    unsigned char *retry_reset_pending;
     size_t event_counter_capacity;
     char *event_counter_names;
     size_t event_name_stride;
