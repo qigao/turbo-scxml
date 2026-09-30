@@ -302,6 +302,92 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
+    it("compiles field and form filled handlers into immutable action ranges") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><assign name='nested.number' expr='value'/></filled>"
+            "</field>"
+            "<field name='flag'><grammar type='application/srgs+xml' src='b'/></field>"
+            "<filled mode='all' namelist='value flag'>"
+            "<exit namelist='value flag'/></filled>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            field_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_filled_row *field_filled;
+        const vxml_cmeta_filled_row *form_filled;
+
+        check_equal(vxml_compile_cmeta(
+                        source, sizeof(source) - 1u, NULL, &options,
+                        &program, NULL),
+                    VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->field_count, (size_t)2u);
+        check_equal(profile->filled_count, (size_t)2u);
+        check_not_null(profile->filled);
+        check_not_null(profile->filled_root_fields);
+        check_equal(profile->fields[0].filled, (size_t)0u);
+        check_equal(profile->fields[1].filled, VXML_CMETA_NO_INDEX);
+        check_equal(profile->forms[0].first_filled, (size_t)1u);
+        check_equal(profile->forms[0].filled_count, (size_t)1u);
+
+        field_filled = &profile->filled[0];
+        check_equal(field_filled->mode, VXML_CMETA_FILLED_FIELD);
+        check_equal(field_filled->field, (size_t)0u);
+        check_true(field_filled->action_end > field_filled->first_action);
+
+        form_filled = &profile->filled[1];
+        check_equal(form_filled->mode, VXML_CMETA_FILLED_ALL);
+        check_equal(form_filled->field, VXML_CMETA_NO_INDEX);
+        check_equal(form_filled->target_count, (size_t)2u);
+        check_equal(
+            profile->filled_root_fields[form_filled->first_target],
+            (size_t)0u);
+        check_equal(
+            profile->filled_root_fields[form_filled->first_target + 1u],
+            (size_t)1u);
+        check_true(form_filled->action_end > form_filled->first_action);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid filled modes targets and handler-local vars") {
+        static const char *const bodies[] = {
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<filled mode='maybe'/></form>",
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<filled namelist='missing'/></form>",
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<filled namelist='value value'/></form>",
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><var name='x' expr='1'/></filled></field></form>"
+        };
+        static const char prefix[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>";
+        const vxml_cmeta_compile_options_v1 options =
+            field_compile_options();
+        size_t index;
+
+        for (index = 0u; index < sizeof(bodies) / sizeof(bodies[0]); ++index) {
+            char source[1024];
+            vxml_program program = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s</vxml>",
+                prefix, bodies[index]);
+            check_true(written > 0 && (size_t)written < sizeof(source));
+            check_true(vxml_compile_cmeta(
+                           source, (size_t)written, NULL, &options,
+                           &program, NULL) != VXML_OK);
+            check_null(program.impl);
+        }
+    }
+
     it("requires explicit field and grammar limits") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
