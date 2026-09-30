@@ -14,11 +14,6 @@ extern "C" {
 #define VXML_SUBMIT_REQUEST_ABI_V1 1u
 #define VXML_SUBMIT_WIRE_REQUEST_ABI_V1 1u
 
-typedef enum vxml_submit_method {
-    VXML_SUBMIT_METHOD_GET = 1,
-    VXML_SUBMIT_METHOD_POST
-} vxml_submit_method;
-
 typedef enum vxml_submit_resource_status {
     VXML_SUBMIT_RESOURCE_OK = 0,
     VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT,
