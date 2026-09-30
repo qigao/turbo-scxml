@@ -3560,10 +3560,13 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_menu_try_complete(
         program->menus == NULL ||
         completion->choice_index >=
             program->menus[profile->active_menu].choice_count) {
-        atomic_store_explicit(
-            &mailbox->state,
-            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-            memory_order_release);
+        expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
+        if (!atomic_compare_exchange_strong_explicit(
+                &mailbox->state, &expected,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_acq_rel, memory_order_acquire) &&
+            expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+            return VXML_CMETA_COLLECT_INGRESS_CLOSED;
         return VXML_CMETA_COLLECT_INGRESS_STALE;
     }
 
