@@ -12,7 +12,12 @@ int main(void) {
     vxml_program program = {0};
     vxml_session session = {0};
     vxml_navigation_target target = {0};
+    vxml_status (*raise_event)(
+        vxml_session *, const char *, size_t) = vxml_session_raise_event;
     int result = 1;
+
+    if (raise_event == NULL)
+        return 2;
 
     if (vxml_compile(document, strlen(document), NULL, &program, NULL) !=
         VXML_OK)

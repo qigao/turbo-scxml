@@ -125,6 +125,8 @@ set_target_properties(voicexml_dialog_manager_test PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
+target_include_directories(voicexml_dialog_manager_test PRIVATE
+  ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(voicexml_dialog_manager_test PRIVATE
   TurboSCXML::VoiceXMLDialogManager
   Salts::TinyTest)

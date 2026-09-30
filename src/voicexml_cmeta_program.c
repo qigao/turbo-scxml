@@ -4210,6 +4210,8 @@ static vxml_status cmeta_write_program(
         impl->profile_session_init = vxml_cmeta_session_init_profile;
         impl->profile_session_start = vxml_cmeta_session_start_profile;
         impl->profile_session_start_at = vxml_cmeta_session_start_profile_at;
+        impl->profile_session_raise_event =
+            vxml_cmeta_session_raise_event_profile;
         impl->profile_session_destroy = vxml_cmeta_session_destroy_profile;
         impl->profile_program_destroy = vxml_cmeta_program_destroy_profile;
         out->impl = impl;

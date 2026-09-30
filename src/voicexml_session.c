@@ -222,6 +222,28 @@ vxml_status vxml_session_navigation(
     return VXML_OK;
 }
 
+vxml_status vxml_session_raise_event(
+    vxml_session *session,
+    const char *event_name,
+    size_t event_name_size) {
+    vxml_session_impl *impl;
+    if (session == NULL || session->impl == NULL ||
+        event_name == NULL || event_name_size == 0u ||
+        memchr(event_name, '\0', event_name_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->program->profile_session_raise_event == NULL)
+        return VXML_UNSUPPORTED_FEATURE;
+    return impl->program->profile_session_raise_event(
+        impl, event_name, event_name_size);
+}
+
 vxml_session_state vxml_session_get_state(const vxml_session *session) {
     const vxml_session_impl *impl;
     if (session == NULL || session->impl == NULL) return VXML_SESSION_CLOSED;

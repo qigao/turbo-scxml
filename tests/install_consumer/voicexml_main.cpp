@@ -12,7 +12,11 @@ int main() {
     vxml_program program{};
     vxml_session session{};
     vxml_navigation_target target{};
+    auto raise_event = &vxml_session_raise_event;
     int result = 1;
+
+    if (raise_event == nullptr)
+        return 2;
 
     if (vxml_compile(document, std::strlen(document), nullptr, &program,
                      nullptr) != VXML_OK)

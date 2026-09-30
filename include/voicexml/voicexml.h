@@ -128,6 +128,17 @@ vxml_status vxml_session_navigation(
     const vxml_session *session,
     vxml_navigation_target *out_target);
 
+/**
+ * Synchronously inject one byte-counted Event into the active runtime profile.
+ *
+ * Profiles without Event semantics return VXML_UNSUPPORTED_FEATURE without
+ * mutating the Session. Event bytes are borrowed only for this call.
+ */
+vxml_status vxml_session_raise_event(
+    vxml_session *session,
+    const char *event_name,
+    size_t event_name_size);
+
 vxml_session_state vxml_session_get_state(const vxml_session *session);
 vxml_status vxml_session_error(const vxml_session *session);
 vxml_status vxml_session_close(vxml_session *session);
