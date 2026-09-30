@@ -21,11 +21,13 @@ int main() {
     auto compile_profile = &vxml_compile_external_script_profile;
     auto acquire_fn = &vxml_script_resource_acquire;
     auto close_fn = &vxml_script_resource_close;
+    auto failure_event_fn = &vxml_script_resource_failure_event;
     return request.abi_version == VXML_SCRIPT_REQUEST_ABI_V1 &&
            request.struct_size == sizeof(request) &&
            target.abi_version == 0u &&
            VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 != 0u &&
            compile_profile != nullptr &&
-           acquire_fn != nullptr && close_fn != nullptr
+           acquire_fn != nullptr && close_fn != nullptr &&
+           failure_event_fn != nullptr
         ? 0 : 1;
 }

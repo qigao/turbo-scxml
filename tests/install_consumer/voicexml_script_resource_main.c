@@ -18,6 +18,9 @@ int main(void) {
         const vxml_script_resource_adapter_v1 *,
         void *,
         vxml_script_source *) = vxml_script_resource_close;
+    const char *(*failure_event_fn)(
+        vxml_script_resource_status, size_t *) =
+        vxml_script_resource_failure_event;
 
     if (request.abi_version != VXML_SCRIPT_REQUEST_ABI_V1 ||
         request.struct_size != sizeof(request) ||
@@ -25,6 +28,7 @@ int main(void) {
         target.abi_version != 0u ||
         compile_profile == NULL ||
         acquire_fn == NULL || close_fn == NULL ||
+        failure_event_fn == NULL ||
         VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 == 0u ||
         VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1 == 0u)
         return 1;

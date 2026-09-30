@@ -64,3 +64,19 @@ borrows those bytes until `vxml_script_resource_close()`.
 
 No cache, worker, timer, transport client, or script engine is owned by this
 component.
+
+## VoiceXML Event projection
+
+The transport-neutral status remains the primary return value. Call
+`vxml_script_resource_failure_event()` when the script-enabled interpreter
+needs the corresponding standard VoiceXML Event without coupling the resource
+boundary to a particular Session implementation.
+
+- invalid URI, provider/fetch failure, malformed provider data, and source-body
+  overflow map exactly to `error.badfetch`;
+- unsupported charset maps to `error.unsupported.format`;
+- local allocation exhaustion maps to `error.noresource`;
+- success and caller contract misuse do not fabricate a language Event.
+
+The returned Event name is immutable static storage and is not provider-owned.
+No retry or session mutation is implied by this projection.
