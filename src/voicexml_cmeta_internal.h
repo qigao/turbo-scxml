@@ -22,6 +22,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_CLEAR,
     VXML_CMETA_ACTION_IF,
     VXML_CMETA_ACTION_EXIT,
+    VXML_CMETA_ACTION_RETURN,
+    VXML_CMETA_ACTION_DISCONNECT,
     VXML_CMETA_ACTION_THROW,
     VXML_CMETA_ACTION_RETHROW,
     VXML_CMETA_ACTION_REPROMPT
@@ -382,6 +384,12 @@ typedef struct vxml_cmeta_session_data {
     size_t exec_frame_capacity;
     vxml_cmeta_exit_snapshot pending_exit;
     vxml_cmeta_exit_snapshot terminal_exit;
+    vxml_cmeta_terminal_kind pending_terminal_kind;
+    const char *pending_terminal_event;
+    size_t pending_terminal_event_size;
+    vxml_cmeta_terminal_kind terminal_kind;
+    const char *terminal_event;
+    size_t terminal_event_size;
     bool exit_requested;
 } vxml_cmeta_session_data;
 
