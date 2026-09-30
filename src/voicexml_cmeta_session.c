@@ -3083,7 +3083,7 @@ static vxml_status collect_request_from_impl(
         .struct_size = sizeof(vxml_cmeta_collect_request_v1),
         .generation = profile->collect_generation,
         .required_capabilities = field->required_capabilities,
-        .field = {field->name, field->name_size},
+        .field = owner,
         .grammar_type = {field->grammar_type, field->grammar_type_size},
         .grammar_src = {field->grammar_src, field->grammar_src_size},
         .has_timeout = prompt != NULL ? prompt->has_timeout : false,
@@ -5277,7 +5277,7 @@ vxml_status vxml_session_cmeta_prompt(
     const vxml_session *session,
     vxml_cmeta_prompt_view_v1 *out_prompt) {
     const vxml_session_impl *impl;
-    const vxml_cmeta_field_row *field = NULL;
+    vxml_cmeta_name_view owner = {0};
     const vxml_cmeta_prompt_row *best = NULL;
     unsigned prompt_count = 0u;
     vxml_status status;
@@ -5289,7 +5289,7 @@ vxml_status vxml_session_cmeta_prompt(
     if (impl == NULL)
         return VXML_INVALID_CONTRACT;
     status = selected_prompt_row(
-        impl, &field, &best, &prompt_count);
+        impl, &owner, &best, &prompt_count);
     if (status != VXML_OK) return status;
 
     *out_prompt = (vxml_cmeta_prompt_view_v1){
@@ -5312,7 +5312,7 @@ vxml_status vxml_session_cmeta_prompt(
 static vxml_status prompt_media_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_prompt_media_request_v1 *out_request) {
-    const vxml_cmeta_field_row *field = NULL;
+    vxml_cmeta_name_view owner = {0};
     const vxml_cmeta_prompt_row *prompt = NULL;
     const vxml_cmeta_session_data *profile;
     unsigned prompt_count = 0u;
@@ -5321,7 +5321,7 @@ static vxml_status prompt_media_request_from_impl(
     *out_request = (vxml_cmeta_prompt_media_request_v1){0};
     if (impl == NULL) return VXML_INVALID_CONTRACT;
     status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
+        impl, &owner, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
     profile = (const vxml_cmeta_session_data *)impl->profile_data;
 
@@ -5329,8 +5329,7 @@ static vxml_status prompt_media_request_from_impl(
     out_request->struct_size =
         sizeof(vxml_cmeta_prompt_media_request_v1);
     out_request->generation = profile->collect_generation;
-    out_request->field =
-        (vxml_cmeta_name_view){field->name, field->name_size};
+    out_request->field = owner;
     out_request->prompt_count = prompt_count;
     out_request->selected_count =
         prompt != NULL ? prompt->count : 0u;
@@ -5385,7 +5384,7 @@ vxml_status vxml_session_cmeta_prompt_media_request(
 static vxml_status prompt_media_batch_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_prompt_media_batch_request_v1 *out_request) {
-    const vxml_cmeta_field_row *field = NULL;
+    vxml_cmeta_name_view owner = {0};
     const vxml_cmeta_prompt_row *prompt = NULL;
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_session_data *profile;
@@ -5397,7 +5396,7 @@ static vxml_status prompt_media_batch_request_from_impl(
         impl->program->profile_data == NULL)
         return VXML_INVALID_CONTRACT;
     status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
+        impl, &owner, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
@@ -5408,8 +5407,7 @@ static vxml_status prompt_media_batch_request_from_impl(
     out_request->struct_size =
         sizeof(vxml_cmeta_prompt_media_batch_request_v1);
     out_request->generation = profile->collect_generation;
-    out_request->field =
-        (vxml_cmeta_name_view){field->name, field->name_size};
+    out_request->field = owner;
     out_request->prompt_count = prompt_count;
     out_request->selected_count =
         prompt != NULL ? prompt->count : 0u;
@@ -5864,7 +5862,7 @@ vxml_session_cmeta_prompt_media_barge_in(
     vxml_cmeta_prompt_bargein_type signal_type) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
-    const vxml_cmeta_field_row *field = NULL;
+    vxml_cmeta_name_view owner = {0};
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
     vxml_status status;
@@ -5890,8 +5888,8 @@ vxml_session_cmeta_prompt_media_barge_in(
         return VXML_CMETA_PROMPT_BARGE_STALE;
 
     status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
-    (void)field;
+        impl, &owner, &prompt, &prompt_count);
+    (void)owner;
     (void)prompt_count;
     if (status != VXML_OK || prompt == NULL)
         return VXML_CMETA_PROMPT_BARGE_STALE;
@@ -5918,7 +5916,7 @@ vxml_session_cmeta_prompt_media_mark(
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
-    const vxml_cmeta_field_row *field = NULL;
+    vxml_cmeta_name_view owner = {0};
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
     size_t absolute_index;
@@ -5943,8 +5941,8 @@ vxml_session_cmeta_prompt_media_mark(
         return VXML_CMETA_PROMPT_MARK_STALE;
 
     status = selected_prompt_row(
-        impl, &field, &prompt, &prompt_count);
-    (void)field;
+        impl, &owner, &prompt, &prompt_count);
+    (void)owner;
     (void)prompt_count;
     if (status != VXML_OK || prompt == NULL)
         return VXML_CMETA_PROMPT_MARK_STALE;
