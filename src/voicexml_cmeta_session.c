@@ -700,6 +700,7 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
@@ -1949,7 +1950,32 @@ vxml_status vxml_cmeta_session_init_profile(
         goto failure;
     }
     if (program->field_count != 0u) {
+        const size_t multi_tail_size =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                max_collect_result_slots) +
+            sizeof(options->max_collect_result_slots);
+        size_t requested_slots = 1u;
         size_t mailbox_allocation_bytes;
+        size_t remainder;
+        if (options->struct_size >= multi_tail_size &&
+            options->max_collect_result_slots != 0u)
+            requested_slots = options->max_collect_result_slots;
+        if (root_shape == NULL || root_shape->field_count == 0u) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        if (requested_slots > root_shape->field_count)
+            requested_slots = root_shape->field_count;
+        profile->collect_mailbox.slot_capacity = requested_slots;
+        profile->collect_mailbox.root_fields =
+            (size_t *)vxml_calloc(
+                requested_slots,
+                sizeof(*profile->collect_mailbox.root_fields));
+        if (profile->collect_mailbox.root_fields == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
         if (!measure_collect_mailbox(
                 program,
                 &profile->collect_mailbox.storage_bytes,
@@ -1957,12 +1983,25 @@ vxml_status vxml_cmeta_session_init_profile(
             status = VXML_INVALID_CONTRACT;
             goto failure;
         }
-        mailbox_allocation_bytes =
+        profile->collect_mailbox.storage_stride =
             profile->collect_mailbox.storage_bytes;
-        if (profile->collect_mailbox.storage_alignment > 1u &&
+        remainder = profile->collect_mailbox.storage_stride %
+            profile->collect_mailbox.storage_alignment;
+        if (remainder != 0u &&
             !checked_add(
+                &profile->collect_mailbox.storage_stride,
+                profile->collect_mailbox.storage_alignment - remainder)) {
+            status = VXML_LIMIT_EXCEEDED;
+            goto failure;
+        }
+        if (!checked_multiply(
+                profile->collect_mailbox.storage_stride,
+                requested_slots,
+                &mailbox_allocation_bytes) ||
+            (profile->collect_mailbox.storage_alignment > 1u &&
+             !checked_add(
                 &mailbox_allocation_bytes,
-                profile->collect_mailbox.storage_alignment - 1u)) {
+                profile->collect_mailbox.storage_alignment - 1u))) {
             status = VXML_LIMIT_EXCEEDED;
             goto failure;
         }
@@ -1975,7 +2014,8 @@ vxml_status vxml_cmeta_session_init_profile(
                         profile->collect_mailbox.allocation,
                     mailbox_allocation_bytes,
                     profile->collect_mailbox.storage_alignment,
-                    profile->collect_mailbox.storage_bytes,
+                    profile->collect_mailbox.storage_stride *
+                        requested_slots,
                     &profile->collect_mailbox.storage)) {
                 status = VXML_ALLOCATION_FAILED;
                 goto failure;
@@ -2550,7 +2590,33 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
             memory_order_release);
         return VXML_CMETA_COLLECT_INGRESS_STALE;
     }
-    memcpy(mailbox->storage, completion->value, type->size);
+    {
+        const vxml_cmeta_program_data *program =
+            (const vxml_cmeta_program_data *)impl->program->profile_data;
+        const vxml_cmeta_field_row *field;
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL ||
+            mailbox->root_fields == NULL ||
+            mailbox->slot_capacity == 0u) {
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+                memory_order_release);
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+        }
+        field = &program->fields[profile->active_field];
+        if (!cmeta_data_desc_equal(
+                completion->data, field->field_data)) {
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+                memory_order_release);
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+        }
+        memcpy(mailbox->storage, completion->value, type->size);
+        mailbox->root_fields[0] = field->root_field;
+        mailbox->slot_count = 1u;
+    }
     expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
@@ -2560,6 +2626,172 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
             ? VXML_CMETA_COLLECT_INGRESS_CLOSED
             : VXML_CMETA_COLLECT_INGRESS_FULL;
     return VXML_CMETA_COLLECT_INGRESS_ACCEPTED;
+}
+
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
+    vxml_session *session,
+    const vxml_cmeta_collect_completion_v2 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const cmeta_data_struct_shape *root_shape;
+    const vxml_cmeta_field_row *selected;
+    vxml_cmeta_collect_mailbox *mailbox;
+    uint64_t generation;
+    unsigned state;
+    unsigned expected;
+    size_t slot_index;
+    size_t selected_count = 0u;
+
+    if (session == NULL || completion == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (completion->abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V2 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == 0u ||
+        completion->slots == NULL ||
+        completion->slot_count == 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_COLLECT_INGRESS_CLOSED
+            : VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    mailbox = &profile->collect_mailbox;
+    if (profile->active_field >= program->field_count ||
+        program->fields == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    selected = &program->fields[profile->active_field];
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL || mailbox->root_fields == NULL ||
+        mailbox->slot_capacity == 0u ||
+        mailbox->storage == NULL ||
+        mailbox->storage_stride == 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (completion->slot_count > mailbox->slot_capacity)
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_WRITING ||
+        state == VXML_CMETA_COLLECT_MAILBOX_READY)
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    if (state != VXML_CMETA_COLLECT_MAILBOX_EMPTY)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (completion->generation != generation)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+
+    expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+            return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    }
+
+    mailbox->slot_count = 0u;
+    for (slot_index = 0u;
+         slot_index < completion->slot_count;
+         ++slot_index) {
+        const vxml_cmeta_collect_result_slot_v1 *slot =
+            &completion->slots[slot_index];
+        size_t root_field;
+        const cmeta_data_field_desc *target = NULL;
+        const cmeta_type_desc *type;
+        size_t prior;
+
+        if (slot->name.data == NULL || slot->name.size == 0u ||
+            memchr(slot->name.data, '\0', slot->name.size) != NULL ||
+            slot->data == NULL || slot->value == NULL) {
+            goto incompatible;
+        }
+        for (root_field = 0u;
+             root_field < root_shape->field_count;
+             ++root_field) {
+            const char *name = root_shape->fields[root_field].name;
+            if (name != NULL &&
+                strlen(name) == slot->name.size &&
+                memcmp(name, slot->name.data, slot->name.size) == 0) {
+                target = &root_shape->fields[root_field];
+                break;
+            }
+        }
+        if (target == NULL ||
+            !cmeta_data_desc_equal(slot->data, target->value) ||
+            !collect_fixed_scalar_data(target->value))
+            goto incompatible;
+        type = target->value->storage_type;
+        if (type == NULL ||
+            type->size > mailbox->storage_stride)
+            goto incompatible;
+        for (prior = 0u; prior < slot_index; ++prior)
+            if (mailbox->root_fields[prior] == root_field)
+                goto incompatible;
+        if (root_field == selected->root_field)
+            ++selected_count;
+
+        mailbox->root_fields[slot_index] = root_field;
+        memcpy(
+            mailbox->storage +
+                slot_index * mailbox->storage_stride,
+            slot->value, type->size);
+    }
+    if (selected_count != 1u)
+        goto incompatible;
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+        completion->generation)
+        goto stale_after_claim;
+
+    mailbox->slot_count = completion->slot_count;
+    mailbox->data = selected->field_data;
+    expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire))
+        return expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED
+            ? VXML_CMETA_COLLECT_INGRESS_CLOSED
+            : VXML_CMETA_COLLECT_INGRESS_FULL;
+    return VXML_CMETA_COLLECT_INGRESS_ACCEPTED;
+
+stale_after_claim:
+    mailbox->slot_count = 0u;
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+        memory_order_release);
+    return VXML_CMETA_COLLECT_INGRESS_STALE;
+
+incompatible:
+    mailbox->slot_count = 0u;
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+        memory_order_release);
+    return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 }
 
 vxml_status vxml_session_cmeta_collect_run_ready(
@@ -2622,18 +2854,15 @@ vxml_status vxml_session_cmeta_collect_run_ready(
     form = &program->forms[profile->active_form];
     root_shape = session_root_shape(program);
     if (generation != profile->collect_generation ||
-        mailbox->data != field->field_data ||
-        !collect_fixed_scalar_data(field->field_data) ||
         root_shape == NULL ||
-        field->root_field >= root_shape->field_count ||
-        root_shape->fields[field->root_field].value !=
-            field->field_data ||
-        root_shape->fields[field->root_field].offset !=
-            field->field_offset ||
-        field->field_data->storage_type->size >
-            mailbox->storage_bytes) {
+        mailbox->root_fields == NULL ||
+        mailbox->slot_count == 0u ||
+        mailbox->slot_count > mailbox->slot_capacity ||
+        mailbox->storage == NULL ||
+        mailbox->storage_stride == 0u) {
         profile->collect_in_flight = false;
         mailbox->data = NULL;
+        mailbox->slot_count = 0u;
         atomic_store_explicit(
             &mailbox->state,
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
@@ -2644,51 +2873,102 @@ vxml_status vxml_session_cmeta_collect_run_ready(
     if (!transaction_begin(profile, program)) {
         profile->collect_in_flight = false;
         mailbox->data = NULL;
+        mailbox->slot_count = 0u;
         atomic_store_explicit(
             &mailbox->state,
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
         return session_fail(impl, VXML_ALLOCATION_FAILED);
     }
-    if (profile->staged_root.bound[field->root_field] != 0u) {
-        transaction_reset(profile, program);
-        profile->collect_in_flight = false;
-        mailbox->data = NULL;
-        atomic_store_explicit(
-            &mailbox->state,
-            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-            memory_order_release);
-        return session_fail(impl, VXML_INVALID_STRUCTURE);
+
+    {
+        size_t slot_index;
+        bool selected_seen = false;
+        for (slot_index = 0u;
+             slot_index < mailbox->slot_count;
+             ++slot_index) {
+            const size_t root_field =
+                mailbox->root_fields[slot_index];
+            const cmeta_data_field_desc *target;
+            const cmeta_type_desc *type;
+            unsigned char *payload;
+
+            if (root_field >= root_shape->field_count) {
+                transaction_reset(profile, program);
+                profile->collect_in_flight = false;
+                mailbox->data = NULL;
+                mailbox->slot_count = 0u;
+                atomic_store_explicit(
+                    &mailbox->state,
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                    memory_order_release);
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
+            }
+            target = &root_shape->fields[root_field];
+            type = target->value != NULL
+                ? target->value->storage_type : NULL;
+            if (!collect_fixed_scalar_data(target->value) ||
+                type == NULL ||
+                type->size > mailbox->storage_stride ||
+                profile->staged_root.bound[root_field] != 0u) {
+                transaction_reset(profile, program);
+                profile->collect_in_flight = false;
+                mailbox->data = NULL;
+                mailbox->slot_count = 0u;
+                atomic_store_explicit(
+                    &mailbox->state,
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                    memory_order_release);
+                return session_fail(impl, VXML_SEMANTIC_ERROR);
+            }
+            payload = mailbox->storage +
+                slot_index * mailbox->storage_stride;
+            destination =
+                profile->staged_root.storage + target->offset;
+            meta_status = cmeta_data_value_init_zero(
+                target->value, destination);
+            if (meta_status == CMETA_OK)
+                meta_status = cmeta_data_value_copy(
+                    target->value, destination, payload);
+            if (meta_status != CMETA_OK) {
+                (void)cmeta_data_value_restore_zero(
+                    target->value, destination);
+                transaction_reset(profile, program);
+                profile->collect_in_flight = false;
+                mailbox->data = NULL;
+                mailbox->slot_count = 0u;
+                atomic_store_explicit(
+                    &mailbox->state,
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                    memory_order_release);
+                return session_fail(
+                    impl,
+                    meta_status == CMETA_OUT_OF_MEMORY
+                        ? VXML_ALLOCATION_FAILED
+                        : VXML_SEMANTIC_ERROR);
+            }
+            profile->staged_root.bound[root_field] = 1u;
+            if (root_field == field->root_field)
+                selected_seen = true;
+        }
+        if (!selected_seen) {
+            transaction_reset(profile, program);
+            profile->collect_in_flight = false;
+            mailbox->data = NULL;
+            mailbox->slot_count = 0u;
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, VXML_INVALID_STRUCTURE);
+        }
     }
 
-    destination =
-        profile->staged_root.storage + field->field_offset;
-    meta_status = cmeta_data_value_init_zero(
-        field->field_data, destination);
-    if (meta_status == CMETA_OK)
-        meta_status = cmeta_data_value_copy(
-            field->field_data, destination, mailbox->storage);
-    if (meta_status != CMETA_OK) {
-        (void)cmeta_data_value_restore_zero(
-            field->field_data, destination);
-        transaction_reset(profile, program);
-        profile->collect_in_flight = false;
-        mailbox->data = NULL;
-        atomic_store_explicit(
-            &mailbox->state,
-            VXML_CMETA_COLLECT_MAILBOX_DISARMED,
-            memory_order_release);
-        return session_fail(
-            impl,
-            meta_status == CMETA_OUT_OF_MEMORY
-                ? VXML_ALLOCATION_FAILED
-                : VXML_SEMANTIC_ERROR);
-    }
-    profile->staged_root.bound[field->root_field] = 1u;
     transaction_commit(profile, program);
 
     profile->collect_in_flight = false;
     mailbox->data = NULL;
+    mailbox->slot_count = 0u;
     atomic_store_explicit(
         &mailbox->state,
         VXML_CMETA_COLLECT_MAILBOX_DISARMED,

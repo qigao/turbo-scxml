@@ -10,6 +10,12 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_collect_completion_v1>::value,
     "collect completion must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_result_slot_v1>::value,
+    "collect result slot must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_completion_v2>::value,
+    "collect completion V2 must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
     "collect adapter must remain C-compatible");
 static_assert(
@@ -34,6 +40,8 @@ int main() {
     const turboscxml_install_cmeta_root initial_root{5};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
+    vxml_cmeta_collect_result_slot_v1 collect_slot{};
+    vxml_cmeta_collect_completion_v2 collect_completion_v2{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
@@ -52,9 +60,17 @@ int main() {
     collect_completion.abi_version =
         VXML_CMETA_COLLECT_COMPLETION_ABI_V1;
     collect_completion.struct_size = sizeof(collect_completion);
+    collect_completion_v2.abi_version =
+        VXML_CMETA_COLLECT_COMPLETION_ABI_V2;
+    collect_completion_v2.struct_size = sizeof(collect_completion_v2);
+    collect_completion_v2.slots = &collect_slot;
+    collect_completion_v2.slot_count = 1u;
     if (collect_request.abi_version != 0u ||
         collect_completion.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
+        collect_completion_v2.abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V2 ||
+        collect_completion_v2.slot_count != 1u ||
         collect_adapter.abi_version != VXML_CMETA_COLLECT_ADAPTER_ABI_V1)
         return 4;
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
