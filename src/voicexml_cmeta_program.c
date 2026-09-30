@@ -2851,12 +2851,38 @@ static vxml_status cmeta_measure_initial(
     status = cmeta_validate_attributes(
         initial, allowed, 3u, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_validate_empty_element(initial, diagnostic);
-    if (status != VXML_OK)
-        return cmeta_program_fail(
-            diagnostic, VXML_UNSUPPORTED_FEATURE,
-            salts_xml_node_location(initial),
-            "initial prompt/Event content is deferred to the initial recovery slice");
+    {
+        size_t child_index;
+        for (child_index = 0u;
+             child_index < salts_xml_node_child_count(initial);
+             ++child_index) {
+            const salts_xml_node child =
+                salts_xml_node_child_at(initial, child_index);
+            if (cmeta_node_ignorable(child)) continue;
+            if (cmeta_node_named(child, "catch") ||
+                cmeta_node_named(child, "help") ||
+                cmeta_node_named(child, "noinput") ||
+                cmeta_node_named(child, "nomatch")) {
+                status = cmeta_measure_catch(
+                    child, options, measurement, limits, diagnostic);
+                if (status != VXML_OK) return status;
+                continue;
+            }
+            if (cmeta_node_named(child, "prompt"))
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "initial prompt content is deferred to the prompt-owner slice");
+            return cmeta_program_fail(
+                diagnostic,
+                cmeta_known_profile_element(child)
+                    ? VXML_INVALID_STRUCTURE : VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(child),
+                cmeta_known_profile_element(child)
+                    ? "VoiceXML element has invalid initial placement"
+                    : "unsupported VoiceXML initial child element");
+        }
+    }
     if (measurement->initial_count >= options->max_initials ||
         !cmeta_measure_increment(&measurement->initial_count) ||
         !cmeta_measure_increment(&measurement->form_item_count))
@@ -6307,6 +6333,30 @@ static vxml_status cmeta_lower_program(
                             builder, condition, scopes, 2u, true,
                             &initial->condition);
                         if (status != VXML_OK) return status;
+                    }
+                    {
+                        size_t nested_index;
+                        for (nested_index = 0u;
+                             nested_index <
+                                 salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, nested_index);
+                            if (cmeta_node_ignorable(nested))
+                                continue;
+                            if (!cmeta_node_named(nested, "catch") &&
+                                !cmeta_node_named(nested, "help") &&
+                                !cmeta_node_named(nested, "noinput") &&
+                                !cmeta_node_named(nested, "nomatch"))
+                                continue;
+                            status = cmeta_lower_catch(
+                                builder, nested,
+                                VXML_CMETA_EVENT_INITIAL,
+                                initial_index - 1u,
+                                form->scope, scopes, 2u);
+                            if (status != VXML_OK) return status;
+                        }
                     }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
