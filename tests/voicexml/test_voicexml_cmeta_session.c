@@ -619,6 +619,7 @@ typedef struct cmeta_collect_probe {
     vxml_cmeta_collect_item_kind item_kind;
     size_t menu_choice_count;
     char menu_dtmf[16][16];
+    char menu_speech[16][64];
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
@@ -711,6 +712,7 @@ static vxml_status cmeta_collect_prepare_menu(
     probe->item_kind = VXML_CMETA_COLLECT_ITEM_MENU;
     probe->menu_choice_count = request->choice_count;
     memset(probe->menu_dtmf, 0, sizeof(probe->menu_dtmf));
+    memset(probe->menu_speech, 0, sizeof(probe->menu_speech));
     memset(probe->field, 0, sizeof(probe->field));
     memset(probe->grammar_type, 0, sizeof(probe->grammar_type));
     memset(probe->grammar_src, 0, sizeof(probe->grammar_src));
@@ -719,16 +721,23 @@ static vxml_status cmeta_collect_prepare_menu(
          ++choice_index) {
         const vxml_cmeta_menu_choice_v1 *choice =
             &request->choices[choice_index];
-        if ((choice->dtmf.size != 0u && choice->dtmf.data == NULL) ||
+        if ((choice->dtmf.data == NULL) != (choice->dtmf.size == 0u) ||
+            (choice->speech.data == NULL) != (choice->speech.size == 0u) ||
             choice->dtmf.size >= sizeof(probe->menu_dtmf[choice_index]) ||
-            choice->speech.data != NULL ||
-            choice->speech.size != 0u)
+            choice->speech.size >=
+                sizeof(probe->menu_speech[choice_index]) ||
+            (choice->dtmf.size == 0u && choice->speech.size == 0u))
             return VXML_INVALID_CONTRACT;
         if (choice->dtmf.size != 0u)
             memcpy(
                 probe->menu_dtmf[choice_index],
                 choice->dtmf.data, choice->dtmf.size);
         probe->menu_dtmf[choice_index][choice->dtmf.size] = '\0';
+        if (choice->speech.size != 0u)
+            memcpy(
+                probe->menu_speech[choice_index],
+                choice->speech.data, choice->speech.size);
+        probe->menu_speech[choice_index][choice->speech.size] = '\0';
     }
     probe->generation = request->generation;
     probe->has_timeout = false;
@@ -1270,6 +1279,84 @@ spec("VoiceXML CMeta session execution") {
             vxml_session_destroy(&session);
             vxml_program_destroy(&program);
         }
+    }
+
+    it("requires exact speech capability before admitting generated menu speech") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><menu id='speech'>"
+            "<choice event='menu.stars'>  Stargazer   news </choice>"
+            "<choice dtmf='0' event='menu.zero'/>"
+            "</menu></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            menu_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_collect_probe missing_probe = {.prepare_status = VXML_OK};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 missing_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT);
+        vxml_cmeta_session_options_v1 options;
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_menu_collect_request_v1 request = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+
+        options = event_session_options(
+            &root, &missing_adapter, &missing_probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request(&session, &request),
+            VXML_OK);
+        check_equal(
+            request.required_capabilities,
+            VXML_CMETA_COLLECT_CAP_MENU_CHOICE |
+                VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT);
+        check_equal(request.choice_count, (size_t)2u);
+        check_equal(
+            request.choices[0].speech.size,
+            sizeof("Stargazer news") - 1u);
+        check_equal(
+            memcmp(
+                request.choices[0].speech.data,
+                "Stargazer news",
+                sizeof("Stargazer news") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(missing_probe.menu_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        request = (vxml_cmeta_menu_collect_request_v1){0};
+        options = event_session_options(&root, &adapter, &probe);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_menu_collect_request(&session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(probe.menu_prepare_calls, (size_t)1u);
+        check_equal(probe.menu_speech[0], "Stargazer news");
+        check_equal(probe.menu_speech[1], "");
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
     }
 
     it("rejects a menu completion for an active directed field generation") {
