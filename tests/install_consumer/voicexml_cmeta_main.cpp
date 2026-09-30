@@ -53,7 +53,11 @@ int main() {
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
     vxml_cmeta_name_view exit_name{};
     vxml_cmeta_value_view exit_value{};
+    auto raise_event = &vxml_session_cmeta_raise;
     int result = 1;
+
+    if (raise_event == nullptr)
+        return 6;
 
     collect_adapter.abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1;
     collect_adapter.struct_size = sizeof(collect_adapter);
@@ -91,11 +95,16 @@ int main() {
     compile_options.max_scope_slots = 32u;
     compile_options.max_scope_storage_bytes = 4096u;
     compile_options.max_conditional_depth = 8u;
+    compile_options.max_event_handlers = 4u;
+    compile_options.max_event_name_bytes = 64u;
     session_options.abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1;
     session_options.struct_size = sizeof(session_options);
     session_options.initial_root = &initial_root;
     session_options.max_transaction_bytes = 65536u;
     session_options.max_execution_steps = 128u;
+    session_options.max_event_counters = 8u;
+    session_options.max_event_name_bytes = 64u;
+    session_options.max_event_dispatch_depth = 8u;
 
     if (layout_type == peer_type || !cmeta_type_equal(layout_type, peer_type))
         goto cleanup;
