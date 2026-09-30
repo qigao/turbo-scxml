@@ -701,9 +701,26 @@ static void exit_snapshot_publish(vxml_cmeta_session_data *session) {
     memset(&session->pending_exit, 0, sizeof(session->pending_exit));
 }
 
+static void prompt_media_mailbox_disarm(
+    vxml_cmeta_session_data *session) {
+    unsigned state;
+    if (session == NULL) return;
+    atomic_store_explicit(
+        &session->prompt_media_mailbox.generation,
+        UINT64_C(0), memory_order_relaxed);
+    state = atomic_load_explicit(
+        &session->prompt_media_mailbox.state, memory_order_acquire);
+    if (state != VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
+        atomic_store_explicit(
+            &session->prompt_media_mailbox.state,
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED,
+            memory_order_release);
+}
+
 static void settle_prompt_media(
     vxml_cmeta_session_data *session) {
     if (session == NULL) return;
+    prompt_media_mailbox_disarm(session);
     if (session->prompt_media_prepared) {
         vxml_cmeta_prompt_media_ticket_v1 ticket =
             session->prompt_media_ticket;
@@ -728,6 +745,13 @@ static void session_data_destroy(
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (session == NULL) return;
+    atomic_store_explicit(
+        &session->prompt_media_mailbox.state,
+        VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED,
+        memory_order_release);
+    atomic_store_explicit(
+        &session->prompt_media_mailbox.generation,
+        UINT64_C(0), memory_order_relaxed);
     settle_prompt_media(session);
     atomic_store_explicit(
         &session->collect_mailbox.state,
@@ -2081,6 +2105,11 @@ vxml_status vxml_cmeta_session_init_profile(
         &profile->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_DISARMED);
     atomic_init(&profile->collect_mailbox.generation, UINT64_C(0));
+    atomic_init(
+        &profile->prompt_media_mailbox.state,
+        VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED);
+    atomic_init(
+        &profile->prompt_media_mailbox.generation, UINT64_C(0));
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
@@ -4158,6 +4187,20 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
         profile->prompt_media_ticket.commit == NULL ||
         profile->prompt_media_ticket.discard == NULL)
         return VXML_INVALID_STATE;
+    if (profile->prompt_media_generation == 0u ||
+        atomic_load_explicit(
+            &profile->prompt_media_mailbox.state,
+            memory_order_acquire) !=
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
+        return VXML_INVALID_STATE;
+    atomic_store_explicit(
+        &profile->prompt_media_mailbox.generation,
+        profile->prompt_media_generation,
+        memory_order_relaxed);
+    atomic_store_explicit(
+        &profile->prompt_media_mailbox.state,
+        VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY,
+        memory_order_release);
     ticket = profile->prompt_media_ticket;
     profile->prompt_media_ticket =
         (vxml_cmeta_prompt_media_ticket_v1){0};
@@ -4194,6 +4237,167 @@ vxml_status vxml_session_cmeta_prompt_media_discard(
     ticket.discard(ticket.user);
     return VXML_OK;
 }
+
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v1 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_prompt_media_mailbox *mailbox;
+    unsigned state;
+    unsigned expected;
+    uint64_t generation;
+
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == 0u ||
+        (completion->outcome !=
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+         completion->outcome !=
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED
+            : VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    mailbox = &profile->prompt_media_mailbox;
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
+    if (state == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+    if (state == VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING ||
+        state == VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL;
+    if (state != VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (!profile->prompt_media_in_flight ||
+        completion->generation != generation ||
+        completion->generation != profile->prompt_media_generation)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+
+    expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
+            return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
+            return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL;
+    }
+
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+            completion->generation ||
+        !profile->prompt_media_in_flight ||
+        profile->prompt_media_generation != completion->generation) {
+        expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
+        (void)atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED,
+            memory_order_acq_rel, memory_order_acquire);
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+    }
+
+    mailbox->outcome = completion->outcome;
+    expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
+            return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
+            return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL;
+    }
+    return VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_run_ready(
+    vxml_session *session,
+    bool *out_progressed,
+    vxml_cmeta_prompt_media_outcome *out_outcome) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_prompt_media_mailbox *mailbox;
+    unsigned expected;
+    uint64_t generation;
+
+    if (out_progressed != NULL) *out_progressed = false;
+    if (out_outcome != NULL) *out_outcome = 0;
+    if (session == NULL || out_progressed == NULL ||
+        out_outcome == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL) return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    mailbox = &profile->prompt_media_mailbox;
+    expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY ||
+            expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING ||
+            expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
+            return VXML_OK;
+        if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
+            return VXML_CLOSED;
+        return VXML_INVALID_STATE;
+    }
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (!profile->prompt_media_in_flight ||
+        generation == 0u ||
+        generation != profile->prompt_media_generation ||
+        (mailbox->outcome !=
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+         mailbox->outcome !=
+             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED)) {
+        profile->prompt_media_in_flight = false;
+        profile->prompt_media_generation = 0u;
+        prompt_media_mailbox_disarm(profile);
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    *out_progressed = true;
+    *out_outcome = mailbox->outcome;
+    profile->prompt_media_in_flight = false;
+    profile->prompt_media_generation = 0u;
+    prompt_media_mailbox_disarm(profile);
+    return VXML_OK;
+}
+
 
 vxml_status vxml_session_cmeta_take_reprompt(
     vxml_session *session, bool *out_requested) {
