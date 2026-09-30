@@ -6562,6 +6562,7 @@ static vxml_status cmeta_lower_program(
     size_t form_index = 0u;
     size_t field_index = 0u;
     size_t initial_index = 0u;
+    size_t subdialog_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -6731,6 +6732,30 @@ static vxml_status cmeta_lower_program(
                                 salts_xml_node_location(item),
                                 "VoiceXML initial prompt rows changed between compiler passes");
                     }
+                } else if (cmeta_node_named(item, "subdialog")) {
+                    vxml_cmeta_subdialog_row *subdialog;
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    if (subdialog_index >=
+                            builder->profile->subdialog_count ||
+                        builder->profile->subdialogs == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog rows changed during lowering");
+                    subdialog =
+                        &builder->profile->subdialogs[subdialog_index++];
+                    if (subdialog->form != form_index)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML subdialog form ownership changed during lowering");
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &subdialog->condition);
+                        if (status != VXML_OK) return status;
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -6890,7 +6915,8 @@ static vxml_status cmeta_lower_program(
         }
     }
     if (field_index != builder->profile->field_count ||
-        initial_index != builder->profile->initial_count)
+        initial_index != builder->profile->initial_count ||
+        subdialog_index != builder->profile->subdialog_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
