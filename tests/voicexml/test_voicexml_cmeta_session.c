@@ -1027,6 +1027,7 @@ spec("VoiceXML CMeta session execution") {
             "datamodel='cmeta'>"
             "<catch event='menu.one'>"
             "<assign name='value' expr='value + 1'/></catch>"
+            "<catch event='menu.zero'><exit namelist='value'/></catch>"
             "<menu id='main' dtmf='true'>"
             "<choice event='menu.one'/>"
             "<choice dtmf='0' event='menu.zero'/>"
@@ -1134,12 +1135,6 @@ spec("VoiceXML CMeta session execution") {
             VXML_OK);
         check_true(progressed);
         check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
-        check_equal(
-            vxml_session_cmeta_read(
-                &session, "value", sizeof("value") - 1u, &read),
-            VXML_OK);
-        check_equal(read.kind, VXML_CMETA_VALUE_SINT);
-        check_equal(read.data.sint, INT64_C(2));
 
         request = (vxml_cmeta_menu_collect_request_v1){0};
         check_equal(
@@ -1150,8 +1145,29 @@ spec("VoiceXML CMeta session execution") {
             vxml_session_cmeta_menu_try_complete(&session, &completion),
             VXML_CMETA_COLLECT_INGRESS_STALE);
 
-        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
         completion.generation = request.generation;
+        completion.choice_index = 1u;
+        check_equal(
+            vxml_session_cmeta_menu_try_complete(&session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        probe.active = false;
+        progressed = false;
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(&session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "value", sizeof("value") - 1u, &read),
+            VXML_OK);
+        check_equal(read.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(read.data.sint, INT64_C(2));
+
+        check_equal(vxml_session_close(&session), VXML_OK);
         check_equal(
             vxml_session_cmeta_menu_try_complete(&session, &completion),
             VXML_CMETA_COLLECT_INGRESS_CLOSED);
@@ -1169,12 +1185,14 @@ spec("VoiceXML CMeta session execution") {
         const vxml_cmeta_compile_options_v1 compile =
             field_compile_options();
         const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
         cmeta_collect_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_collect_adapter_v1 adapter =
             cmeta_collect_adapter(
                 VXML_CMETA_COLLECT_CAP_SRGS_XML |
                 VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
-        const vxml_cmeta_session_options_v1 options =
+        vxml_cmeta_session_options_v1 options =
             field_session_options(&root, &adapter, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
@@ -1183,6 +1201,9 @@ spec("VoiceXML CMeta session execution") {
             .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1,
             .struct_size = sizeof(vxml_cmeta_menu_completion_v1),
             .choice_index = 0u};
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
 
         check_equal(
             vxml_compile_cmeta(
