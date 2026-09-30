@@ -483,6 +483,42 @@ static bool cmeta_node_named(salts_xml_node node, const char *name) {
         cmeta_decoded_equal(uri, VXML_NAMESPACE);
 }
 
+static bool cmeta_static_ssml_name(salts_xml_node node) {
+    static const char *const names[] = {
+        "break", "emphasis", "p", "phoneme", "prosody",
+        "say-as", "s", "sub", "voice"};
+    const salts_xml_string_view uri = salts_xml_node_namespace_uri(node);
+    const salts_xml_string_view local = salts_xml_node_local_name(node);
+    size_t index;
+    if (salts_xml_node_type(node) != SALTS_XML_ELEMENT ||
+        (!cmeta_decoded_equal(uri, VXML_NAMESPACE) &&
+         !cmeta_decoded_equal(
+             uri, "http://www.w3.org/2001/10/synthesis")))
+        return false;
+    for (index = 0u; index < sizeof(names) / sizeof(names[0]); ++index)
+        if (raw_view_equal(local, names[index]))
+            return true;
+    return false;
+}
+
+static bool cmeta_static_ssml_subtree(salts_xml_node node) {
+    size_t index;
+    if (!cmeta_static_ssml_name(node))
+        return false;
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
+        const salts_xml_node child = salts_xml_node_child_at(node, index);
+        const salts_xml_node_kind kind = salts_xml_node_type(child);
+        if (kind == SALTS_XML_TEXT || kind == SALTS_XML_COMMENT ||
+            kind == SALTS_XML_PROCESSING_INSTRUCTION)
+            continue;
+        if (kind == SALTS_XML_ELEMENT &&
+            cmeta_static_ssml_subtree(child))
+            continue;
+        return false;
+    }
+    return true;
+}
+
 static bool cmeta_text_whitespace(salts_xml_string_view text) {
     size_t cursor = 0u;
     while (cursor < text.size) {
@@ -1481,6 +1517,7 @@ static vxml_status cmeta_measure_prompt(
     size_t audio_count = 0u;
     size_t audio_src_bytes = 0u;
     size_t mark_count = 0u;
+    size_t ssml_count = 0u;
     size_t total_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
     bool has_timeout = false;
@@ -1614,6 +1651,36 @@ static vxml_status cmeta_measure_prompt(
             total_prompt_bytes += audio_src_bytes;
             continue;
         }
+        if (cmeta_static_ssml_subtree(child)) {
+            char *serialized;
+            size_t serialized_size = 0u;
+            if (!cmeta_measure_increment(&ssml_count))
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML SSML segment count overflow");
+            serialized = salts_xml_node_serialize(
+                child, &serialized_size);
+            if (serialized == NULL)
+                return cmeta_program_fail(
+                    diagnostic, VXML_ALLOCATION_FAILED,
+                    salts_xml_node_location(child),
+                    "VoiceXML SSML serialization failed");
+            salts_xml_owned_string_free(serialized);
+            if (serialized_size == 0u ||
+                serialized_size > options->max_prompt_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML SSML segment exceeds max_prompt_bytes");
+            if (serialized_size > SIZE_MAX - total_prompt_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt total bytes overflow");
+            total_prompt_bytes += serialized_size;
+            continue;
+        }
         if (cmeta_node_named(child, "mark")) {
             const salts_xml_attribute name =
                 cmeta_attribute(child, "name");
@@ -1676,6 +1743,12 @@ static vxml_status cmeta_measure_prompt(
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment count overflow");
         segment_count += audio_count;
+        if (ssml_count > SIZE_MAX - segment_count)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt segment count overflow");
+        segment_count += ssml_count;
         if (mark_count > SIZE_MAX - segment_count)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -2598,6 +2671,44 @@ static vxml_status cmeta_compile_prompt_schema(
                 .media_type = {0}};
             out->required_capabilities |=
                 VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+            continue;
+        }
+
+        if (cmeta_static_ssml_subtree(child)) {
+            char *serialized;
+            const char *payload;
+            size_t payload_size = 0u;
+            if (builder->prompt_segment_index >=
+                builder->profile->prompt_segment_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML prompt segment rows changed between passes");
+            serialized = salts_xml_node_serialize(child, &payload_size);
+            if (serialized == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_ALLOCATION_FAILED,
+                    salts_xml_node_location(child),
+                    "VoiceXML SSML serialization failed");
+            payload = cmeta_retain_view(
+                builder,
+                (salts_xml_string_view){serialized, payload_size});
+            salts_xml_owned_string_free(serialized);
+            if (payload == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML retained SSML storage overflow");
+            segment = &builder->profile->prompt_segments[
+                builder->prompt_segment_index++];
+            *segment = (vxml_cmeta_prompt_media_segment_v1){
+                .kind = VXML_CMETA_PROMPT_MEDIA_SSML,
+                .payload = {payload, payload_size},
+                .media_type = {
+                    "application/ssml+xml",
+                    sizeof("application/ssml+xml") - 1u}};
+            out->required_capabilities |=
+                VXML_CMETA_PROMPT_MEDIA_CAP_SSML;
             continue;
         }
 
