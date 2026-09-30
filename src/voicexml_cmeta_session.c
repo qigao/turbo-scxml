@@ -4002,6 +4002,8 @@ static vxml_status prompt_media_request_from_impl(
         prompt != NULL ? prompt->count : 0u;
     if (prompt == NULL)
         return VXML_OK;
+    out_request->bargein = prompt->bargein;
+    out_request->bargein_type = prompt->bargein_type;
     if (prompt->segment_count != 1u)
         return VXML_UNSUPPORTED_FEATURE;
 
@@ -4069,6 +4071,8 @@ static vxml_status prompt_media_batch_request_from_impl(
         prompt != NULL ? prompt->count : 0u;
     if (prompt == NULL)
         return VXML_OK;
+    out_request->bargein = prompt->bargein;
+    out_request->bargein_type = prompt->bargein_type;
     if (prompt->segment_count == 0u ||
         !range_valid(
             prompt->first_segment, prompt->segment_count,
@@ -4397,6 +4401,56 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     prompt_media_mailbox_disarm(profile);
     return VXML_OK;
 }
+
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in(
+    vxml_session *session,
+    uint64_t collect_generation,
+    vxml_cmeta_prompt_bargein_type signal_type) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_field_row *field = NULL;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    unsigned prompt_count = 0u;
+    vxml_status status;
+
+    if (session == NULL || collect_generation == 0u ||
+        (signal_type != VXML_CMETA_PROMPT_BARGEIN_SPEECH &&
+         signal_type != VXML_CMETA_PROMPT_BARGEIN_HOTWORD))
+        return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_PROMPT_BARGE_STALE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL ||
+        impl->state != VXML_SESSION_RUNNING)
+        return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (collect_generation != profile->collect_generation ||
+        !profile->prompt_media_in_flight ||
+        profile->prompt_media_generation != collect_generation)
+        return VXML_CMETA_PROMPT_BARGE_STALE;
+
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
+    (void)field;
+    (void)prompt_count;
+    if (status != VXML_OK || prompt == NULL)
+        return VXML_CMETA_PROMPT_BARGE_STALE;
+    if (!prompt->bargein)
+        return VXML_CMETA_PROMPT_BARGE_DISABLED;
+    if (prompt->bargein_type !=
+            VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED &&
+        prompt->bargein_type != signal_type)
+        return VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH;
+
+    settle_prompt_media(profile);
+    return VXML_CMETA_PROMPT_BARGE_CANCELED;
+}
+
 
 
 vxml_status vxml_session_cmeta_take_reprompt(
