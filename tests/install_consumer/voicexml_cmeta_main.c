@@ -42,6 +42,12 @@ int main(void) {
     vxml_cmeta_collect_completion_v1 collect_completion = {
         .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
+    vxml_cmeta_collect_result_slot_v1 collect_slot = {0};
+    vxml_cmeta_collect_completion_v2 collect_completion_v2 = {
+        .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+        .slots = &collect_slot,
+        .slot_count = 1u};
     vxml_cmeta_collect_adapter_v1 collect_adapter = {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
@@ -65,6 +71,9 @@ int main(void) {
         collect_request.abi_version != 0u ||
         collect_completion.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
+        collect_completion_v2.abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V2 ||
+        collect_completion_v2.slot_count != 1u ||
         VXML_CMETA_COLLECT_INGRESS_ACCEPTED != 0)
         return 6;
     if (layout_type ==
