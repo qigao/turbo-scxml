@@ -1037,6 +1037,7 @@ static vxml_status cmeta_measure_field(
     const salts_xml_attribute cond = cmeta_attribute(field, "cond");
     size_t index;
     size_t grammar_count = 0u;
+    size_t filled_count = 0u;
     vxml_status status = cmeta_validate_attributes(
         field, allowed, 2u, diagnostic);
     if (status != VXML_OK) return status;
@@ -1073,6 +1074,19 @@ static vxml_status cmeta_measure_field(
         size_t type_size = 0u;
         size_t src_size = 0u;
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "filled")) {
+            if (filled_count != 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML field accepts at most one filled handler");
+            ++filled_count;
+            status = cmeta_measure_filled_content(
+                child, false, 0u,
+                measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (!cmeta_node_named(child, "grammar"))
             return cmeta_program_fail(
                 diagnostic,
@@ -1143,10 +1157,21 @@ static vxml_status cmeta_measure_form(
     cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
+    size_t pre_index;
+    size_t form_field_count = 0u;
     bool saw_block = false;
     bool saw_field = false;
+    bool saw_filled = false;
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
+    for (pre_index = 0u;
+         pre_index < salts_xml_node_child_count(form);
+         ++pre_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(form, pre_index);
+        if (cmeta_node_named(child, "field"))
+            ++form_field_count;
+    }
     {
         static const char *const allowed[] = {"id"};
         const vxml_status status = cmeta_validate_attributes(
@@ -1177,7 +1202,7 @@ static vxml_status cmeta_measure_form(
                 cmeta_attribute(child, "name"), measurement,
                 limits, diagnostic);
             if (declaration_status != VXML_OK) return declaration_status;
-            if (saw_block || saw_field)
+            if (saw_block || saw_field || saw_filled)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
@@ -1192,7 +1217,7 @@ static vxml_status cmeta_measure_form(
             continue;
         }
         if (cmeta_node_named(child, "field")) {
-            if (saw_block)
+            if (saw_block || saw_filled)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
@@ -1202,6 +1227,25 @@ static vxml_status cmeta_measure_form(
                 const vxml_status field_status = cmeta_measure_field(
                     child, options, measurement, limits, diagnostic);
                 if (field_status != VXML_OK) return field_status;
+            }
+            continue;
+        }
+        if (cmeta_node_named(child, "filled")) {
+            if (saw_block || !saw_field ||
+                measurement->field_count - first_field !=
+                    form_field_count)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form filled must follow all directed fields");
+            saw_filled = true;
+            {
+                const vxml_status filled_status =
+                    cmeta_measure_filled_content(
+                        child, true, form_field_count,
+                        measurement, limits, diagnostic);
+                if (filled_status != VXML_OK)
+                    return filled_status;
             }
             continue;
         }
