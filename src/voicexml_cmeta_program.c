@@ -383,6 +383,7 @@ typedef struct cmeta_program_measurement {
     size_t field_count;
     size_t filled_count;
     size_t filled_target_count;
+    size_t event_handler_count;
     size_t block_count;
     size_t scope_count;
     size_t declaration_count;
@@ -504,11 +505,22 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
     return cmeta_node_named(node, "vxml") || cmeta_node_named(node, "form") ||
         cmeta_node_named(node, "block") || cmeta_node_named(node, "field") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
+        cmeta_node_named(node, "catch") || cmeta_node_named(node, "throw") ||
         cmeta_node_named(node, "var") ||
         cmeta_node_named(node, "data") ||
         cmeta_node_named(node, "assign") || cmeta_node_named(node, "clear") ||
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
         cmeta_node_named(node, "else") || cmeta_node_named(node, "exit");
+}
+
+static bool cmeta_event_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_compile_options_v1, max_event_name_bytes) +
+        sizeof(options->max_event_name_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        options->max_event_handlers != 0u &&
+        options->max_event_name_bytes != 0u;
 }
 
 static bool cmeta_field_options_valid(
@@ -535,6 +547,99 @@ static bool cmeta_external_data_options_valid(
 
 static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
+}
+
+static vxml_status cmeta_measure_event_name(
+    salts_xml_attribute attribute,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    vxml_status status;
+    if (attribute.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            (salts_xml_location){0},
+            "VoiceXML Event name is required");
+    raw = salts_xml_attribute_value(attribute);
+    if (!cmeta_decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size == 0u || decoded_size > options->max_event_name_bytes)
+        return cmeta_program_fail(
+            diagnostic,
+            decoded_size > options->max_event_name_bytes
+                ? VXML_LIMIT_EXCEEDED : VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML Event name is invalid or exceeds max_event_name_bytes");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML Event name allocation failed");
+    if (!cmeta_decode_entities(raw, decoded, decoded_size, &decoded_size)) {
+        vxml_free(decoded);
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML Event name decoding changed between passes");
+    }
+    decoded[decoded_size] = '\0';
+    if (!cmeta_location_path_valid(decoded, decoded_size, SIZE_MAX)) {
+        vxml_free(decoded);
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML Event name must be a dotted NCName path");
+    }
+    vxml_free(decoded);
+    status = cmeta_measure_name(
+        attribute, measurement, limits, diagnostic);
+    return status;
+}
+
+static vxml_status cmeta_parse_count_attribute(
+    salts_xml_attribute attribute,
+    unsigned *out_count,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    size_t cursor = 0u;
+    unsigned value = 0u;
+    if (out_count == NULL) return VXML_INVALID_ARGUMENT;
+    *out_count = 1u;
+    if (attribute.impl == NULL) return VXML_OK;
+    raw = salts_xml_attribute_value(attribute);
+    if (raw.size == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML catch count must be a positive integer");
+    while (cursor < raw.size) {
+        uint32_t cp;
+        unsigned digit;
+        if (!cmeta_next_decoded_codepoint(raw, &cursor, &cp) ||
+            cp < '0' || cp > '9')
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML catch count must be a positive integer");
+        digit = (unsigned)(cp - '0');
+        if (value > (UINT_MAX - digit) / 10u)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML catch count exceeds unsigned range");
+        value = value * 10u + digit;
+    }
+    if (value == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML catch count must be positive");
+    *out_count = value;
+    return VXML_OK;
 }
 
 static bool cmeta_measure_increment(size_t *value) {
