@@ -1824,10 +1824,20 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     if (program->field_count != 0u) {
+        size_t field_index;
         if (program->fields == NULL ||
             !session_collect_options_valid(options)) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
+        }
+        for (field_index = 0u; field_index < program->field_count;
+             ++field_index) {
+            const uint64_t required =
+                program->fields[field_index].required_capabilities;
+            if ((options->collect->capabilities & required) != required) {
+                status = VXML_UNSUPPORTED_FEATURE;
+                goto failure;
+            }
         }
         profile->collect_adapter = options->collect;
         profile->collect_user = options->collect_user;
