@@ -6193,6 +6193,7 @@ static vxml_status cmeta_lower_program(
     size_t declaration_index = 0u;
     size_t form_index = 0u;
     size_t field_index = 0u;
+    size_t initial_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -6257,6 +6258,38 @@ static vxml_status cmeta_lower_program(
                             declaration_index++],
                         scopes, 2u);
                     if (status != VXML_OK) return status;
+                } else if (cmeta_node_named(item, "grammar")) {
+                    continue;
+                } else if (cmeta_node_named(item, "initial")) {
+                    vxml_cmeta_initial_row *initial;
+                    const salts_xml_attribute expression =
+                        cmeta_attribute(item, "expr");
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    if (initial_index >= builder->profile->initial_count ||
+                        builder->profile->initials == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial rows changed during lowering");
+                    initial = &builder->profile->initials[initial_index++];
+                    if (initial->form != form_index)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML initial form ownership changed during lowering");
+                    if (expression.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, expression, scopes, 2u, true,
+                            &initial->initial_expression);
+                        if (status != VXML_OK) return status;
+                    }
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &initial->condition);
+                        if (status != VXML_OK) return status;
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -6413,11 +6446,12 @@ static vxml_status cmeta_lower_program(
             ++form_index;
         }
     }
-    if (field_index != builder->profile->field_count)
+    if (field_index != builder->profile->field_count ||
+        initial_index != builder->profile->initial_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
-            "VoiceXML field rows changed between compiler passes");
+            "VoiceXML directed form-item rows changed between compiler passes");
     return VXML_OK;
 }
 
@@ -6474,6 +6508,8 @@ static vxml_status cmeta_write_program(
              measurement->menu_speech_policy_count ||
          builder.menu_grammar_index != measurement->menu_grammar_count ||
          builder.field_index != measurement->field_count ||
+         builder.initial_index != measurement->initial_count ||
+         builder.form_item_index != measurement->form_item_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
