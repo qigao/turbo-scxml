@@ -347,7 +347,9 @@ static bool session_subdialogs_valid(
     const cmeta_data_struct_shape *shape = session_root_shape(program);
     size_t index;
     if (program == NULL || shape == NULL ||
-        (program->subdialog_count != 0u && program->subdialogs == NULL))
+        (program->subdialog_count != 0u && program->subdialogs == NULL) ||
+        (program->subdialog_param_count != 0u &&
+         program->subdialog_params == NULL))
         return false;
     for (index = 0u; index < program->subdialog_count; ++index) {
         const vxml_cmeta_subdialog_row *row =
@@ -372,8 +374,47 @@ static bool session_subdialogs_valid(
             return false;
         field_name_size = strlen(field->name);
         if (field_name_size != row->name_size ||
-            memcmp(field->name, row->name, row->name_size) != 0)
+            memcmp(field->name, row->name, row->name_size) != 0 ||
+            !range_valid(
+                row->first_param, row->param_count,
+                program->subdialog_param_count))
             return false;
+        {
+            size_t offset;
+            for (offset = 0u; offset < row->param_count; ++offset) {
+                const vxml_cmeta_subdialog_param_row *param =
+                    &program->subdialog_params[row->first_param + offset];
+                size_t prior;
+                if (param->subdialog != index ||
+                    param->name == NULL || param->name_size == 0u)
+                    return false;
+                if (param->source == VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+                    if (param->expression == VXML_CMETA_NO_INDEX ||
+                        param->expression >= program->expression_count ||
+                        param->literal != NULL || param->literal_size != 0u)
+                        return false;
+                } else if (param->source ==
+                               VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+                    if (param->expression != VXML_CMETA_NO_INDEX ||
+                        param->literal == NULL ||
+                        param->literal_size >
+                            program->max_subdialog_param_value_bytes)
+                        return false;
+                } else {
+                    return false;
+                }
+                for (prior = 0u; prior < offset; ++prior) {
+                    const vxml_cmeta_subdialog_param_row *previous =
+                        &program->subdialog_params[
+                            row->first_param + prior];
+                    if (previous->name_size == param->name_size &&
+                        memcmp(
+                            previous->name, param->name,
+                            param->name_size) == 0)
+                        return false;
+                }
+            }
+        }
     }
     return true;
 }
@@ -2488,6 +2529,24 @@ vxml_status vxml_cmeta_session_init_profile(
             }
             profile->prompt_media_adapter = options->prompt_media;
             profile->prompt_media_user = options->prompt_media_user;
+        }
+    }
+    {
+        const size_t subdialog_tail =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                max_subdialog_snapshot_bytes) +
+            sizeof(options->max_subdialog_snapshot_bytes);
+        if (options->struct_size >= subdialog_tail &&
+            options->subdialog != NULL) {
+            if (!session_subdialog_options_valid(options)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->subdialog_adapter = options->subdialog;
+            profile->subdialog_user = options->subdialog_user;
+            profile->max_subdialog_snapshot_bytes =
+                options->max_subdialog_snapshot_bytes;
         }
     }
     if (program->event_handler_count != 0u) {
