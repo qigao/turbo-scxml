@@ -107,6 +107,10 @@ typedef struct vxml_document_store_config_v1 {
     vxml_limits voice_limits;
     const vxml_dialog_document_adapter_v1 *documents;
     void *document_user;
+
+    /* Optional append-only fetch-audio playback handoff. */
+    const vxml_fetch_audio_adapter_v1 *fetch_audio;
+    void *fetch_audio_user;
 } vxml_document_store_config_v1;
 
 typedef struct vxml_document_store {

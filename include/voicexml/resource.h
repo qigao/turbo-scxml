@@ -13,6 +13,8 @@ extern "C" {
 
 #define VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1 1u
 #define VXML_DOCUMENT_FETCH_POLICY_ABI_V1 1u
+#define VXML_FETCH_AUDIO_ADAPTER_ABI_V1 1u
+#define VXML_FETCH_AUDIO_REQUEST_ABI_V1 1u
 
 /*
  * Shared status space for the delivered dialog/document boundary.
@@ -48,6 +50,43 @@ typedef struct vxml_dialog_document {
     void *lease;
 } vxml_dialog_document;
 
+typedef enum vxml_fetch_audio_begin_result {
+    VXML_FETCH_AUDIO_STARTED = 0,
+    VXML_FETCH_AUDIO_SKIPPED
+} vxml_fetch_audio_begin_result;
+
+typedef struct vxml_fetch_audio_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    bool has_delay;
+    uint64_t delay_us;
+    bool has_minimum;
+    uint64_t minimum_us;
+} vxml_fetch_audio_request_v1;
+
+typedef struct vxml_fetch_audio_ticket_v1 {
+    void (*finish)(void *user);
+    void *user;
+} vxml_fetch_audio_ticket_v1;
+
+/**
+ * Optional playback handoff around one real document fetch.
+ *
+ * STARTED must return one valid finish ticket. SKIPPED must publish no ticket
+ * and means the fetchaudio resource is unavailable/unsupported; the main
+ * document fetch continues unchanged. Request views are callback-borrowed.
+ */
+typedef struct vxml_fetch_audio_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_fetch_audio_begin_result (*begin)(
+        void *user,
+        const vxml_fetch_audio_request_v1 *request,
+        vxml_fetch_audio_ticket_v1 *out_ticket);
+} vxml_fetch_audio_adapter_v1;
+
 /**
  * Per-request document fetch policy.
  *
@@ -60,11 +99,21 @@ typedef struct vxml_document_fetch_policy_v1 {
     size_t struct_size;
     bool has_timeout;
     uint64_t timeout_us;
+
+    /* Optional append-only fetch-audio handoff policy. */
+    bool has_fetchaudio;
+    const char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
 } vxml_document_fetch_policy_v1;
 
 #define VXML_DOCUMENT_FETCH_POLICY_V1_INIT \
     {VXML_DOCUMENT_FETCH_POLICY_ABI_V1, \
-     sizeof(vxml_document_fetch_policy_v1), false, UINT64_C(0)}
+     sizeof(vxml_document_fetch_policy_v1), false, UINT64_C(0), \
+     false, NULL, 0u, false, UINT64_C(0), false, UINT64_C(0)}
 
 /**
  * Synchronous bounded VoiceXML document acquisition boundary.

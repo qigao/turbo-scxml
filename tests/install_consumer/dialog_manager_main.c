@@ -12,6 +12,20 @@ int main(void) {
     vxml_document_store store = {0};
     vxml_document_fetch_policy_v1 fetch_policy =
         VXML_DOCUMENT_FETCH_POLICY_V1_INIT;
+    vxml_fetch_audio_request_v1 fetch_audio_request = {
+        .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_fetch_audio_request_v1),
+        .uri = "https://example.invalid/wait.wav",
+        .uri_size = sizeof("https://example.invalid/wait.wav") - 1u,
+        .has_delay = true,
+        .delay_us = UINT64_C(0),
+        .has_minimum = true,
+        .minimum_us = UINT64_C(0)};
+    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
+    vxml_fetch_audio_adapter_v1 fetch_audio_adapter = {
+        .abi_version = VXML_FETCH_AUDIO_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_fetch_audio_adapter_v1)};
+    vxml_document_store_config_v1 store_config = {0};
     vxml_document_ref ref = {0};
 
     if (manager.impl != NULL || store.impl != NULL)
@@ -30,7 +44,16 @@ int main(void) {
     if (v2.document_store != NULL || v3.document_store != NULL)
         return 6;
     if (fetch_policy.abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
-        fetch_policy.struct_size != sizeof(fetch_policy))
+        fetch_policy.struct_size != sizeof(fetch_policy) ||
+        fetch_audio_request.abi_version != VXML_FETCH_AUDIO_REQUEST_ABI_V1 ||
+        !fetch_audio_request.has_delay ||
+        fetch_audio_request.delay_us != UINT64_C(0) ||
+        !fetch_audio_request.has_minimum ||
+        fetch_audio_request.minimum_us != UINT64_C(0) ||
+        fetch_audio_ticket.finish != NULL ||
+        fetch_audio_adapter.abi_version != VXML_FETCH_AUDIO_ADAPTER_ABI_V1 ||
+        store_config.fetch_audio != NULL ||
+        VXML_FETCH_AUDIO_SKIPPED == VXML_FETCH_AUDIO_STARTED)
         return 7;
     if (vxml_document_store_acquire_with_policy(
             &store, "x", 1u, &fetch_policy, &ref, NULL) !=
