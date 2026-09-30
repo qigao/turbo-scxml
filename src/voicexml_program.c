@@ -572,7 +572,9 @@ static vxml_status append_id(
 }
 
 static vxml_status append_goto(
-    vxml_measurement *measurement, salts_xml_attribute attribute,
+    vxml_measurement *measurement,
+    salts_xml_attribute attribute,
+    salts_xml_attribute fetchaudio_attribute,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     vxml_decoded_goto entry = {0};
     const salts_xml_string_view raw =
@@ -648,6 +650,55 @@ static vxml_status append_goto(
         }
     }
 
+    if (fetchaudio_attribute.impl != NULL) {
+        const salts_xml_string_view fetchaudio_raw =
+            salts_xml_attribute_value(fetchaudio_attribute);
+        size_t fetchaudio_size = 0u;
+        size_t retained_size;
+        if (!entry.external) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio_attribute),
+                "VoiceXML goto fetchaudio requires an external document fetch");
+        }
+        if (!decode_entities(
+                fetchaudio_raw, NULL, 0u, &fetchaudio_size) ||
+            fetchaudio_size == 0u ||
+            !checked_add(fetchaudio_size, 1u, &retained_size) ||
+            !checked_add(
+                measurement->name_bytes, retained_size,
+                &measurement->name_bytes) ||
+            measurement->name_bytes > limits->max_name_bytes) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(fetchaudio_attribute),
+                "VoiceXML goto fetchaudio exceeds max_name_bytes");
+        }
+        entry.fetchaudio =
+            (char *)vxml_malloc(retained_size);
+        if (entry.fetchaudio == NULL) {
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_ALLOCATION_FAILED,
+                salts_xml_attribute_location(fetchaudio_attribute),
+                "VoiceXML goto fetchaudio allocation failed");
+        }
+        if (!decode_entities(
+                fetchaudio_raw, entry.fetchaudio,
+                fetchaudio_size, &fetchaudio_size)) {
+            vxml_free(entry.fetchaudio);
+            vxml_free(entry.target);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio_attribute),
+                "VoiceXML goto fetchaudio decoding changed between passes");
+        }
+        entry.fetchaudio[fetchaudio_size] = '\0';
+        entry.fetchaudio_size = fetchaudio_size;
+    }
+
     if (measurement->goto_count == measurement->goto_capacity) {
         size_t capacity = measurement->goto_capacity == 0u
             ? 4u : measurement->goto_capacity * 2u;
@@ -657,6 +708,7 @@ static vxml_status append_goto(
             capacity = limits->max_actions;
         if (capacity <= measurement->goto_capacity ||
             !checked_multiply(capacity, sizeof(*gotos), &allocation_size)) {
+            vxml_free(entry.fetchaudio);
             vxml_free(entry.target);
             return fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -666,6 +718,7 @@ static vxml_status append_goto(
         gotos = (vxml_decoded_goto *)vxml_realloc(
             measurement->gotos, allocation_size);
         if (gotos == NULL) {
+            vxml_free(entry.fetchaudio);
             vxml_free(entry.target);
             return fail(
                 diagnostic, VXML_ALLOCATION_FAILED,
