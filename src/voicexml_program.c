@@ -781,6 +781,12 @@ static vxml_status append_goto(
     return VXML_OK;
 }
 
+static vxml_status reject_non_element(
+    salts_xml_node node, vxml_diagnostic *diagnostic);
+static vxml_status reject_unexpected_element(
+    salts_xml_node node, vxml_diagnostic *diagnostic,
+    const char *unsupported_message);
+
 static vxml_status append_submit(
     vxml_measurement *measurement,
     salts_xml_attribute next_attribute,
