@@ -2442,6 +2442,9 @@ static vxml_status cmeta_measure_menu(
         size_t normalized_size = 0u;
         char *speech = NULL;
         size_t speech_size = 0u;
+        vxml_cmeta_menu_accept_mode accept_mode =
+            VXML_CMETA_MENU_ACCEPT_EXACT;
+        salts_xml_node grammar = {0};
         size_t prior;
         if (cmeta_node_ignorable(child)) continue;
 
@@ -2467,8 +2470,11 @@ static vxml_status cmeta_measure_menu(
                 "VoiceXML choice requires exactly one literal event or next");
             goto done;
         }
-        status = cmeta_menu_choice_accept_exact(
-            menu, child, diagnostic);
+        status = cmeta_menu_choice_accept_mode(
+            menu, child, &accept_mode, diagnostic);
+        if (status != VXML_OK) goto done;
+        status = cmeta_menu_choice_grammar(
+            child, options, &grammar, diagnostic);
         if (status != VXML_OK) goto done;
         if (event.impl != NULL) {
             if (!cmeta_event_options_valid(options)) {
@@ -2485,10 +2491,44 @@ static vxml_status cmeta_measure_menu(
                 next, options, measurement, limits, diagnostic);
         }
         if (status != VXML_OK) goto done;
-        status = cmeta_normalize_menu_choice_phrase(
-            child, options->max_menu_choice_bytes,
-            &speech, &speech_size, diagnostic);
-        if (status != VXML_OK) goto done;
+
+        if (grammar.impl != NULL) {
+            const salts_xml_attribute type =
+                cmeta_attribute(grammar, "type");
+            const salts_xml_attribute src =
+                cmeta_attribute(grammar, "src");
+            status = cmeta_measure_name(
+                type, measurement, limits, diagnostic);
+            if (status != VXML_OK) goto done;
+            status = cmeta_measure_name(
+                src, measurement, limits, diagnostic);
+            if (status != VXML_OK) goto done;
+            if (!cmeta_measure_increment(
+                    &measurement->menu_grammar_count)) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(grammar),
+                    "VoiceXML menu grammar row count overflow");
+                goto done;
+            }
+        } else {
+            status = cmeta_normalize_menu_choice_phrase(
+                child, options->max_menu_choice_bytes,
+                &speech, &speech_size, diagnostic);
+            if (status != VXML_OK) goto done;
+            if (speech_size != 0u &&
+                accept_mode ==
+                    VXML_CMETA_MENU_ACCEPT_APPROXIMATE &&
+                !cmeta_measure_increment(
+                    &measurement->menu_speech_policy_count)) {
+                vxml_free(speech);
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML menu speech policy count overflow");
+                goto done;
+            }
+        }
         status = cmeta_decode_menu_dtmf(
             explicit_dtmf, auto_dtmf, implicit_count,
             options->max_menu_choice_bytes,
@@ -2497,7 +2537,8 @@ static vxml_status cmeta_measure_menu(
             vxml_free(speech);
             goto done;
         }
-        if (normalized_size == 0u && speech_size == 0u) {
+        if (normalized_size == 0u && speech_size == 0u &&
+            grammar.impl == NULL) {
             vxml_free(normalized);
             vxml_free(speech);
             status = cmeta_program_fail(
