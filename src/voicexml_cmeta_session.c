@@ -4123,6 +4123,10 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if (profile->prompt_media_prepared ||
         profile->prompt_media_in_flight)
         return VXML_INVALID_STATE;
+    if (profile->collect_generation != 0u &&
+        profile->prompt_media_barged_generation ==
+            profile->collect_generation)
+        return VXML_INVALID_STATE;
 
     status = prompt_media_batch_request_from_impl(impl, &batch);
     if (status != VXML_OK) return status;
@@ -4447,6 +4451,8 @@ vxml_session_cmeta_prompt_media_barge_in(
         prompt->bargein_type != signal_type)
         return VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH;
 
+    profile->prompt_media_barged_generation =
+        collect_generation;
     settle_prompt_media(profile);
     return VXML_CMETA_PROMPT_BARGE_CANCELED;
 }
