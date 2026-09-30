@@ -4188,6 +4188,59 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     return prompt_media_batch_request_from_impl(impl, out_request);
 }
 
+static bool prompt_media_failure_event(
+    vxml_cmeta_prompt_media_failure failure,
+    const char **out_event,
+    size_t *out_event_size) {
+    if (out_event == NULL || out_event_size == NULL)
+        return false;
+    *out_event = NULL;
+    *out_event_size = 0u;
+    switch (failure) {
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH:
+        *out_event = "error.badfetch";
+        *out_event_size = sizeof("error.badfetch") - 1u;
+        return true;
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT:
+        *out_event = "error.unsupported.format";
+        *out_event_size = sizeof("error.unsupported.format") - 1u;
+        return true;
+    case VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE:
+        *out_event = "error.noresource";
+        *out_event_size = sizeof("error.noresource") - 1u;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static vxml_status prompt_media_raise_failure(
+    vxml_session *session,
+    vxml_cmeta_prompt_media_failure failure) {
+    const char *event_name;
+    size_t event_name_size;
+    if (!prompt_media_failure_event(
+            failure, &event_name, &event_name_size))
+        return VXML_INVALID_ARGUMENT;
+    return vxml_session_cmeta_raise(
+        session, event_name, event_name_size);
+}
+
+static vxml_status prompt_media_admission_failure(
+    vxml_session *session,
+    vxml_status media_status) {
+    vxml_cmeta_prompt_media_failure failure;
+    vxml_status event_status;
+    if (media_status == VXML_LIMIT_EXCEEDED)
+        failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE;
+    else if (media_status == VXML_UNSUPPORTED_FEATURE)
+        failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT;
+    else
+        return media_status;
+    event_status = prompt_media_raise_failure(session, failure);
+    return event_status == VXML_OK ? media_status : event_status;
+}
+
 vxml_status vxml_session_cmeta_prompt_media_prepare(
     vxml_session *session, const char **out_error) {
     vxml_session_impl *impl;
@@ -4223,7 +4276,8 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if ((profile->prompt_media_adapter->capabilities &
          batch.required_capabilities) !=
         batch.required_capabilities)
-        return VXML_UNSUPPORTED_FEATURE;
+        return prompt_media_admission_failure(
+            session, VXML_UNSUPPORTED_FEATURE);
 
     if (batch.segment_count == 1u) {
         vxml_cmeta_prompt_media_request_v1 request = {0};
@@ -4241,7 +4295,8 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         if (profile->prompt_media_adapter->struct_size <
                 batch_field_size ||
             profile->prompt_media_adapter->prepare_batch == NULL)
-            return VXML_UNSUPPORTED_FEATURE;
+            return prompt_media_admission_failure(
+                session, VXML_UNSUPPORTED_FEATURE);
         status = profile->prompt_media_adapter->prepare_batch(
             profile->prompt_media_user,
             &batch, &ticket, out_error);
