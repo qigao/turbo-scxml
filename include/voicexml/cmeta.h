@@ -22,11 +22,13 @@ extern "C" {
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
+#define VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
+#define VXML_CMETA_PROMPT_MEDIA_CAP_BATCH UINT64_C(8)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -87,6 +89,9 @@ typedef struct vxml_cmeta_compile_options_v1 {
     /* Optional append-only literal prompt admission tail. */
     size_t max_prompts;
     size_t max_prompt_bytes;
+
+    /* Optional append-only mixed prompt batch bound. Zero keeps V1-only. */
+    size_t max_prompt_segments;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -241,6 +246,18 @@ typedef struct vxml_cmeta_prompt_media_request_v1 {
     vxml_cmeta_prompt_media_segment_v1 segment;
 } vxml_cmeta_prompt_media_request_v1;
 
+typedef struct vxml_cmeta_prompt_media_batch_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view field;
+    unsigned prompt_count;
+    unsigned selected_count;
+    const vxml_cmeta_prompt_media_segment_v1 *segments;
+    size_t segment_count;
+} vxml_cmeta_prompt_media_batch_request_v1;
+
 typedef struct vxml_cmeta_prompt_media_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -252,6 +269,18 @@ typedef struct vxml_cmeta_prompt_media_adapter_v1 {
         const char **out_error);
     /** No-fail/nonblocking cancellation of one committed generation. */
     void (*cancel)(void *user, uint64_t generation);
+
+    /**
+     * Optional append-only atomic batch reservation.
+     *
+     * The segments array and all views are borrowed for this callback only.
+     * Success returns one commit/discard ticket owning the whole batch.
+     */
+    vxml_status (*prepare_batch)(
+        void *user,
+        const vxml_cmeta_prompt_media_batch_request_v1 *request,
+        vxml_cmeta_prompt_media_ticket_v1 *out_ticket,
+        const char **out_error);
 } vxml_cmeta_prompt_media_adapter_v1;
 
 typedef struct vxml_cmeta_prompt_view_v1 {
@@ -377,6 +406,11 @@ vxml_status vxml_session_cmeta_prompt(
 vxml_status vxml_session_cmeta_prompt_media_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_request_v1 *out_request);
+
+/** Borrow the selected prompt as one ordered immutable segment batch. */
+vxml_status vxml_session_cmeta_prompt_media_batch_request(
+    const vxml_session *session,
+    vxml_cmeta_prompt_media_batch_request_v1 *out_request);
 
 /** Reserve the current prompt with the configured media provider. */
 vxml_status vxml_session_cmeta_prompt_media_prepare(

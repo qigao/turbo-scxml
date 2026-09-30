@@ -52,6 +52,9 @@ typedef struct vxml_cmeta_prompt_row {
     vxml_cmeta_prompt_media_segment_kind media_kind;
     const char *media_payload;
     size_t media_payload_size;
+    size_t first_segment;
+    size_t segment_count;
+    uint64_t required_capabilities;
     unsigned count;
     size_t condition;
 } vxml_cmeta_prompt_row;
@@ -207,6 +210,8 @@ typedef struct vxml_cmeta_program_data {
     size_t field_count;
     vxml_cmeta_prompt_row *prompts;
     size_t prompt_count;
+    vxml_cmeta_prompt_media_segment_v1 *prompt_segments;
+    size_t prompt_segment_count;
     vxml_cmeta_filled_row *filled;
     size_t filled_count;
     size_t *filled_root_fields;
