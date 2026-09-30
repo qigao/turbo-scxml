@@ -1,7 +1,7 @@
 # VoiceXML static menu collect boundary
 
-This slice implements the bounded event-target half of VoiceXML `menu` /
-`choice` without creating a second recognizer runtime and without inventing
+This boundary implements bounded static VoiceXML `menu` / `choice`
+collection without creating a second recognizer runtime and without inventing
 an application-root field for the anonymous menu item.
 
 ## Program model
@@ -18,7 +18,7 @@ shared vxml_form_row entry
         |      { dtmf, speech(empty in this slice) }
         |
         +-- private target side table
-               { EVENT, Program-owned literal event }
+               { EVENT | NEXT, Program-owned literal bytes }
 ```
 
 The public choice array is intentionally separated from the private target
@@ -56,7 +56,8 @@ The same committed generation cannot accept both completion forms.
 
 ## Static DTMF profile
 
-This slice accepts literal `choice@event` only.
+The static profile accepts exactly one literal `choice@event` or
+`choice@next` per choice.
 
 - without `menu@dtmf="true"`, every choice supplies a non-empty DTMF
   sequence;
@@ -68,22 +69,33 @@ This slice accepts literal `choice@event` only.
   (`"1 2 #"` and `"12#"` are equivalent);
 - duplicate normalized DTMF sequences reject;
 - lowercase A-D normalize to uppercase outside auto mode;
-- choice speech content, generated speech grammar, dynamic targets, messages,
-  and navigation are deferred rather than approximated.
+- choice speech content, generated speech grammar, dynamic targets, and
+  messages are deferred rather than approximated;
+- literal next targets have an independent `max_menu_target_bytes` bound;
+  event-only callers using the earlier menu compile-options prefix remain
+  compatible;
+- a local `#fragment` must name one valid dialog NCName.
 
-## Completion and Event routing
+## Completion routing
 
 `vxml_session_cmeta_menu_try_complete()` copies only
 `{generation, choice_index}` into the shared mailbox. It retains no provider
 bytes.
 
 The single-owner `vxml_session_cmeta_collect_run_ready()` validates the
-generation and ordinal, disarms that generation, then raises the immutable
-literal Event through the existing scoped Event dispatcher. If the Event is
-handled and the Session remains RUNNING, the menu is re-armed with a fresh
-generation. Stale callbacks from the prior generation therefore cannot mutate
-the new menu attempt.
+generation and ordinal and disarms that generation before publishing the
+selected target.
 
-Literal `choice@next` is tracked separately by #170 so navigation storage and
-DocumentStore ownership remain aligned with the already-delivered #48
-boundary.
+For EVENT, it raises the immutable literal Event through the existing scoped
+Event dispatcher. If the Event is handled and the Session remains RUNNING, the
+menu is re-armed with a fresh generation.
+
+For NEXT, it publishes the Program-owned target into the existing Session
+navigation fields and enters `VXML_SESSION_NAVIGATING`. Callers then use the
+historical `vxml_session_navigation_request()`; DialogManager/DocumentStore
+remain responsible for relative resolution, current-document fragments,
+fetching, and form selection. No menu-specific resolver or URI allocation is
+introduced.
+
+Stale callbacks from the prior generation cannot publish either an Event or a
+navigation request.
