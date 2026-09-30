@@ -20,6 +20,7 @@ extern "C" {
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 2u
+#define VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 #define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
@@ -32,6 +33,7 @@ extern "C" {
 #define VXML_CMETA_COLLECT_CAP_MENU_SPEECH_EXACT UINT64_C(4)
 #define VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE UINT64_C(8)
 #define VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL UINT64_C(16)
+#define VXML_CMETA_COLLECT_CAP_INITIAL_MULTI UINT64_C(32)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
@@ -116,6 +118,9 @@ typedef struct vxml_cmeta_compile_options_v1 {
 
     /* Optional append-only explicit menu grammar bound. Zero disables V2 grammar refs. */
     size_t max_menu_grammar_bytes;
+
+    /* Optional append-only mixed-initiative control bound. Zero disables <initial>. */
+    size_t max_initials;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -269,6 +274,21 @@ typedef struct vxml_cmeta_menu_collect_request_v2 {
     size_t grammar_count;
 } vxml_cmeta_menu_collect_request_v2;
 
+/**
+ * Mixed-initiative initial collect request.
+ *
+ * Separate caller-owned object: historical field/menu request sizes remain
+ * byte-for-byte stable.
+ */
+typedef struct vxml_cmeta_initial_collect_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view grammar_type;
+    vxml_cmeta_name_view grammar_src;
+} vxml_cmeta_initial_collect_request_v1;
+
 typedef struct vxml_cmeta_collect_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -301,6 +321,16 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
     vxml_status (*prepare_menu_v2)(
         void *user,
         const vxml_cmeta_menu_collect_request_v2 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
+
+    /*
+     * Optional append-only mixed-initiative form-level grammar admission.
+     * Historical field/menu adapter prefixes remain valid.
+     */
+    vxml_status (*prepare_initial)(
+        void *user,
+        const vxml_cmeta_initial_collect_request_v1 *request,
         vxml_cmeta_collect_ticket_v1 *out_ticket,
         const char **out_error);
 } vxml_cmeta_collect_adapter_v1;
@@ -558,6 +588,11 @@ vxml_status vxml_session_cmeta_menu_collect_request(
 vxml_status vxml_session_cmeta_menu_collect_request_v2(
     const vxml_session *session,
     vxml_cmeta_menu_collect_request_v2 *out_request);
+
+/** Borrow the active form-level grammar request selected through <initial>. */
+vxml_status vxml_session_cmeta_initial_collect_request(
+    const vxml_session *session,
+    vxml_cmeta_initial_collect_request_v1 *out_request);
 
 /**
  * Ask the configured provider to reserve the selected collect operation.
