@@ -533,6 +533,10 @@ static bool cmeta_external_data_options_valid(
         options->max_data_bind_items != 0u;
 }
 
+static bool range_valid(size_t first, size_t count, size_t total) {
+    return first <= total && count <= total - first;
+}
+
 static bool cmeta_measure_increment(size_t *value) {
     if (*value == SIZE_MAX) return false;
     ++*value;
