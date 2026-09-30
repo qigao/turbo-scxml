@@ -6,6 +6,7 @@
 
 #include <cmeta/cmeta.h>
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
