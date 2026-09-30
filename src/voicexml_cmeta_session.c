@@ -3876,6 +3876,167 @@ vxml_status vxml_session_cmeta_prompt(
     return VXML_OK;
 }
 
+static vxml_status prompt_media_request_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_prompt_media_request_v1 *out_request) {
+    vxml_session wrapper = {0};
+    vxml_cmeta_prompt_view_v1 prompt = {0};
+    vxml_status status;
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_prompt_media_request_v1){0};
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    wrapper.impl = (void *)impl;
+    status = vxml_session_cmeta_prompt(&wrapper, &prompt);
+    if (status != VXML_OK) return status;
+
+    out_request->abi_version = VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1;
+    out_request->struct_size =
+        sizeof(vxml_cmeta_prompt_media_request_v1);
+    out_request->generation = prompt.generation;
+    out_request->field = prompt.field;
+    out_request->prompt_count = prompt.prompt_count;
+    out_request->selected_count = prompt.count;
+    if (prompt.text.data == NULL || prompt.text.size == 0u)
+        return VXML_OK;
+
+    out_request->required_capabilities =
+        VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+    out_request->segment_count = 1u;
+    out_request->segment.kind = VXML_CMETA_PROMPT_MEDIA_TEXT;
+    out_request->segment.payload = prompt.text;
+    out_request->segment.media_type =
+        (vxml_cmeta_name_view){0};
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_request(
+    const vxml_session *session,
+    vxml_cmeta_prompt_media_request_v1 *out_request) {
+    const vxml_session_impl *impl;
+    if (out_request != NULL)
+        *out_request = (vxml_cmeta_prompt_media_request_v1){0};
+    if (session == NULL || out_request == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = cmeta_session(session);
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    return prompt_media_request_from_impl(impl, out_request);
+}
+
+vxml_status vxml_session_cmeta_prompt_media_prepare(
+    vxml_session *session, const char **out_error) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_prompt_media_request_v1 request = {0};
+    vxml_cmeta_prompt_media_ticket_v1 ticket = {0};
+    vxml_status status;
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->prompt_media_adapter == NULL ||
+        profile->prompt_media_adapter->prepare == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (profile->prompt_media_prepared ||
+        profile->prompt_media_in_flight)
+        return VXML_INVALID_STATE;
+
+    status = prompt_media_request_from_impl(impl, &request);
+    if (status != VXML_OK) return status;
+    if (request.segment_count == 0u)
+        return VXML_INVALID_STATE;
+    if (request.segment_count != 1u ||
+        request.segment.kind != VXML_CMETA_PROMPT_MEDIA_TEXT ||
+        request.segment.payload.data == NULL ||
+        request.segment.payload.size == 0u)
+        return VXML_INVALID_STRUCTURE;
+    if ((profile->prompt_media_adapter->capabilities &
+         request.required_capabilities) !=
+        request.required_capabilities)
+        return VXML_UNSUPPORTED_FEATURE;
+
+    status = profile->prompt_media_adapter->prepare(
+        profile->prompt_media_user,
+        &request, &ticket, out_error);
+    if (status != VXML_OK) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return status;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return VXML_INVALID_CONTRACT;
+    }
+    profile->prompt_media_ticket = ticket;
+    profile->prompt_media_generation = request.generation;
+    profile->prompt_media_prepared = true;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_commit(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_prompt_media_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->prompt_media_prepared ||
+        profile->prompt_media_in_flight ||
+        profile->prompt_media_ticket.commit == NULL ||
+        profile->prompt_media_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->prompt_media_ticket;
+    profile->prompt_media_ticket =
+        (vxml_cmeta_prompt_media_ticket_v1){0};
+    profile->prompt_media_prepared = false;
+    profile->prompt_media_in_flight = true;
+    ticket.commit(ticket.user);
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_discard(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_prompt_media_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->prompt_media_prepared ||
+        profile->prompt_media_ticket.commit == NULL ||
+        profile->prompt_media_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->prompt_media_ticket;
+    profile->prompt_media_ticket =
+        (vxml_cmeta_prompt_media_ticket_v1){0};
+    profile->prompt_media_generation = 0u;
+    profile->prompt_media_prepared = false;
+    ticket.discard(ticket.user);
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_take_reprompt(
     vxml_session *session, bool *out_requested) {
     vxml_session_impl *impl;
