@@ -54,9 +54,12 @@ This slice accepts literal `choice@event` only.
 
 - without `menu@dtmf="true"`, every choice supplies a non-empty DTMF
   sequence;
-- with `menu@dtmf="true"`, choices without explicit DTMF receive 1..9 in
-  order;
+- with `menu@dtmf="true"`, the first nine choices without explicit DTMF
+  receive 1..9 in order; later implicit choices remain valid with no DTMF
+  assignment;
 - explicit DTMF under auto mode is restricted to `0`, `*`, or `#`;
+- optional whitespace in explicit DTMF is removed before validation
+  (`"1 2 #"` and `"12#"` are equivalent);
 - duplicate normalized DTMF sequences reject;
 - lowercase A-D normalize to uppercase outside auto mode;
 - choice speech content, generated speech grammar, dynamic targets, messages,
