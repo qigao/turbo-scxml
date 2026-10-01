@@ -2102,7 +2102,7 @@ spec("VoiceXML CMeta session execution") {
             "datamodel='cmeta'><form>"
             "<subdialog name='child' src='child.vxml#entry'>"
             "<filled><assign name='value' expr='9'/>"
-            "<assign name='flag' expr='value + 1'/></filled>"
+            "<assign name='child.label' expr='&quot;new&quot;'/></filled>"
             "</subdialog></form></vxml>";
         const vxml_cmeta_compile_options_v1 compile =
             subdialog_compile_options();
@@ -2167,11 +2167,12 @@ spec("VoiceXML CMeta session execution") {
             VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
         probe.active = false;
         memset(label, 'x', sizeof(label) - 1u);
+        session_text_fail_assign_call = 2u;
 
         check_equal(
             vxml_session_cmeta_subdialog_run_ready(
                 &session, &progressed),
-            VXML_SEMANTIC_ERROR);
+            VXML_ALLOCATION_FAILED);
         check_true(progressed);
         check_equal(
             vxml_session_get_state(&session),
@@ -2185,6 +2186,7 @@ spec("VoiceXML CMeta session execution") {
         check_equal(session_text_live_resources, (size_t)0u);
         check_equal(session_text_invalid_operations, (size_t)0u);
 
+        session_text_fail_assign_call = SIZE_MAX;
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
         check_equal(session_text_live_resources, (size_t)0u);
