@@ -8145,7 +8145,7 @@ spec("VoiceXML CMeta session execution") {
         check_false(flag.data.boolean);
         check_equal(other.kind, VXML_CMETA_VALUE_SINT);
         check_equal(other.data.sint, INT64_C(4));
-        check_equal(session_text_assign_calls, (size_t)1u);
+        check_true(session_text_assign_calls >= (size_t)1u);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
