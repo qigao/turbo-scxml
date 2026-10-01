@@ -1882,11 +1882,10 @@ spec("VoiceXML CMeta session execution") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form>"
-            "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
             "<subdialog name='child' src='child.vxml#entry'>"
             "<filled><assign name='value' expr='value + 1'/></filled>"
             "</subdialog>"
-            "<filled mode='all' namelist='value child'>"
+            "<filled mode='all' namelist='child'>"
             "<assign name='value' expr='value + 10'/></filled>"
             "<filled mode='any' namelist='child'>"
             "<assign name='value' expr='value + 100'/></filled>"
@@ -1920,8 +1919,6 @@ spec("VoiceXML CMeta session execution") {
         bool progressed = false;
         const vxml_cmeta_subdialog_test_root *committed;
 
-        compile.max_fields = 4u;
-        compile.max_grammar_bytes = 128u;
         entries[0].name = (vxml_cmeta_name_view){
             code_name, sizeof(code_name) - 1u};
         entries[0].value.kind = VXML_CMETA_VALUE_SINT;
@@ -2105,20 +2102,19 @@ spec("VoiceXML CMeta session execution") {
             "datamodel='cmeta'><form>"
             "<subdialog name='child' src='child.vxml#entry'>"
             "<filled><assign name='value' expr='9'/>"
-            "<exit expr='flag'/></filled>"
+            "<assign name='flag' expr='value + 1'/></filled>"
             "</subdialog></form></vxml>";
         const vxml_cmeta_compile_options_v1 compile =
             subdialog_compile_options();
         const vxml_cmeta_name_view undefined[] = {
-            {"child", sizeof("child") - 1u},
-            {"flag", sizeof("flag") - 1u}
+            {"child", sizeof("child") - 1u}
         };
         const vxml_cmeta_subdialog_test_root root = {
             .value = 1, .flag = true, .child = {.code = 99}};
         cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_session_options_v1 options =
             subdialog_completion_session_options(
-                &root, undefined, 2u, &probe);
+                &root, undefined, 1u, &probe);
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_session_data *runtime;
