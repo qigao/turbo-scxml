@@ -19,6 +19,8 @@ static vxml_status read_scalar_value(
     unsigned char *string_scratch, size_t string_capacity,
     vxml_cmeta_value_view *out_value);
 
+static bool range_valid(size_t first, size_t count, size_t total);
+
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     const size_t v1_prefix_size =
