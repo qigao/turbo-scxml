@@ -8290,6 +8290,73 @@ spec("VoiceXML CMeta session execution") {
         }
     }
 
+    it("publishes literal CMeta goto only after the enclosing transaction commits") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<assign name='value' expr='5'/>"
+            "<goto next='dialogs/child.vxml#entry'/>"
+            "<assign name='other' expr='99'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 1, .other = 2};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_navigation_request_v1 navigation = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_value_view other = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_NAVIGATING);
+        check_equal(
+            vxml_session_navigation_request(
+                &session, &navigation),
+            VXML_OK);
+        check_equal(
+            navigation.uri_size,
+            sizeof("dialogs/child.vxml#entry") - 1u);
+        check_equal(
+            memcmp(
+                navigation.uri,
+                "dialogs/child.vxml#entry",
+                navigation.uri_size),
+            0);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "value", sizeof("value") - 1u,
+                &value),
+            VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(5));
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "other", sizeof("other") - 1u,
+                &other),
+            VXML_OK);
+        check_equal(other.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(other.data.sint, INT64_C(2));
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("starts a named non-first CMeta form through the shared form-entry API") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
