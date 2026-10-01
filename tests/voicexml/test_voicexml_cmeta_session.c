@@ -1594,7 +1594,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         vxml_cmeta_subdialog_test_root root = {
-            .value = 7, .flag = true, .child = {99}};
+            .value = 7, .flag = true, .child = {.code = 99}};
         vxml_cmeta_session_options_v1 options =
             subdialog_session_options(&root, undefined, 1u);
         vxml_program program = {0};
@@ -1653,7 +1653,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         vxml_cmeta_subdialog_test_root root = {
-            .value = 7, .flag = true, .child = {99}};
+            .value = 7, .flag = true, .child = {.code = 99}};
         cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_session_options_v1 options =
             subdialog_param_session_options(
@@ -1781,7 +1781,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         vxml_cmeta_subdialog_test_root root = {
-            .value = 1, .flag = true, .child = {99}};
+            .value = 1, .flag = true, .child = {.code = 99}};
         cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_session_options_v1 options =
             subdialog_completion_session_options(
@@ -1897,7 +1897,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         vxml_cmeta_subdialog_test_root root = {
-            .value = 1, .flag = false, .child = {99}};
+            .value = 1, .flag = false, .child = {.code = 99}};
         cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_session_options_v1 options =
             subdialog_completion_session_options(
@@ -2006,7 +2006,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         const vxml_cmeta_subdialog_test_root root = {
-            .value = 1, .flag = true, .child = {99}};
+            .value = 1, .flag = true, .child = {.code = 99}};
         size_t pass;
 
         for (pass = 0u; pass < 3u; ++pass) {
@@ -2114,7 +2114,7 @@ spec("VoiceXML CMeta session execution") {
             {"flag", sizeof("flag") - 1u}
         };
         const vxml_cmeta_subdialog_test_root root = {
-            .value = 1, .flag = true, .child = {99}};
+            .value = 1, .flag = true, .child = {.code = 99}};
         cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
         vxml_cmeta_session_options_v1 options =
             subdialog_completion_session_options(
@@ -2207,7 +2207,7 @@ spec("VoiceXML CMeta session execution") {
             {"child", sizeof("child") - 1u}
         };
         vxml_cmeta_subdialog_test_root root = {
-            .value = 1, .flag = true, .child = {99}};
+            .value = 1, .flag = true, .child = {.code = 99}};
         size_t pass;
 
         for (pass = 0u; pass < 2u; ++pass) {
