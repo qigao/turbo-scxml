@@ -5634,6 +5634,18 @@ static bool event_scope_owner(
         out_kind == NULL || out_owner == NULL)
         return false;
     if (scope_rank == 0u) {
+        if (profile->active_subdialog != VXML_CMETA_NO_INDEX) {
+            if (profile->active_subdialog >= program->subdialog_count ||
+                program->subdialogs == NULL ||
+                profile->active_initial != VXML_CMETA_NO_INDEX ||
+                profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_menu != VXML_CMETA_NO_INDEX ||
+                profile->active_block != VXML_CMETA_NO_INDEX)
+                return false;
+            *out_kind = VXML_CMETA_EVENT_SUBDIALOG;
+            *out_owner = profile->active_subdialog;
+            return true;
+        }
         if (profile->active_initial != VXML_CMETA_NO_INDEX) {
             if (profile->active_field != VXML_CMETA_NO_INDEX ||
                 profile->active_initial >= program->initial_count ||
@@ -5732,7 +5744,8 @@ static vxml_status execute_event_handler(
         execution_scope = program->document_scope;
     } else if (handler->scope_kind == VXML_CMETA_EVENT_FORM ||
                handler->scope_kind == VXML_CMETA_EVENT_FIELD ||
-               handler->scope_kind == VXML_CMETA_EVENT_INITIAL) {
+               handler->scope_kind == VXML_CMETA_EVENT_INITIAL ||
+               handler->scope_kind == VXML_CMETA_EVENT_SUBDIALOG) {
         if (form == NULL || form->scope >= program->scope_count)
             return VXML_INVALID_STRUCTURE;
         scope_values[0] = form->scope;
@@ -5789,10 +5802,11 @@ static vxml_status execute_event_handler(
     return VXML_OK;
 }
 
-vxml_status vxml_session_cmeta_raise(
+static vxml_status cmeta_raise_event_impl(
     vxml_session *session,
     const char *event_name,
-    size_t event_name_size) {
+    size_t event_name_size,
+    bool allow_subdialog) {
     vxml_session_impl *impl;
     vxml_cmeta_program_data const *program;
     vxml_cmeta_session_data *profile;
@@ -5816,7 +5830,8 @@ vxml_status vxml_session_cmeta_raise(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
-    if (profile->active_subdialog != VXML_CMETA_NO_INDEX)
+    if (profile->active_subdialog != VXML_CMETA_NO_INDEX &&
+        !allow_subdialog)
         return VXML_INVALID_STATE;
     if (profile->active_initial != VXML_CMETA_NO_INDEX &&
         (profile->active_initial >= program->initial_count ||
@@ -5897,6 +5912,14 @@ vxml_status vxml_session_cmeta_raise(
             continue;
         return session_fail(impl, VXML_SEMANTIC_ERROR);
     }
+}
+
+vxml_status vxml_session_cmeta_raise(
+    vxml_session *session,
+    const char *event_name,
+    size_t event_name_size) {
+    return cmeta_raise_event_impl(
+        session, event_name, event_name_size, false);
 }
 
 vxml_status vxml_cmeta_session_raise_event_profile(
