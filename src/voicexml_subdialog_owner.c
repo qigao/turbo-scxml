@@ -635,19 +635,23 @@ static vxml_status row_follow_navigation(owner_row *row) {
             return VXML_OK;
         }
 
-        row_destroy_runtime(row);
-        row->document_ref = next_ref;
-        row->document_ref_live = true;
-        row->program_view = next_view.program;
-        row->current_document_uri_size =
-            resolved.document_uri_size;
-        memcpy(
-            row->current_document_uri,
-            resolved.document_uri,
-            resolved.document_uri_size);
-        row->current_document_uri[
-            resolved.document_uri_size] = '\0';
-        ++row->navigation_hops;
+        {
+            const size_t next_hop =
+                row->navigation_hops + 1u;
+            row_destroy_runtime(row);
+            row->document_ref = next_ref;
+            row->document_ref_live = true;
+            row->program_view = next_view.program;
+            row->current_document_uri_size =
+                resolved.document_uri_size;
+            memcpy(
+                row->current_document_uri,
+                resolved.document_uri,
+                resolved.document_uri_size);
+            row->current_document_uri[
+                resolved.document_uri_size] = '\0';
+            row->navigation_hops = next_hop;
+        }
 
         status = row_init_session(
             row, row->program_view,
