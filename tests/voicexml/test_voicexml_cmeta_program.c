@@ -2308,7 +2308,7 @@ spec("VoiceXML CMeta program compiler") {
             {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
                 "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
-                "<param name='bad.name' value='1'/>"
+                "<param name='bad:name' value='1'/>"
                 "</subdialog></form></vxml>",
                 VXML_INVALID_STRUCTURE
             },
