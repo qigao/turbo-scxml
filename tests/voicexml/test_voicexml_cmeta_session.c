@@ -1811,8 +1811,12 @@ spec("VoiceXML CMeta session execution") {
                 &session, &completion),
             VXML_CMETA_SUBDIALOG_INGRESS_STALE);
 
-        check_equal(vxml_session_close(&session), VXML_OK);
-        completion.generation = runtime->subdialog_generation;
+        {
+            const uint64_t next_generation =
+                runtime->subdialog_generation;
+            check_equal(vxml_session_close(&session), VXML_OK);
+            completion.generation = next_generation;
+        }
         check_equal(
             vxml_session_cmeta_subdialog_try_complete(
                 &session, &completion),
