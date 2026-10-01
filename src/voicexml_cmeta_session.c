@@ -3405,8 +3405,9 @@ static vxml_status child_literal_value(
 
     if (out == NULL || !cmeta_data_desc_valid(target) ||
         target->storage_type == NULL ||
-        (literal.size != 0u && literal.data == NULL) ||
-        memchr(literal.data, '\0', literal.size) != NULL ||
+        (literal.size != 0u &&
+         (literal.data == NULL ||
+          memchr(literal.data, '\0', literal.size) != NULL)) ||
         max_literal_bytes == 0u ||
         literal.size > max_literal_bytes)
         return literal.size > max_literal_bytes
@@ -3541,14 +3542,15 @@ static vxml_status import_child_entry_parameters(
             value = param->value;
         } else if (param->source ==
                        VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
-            if (param->value.kind != VXML_CMETA_VALUE_UNDEFINED ||
-                param->value.data.string.data != NULL ||
-                param->value.data.string.size != 0u)
+            const size_t literal_limit =
+                program->max_subdialog_param_value_bytes != 0u
+                    ? program->max_subdialog_param_value_bytes
+                    : program->max_string_bytes;
+            if (param->value.kind != VXML_CMETA_VALUE_UNDEFINED)
                 return VXML_SEMANTIC_ERROR;
             status = child_literal_value(
                 slot->value, param->literal,
-                program->max_subdialog_param_value_bytes,
-                &value);
+                literal_limit, &value);
             if (status != VXML_OK)
                 return status;
         } else {
@@ -3725,7 +3727,6 @@ static vxml_status cmeta_session_start_profile_at_entry(
         }
         exit_snapshot_destroy(&profile->pending_exit);
     }
-}
 }
 
 vxml_status vxml_cmeta_session_start_profile_at(
