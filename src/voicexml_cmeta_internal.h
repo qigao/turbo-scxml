@@ -26,7 +26,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_DISCONNECT,
     VXML_CMETA_ACTION_THROW,
     VXML_CMETA_ACTION_RETHROW,
-    VXML_CMETA_ACTION_REPROMPT
+    VXML_CMETA_ACTION_REPROMPT,
+    VXML_CMETA_ACTION_GOTO
 } vxml_cmeta_action_kind;
 
 typedef struct vxml_cmeta_scope_row {
@@ -290,6 +291,8 @@ typedef struct vxml_cmeta_action_row {
     vxml_cmeta_exit_kind exit_kind;
     const char *event_name;
     size_t event_name_size;
+    const char *navigation_uri;
+    size_t navigation_uri_size;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
 
@@ -544,6 +547,8 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_terminal_kind terminal_kind;
     const char *terminal_event;
     size_t terminal_event_size;
+    const char *pending_navigation_uri;
+    size_t pending_navigation_uri_size;
     bool exit_requested;
 } vxml_cmeta_session_data;
 
