@@ -3078,6 +3078,15 @@ static vxml_status cmeta_measure_subdialog(
             const salts_xml_node child =
                 salts_xml_node_child_at(subdialog, child_index);
             if (cmeta_node_ignorable(child)) continue;
+            if (cmeta_node_named(child, "catch") ||
+                cmeta_node_named(child, "help") ||
+                cmeta_node_named(child, "noinput") ||
+                cmeta_node_named(child, "nomatch")) {
+                status = cmeta_measure_catch(
+                    child, options, measurement, limits, diagnostic);
+                if (status != VXML_OK) return status;
+                continue;
+            }
             if (!cmeta_node_named(child, "param"))
                 return cmeta_program_fail(
                     diagnostic,
@@ -5391,6 +5400,11 @@ static vxml_status cmeta_compile_subdialog_schema(
                 salts_xml_node_child_at(node, child_index);
             vxml_cmeta_subdialog_param_row *param;
             if (cmeta_node_ignorable(child)) continue;
+            if (cmeta_node_named(child, "catch") ||
+                cmeta_node_named(child, "help") ||
+                cmeta_node_named(child, "noinput") ||
+                cmeta_node_named(child, "nomatch"))
+                continue;
             if (!cmeta_node_named(child, "param")) {
                 status = cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -7052,6 +7066,18 @@ static vxml_status cmeta_lower_program(
                         const salts_xml_attribute expression =
                             cmeta_attribute(nested, "expr");
                         if (cmeta_node_ignorable(nested)) continue;
+                        if (cmeta_node_named(nested, "catch") ||
+                            cmeta_node_named(nested, "help") ||
+                            cmeta_node_named(nested, "noinput") ||
+                            cmeta_node_named(nested, "nomatch")) {
+                            status = cmeta_lower_catch(
+                                builder, nested,
+                                VXML_CMETA_EVENT_SUBDIALOG,
+                                current_subdialog_index,
+                                form->scope, scopes, 2u);
+                            if (status != VXML_OK) return status;
+                            continue;
+                        }
                         if (!cmeta_node_named(nested, "param") ||
                             param_offset >= subdialog->param_count)
                             return cmeta_program_fail(
