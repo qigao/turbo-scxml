@@ -1878,6 +1878,323 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("atomically binds RETURN_DATA before subdialog and form filled PROCESS") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+            "<subdialog name='child' src='child.vxml#entry'>"
+            "<filled><assign name='value' expr='value + 1'/></filled>"
+            "</subdialog>"
+            "<filled mode='all' namelist='value child'>"
+            "<assign name='value' expr='value + 10'/></filled>"
+            "<filled mode='any' namelist='child'>"
+            "<assign name='value' expr='value + 100'/></filled>"
+            "</form></vxml>";
+        vxml_cmeta_compile_options_v1 compile =
+            subdialog_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        vxml_cmeta_subdialog_test_root root = {
+            .value = 1, .flag = false, .child = {99}};
+        cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_completion_session_options(
+                &root, undefined, 1u, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_subdialog_result_entry_v1 entries[2] = {0};
+        vxml_cmeta_subdialog_completion_v1 completion = {
+            .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_subdialog_completion_v1),
+            .kind = VXML_CMETA_SUBDIALOG_RETURN_DATA,
+            .entries = entries,
+            .entry_count = 2u,
+            .global_exit_kind = VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL
+        };
+        char code_name[] = "code";
+        char label_name[] = "label";
+        char label[] = "owned";
+        bool progressed = false;
+        const vxml_cmeta_subdialog_test_root *committed;
+
+        compile.max_fields = 4u;
+        compile.max_grammar_bytes = 128u;
+        entries[0].name = (vxml_cmeta_name_view){
+            code_name, sizeof(code_name) - 1u};
+        entries[0].value.kind = VXML_CMETA_VALUE_SINT;
+        entries[0].value.data.sint = INT64_C(5);
+        entries[1].name = (vxml_cmeta_name_view){
+            label_name, sizeof(label_name) - 1u};
+        entries[1].value.kind = VXML_CMETA_VALUE_STRING;
+        entries[1].value.data.string.data = label;
+        entries[1].value.data.string.size = sizeof(label) - 1u;
+
+        check_equal(session_text_live_resources, (size_t)0u);
+        reset_session_text_probe();
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        check_equal(runtime->active_subdialog, (size_t)0u);
+
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_subdialog_commit(&session),
+            VXML_OK);
+        completion.generation = runtime->subdialog_generation;
+        check_equal(
+            vxml_session_cmeta_subdialog_try_complete(
+                &session, &completion),
+            VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+        probe.active = false;
+        memset(code_name, 'x', sizeof(code_name) - 1u);
+        memset(label_name, 'y', sizeof(label_name) - 1u);
+        memset(label, 'z', sizeof(label) - 1u);
+
+        check_equal(
+            vxml_session_cmeta_subdialog_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(probe.cancel_calls, (size_t)0u);
+
+        committed = (const vxml_cmeta_subdialog_test_root *)
+            runtime->committed_root.storage;
+        check_equal(runtime->committed_root.bound[2], (unsigned char)1u);
+        check_equal(committed->child.code, 5);
+        check_equal(committed->child.label.size, sizeof("owned") - 1u);
+        check_equal(
+            memcmp(
+                committed->child.label.bytes,
+                "owned", sizeof("owned") - 1u),
+            0);
+        check_equal(committed->value, 112);
+        check_equal(session_text_assign_calls, (size_t)1u);
+        check_equal(session_text_live_resources, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+    }
+
+    it("rejects unknown duplicate and incompatible RETURN_DATA atomically") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='child' src='child.vxml#entry'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        const vxml_cmeta_subdialog_test_root root = {
+            .value = 1, .flag = true, .child = {99}};
+        size_t pass;
+
+        for (pass = 0u; pass < 3u; ++pass) {
+            cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
+            vxml_cmeta_session_options_v1 options =
+                subdialog_completion_session_options(
+                    &root, undefined, 1u, &probe);
+            vxml_program program = {0};
+            vxml_session session = {0};
+            vxml_cmeta_session_data *runtime;
+            vxml_cmeta_subdialog_result_entry_v1 entries[2] = {0};
+            vxml_cmeta_subdialog_completion_v1 completion = {
+                .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1,
+                .struct_size =
+                    sizeof(vxml_cmeta_subdialog_completion_v1),
+                .kind = VXML_CMETA_SUBDIALOG_RETURN_DATA,
+                .entries = entries,
+                .entry_count = pass == 1u ? 2u : 1u,
+                .global_exit_kind =
+                    VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL
+            };
+            bool progressed = false;
+
+            entries[0].name = pass == 0u
+                ? (vxml_cmeta_name_view){
+                    "missing", sizeof("missing") - 1u}
+                : (vxml_cmeta_name_view){
+                    "code", sizeof("code") - 1u};
+            entries[0].value.kind = pass == 2u
+                ? VXML_CMETA_VALUE_BOOL
+                : VXML_CMETA_VALUE_SINT;
+            if (pass == 2u)
+                entries[0].value.data.boolean = true;
+            else
+                entries[0].value.data.sint = INT64_C(7);
+            entries[1].name = (vxml_cmeta_name_view){
+                "code", sizeof("code") - 1u};
+            entries[1].value.kind = VXML_CMETA_VALUE_SINT;
+            entries[1].value.data.sint = INT64_C(8);
+
+            reset_session_text_probe();
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(
+                    &session, &program, &options),
+                VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            runtime = session_data(&session);
+            check_not_null(runtime);
+            check_equal(
+                vxml_session_cmeta_subdialog_prepare(
+                    &session, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_cmeta_subdialog_commit(&session),
+                VXML_OK);
+            completion.generation = runtime->subdialog_generation;
+            check_equal(
+                vxml_session_cmeta_subdialog_try_complete(
+                    &session, &completion),
+                VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+            probe.active = false;
+
+            check_equal(
+                vxml_session_cmeta_subdialog_run_ready(
+                    &session, &progressed),
+                VXML_SEMANTIC_ERROR);
+            check_true(progressed);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_FAILED);
+            check_equal(
+                runtime->committed_root.bound[2],
+                (unsigned char)0u);
+            check_equal(
+                ((const vxml_cmeta_subdialog_test_root *)
+                    runtime->committed_root.storage)->value,
+                1);
+            check_equal(probe.cancel_calls, (size_t)0u);
+            check_equal(session_text_live_resources, (size_t)0u);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+            check_equal(session_text_live_resources, (size_t)0u);
+            check_equal(session_text_invalid_operations, (size_t)0u);
+        }
+    }
+
+    it("rolls back RETURN_DATA and earlier filled writes on PROCESS failure") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='child' src='child.vxml#entry'>"
+            "<filled><assign name='value' expr='9'/>"
+            "<exit expr='flag'/></filled>"
+            "</subdialog></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u},
+            {"flag", sizeof("flag") - 1u}
+        };
+        const vxml_cmeta_subdialog_test_root root = {
+            .value = 1, .flag = true, .child = {99}};
+        cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_completion_session_options(
+                &root, undefined, 2u, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_subdialog_result_entry_v1 entries[2] = {0};
+        vxml_cmeta_subdialog_completion_v1 completion = {
+            .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_subdialog_completion_v1),
+            .kind = VXML_CMETA_SUBDIALOG_RETURN_DATA,
+            .entries = entries,
+            .entry_count = 2u,
+            .global_exit_kind = VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL
+        };
+        char label[] = "temp";
+        bool progressed = false;
+
+        entries[0].name = (vxml_cmeta_name_view){
+            "code", sizeof("code") - 1u};
+        entries[0].value.kind = VXML_CMETA_VALUE_SINT;
+        entries[0].value.data.sint = INT64_C(5);
+        entries[1].name = (vxml_cmeta_name_view){
+            "label", sizeof("label") - 1u};
+        entries[1].value.kind = VXML_CMETA_VALUE_STRING;
+        entries[1].value.data.string.data = label;
+        entries[1].value.data.string.size = sizeof(label) - 1u;
+
+        check_equal(session_text_live_resources, (size_t)0u);
+        reset_session_text_probe();
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_subdialog_commit(&session),
+            VXML_OK);
+        completion.generation = runtime->subdialog_generation;
+        check_equal(
+            vxml_session_cmeta_subdialog_try_complete(
+                &session, &completion),
+            VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+        probe.active = false;
+        memset(label, 'x', sizeof(label) - 1u);
+
+        check_equal(
+            vxml_session_cmeta_subdialog_run_ready(
+                &session, &progressed),
+            VXML_SEMANTIC_ERROR);
+        check_true(progressed);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(runtime->committed_root.bound[2], (unsigned char)0u);
+        check_equal(
+            ((const vxml_cmeta_subdialog_test_root *)
+                runtime->committed_root.storage)->value,
+            1);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+    }
+
     it("publishes GLOBAL_EXIT namelist and disconnect without canceling settled child") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
