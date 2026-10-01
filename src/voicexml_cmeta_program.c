@@ -4312,6 +4312,7 @@ static vxml_status cmeta_compile_field_schema(
     out->condition = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
+    out->filled = VXML_CMETA_NO_INDEX;
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
