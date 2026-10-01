@@ -34,6 +34,18 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_collect_request_v1>::value,
     "collect request must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_subdialog_param_v1>::value,
+    "subdialog param must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_subdialog_request_v1>::value,
+    "subdialog request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_subdialog_ticket_v1>::value,
+    "subdialog ticket must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_subdialog_adapter_v1>::value,
+    "subdialog adapter must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_completion_v1>::value,
     "collect completion must remain C-compatible");
 static_assert(
@@ -97,6 +109,10 @@ int main() {
     vxml_cmeta_prompt_mark_view_v1 prompt_mark{};
     vxml_cmeta_prompt_media_completion_v1 prompt_media_completion{};
     vxml_cmeta_collect_request_v1 collect_request{};
+    vxml_cmeta_subdialog_param_v1 subdialog_param{};
+    vxml_cmeta_subdialog_request_v1 subdialog_request{};
+    vxml_cmeta_subdialog_ticket_v1 subdialog_ticket{};
+    vxml_cmeta_subdialog_adapter_v1 subdialog_adapter{};
     vxml_cmeta_collect_completion_v1 collect_completion{};
     vxml_cmeta_collect_result_slot_v1 collect_slot{};
     vxml_cmeta_menu_choice_v1 menu_choice{};
@@ -128,12 +144,20 @@ int main() {
     auto query_mark = &vxml_session_cmeta_prompt_media_last_mark;
     auto query_terminal = &vxml_session_cmeta_terminal_kind;
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
+    auto prepare_subdialog = &vxml_session_cmeta_subdialog_prepare;
+    auto commit_subdialog = &vxml_session_cmeta_subdialog_commit;
+    auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
     auto query_menu = &vxml_session_cmeta_menu_collect_request;
     auto query_menu_v2 = &vxml_session_cmeta_menu_collect_request_v2;
     auto query_initial = &vxml_session_cmeta_initial_collect_request;
     auto complete_menu = &vxml_session_cmeta_menu_try_complete;
     int result = 1;
 
+    subdialog_param.source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+    subdialog_request.abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1;
+    subdialog_request.struct_size = sizeof(subdialog_request);
+    subdialog_adapter.abi_version = VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1;
+    subdialog_adapter.struct_size = sizeof(subdialog_adapter);
     prompt_view.abi_version = VXML_CMETA_PROMPT_VIEW_ABI_V1;
     prompt_view.struct_size = sizeof(prompt_view);
     prompt_media_request.abi_version =
@@ -157,6 +181,14 @@ int main() {
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
         query_terminal == nullptr || query_terminal_event == nullptr ||
+        prepare_subdialog == nullptr || commit_subdialog == nullptr ||
+        discard_subdialog == nullptr ||
+        subdialog_request.abi_version !=
+            VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 ||
+        subdialog_adapter.abi_version !=
+            VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 ||
+        subdialog_param.source != VXML_CMETA_SUBDIALOG_PARAM_TYPED ||
+        subdialog_ticket.commit != nullptr ||
         query_menu == nullptr || query_menu_v2 == nullptr ||
         query_initial == nullptr || complete_menu == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
