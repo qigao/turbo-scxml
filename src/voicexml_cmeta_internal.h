@@ -450,6 +450,7 @@ typedef struct vxml_cmeta_session_data {
     bool subdialog_in_flight;
     vxml_cmeta_subdialog_param_v1 *subdialog_snapshot_params;
     size_t subdialog_snapshot_param_count;
+    uint64_t subdialog_snapshot_generation;
     char *subdialog_snapshot_storage;
     size_t subdialog_snapshot_storage_size;
     size_t subdialog_snapshot_storage_capacity;
