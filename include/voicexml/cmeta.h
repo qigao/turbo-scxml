@@ -29,6 +29,7 @@ extern "C" {
 #define VXML_CMETA_PROMPT_MEDIA_BATCH_REQUEST_ABI_V1 1u
 #define VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 1u
+#define VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
@@ -169,6 +170,10 @@ typedef struct vxml_cmeta_session_options_v1 {
     const struct vxml_cmeta_subdialog_adapter_v1 *subdialog;
     void *subdialog_user;
     size_t max_subdialog_snapshot_bytes;
+
+    /* Optional append-only child completion mailbox bounds. */
+    size_t max_subdialog_completion_entries;
+    size_t max_subdialog_completion_bytes;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -248,6 +253,47 @@ typedef struct vxml_cmeta_subdialog_adapter_v1 {
     /* No-fail/nonblocking cancellation of one committed child generation. */
     void (*cancel)(void *user, uint64_t generation);
 } vxml_cmeta_subdialog_adapter_v1;
+
+
+typedef enum vxml_cmeta_subdialog_completion_kind {
+    VXML_CMETA_SUBDIALOG_RETURN_DATA = 1,
+    VXML_CMETA_SUBDIALOG_RETURN_EVENT,
+    VXML_CMETA_SUBDIALOG_GLOBAL_EXIT
+} vxml_cmeta_subdialog_completion_kind;
+
+typedef enum vxml_cmeta_subdialog_global_exit_kind {
+    VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL = 0,
+    VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_EMPTY,
+    VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_EXPRESSION,
+    VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_NAMELIST,
+    VXML_CMETA_SUBDIALOG_GLOBAL_DISCONNECT
+} vxml_cmeta_subdialog_global_exit_kind;
+
+/* Fixed-stride completion entry. Do not tail-extend. */
+typedef struct vxml_cmeta_subdialog_result_entry_v1 {
+    vxml_cmeta_name_view name;
+    vxml_cmeta_value_view value;
+} vxml_cmeta_subdialog_result_entry_v1;
+
+typedef struct vxml_cmeta_subdialog_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_subdialog_completion_kind kind;
+    const vxml_cmeta_subdialog_result_entry_v1 *entries;
+    size_t entry_count;
+    vxml_cmeta_name_view event;
+    vxml_cmeta_subdialog_global_exit_kind global_exit_kind;
+} vxml_cmeta_subdialog_completion_v1;
+
+typedef enum vxml_cmeta_subdialog_ingress_result {
+    VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_SUBDIALOG_INGRESS_FULL,
+    VXML_CMETA_SUBDIALOG_INGRESS_CLOSED,
+    VXML_CMETA_SUBDIALOG_INGRESS_STALE,
+    VXML_CMETA_SUBDIALOG_INGRESS_INVALID_ARGUMENT,
+    VXML_CMETA_SUBDIALOG_INGRESS_INCOMPATIBLE_RESULT
+} vxml_cmeta_subdialog_ingress_result;
 
 /*
  * Stable array element: do not append fields. Future menu metadata must use a
@@ -651,6 +697,27 @@ vxml_status vxml_session_cmeta_subdialog_commit(vxml_session *session);
  * or the Session is destroyed.
  */
 vxml_status vxml_session_cmeta_subdialog_discard(vxml_session *session);
+
+
+/**
+ * MPSC admission of one terminal child completion. RETURN_EVENT and GLOBAL_EXIT
+ * are enabled by #190; RETURN_DATA is reserved by this V1 envelope and becomes
+ * admissible with the atomic parent result binder in #191.
+ *
+ * Names, STRING values, and Event bytes are copied into Session-owned mailbox
+ * storage before ACCEPTED is returned.
+ */
+vxml_cmeta_subdialog_ingress_result
+vxml_session_cmeta_subdialog_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_subdialog_completion_v1 *completion);
+
+/**
+ * Single-owner progress point. Settles at most one accepted child completion.
+ */
+vxml_status vxml_session_cmeta_subdialog_run_ready(
+    vxml_session *session,
+    bool *out_progressed);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(

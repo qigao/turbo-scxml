@@ -239,7 +239,8 @@ typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_DOCUMENT = 0,
     VXML_CMETA_EVENT_FORM,
     VXML_CMETA_EVENT_FIELD,
-    VXML_CMETA_EVENT_INITIAL
+    VXML_CMETA_EVENT_INITIAL,
+    VXML_CMETA_EVENT_SUBDIALOG
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
@@ -394,6 +395,28 @@ typedef enum vxml_cmeta_collect_item_kind {
     VXML_CMETA_COLLECT_ITEM_INITIAL
 } vxml_cmeta_collect_item_kind;
 
+typedef enum vxml_cmeta_subdialog_mailbox_state {
+    VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED = 0,
+    VXML_CMETA_SUBDIALOG_MAILBOX_EMPTY,
+    VXML_CMETA_SUBDIALOG_MAILBOX_WRITING,
+    VXML_CMETA_SUBDIALOG_MAILBOX_READY,
+    VXML_CMETA_SUBDIALOG_MAILBOX_CLOSED
+} vxml_cmeta_subdialog_mailbox_state;
+
+typedef struct vxml_cmeta_subdialog_completion_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    vxml_cmeta_subdialog_completion_kind kind;
+    vxml_cmeta_subdialog_global_exit_kind global_exit_kind;
+    vxml_cmeta_subdialog_result_entry_v1 *entries;
+    size_t entry_count;
+    size_t entry_capacity;
+    char *storage;
+    size_t storage_size;
+    size_t storage_capacity;
+    vxml_cmeta_name_view event;
+} vxml_cmeta_subdialog_completion_mailbox;
+
 typedef enum vxml_cmeta_collect_mailbox_state {
     VXML_CMETA_COLLECT_MAILBOX_DISARMED = 0,
     VXML_CMETA_COLLECT_MAILBOX_EMPTY,
@@ -455,6 +478,7 @@ typedef struct vxml_cmeta_session_data {
     size_t subdialog_snapshot_storage_size;
     size_t subdialog_snapshot_storage_capacity;
     size_t max_subdialog_snapshot_bytes;
+    vxml_cmeta_subdialog_completion_mailbox subdialog_mailbox;
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;
