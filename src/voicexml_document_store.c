@@ -44,6 +44,9 @@ typedef struct vxml_document_store_impl {
     vxml_fetch_audio_adapter_v1 fetch_audio;
     void *fetch_audio_user;
     bool fetch_audio_enabled;
+    vxml_document_compile_adapter_v1 compiler;
+    void *compiler_user;
+    bool compiler_enabled;
     vxml_document_entry *entries;
     vxml_document_borrow *borrows;
 } vxml_document_store_impl;
@@ -559,6 +562,9 @@ vxml_document_store_status vxml_document_store_init(
     const size_t fetch_audio_tail =
         offsetof(vxml_document_store_config_v1, fetch_audio_user) +
         sizeof(config->fetch_audio_user);
+    const size_t compiler_tail =
+        offsetof(vxml_document_store_config_v1, compiler_user) +
+        sizeof(config->compiler_user);
     if (store == NULL || store->impl != NULL ||
         config == NULL ||
         config->abi_version != VXML_DOCUMENT_STORE_CONFIG_ABI_V1 ||
@@ -589,6 +595,15 @@ vxml_document_store_status vxml_document_store_init(
              offsetof(vxml_fetch_audio_adapter_v1, begin) +
              sizeof(config->fetch_audio->begin) ||
          config->fetch_audio->begin == NULL))
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (config->struct_size >= compiler_tail &&
+        config->compiler != NULL &&
+        (config->compiler->abi_version !=
+             VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1 ||
+         config->compiler->struct_size <
+             offsetof(vxml_document_compile_adapter_v1, compile) +
+             sizeof(config->compiler->compile) ||
+         config->compiler->compile == NULL))
         return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
 
     normalized = (char *)malloc(config->max_uri_bytes + 1u);
@@ -643,6 +658,17 @@ vxml_document_store_status vxml_document_store_init(
                 : sizeof(impl->fetch_audio));
         impl->fetch_audio_user = config->fetch_audio_user;
         impl->fetch_audio_enabled = true;
+    }
+    if (config->struct_size >= compiler_tail &&
+        config->compiler != NULL) {
+        memset(&impl->compiler, 0, sizeof(impl->compiler));
+        memcpy(
+            &impl->compiler, config->compiler,
+            config->compiler->struct_size < sizeof(impl->compiler)
+                ? config->compiler->struct_size
+                : sizeof(impl->compiler));
+        impl->compiler_user = config->compiler_user;
+        impl->compiler_enabled = true;
     }
     store->impl = impl;
     return VXML_DOCUMENT_STORE_OK;
@@ -1003,10 +1029,18 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
     source_copy[source_size] = '\0';
     impl->documents.close(impl->document_user, &document);
 
-    voice_status = vxml_compile(
-        source_copy, source_size,
-        &impl->voice_limits, &program, &diagnostic);
+    if (impl->compiler_enabled) {
+        voice_status = impl->compiler.compile(
+            impl->compiler_user,
+            source_copy, source_size,
+            &program, &diagnostic);
+    } else {
+        voice_status = vxml_compile(
+            source_copy, source_size,
+            &impl->voice_limits, &program, &diagnostic);
+    }
     if (voice_status != VXML_OK) {
+        vxml_program_destroy(&program);
         free(allocation);
         free(canonical);
         error_set(out_error, VXML_DOCUMENT_STORE_COMPILE_ERROR,

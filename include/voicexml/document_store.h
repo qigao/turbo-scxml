@@ -26,6 +26,18 @@ typedef enum vxml_document_store_status {
     VXML_DOCUMENT_STORE_BUSY
 } vxml_document_store_status;
 
+#define VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1 1u
+
+typedef struct vxml_document_compile_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_status (*compile)(
+        void *user,
+        const void *source, size_t source_size,
+        vxml_program *out_program,
+        vxml_diagnostic *diagnostic);
+} vxml_document_compile_adapter_v1;
+
 /**
  * Caller-owned output buffers for URI resolution.
  *
@@ -111,6 +123,14 @@ typedef struct vxml_document_store_config_v1 {
     /* Optional append-only fetch-audio playback handoff. */
     const vxml_fetch_audio_adapter_v1 *fetch_audio;
     void *fetch_audio_user;
+
+    /*
+     * Optional append-only source compiler. When absent, cache misses use
+     * vxml_compile() with voice_limits exactly as before. The adapter borrows
+     * Store-owned immutable source bytes only for the duration of compile().
+     */
+    const vxml_document_compile_adapter_v1 *compiler;
+    void *compiler_user;
 } vxml_document_store_config_v1;
 
 typedef struct vxml_document_store {
