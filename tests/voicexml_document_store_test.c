@@ -261,6 +261,8 @@ spec("VoiceXML bounded document store") {
         compile_probe compiler = {
             .provider_source = valid_document,
             .result_override = VXML_OK};
+        vxml_document_compile_adapter_v1 compiler_adapter =
+            compile_adapter;
         vxml_document_store_config_v1 config =
             store_config(&document, 2u, 4096u);
         vxml_document_store store = {0};
@@ -271,11 +273,12 @@ spec("VoiceXML bounded document store") {
         static const char uri[] =
             "https://voice.example/profile.vxml";
 
-        config.compiler = &compile_adapter;
+        config.compiler = &compiler_adapter;
         config.compiler_user = &compiler;
         check_equal(
             vxml_document_store_init(&store, &config),
             VXML_DOCUMENT_STORE_OK);
+        compiler_adapter.compile = NULL;
         check_equal(
             vxml_document_store_acquire(
                 &store, uri, sizeof(uri) - 1u, &first, NULL),
