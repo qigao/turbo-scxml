@@ -3333,11 +3333,7 @@ static vxml_status cmeta_measure_form(
         }
 
         if (cmeta_node_named(child, "filled")) {
-            if (form_subdialog_count != 0u)
-                return cmeta_program_fail(
-                    diagnostic, VXML_UNSUPPORTED_FEATURE,
-                    salts_xml_node_location(child),
-                    "form-level filled with subdialog is deferred to RETURN_DATA processing");
+            size_t result_target_count;
             if (saw_block || !saw_directed ||
                 measurement->field_count - first_field != form_field_count ||
                 measurement->initial_count - first_initial !=
@@ -3348,11 +3344,18 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form filled must follow all directed form items");
+            if (form_field_count > SIZE_MAX - form_subdialog_count)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML filled default target count overflow");
+            result_target_count =
+                form_field_count + form_subdialog_count;
             saw_filled = true;
             {
                 const vxml_status filled_status =
                     cmeta_measure_filled_content(
-                        child, true, form_field_count,
+                        child, true, result_target_count,
                         measurement, limits, diagnostic);
                 if (filled_status != VXML_OK)
                     return filled_status;
@@ -6247,6 +6250,33 @@ static const vxml_cmeta_field_row *cmeta_form_field_by_name(
     return NULL;
 }
 
+static const vxml_cmeta_subdialog_row *cmeta_form_subdialog_by_name(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    salts_xml_string_view name,
+    size_t *out_subdialog_index) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        !range_valid(
+            form->first_subdialog, form->subdialog_count,
+            program->subdialog_count) ||
+        (form->subdialog_count != 0u && program->subdialogs == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->subdialog_count; ++offset) {
+        const size_t index = form->first_subdialog + offset;
+        const vxml_cmeta_subdialog_row *subdialog =
+            &program->subdialogs[index];
+        if (subdialog->name != NULL &&
+            subdialog->name_size == name.size &&
+            memcmp(subdialog->name, name.data, name.size) == 0) {
+            if (out_subdialog_index != NULL)
+                *out_subdialog_index = index;
+            return subdialog;
+        }
+    }
+    return NULL;
+}
+
 static vxml_status cmeta_append_filled_target(
     cmeta_program_builder *builder,
     vxml_cmeta_filled_row *row,
@@ -6292,12 +6322,21 @@ static vxml_status cmeta_lower_filled_targets(
                 salts_xml_node_location(node));
             if (status != VXML_OK) return status;
         }
+        for (offset = 0u; offset < form->subdialog_count; ++offset) {
+            const vxml_cmeta_subdialog_row *subdialog =
+                &builder->profile->subdialogs[
+                    form->first_subdialog + offset];
+            status = cmeta_append_filled_target(
+                builder, row, subdialog->root_field,
+                salts_xml_node_location(node));
+            if (status != VXML_OK) return status;
+        }
         return row->target_count != 0u
             ? VXML_OK
             : cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(node),
-                "VoiceXML filled has no directed fields");
+                "VoiceXML filled has no result-bearing form items");
     }
 
     {
@@ -6312,24 +6351,32 @@ static vxml_status cmeta_lower_filled_targets(
         list = decoded.view;
         while (cmeta_namelist_next(list, &cursor, &name)) {
             const vxml_cmeta_field_row *field;
+            const vxml_cmeta_subdialog_row *subdialog;
+            size_t root_field;
             if (!cmeta_is_ncname(name)) {
                 status = cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_attribute_location(namelist),
-                    "VoiceXML filled namelist requires field NCNames");
+                    "VoiceXML filled namelist requires form-item NCNames");
                 break;
             }
             field = cmeta_form_field_by_name(
                 builder->profile, form, name, NULL);
-            if (field == NULL) {
+            subdialog = field == NULL
+                ? cmeta_form_subdialog_by_name(
+                    builder->profile, form, name, NULL)
+                : NULL;
+            if (field == NULL && subdialog == NULL) {
                 status = cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(namelist),
-                    "VoiceXML filled namelist references an unknown field");
+                    "VoiceXML filled namelist references an unknown result-bearing form item");
                 break;
             }
+            root_field = field != NULL
+                ? field->root_field : subdialog->root_field;
             status = cmeta_append_filled_target(
-                builder, row, field->root_field,
+                builder, row, root_field,
                 salts_xml_attribute_location(namelist));
             if (status != VXML_OK) break;
         }
