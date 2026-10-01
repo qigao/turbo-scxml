@@ -903,6 +903,7 @@ static void subdialog_snapshot_destroy(
     session->subdialog_snapshot_storage_size = 0u;
     session->subdialog_snapshot_storage_capacity = 0u;
     session->subdialog_snapshot_param_count = 0u;
+    session->subdialog_snapshot_generation = UINT64_C(0);
 }
 
 static void settle_subdialog(
@@ -1297,9 +1298,18 @@ static vxml_status build_subdialog_snapshot(
         session->max_subdialog_snapshot_bytes == 0u)
         return VXML_INVALID_CONTRACT;
 
-    subdialog_snapshot_destroy(session);
-    if (subdialog->param_count == 0u)
+    if (session->subdialog_snapshot_generation ==
+            session->subdialog_generation &&
+        session->subdialog_generation != UINT64_C(0) &&
+        session->subdialog_snapshot_param_count == subdialog->param_count)
         return VXML_OK;
+
+    subdialog_snapshot_destroy(session);
+    if (subdialog->param_count == 0u) {
+        session->subdialog_snapshot_generation =
+            session->subdialog_generation;
+        return VXML_OK;
+    }
 
     if (!checked_multiply(
             subdialog->param_count,
@@ -1433,6 +1443,8 @@ static vxml_status build_subdialog_snapshot(
         subdialog_snapshot_destroy(session);
         return VXML_INVALID_STRUCTURE;
     }
+    session->subdialog_snapshot_generation =
+        session->subdialog_generation;
     return VXML_OK;
 }
 
@@ -3505,13 +3517,11 @@ vxml_status vxml_session_cmeta_subdialog_prepare(
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        subdialog_snapshot_destroy(profile);
         return status;
     }
     if (ticket.commit == NULL || ticket.discard == NULL) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        subdialog_snapshot_destroy(profile);
         return VXML_INVALID_CONTRACT;
     }
     profile->subdialog_ticket = ticket;
@@ -3572,7 +3582,6 @@ vxml_status vxml_session_cmeta_subdialog_discard(
     profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
     profile->subdialog_prepared = false;
     ticket.discard(ticket.user);
-    subdialog_snapshot_destroy(profile);
     return VXML_OK;
 }
 
