@@ -377,7 +377,15 @@ static bool session_subdialogs_valid(
             row->result_data->storage_type == NULL ||
             row->result_data->shape == NULL ||
             (row->condition != VXML_CMETA_NO_INDEX &&
-             row->condition >= program->expression_count))
+             row->condition >= program->expression_count) ||
+            (row->filled != VXML_CMETA_NO_INDEX &&
+             (row->filled >= program->filled_count ||
+              program->filled == NULL ||
+              program->filled[row->filled].form != row->form ||
+              program->filled[row->filled].mode !=
+                  VXML_CMETA_FILLED_FIELD ||
+              program->filled[row->filled].field !=
+                  VXML_CMETA_NO_INDEX)))
             return false;
         field = &shape->fields[row->root_field];
         if (field->name == NULL ||
@@ -5092,6 +5100,8 @@ static vxml_status execute_subdialog_filled_process(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
     const vxml_cmeta_subdialog_row *subdialog) {
+    const cmeta_data_struct_shape *root_shape =
+        session_root_shape(program);
     const size_t completed_root_field =
         subdialog != NULL ? subdialog->root_field : VXML_CMETA_NO_INDEX;
     size_t offset;
@@ -5099,9 +5109,9 @@ static vxml_status execute_subdialog_filled_process(
     bool run = false;
 
     if (profile == NULL || program == NULL || form == NULL ||
-        subdialog == NULL ||
+        subdialog == NULL || root_shape == NULL ||
         subdialog->form != profile->active_form ||
-        completed_root_field >= session_root_shape(program)->field_count)
+        completed_root_field >= root_shape->field_count)
         return VXML_INVALID_STRUCTURE;
 
     if (subdialog->filled != VXML_CMETA_NO_INDEX) {
