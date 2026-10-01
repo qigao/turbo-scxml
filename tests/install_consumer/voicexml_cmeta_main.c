@@ -48,6 +48,12 @@ int main(void) {
     vxml_cmeta_subdialog_request_v1 subdialog_request = {
         .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_subdialog_request_v1)};
+    vxml_cmeta_subdialog_result_entry_v1 subdialog_result = {0};
+    vxml_cmeta_subdialog_completion_v1 subdialog_completion = {
+        .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_subdialog_completion_v1),
+        .kind = VXML_CMETA_SUBDIALOG_RETURN_EVENT,
+        .global_exit_kind = VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL};
     vxml_cmeta_subdialog_ticket_v1 subdialog_ticket = {0};
     vxml_cmeta_subdialog_adapter_v1 subdialog_adapter = {
         .abi_version = VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1,
@@ -147,6 +153,13 @@ int main(void) {
         vxml_session_cmeta_subdialog_commit;
     vxml_status (*discard_subdialog)(vxml_session *) =
         vxml_session_cmeta_subdialog_discard;
+    vxml_cmeta_subdialog_ingress_result (*complete_subdialog)(
+        vxml_session *,
+        const vxml_cmeta_subdialog_completion_v1 *) =
+        vxml_session_cmeta_subdialog_try_complete;
+    vxml_status (*run_subdialog_completion)(
+        vxml_session *, bool *) =
+        vxml_session_cmeta_subdialog_run_ready;
     vxml_status (*query_menu)(
         const vxml_session *, vxml_cmeta_menu_collect_request_v1 *) =
         vxml_session_cmeta_menu_collect_request;
@@ -166,10 +179,19 @@ int main(void) {
         query_terminal == NULL || query_terminal_event == NULL ||
         prepare_subdialog == NULL || commit_subdialog == NULL ||
         discard_subdialog == NULL ||
+        complete_subdialog == NULL || run_subdialog_completion == NULL ||
         subdialog_request.abi_version !=
             VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 ||
         subdialog_adapter.abi_version !=
             VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 ||
+        subdialog_completion.abi_version !=
+            VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1 ||
+        subdialog_completion.kind !=
+            VXML_CMETA_SUBDIALOG_RETURN_EVENT ||
+        subdialog_completion.global_exit_kind !=
+            VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL ||
+        subdialog_result.value.kind != VXML_CMETA_VALUE_UNDEFINED ||
+        VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED != 0 ||
         subdialog_param.source != VXML_CMETA_SUBDIALOG_PARAM_TYPED ||
         subdialog_ticket.commit != NULL ||
         query_menu == NULL || query_menu_v2 == NULL ||
