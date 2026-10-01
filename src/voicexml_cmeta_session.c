@@ -3828,9 +3828,30 @@ vxml_session_cmeta_subdialog_try_complete(
         profile->active_subdialog == VXML_CMETA_NO_INDEX)
         return VXML_CMETA_SUBDIALOG_INGRESS_STALE;
 
-    if (completion->kind == VXML_CMETA_SUBDIALOG_RETURN_DATA)
-        return VXML_CMETA_SUBDIALOG_INGRESS_INCOMPATIBLE_RESULT;
-    if (completion->kind == VXML_CMETA_SUBDIALOG_RETURN_EVENT) {
+    if (completion->kind == VXML_CMETA_SUBDIALOG_RETURN_DATA) {
+        if (completion->event.data != NULL ||
+            completion->event.size != 0u ||
+            completion->global_exit_kind !=
+                VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL ||
+            ((completion->entries == NULL) !=
+             (completion->entry_count == 0u)))
+            return VXML_CMETA_SUBDIALOG_INGRESS_INVALID_ARGUMENT;
+        for (index = 0u; index < completion->entry_count; ++index) {
+            const vxml_cmeta_subdialog_result_entry_v1 *entry =
+                &completion->entries[index];
+            if (entry->name.data == NULL ||
+                entry->name.size == 0u ||
+                memchr(entry->name.data, '\0', entry->name.size) != NULL)
+                return VXML_CMETA_SUBDIALOG_INGRESS_INVALID_ARGUMENT;
+            if (entry->value.kind == VXML_CMETA_VALUE_STRING &&
+                entry->value.data.string.size != 0u &&
+                entry->value.data.string.data == NULL)
+                return VXML_CMETA_SUBDIALOG_INGRESS_INVALID_ARGUMENT;
+            if (entry->value.kind < VXML_CMETA_VALUE_UNDEFINED ||
+                entry->value.kind > VXML_CMETA_VALUE_STRING)
+                return VXML_CMETA_SUBDIALOG_INGRESS_INVALID_ARGUMENT;
+        }
+    } else if (completion->kind == VXML_CMETA_SUBDIALOG_RETURN_EVENT) {
         if (completion->entries != NULL ||
             completion->entry_count != 0u ||
             completion->event.data == NULL ||
@@ -4877,29 +4898,44 @@ incompatible:
     return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 }
 
-static bool completion_contains_root_field(
-    const vxml_cmeta_collect_mailbox *mailbox,
+static bool root_field_list_contains(
+    const size_t *root_fields, size_t root_field_count,
     size_t root_field) {
     size_t index;
-    if (mailbox == NULL || mailbox->root_fields == NULL)
+    if (root_field_count != 0u && root_fields == NULL)
         return false;
-    for (index = 0u; index < mailbox->slot_count; ++index)
-        if (mailbox->root_fields[index] == root_field)
+    for (index = 0u; index < root_field_count; ++index)
+        if (root_fields[index] == root_field)
             return true;
     return false;
 }
 
-static vxml_status filled_should_run(
+static bool completion_contains_root_field(
+    const vxml_cmeta_collect_mailbox *mailbox,
+    size_t root_field) {
+    if (mailbox == NULL)
+        return false;
+    return root_field_list_contains(
+        mailbox->root_fields, mailbox->slot_count, root_field);
+}
+
+static vxml_status filled_should_run_for_roots(
     const vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
     const vxml_cmeta_filled_row *filled,
-    const vxml_cmeta_collect_mailbox *mailbox,
+    const size_t *completed_root_fields,
+    size_t completed_root_field_count,
     bool *out) {
+    const cmeta_data_struct_shape *root_shape;
     size_t index;
+    if (out == NULL)
+        return VXML_INVALID_ARGUMENT;
     *out = false;
     if (profile == NULL || program == NULL || form == NULL ||
-        filled == NULL || mailbox == NULL ||
+        filled == NULL ||
+        (completed_root_field_count != 0u &&
+         completed_root_fields == NULL) ||
         filled->form != profile->active_form)
         return VXML_INVALID_STRUCTURE;
     if (filled->mode == VXML_CMETA_FILLED_FIELD) {
@@ -4912,14 +4948,16 @@ static vxml_status filled_should_run(
         filled->target_count == 0u ||
         program->filled_root_fields == NULL)
         return VXML_INVALID_STRUCTURE;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL)
+        return VXML_INVALID_STRUCTURE;
 
     if (filled->mode == VXML_CMETA_FILLED_ALL) {
         for (index = 0u; index < filled->target_count; ++index) {
             const size_t root_field =
                 program->filled_root_fields[
                     filled->first_target + index];
-            if (root_field >=
-                    session_root_shape(program)->field_count)
+            if (root_field >= root_shape->field_count)
                 return VXML_INVALID_STRUCTURE;
             if (profile->staged_root.bound[root_field] == 0u)
                 return VXML_OK;
@@ -4932,8 +4970,12 @@ static vxml_status filled_should_run(
             const size_t root_field =
                 program->filled_root_fields[
                     filled->first_target + index];
-            if (completion_contains_root_field(
-                    mailbox, root_field)) {
+            if (root_field >= root_shape->field_count)
+                return VXML_INVALID_STRUCTURE;
+            if (root_field_list_contains(
+                    completed_root_fields,
+                    completed_root_field_count,
+                    root_field)) {
                 *out = true;
                 return VXML_OK;
             }
@@ -4941,6 +4983,20 @@ static vxml_status filled_should_run(
         return VXML_OK;
     }
     return VXML_INVALID_STRUCTURE;
+}
+
+static vxml_status filled_should_run(
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_filled_row *filled,
+    const vxml_cmeta_collect_mailbox *mailbox,
+    bool *out) {
+    if (mailbox == NULL)
+        return VXML_INVALID_STRUCTURE;
+    return filled_should_run_for_roots(
+        profile, program, form, filled,
+        mailbox->root_fields, mailbox->slot_count, out);
 }
 
 static vxml_status execute_filled_handler(
@@ -5020,6 +5076,65 @@ static vxml_status execute_filled_process(
             &program->filled[form->first_filled + offset];
         status = filled_should_run(
             profile, program, form, filled, mailbox, &run);
+        if (status != VXML_OK) return status;
+        if (!run) continue;
+        status = execute_filled_handler(
+            profile, program, form, filled);
+        if (status != VXML_OK || profile->exit_requested)
+            return status;
+    }
+    return VXML_OK;
+}
+
+
+static vxml_status execute_subdialog_filled_process(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_subdialog_row *subdialog) {
+    const size_t completed_root_field =
+        subdialog != NULL ? subdialog->root_field : VXML_CMETA_NO_INDEX;
+    size_t offset;
+    vxml_status status;
+    bool run = false;
+
+    if (profile == NULL || program == NULL || form == NULL ||
+        subdialog == NULL ||
+        subdialog->form != profile->active_form ||
+        completed_root_field >= session_root_shape(program)->field_count)
+        return VXML_INVALID_STRUCTURE;
+
+    if (subdialog->filled != VXML_CMETA_NO_INDEX) {
+        const vxml_cmeta_filled_row *filled;
+        if (subdialog->filled >= program->filled_count ||
+            program->filled == NULL)
+            return VXML_INVALID_STRUCTURE;
+        filled = &program->filled[subdialog->filled];
+        if (filled->form != profile->active_form ||
+            filled->mode != VXML_CMETA_FILLED_FIELD ||
+            filled->field != VXML_CMETA_NO_INDEX)
+            return VXML_INVALID_STRUCTURE;
+        status = execute_filled_handler(
+            profile, program, form, filled);
+        if (status != VXML_OK || profile->exit_requested)
+            return status;
+    }
+
+    if (form->filled_count == 0u)
+        return VXML_OK;
+    if (form->first_filled == VXML_CMETA_NO_INDEX ||
+        !range_valid(
+            form->first_filled, form->filled_count,
+            program->filled_count) ||
+        program->filled == NULL)
+        return VXML_INVALID_STRUCTURE;
+
+    for (offset = 0u; offset < form->filled_count; ++offset) {
+        const vxml_cmeta_filled_row *filled =
+            &program->filled[form->first_filled + offset];
+        status = filled_should_run_for_roots(
+            profile, program, form, filled,
+            &completed_root_field, 1u, &run);
         if (status != VXML_OK) return status;
         if (!run) continue;
         status = execute_filled_handler(
@@ -6029,6 +6144,130 @@ failure:
     return status;
 }
 
+static const cmeta_data_field_desc *subdialog_result_member_by_name(
+    const cmeta_data_desc *result_data,
+    vxml_cmeta_name_view name) {
+    const cmeta_data_struct_shape *shape;
+    size_t index;
+    if (!cmeta_data_desc_valid(result_data) ||
+        result_data->kind != CMETA_DATA_STRUCT ||
+        result_data->storage_type == NULL ||
+        result_data->shape == NULL ||
+        name.data == NULL || name.size == 0u)
+        return NULL;
+    shape = (const cmeta_data_struct_shape *)result_data->shape;
+    if (shape->field_count != 0u && shape->fields == NULL)
+        return NULL;
+    for (index = 0u; index < shape->field_count; ++index) {
+        const cmeta_data_field_desc *field = &shape->fields[index];
+        size_t field_name_size;
+        if (field->name == NULL || field->value == NULL ||
+            field->value->storage_type == NULL)
+            return NULL;
+        field_name_size = strlen(field->name);
+        if (field_name_size == name.size &&
+            memcmp(field->name, name.data, name.size) == 0)
+            return field;
+    }
+    return NULL;
+}
+
+static vxml_status subdialog_stage_return_data(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_subdialog_row *subdialog,
+    const vxml_cmeta_subdialog_completion_mailbox *mailbox) {
+    const cmeta_data_struct_shape *root_shape;
+    const cmeta_data_struct_shape *result_shape;
+    const cmeta_data_field_desc *root_field;
+    unsigned char *result_object;
+    cmeta_status meta_status;
+    size_t index;
+
+    if (profile == NULL || program == NULL || subdialog == NULL ||
+        mailbox == NULL ||
+        mailbox->kind != VXML_CMETA_SUBDIALOG_RETURN_DATA ||
+        (mailbox->entry_count != 0u && mailbox->entries == NULL))
+        return VXML_INVALID_STRUCTURE;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL ||
+        subdialog->root_field >= root_shape->field_count ||
+        !cmeta_data_desc_valid(subdialog->result_data) ||
+        subdialog->result_data->kind != CMETA_DATA_STRUCT ||
+        subdialog->result_data->storage_type == NULL ||
+        subdialog->result_data->shape == NULL)
+        return VXML_INVALID_STRUCTURE;
+    root_field = &root_shape->fields[subdialog->root_field];
+    if (root_field->value != subdialog->result_data ||
+        root_field->offset != subdialog->field_offset ||
+        subdialog->field_offset > program->root->storage_type->size ||
+        subdialog->result_data->storage_type->size >
+            program->root->storage_type->size - subdialog->field_offset)
+        return VXML_INVALID_STRUCTURE;
+    result_shape =
+        (const cmeta_data_struct_shape *)subdialog->result_data->shape;
+    if ((result_shape->field_count != 0u &&
+         result_shape->fields == NULL) ||
+        profile->staged_root.bound[subdialog->root_field] != 0u)
+        return VXML_SEMANTIC_ERROR;
+
+    for (index = 0u; index < mailbox->entry_count; ++index) {
+        const vxml_cmeta_subdialog_result_entry_v1 *entry =
+            &mailbox->entries[index];
+        const cmeta_data_field_desc *member;
+        size_t prior;
+        if (entry->name.data == NULL || entry->name.size == 0u ||
+            entry->value.kind == VXML_CMETA_VALUE_UNDEFINED)
+            return VXML_SEMANTIC_ERROR;
+        for (prior = 0u; prior < index; ++prior) {
+            const vxml_cmeta_name_view previous =
+                mailbox->entries[prior].name;
+            if (previous.size == entry->name.size &&
+                previous.data != NULL &&
+                memcmp(
+                    previous.data, entry->name.data,
+                    entry->name.size) == 0)
+                return VXML_SEMANTIC_ERROR;
+        }
+        member = subdialog_result_member_by_name(
+            subdialog->result_data, entry->name);
+        if (member == NULL ||
+            member->offset > subdialog->result_data->storage_type->size ||
+            member->value->storage_type->size >
+                subdialog->result_data->storage_type->size -
+                    member->offset)
+            return VXML_SEMANTIC_ERROR;
+    }
+
+    result_object =
+        profile->staged_root.storage + subdialog->field_offset;
+    meta_status = cmeta_data_value_init_zero(
+        subdialog->result_data, result_object);
+    if (meta_status != CMETA_OK)
+        return buffer_status(meta_status);
+    profile->staged_root.bound[subdialog->root_field] = 1u;
+
+    for (index = 0u; index < mailbox->entry_count; ++index) {
+        const vxml_cmeta_subdialog_result_entry_v1 *entry =
+            &mailbox->entries[index];
+        const cmeta_data_field_desc *member =
+            subdialog_result_member_by_name(
+                subdialog->result_data, entry->name);
+        vxml_status status;
+        if (member == NULL)
+            return VXML_INVALID_STRUCTURE;
+        status = assign_scalar_object(
+            member->value,
+            result_object + member->offset,
+            &entry->value,
+            program->max_string_bytes);
+        if (status != VXML_OK)
+            return status;
+    }
+    return VXML_OK;
+}
+
+
 vxml_status vxml_session_cmeta_subdialog_run_ready(
     vxml_session *session,
     bool *out_progressed) {
@@ -6143,13 +6382,48 @@ vxml_status vxml_session_cmeta_subdialog_run_ready(
         return VXML_OK;
     }
 
-    /*
-     * RETURN_DATA uses this envelope but is intentionally executable only
-     * after #191 adds the atomic parent-result transaction.
-     */
+    if (mailbox->kind == VXML_CMETA_SUBDIALOG_RETURN_DATA) {
+        const vxml_cmeta_subdialog_row *subdialog =
+            &program->subdialogs[profile->active_subdialog];
+        if (subdialog->form != profile->active_form) {
+            subdialog_mailbox_payload_reset(mailbox);
+            profile->active_subdialog = VXML_CMETA_NO_INDEX;
+            return session_fail(impl, VXML_INVALID_STRUCTURE);
+        }
+        if (!transaction_begin(profile, program)) {
+            subdialog_mailbox_payload_reset(mailbox);
+            profile->active_subdialog = VXML_CMETA_NO_INDEX;
+            return session_fail(impl, VXML_ALLOCATION_FAILED);
+        }
+        status = subdialog_stage_return_data(
+            profile, program, subdialog, mailbox);
+        if (status == VXML_OK)
+            status = execute_subdialog_filled_process(
+                profile, program, form, subdialog);
+        if (status != VXML_OK) {
+            transaction_reset(profile, program);
+            subdialog_mailbox_payload_reset(mailbox);
+            profile->active_subdialog = VXML_CMETA_NO_INDEX;
+            return session_fail(impl, status);
+        }
+
+        transaction_commit(profile, program);
+        subdialog_mailbox_payload_reset(mailbox);
+        profile->active_subdialog = VXML_CMETA_NO_INDEX;
+
+        if (profile->exit_requested) {
+            terminal_publish(profile);
+            impl->state = VXML_SESSION_EXITED;
+            impl->error = VXML_OK;
+            return VXML_OK;
+        }
+        return select_directed_item(
+            impl, program, profile, form, profile->active_form);
+    }
+
     subdialog_mailbox_payload_reset(mailbox);
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
-    return session_fail(impl, VXML_UNSUPPORTED_FEATURE);
+    return session_fail(impl, VXML_INVALID_STRUCTURE);
 }
 
 vxml_status vxml_session_cmeta_raise(
