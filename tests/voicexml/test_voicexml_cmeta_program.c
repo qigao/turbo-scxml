@@ -2221,6 +2221,83 @@ spec("VoiceXML CMeta program compiler") {
                 subdialog->src, "child.vxml#entry",
                 subdialog->src_size), 0);
         check_true(subdialog->condition != VXML_CMETA_NO_INDEX);
+        check_equal(subdialog->filled, VXML_CMETA_NO_INDEX);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("compiles subdialog-local and form filled targets over result-bearing items") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'><grammar type='application/srgs+xml' src='v.grxml'/></field>"
+            "<subdialog name='nested' src='child.vxml#entry'>"
+            "<filled><assign name='value' expr='value + 1'/></filled>"
+            "</subdialog>"
+            "<filled mode='all' namelist='value nested'>"
+            "<assign name='flag' expr='true'/></filled>"
+            "<filled mode='any' namelist='nested'>"
+            "<assign name='flag' expr='false'/></filled>"
+            "<filled><assign name='value' expr='value + 2'/></filled>"
+            "</form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            subdialog_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_form_row *form;
+        const vxml_cmeta_subdialog_row *subdialog;
+        const vxml_cmeta_filled_row *local;
+        const vxml_cmeta_filled_row *all;
+        const vxml_cmeta_filled_row *any;
+        const vxml_cmeta_filled_row *defaults;
+
+        options.max_fields = 4u;
+        options.max_grammar_bytes = 128u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        form = &profile->forms[0];
+        subdialog = &profile->subdialogs[form->first_subdialog];
+        check_true(subdialog->filled != VXML_CMETA_NO_INDEX);
+        check_equal(form->filled_count, (size_t)3u);
+        check_equal(profile->filled_count, (size_t)4u);
+
+        local = &profile->filled[subdialog->filled];
+        check_equal(local->form, (size_t)0u);
+        check_equal(local->field, VXML_CMETA_NO_INDEX);
+        check_equal(local->mode, VXML_CMETA_FILLED_FIELD);
+        check_true(local->action_end > local->first_action);
+
+        all = &profile->filled[form->first_filled + 0u];
+        any = &profile->filled[form->first_filled + 1u];
+        defaults = &profile->filled[form->first_filled + 2u];
+        check_equal(all->mode, VXML_CMETA_FILLED_ALL);
+        check_equal(all->target_count, (size_t)2u);
+        check_equal(
+            profile->filled_root_fields[all->first_target + 0u],
+            (size_t)0u);
+        check_equal(
+            profile->filled_root_fields[all->first_target + 1u],
+            (size_t)2u);
+        check_equal(any->mode, VXML_CMETA_FILLED_ANY);
+        check_equal(any->target_count, (size_t)1u);
+        check_equal(
+            profile->filled_root_fields[any->first_target],
+            (size_t)2u);
+        check_equal(defaults->mode, VXML_CMETA_FILLED_ALL);
+        check_equal(defaults->target_count, (size_t)2u);
+        check_equal(
+            profile->filled_root_fields[defaults->first_target + 0u],
+            (size_t)0u);
+        check_equal(
+            profile->filled_root_fields[defaults->first_target + 1u],
+            (size_t)2u);
 
         vxml_program_destroy(&program);
     }
@@ -2315,7 +2392,7 @@ spec("VoiceXML CMeta program compiler") {
             {
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
                 "datamodel='cmeta'><form><subdialog name='nested' src='c'>"
-                "<filled/>"
+                "<filled/><filled/>"
                 "</subdialog></form></vxml>",
                 VXML_INVALID_STRUCTURE
             }
