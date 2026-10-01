@@ -218,12 +218,8 @@ static bool copy_param(
             return false;
         output->value = input->value;
         if (input->value.kind == VXML_CMETA_VALUE_STRING) {
-            if ((input->value.data.string.size != 0u &&
-                 input->value.data.string.data == NULL) ||
-                (input->value.data.string.size != 0u &&
-                 memchr(
-                     input->value.data.string.data, '\0',
-                     input->value.data.string.size) != NULL))
+            if (input->value.data.string.size != 0u &&
+                input->value.data.string.data == NULL)
                 return false;
             owned = NULL;
             if (!append_storage(
@@ -239,10 +235,7 @@ static bool copy_param(
     } else if (input->source == VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
         if (input->value.kind != VXML_CMETA_VALUE_UNDEFINED ||
             (input->literal.size != 0u &&
-             (input->literal.data == NULL ||
-              memchr(
-                  input->literal.data, '\0',
-                  input->literal.size) != NULL)))
+             input->literal.data == NULL))
             return false;
         owned = NULL;
         if (!append_storage(
@@ -1030,7 +1023,16 @@ vxml_status vxml_cmeta_subdialog_owner_init(
         config->child_session_options->struct_size < child_prefix ||
         config->child_session_options->initial_root == NULL ||
         config->child_session_options->max_transaction_bytes == 0u ||
-        config->child_session_options->max_execution_steps == 0u)
+        config->child_session_options->max_execution_steps == 0u ||
+        config->child_session_options->struct_size <
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                max_subdialog_completion_bytes) +
+                sizeof(
+                    config->child_session_options
+                        ->max_subdialog_completion_bytes) ||
+        config->child_session_options->max_subdialog_snapshot_bytes == 0u ||
+        config->child_session_options->max_subdialog_completion_bytes == 0u)
         return VXML_INVALID_ARGUMENT;
 
     impl = (owner_impl *)calloc(1u, sizeof(*impl));
