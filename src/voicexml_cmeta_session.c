@@ -19,6 +19,8 @@ static vxml_status read_scalar_value(
     unsigned char *string_scratch, size_t string_capacity,
     vxml_cmeta_value_view *out_value);
 
+static bool range_valid(size_t first, size_t count, size_t total);
+
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     const size_t v1_prefix_size =
@@ -97,6 +99,24 @@ static bool session_collect_options_valid(
     return adapter != NULL &&
         adapter->abi_version == VXML_CMETA_COLLECT_ADAPTER_ABI_V1 &&
         adapter->struct_size >= adapter_prefix_size &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
+
+static bool session_subdialog_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_subdialog_snapshot_bytes) +
+        sizeof(options->max_subdialog_snapshot_bytes);
+    const vxml_cmeta_subdialog_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size ||
+        options->max_subdialog_snapshot_bytes == 0u)
+        return false;
+    adapter = options->subdialog;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
         adapter->prepare != NULL &&
         adapter->cancel != NULL;
 }
@@ -329,7 +349,9 @@ static bool session_subdialogs_valid(
     const cmeta_data_struct_shape *shape = session_root_shape(program);
     size_t index;
     if (program == NULL || shape == NULL ||
-        (program->subdialog_count != 0u && program->subdialogs == NULL))
+        (program->subdialog_count != 0u && program->subdialogs == NULL) ||
+        (program->subdialog_param_count != 0u &&
+         program->subdialog_params == NULL))
         return false;
     for (index = 0u; index < program->subdialog_count; ++index) {
         const vxml_cmeta_subdialog_row *row =
@@ -354,8 +376,47 @@ static bool session_subdialogs_valid(
             return false;
         field_name_size = strlen(field->name);
         if (field_name_size != row->name_size ||
-            memcmp(field->name, row->name, row->name_size) != 0)
+            memcmp(field->name, row->name, row->name_size) != 0 ||
+            !range_valid(
+                row->first_param, row->param_count,
+                program->subdialog_param_count))
             return false;
+        {
+            size_t offset;
+            for (offset = 0u; offset < row->param_count; ++offset) {
+                const vxml_cmeta_subdialog_param_row *param =
+                    &program->subdialog_params[row->first_param + offset];
+                size_t prior;
+                if (param->subdialog != index ||
+                    param->name == NULL || param->name_size == 0u)
+                    return false;
+                if (param->source == VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+                    if (param->expression == VXML_CMETA_NO_INDEX ||
+                        param->expression >= program->expression_count ||
+                        param->literal != NULL || param->literal_size != 0u)
+                        return false;
+                } else if (param->source ==
+                               VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+                    if (param->expression != VXML_CMETA_NO_INDEX ||
+                        param->literal == NULL ||
+                        param->literal_size >
+                            program->max_subdialog_param_value_bytes)
+                        return false;
+                } else {
+                    return false;
+                }
+                for (prior = 0u; prior < offset; ++prior) {
+                    const vxml_cmeta_subdialog_param_row *previous =
+                        &program->subdialog_params[
+                            row->first_param + prior];
+                    if (previous->name_size == param->name_size &&
+                        memcmp(
+                            previous->name, param->name,
+                            param->name_size) == 0)
+                        return false;
+                }
+            }
+        }
     }
     return true;
 }
@@ -833,6 +894,41 @@ static void settle_prompt_media(
     session->prompt_media_generation = 0u;
 }
 
+
+static void subdialog_snapshot_destroy(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    vxml_free(session->subdialog_snapshot_storage);
+    vxml_free(session->subdialog_snapshot_params);
+    session->subdialog_snapshot_storage = NULL;
+    session->subdialog_snapshot_params = NULL;
+    session->subdialog_snapshot_storage_size = 0u;
+    session->subdialog_snapshot_storage_capacity = 0u;
+    session->subdialog_snapshot_param_count = 0u;
+    session->subdialog_snapshot_generation = UINT64_C(0);
+}
+
+static void settle_subdialog(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    if (session->subdialog_prepared) {
+        vxml_cmeta_subdialog_ticket_v1 ticket =
+            session->subdialog_ticket;
+        session->subdialog_prepared = false;
+        session->subdialog_ticket =
+            (vxml_cmeta_subdialog_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->subdialog_in_flight &&
+               session->subdialog_adapter != NULL) {
+        const uint64_t generation = session->subdialog_generation;
+        session->subdialog_in_flight = false;
+        session->subdialog_adapter->cancel(
+            session->subdialog_user, generation);
+    }
+    subdialog_snapshot_destroy(session);
+}
+
 static void session_data_destroy(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
@@ -850,6 +946,7 @@ static void session_data_destroy(
         &session->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_CLOSED,
         memory_order_release);
+    settle_subdialog(session);
     if (session->collect_prepared) {
         vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
         session->collect_prepared = false;
@@ -1141,6 +1238,219 @@ static vxml_status evaluate_condition(
     if (value.kind != VXML_CMETA_VALUE_BOOL)
         return VXML_INVALID_STRUCTURE;
     *out_value = value.data.boolean;
+    return VXML_OK;
+}
+
+
+static char *subdialog_snapshot_copy_bytes(
+    vxml_cmeta_session_data *session,
+    const char *data, size_t size) {
+    char *destination;
+    if (session == NULL || size == 0u) return NULL;
+    if (data == NULL ||
+        session->subdialog_snapshot_storage_size >
+            session->subdialog_snapshot_storage_capacity ||
+        size > session->subdialog_snapshot_storage_capacity -
+            session->subdialog_snapshot_storage_size ||
+        session->subdialog_snapshot_storage == NULL)
+        return NULL;
+    destination = session->subdialog_snapshot_storage +
+        session->subdialog_snapshot_storage_size;
+    memcpy(destination, data, size);
+    session->subdialog_snapshot_storage_size += size;
+    return destination;
+}
+
+static size_t subdialog_scalar_value_bytes(
+    vxml_cmeta_value_kind kind) {
+    switch (kind) {
+    case VXML_CMETA_VALUE_UNDEFINED:
+        return 0u;
+    case VXML_CMETA_VALUE_BOOL:
+        return sizeof(bool);
+    case VXML_CMETA_VALUE_SINT:
+        return sizeof(int64_t);
+    case VXML_CMETA_VALUE_UINT:
+        return sizeof(uint64_t);
+    case VXML_CMETA_VALUE_FLOAT:
+        return sizeof(double);
+    case VXML_CMETA_VALUE_STRING:
+    default:
+        return 0u;
+    }
+}
+
+static vxml_status build_subdialog_snapshot(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_subdialog_row *subdialog) {
+    const vxml_cmeta_form_row *form;
+    size_t array_bytes = 0u;
+    size_t storage_capacity;
+    size_t offset;
+
+    if (session == NULL || program == NULL || subdialog == NULL ||
+        subdialog->form >= program->form_count ||
+        program->forms == NULL ||
+        !range_valid(
+            subdialog->first_param, subdialog->param_count,
+            program->subdialog_param_count) ||
+        (subdialog->param_count != 0u &&
+         program->subdialog_params == NULL) ||
+        session->max_subdialog_snapshot_bytes == 0u)
+        return VXML_INVALID_CONTRACT;
+
+    if (session->subdialog_snapshot_generation ==
+            session->subdialog_generation &&
+        session->subdialog_generation != UINT64_C(0) &&
+        session->subdialog_snapshot_param_count == subdialog->param_count)
+        return VXML_OK;
+
+    subdialog_snapshot_destroy(session);
+    if (subdialog->param_count == 0u) {
+        session->subdialog_snapshot_generation =
+            session->subdialog_generation;
+        return VXML_OK;
+    }
+
+    if (!checked_multiply(
+            subdialog->param_count,
+            sizeof(vxml_cmeta_subdialog_param_v1),
+            &array_bytes) ||
+        array_bytes > session->max_subdialog_snapshot_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    storage_capacity =
+        session->max_subdialog_snapshot_bytes - array_bytes;
+
+    session->subdialog_snapshot_params =
+        (vxml_cmeta_subdialog_param_v1 *)vxml_calloc(
+            subdialog->param_count,
+            sizeof(*session->subdialog_snapshot_params));
+    if (session->subdialog_snapshot_params == NULL)
+        return VXML_ALLOCATION_FAILED;
+    if (storage_capacity != 0u) {
+        session->subdialog_snapshot_storage =
+            (char *)vxml_malloc(storage_capacity);
+        if (session->subdialog_snapshot_storage == NULL) {
+            subdialog_snapshot_destroy(session);
+            return VXML_ALLOCATION_FAILED;
+        }
+    }
+    session->subdialog_snapshot_storage_capacity = storage_capacity;
+    session->subdialog_snapshot_param_count = subdialog->param_count;
+    form = &program->forms[subdialog->form];
+
+    for (offset = 0u; offset < subdialog->param_count; ++offset) {
+        const vxml_cmeta_subdialog_param_row *row =
+            &program->subdialog_params[subdialog->first_param + offset];
+        vxml_cmeta_subdialog_param_v1 *out =
+            &session->subdialog_snapshot_params[offset];
+        char *owned_name;
+
+        if (row->subdialog != session->active_subdialog ||
+            row->name == NULL || row->name_size == 0u) {
+            subdialog_snapshot_destroy(session);
+            return VXML_INVALID_STRUCTURE;
+        }
+        owned_name = subdialog_snapshot_copy_bytes(
+            session, row->name, row->name_size);
+        if (owned_name == NULL) {
+            subdialog_snapshot_destroy(session);
+            return VXML_LIMIT_EXCEEDED;
+        }
+        out->name = (vxml_cmeta_name_view){
+            owned_name, row->name_size};
+        out->source = row->source;
+
+        if (row->source == VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+            char *owned_literal = NULL;
+            if (row->expression != VXML_CMETA_NO_INDEX ||
+                row->literal == NULL ||
+                row->literal_size >
+                    program->max_subdialog_param_value_bytes) {
+                subdialog_snapshot_destroy(session);
+                return VXML_INVALID_STRUCTURE;
+            }
+            if (row->literal_size != 0u) {
+                owned_literal = subdialog_snapshot_copy_bytes(
+                    session, row->literal, row->literal_size);
+                if (owned_literal == NULL) {
+                    subdialog_snapshot_destroy(session);
+                    return VXML_LIMIT_EXCEEDED;
+                }
+            }
+            out->literal = (vxml_cmeta_name_view){
+                owned_literal, row->literal_size};
+            continue;
+        }
+
+        if (row->source == VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+            const size_t scopes[2] = {
+                form->scope, program->document_scope};
+            vxml_cmeta_value_view value = {0};
+            vxml_status status;
+            if (row->expression == VXML_CMETA_NO_INDEX ||
+                row->expression >= program->expression_count) {
+                subdialog_snapshot_destroy(session);
+                return VXML_INVALID_STRUCTURE;
+            }
+            status = evaluate_expression(
+                session, program, false, row->expression,
+                scopes, 2u, &value);
+            if (status != VXML_OK) {
+                subdialog_snapshot_destroy(session);
+                return status;
+            }
+            if (value.kind == VXML_CMETA_VALUE_UNDEFINED) {
+                subdialog_snapshot_destroy(session);
+                return VXML_SEMANTIC_ERROR;
+            }
+            if (value.kind == VXML_CMETA_VALUE_STRING) {
+                char *owned_string = NULL;
+                if ((value.data.string.size != 0u &&
+                     value.data.string.data == NULL) ||
+                    value.data.string.size >
+                        program->max_subdialog_param_value_bytes) {
+                    subdialog_snapshot_destroy(session);
+                    return value.data.string.size >
+                            program->max_subdialog_param_value_bytes
+                        ? VXML_LIMIT_EXCEEDED
+                        : VXML_INVALID_STRUCTURE;
+                }
+                if (value.data.string.size != 0u) {
+                    owned_string = subdialog_snapshot_copy_bytes(
+                        session,
+                        value.data.string.data,
+                        value.data.string.size);
+                    if (owned_string == NULL) {
+                        subdialog_snapshot_destroy(session);
+                        return VXML_LIMIT_EXCEEDED;
+                    }
+                }
+                value.data.string.data = owned_string;
+            } else {
+                const size_t scalar_bytes =
+                    subdialog_scalar_value_bytes(value.kind);
+                if (value.kind != VXML_CMETA_VALUE_UNDEFINED &&
+                    scalar_bytes == 0u) {
+                    subdialog_snapshot_destroy(session);
+                    return VXML_INVALID_STRUCTURE;
+                }
+                if (scalar_bytes >
+                    program->max_subdialog_param_value_bytes) {
+                    subdialog_snapshot_destroy(session);
+                    return VXML_LIMIT_EXCEEDED;
+                }
+            }
+            out->value = value;
+            continue;
+        }
+
+        subdialog_snapshot_destroy(session);
+        return VXML_INVALID_STRUCTURE;
+    }
+    session->subdialog_snapshot_generation =
+        session->subdialog_generation;
     return VXML_OK;
 }
 
@@ -2437,6 +2747,24 @@ vxml_status vxml_cmeta_session_init_profile(
             profile->prompt_media_user = options->prompt_media_user;
         }
     }
+    {
+        const size_t subdialog_tail =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                max_subdialog_snapshot_bytes) +
+            sizeof(options->max_subdialog_snapshot_bytes);
+        if (options->struct_size >= subdialog_tail &&
+            options->subdialog != NULL) {
+            if (!session_subdialog_options_valid(options)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->subdialog_adapter = options->subdialog;
+            profile->subdialog_user = options->subdialog_user;
+            profile->max_subdialog_snapshot_bytes =
+                options->max_subdialog_snapshot_bytes;
+        }
+    }
     if (program->event_handler_count != 0u) {
         size_t name_bytes;
         size_t index;
@@ -3129,6 +3457,138 @@ static const vxml_session_impl *cmeta_session(const vxml_session *session) {
     return impl->program != NULL &&
             impl->program->profile_kind == VXML_PROFILE_CMETA
         ? impl : NULL;
+}
+
+
+vxml_status vxml_session_cmeta_subdialog_prepare(
+    vxml_session *session, const char **out_error) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_subdialog_row *subdialog;
+    vxml_cmeta_subdialog_request_v1 request = {0};
+    vxml_cmeta_subdialog_ticket_v1 ticket = {0};
+    vxml_status status;
+
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_subdialog == VXML_CMETA_NO_INDEX ||
+        profile->active_subdialog >= program->subdialog_count ||
+        program->subdialogs == NULL ||
+        profile->subdialog_generation == 0u)
+        return VXML_INVALID_STATE;
+    if (profile->subdialog_adapter == NULL ||
+        profile->max_subdialog_snapshot_bytes == 0u)
+        return VXML_INVALID_CONTRACT;
+    if (profile->subdialog_prepared || profile->subdialog_in_flight)
+        return VXML_INVALID_STATE;
+
+    subdialog = &program->subdialogs[profile->active_subdialog];
+    if (subdialog->form != profile->active_form ||
+        subdialog->src == NULL || subdialog->src_size == 0u ||
+        !range_valid(
+            subdialog->first_param, subdialog->param_count,
+            program->subdialog_param_count))
+        return VXML_INVALID_STRUCTURE;
+
+    status = build_subdialog_snapshot(
+        profile, program, subdialog);
+    if (status != VXML_OK)
+        return status;
+
+    request = (vxml_cmeta_subdialog_request_v1){
+        .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_subdialog_request_v1),
+        .generation = profile->subdialog_generation,
+        .src = {subdialog->src, subdialog->src_size},
+        .params = profile->subdialog_snapshot_param_count != 0u
+            ? profile->subdialog_snapshot_params : NULL,
+        .param_count = profile->subdialog_snapshot_param_count
+    };
+    status = profile->subdialog_adapter->prepare(
+        profile->subdialog_user, &request, &ticket, out_error);
+    if (status != VXML_OK) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return status;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return VXML_INVALID_CONTRACT;
+    }
+    profile->subdialog_ticket = ticket;
+    profile->subdialog_prepared = true;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_subdialog_commit(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_subdialog_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->subdialog_prepared ||
+        profile->subdialog_in_flight ||
+        profile->subdialog_ticket.commit == NULL ||
+        profile->subdialog_ticket.discard == NULL ||
+        profile->active_subdialog == VXML_CMETA_NO_INDEX ||
+        profile->subdialog_generation == 0u)
+        return VXML_INVALID_STATE;
+    ticket = profile->subdialog_ticket;
+    profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
+    profile->subdialog_prepared = false;
+    profile->subdialog_in_flight = true;
+    ticket.commit(ticket.user);
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_subdialog_discard(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_subdialog_ticket_v1 ticket;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->subdialog_prepared ||
+        profile->subdialog_in_flight ||
+        profile->subdialog_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+    ticket = profile->subdialog_ticket;
+    profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
+    profile->subdialog_prepared = false;
+    ticket.discard(ticket.user);
+    return VXML_OK;
 }
 
 static vxml_status selected_prompt_row(

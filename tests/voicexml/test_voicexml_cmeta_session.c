@@ -527,6 +527,143 @@ static vxml_cmeta_session_options_v1 subdialog_session_options(
     return options;
 }
 
+
+static vxml_cmeta_compile_options_v1 subdialog_param_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = subdialog_compile_options();
+    options.max_subdialog_params = 8u;
+    options.max_subdialog_param_name_bytes = 32u;
+    options.max_subdialog_param_value_bytes = 64u;
+    return options;
+}
+
+typedef struct cmeta_subdialog_probe {
+    vxml_status prepare_status;
+    size_t prepare_calls;
+    size_t commit_calls;
+    size_t discard_calls;
+    size_t cancel_calls;
+    uint64_t generation;
+    uint64_t cancel_generation;
+    size_t param_count;
+    bool active;
+    vxml_cmeta_subdialog_param_v1 params[8];
+    char names[8][32];
+    char values[8][64];
+} cmeta_subdialog_probe;
+
+static void cmeta_subdialog_commit(void *user) {
+    cmeta_subdialog_probe *probe = (cmeta_subdialog_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commit_calls;
+    probe->active = true;
+}
+
+static void cmeta_subdialog_discard(void *user) {
+    cmeta_subdialog_probe *probe = (cmeta_subdialog_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discard_calls;
+}
+
+static vxml_status cmeta_subdialog_prepare(
+    void *user,
+    const vxml_cmeta_subdialog_request_v1 *request,
+    vxml_cmeta_subdialog_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_subdialog_probe *probe = (cmeta_subdialog_probe *)user;
+    size_t index;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->generation == UINT64_C(0) ||
+        request->src.data == NULL || request->src.size == 0u ||
+        request->param_count > 8u ||
+        ((request->params == NULL) != (request->param_count == 0u)))
+        return VXML_INVALID_ARGUMENT;
+    ++probe->prepare_calls;
+    probe->generation = request->generation;
+    probe->param_count = request->param_count;
+    memset(probe->params, 0, sizeof(probe->params));
+    memset(probe->names, 0, sizeof(probe->names));
+    memset(probe->values, 0, sizeof(probe->values));
+    for (index = 0u; index < request->param_count; ++index) {
+        const vxml_cmeta_subdialog_param_v1 *in = &request->params[index];
+        vxml_cmeta_subdialog_param_v1 *out = &probe->params[index];
+        if (in->name.data == NULL || in->name.size == 0u ||
+            in->name.size >= sizeof(probe->names[index]))
+            return VXML_INVALID_ARGUMENT;
+        memcpy(probe->names[index], in->name.data, in->name.size);
+        out->name = (vxml_cmeta_name_view){
+            probe->names[index], in->name.size};
+        out->source = in->source;
+        if (in->source == VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+            out->value = in->value;
+            if (in->value.kind == VXML_CMETA_VALUE_STRING) {
+                if ((in->value.data.string.size != 0u &&
+                     in->value.data.string.data == NULL) ||
+                    in->value.data.string.size >=
+                        sizeof(probe->values[index]))
+                    return VXML_INVALID_ARGUMENT;
+                if (in->value.data.string.size != 0u)
+                    memcpy(
+                        probe->values[index],
+                        in->value.data.string.data,
+                        in->value.data.string.size);
+                out->value.data.string.data = probe->values[index];
+            }
+        } else if (in->source == VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+            if ((in->literal.size != 0u && in->literal.data == NULL) ||
+                in->literal.size >= sizeof(probe->values[index]))
+                return VXML_INVALID_ARGUMENT;
+            if (in->literal.size != 0u)
+                memcpy(
+                    probe->values[index],
+                    in->literal.data, in->literal.size);
+            out->literal = (vxml_cmeta_name_view){
+                in->literal.size != 0u ? probe->values[index] : NULL,
+                in->literal.size};
+        } else {
+            return VXML_INVALID_ARGUMENT;
+        }
+    }
+    if (probe->prepare_status != VXML_OK) {
+        if (out_error != NULL) *out_error = "subdialog-probe";
+        return probe->prepare_status;
+    }
+    *out_ticket = (vxml_cmeta_subdialog_ticket_v1){
+        cmeta_subdialog_commit, cmeta_subdialog_discard, probe};
+    return VXML_OK;
+}
+
+static void cmeta_subdialog_cancel(
+    void *user, uint64_t generation) {
+    cmeta_subdialog_probe *probe = (cmeta_subdialog_probe *)user;
+    if (probe == NULL) return;
+    ++probe->cancel_calls;
+    probe->cancel_generation = generation;
+    probe->active = false;
+}
+
+static const vxml_cmeta_subdialog_adapter_v1 cmeta_subdialog_adapter = {
+    .abi_version = VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_cmeta_subdialog_adapter_v1),
+    .prepare = cmeta_subdialog_prepare,
+    .cancel = cmeta_subdialog_cancel};
+
+static vxml_cmeta_session_options_v1 subdialog_param_session_options(
+    const vxml_cmeta_subdialog_test_root *root,
+    const vxml_cmeta_name_view *undefined,
+    size_t undefined_count,
+    cmeta_subdialog_probe *probe,
+    size_t max_snapshot_bytes) {
+    vxml_cmeta_session_options_v1 options =
+        subdialog_session_options(root, undefined, undefined_count);
+    options.subdialog = &cmeta_subdialog_adapter;
+    options.subdialog_user = probe;
+    options.max_subdialog_snapshot_bytes = max_snapshot_bytes;
+    return options;
+}
+
 static vxml_cmeta_session_options_v1 session_options(
     const vxml_cmeta_session_root *root) {
     return (vxml_cmeta_session_options_v1){
@@ -1427,6 +1564,189 @@ spec("VoiceXML CMeta session execution") {
         check_equal(row->src_size, sizeof("child.vxml#entry") - 1u);
         check_equal(
             memcmp(row->src, "child.vxml#entry", row->src_size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+
+    it("owns typed and literal subdialog parameters across discard retry and cancel") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='child' src='child.vxml#entry'>"
+            "<param name='number' expr='value + 1'/>"
+            "<param name='enabled' expr='flag'/>"
+            "<param name='text' expr='&quot;snap&quot;'/>"
+            "<param name='raw' value='0042'/>"
+            "</subdialog></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_param_compile_options();
+        const vxml_cmeta_name_view undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        vxml_cmeta_subdialog_test_root root = {
+            .value = 7, .flag = true, .child = {99}};
+        cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_param_session_options(
+                &root, undefined, 1u, &probe, 2048u);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        uint64_t generation;
+        const char *snapshot_string;
+        size_t snapshot_string_size;
+        bool snapshot_string_owned = false;
+        bool snapshot_string_not_scratch = false;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        generation = runtime->subdialog_generation;
+        check_true(generation != UINT64_C(0));
+        check_equal(probe.prepare_calls, (size_t)0u);
+
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(probe.generation, generation);
+        check_equal(probe.param_count, (size_t)4u);
+        check_equal(probe.params[0].source, VXML_CMETA_SUBDIALOG_PARAM_TYPED);
+        check_equal(probe.params[0].value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(probe.params[0].value.data.sint, INT64_C(8));
+        check_equal(probe.params[1].value.kind, VXML_CMETA_VALUE_BOOL);
+        check_true(probe.params[1].value.data.boolean);
+        check_equal(probe.params[2].value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(probe.params[2].value.data.string.size, (size_t)4u);
+        check_equal(
+            memcmp(probe.params[2].value.data.string.data, "snap", 4u), 0);
+        check_equal(
+            probe.params[3].source, VXML_CMETA_SUBDIALOG_PARAM_LITERAL);
+        check_equal(probe.params[3].literal.size, (size_t)4u);
+        check_equal(memcmp(probe.params[3].literal.data, "0042", 4u), 0);
+
+        check_equal(runtime->subdialog_snapshot_generation, generation);
+        check_equal(runtime->subdialog_snapshot_param_count, (size_t)4u);
+        snapshot_string =
+            runtime->subdialog_snapshot_params[2].value.data.string.data;
+        snapshot_string_size =
+            runtime->subdialog_snapshot_params[2].value.data.string.size;
+        if (runtime->subdialog_snapshot_storage != NULL &&
+            snapshot_string != NULL) {
+            const uintptr_t begin =
+                (uintptr_t)runtime->subdialog_snapshot_storage;
+            const uintptr_t end =
+                begin + runtime->subdialog_snapshot_storage_capacity;
+            const uintptr_t value = (uintptr_t)snapshot_string;
+            snapshot_string_owned =
+                value >= begin && value <= end &&
+                snapshot_string_size <= (size_t)(end - value);
+        }
+        if (runtime->expression_scratch == NULL ||
+            snapshot_string == NULL) {
+            snapshot_string_not_scratch = true;
+        } else {
+            const uintptr_t begin =
+                (uintptr_t)runtime->expression_scratch;
+            const uintptr_t end =
+                begin + runtime->expression_scratch_bytes;
+            const uintptr_t value = (uintptr_t)snapshot_string;
+            snapshot_string_not_scratch =
+                value < begin || value >= end;
+        }
+        check_true(snapshot_string_owned);
+        check_true(snapshot_string_not_scratch);
+
+        check_equal(
+            vxml_session_cmeta_subdialog_discard(&session),
+            VXML_OK);
+        check_equal(probe.discard_calls, (size_t)1u);
+        check_equal(runtime->subdialog_snapshot_generation, generation);
+        check_not_null(runtime->subdialog_snapshot_params);
+
+        ((vxml_cmeta_subdialog_test_root *)
+            runtime->committed_root.storage)->value = 40;
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(probe.params[0].value.data.sint, INT64_C(8));
+        check_equal(
+            vxml_session_cmeta_subdialog_commit(&session),
+            VXML_OK);
+        check_equal(probe.commit_calls, (size_t)1u);
+        check_true(probe.active);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)1u);
+        check_equal(probe.cancel_generation, generation);
+        check_false(probe.active);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails subdialog parameter snapshot limits and evaluation before provider callback") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<subdialog name='child' src='child.vxml'>"
+            "<param name='number' expr='value + 1'/>"
+            "</subdialog></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            subdialog_param_compile_options();
+        const vxml_cmeta_name_view child_undefined[] = {
+            {"child", sizeof("child") - 1u}
+        };
+        const vxml_cmeta_name_view both_undefined[] = {
+            {"child", sizeof("child") - 1u},
+            {"value", sizeof("value") - 1u}
+        };
+        vxml_cmeta_subdialog_test_root root = {
+            .value = 7, .flag = true, .child = {0}};
+        cmeta_subdialog_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            subdialog_param_session_options(
+                &root, child_undefined, 1u, &probe,
+                sizeof(vxml_cmeta_subdialog_param_v1) - 1u);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_LIMIT_EXCEEDED);
+        check_equal(probe.prepare_calls, (size_t)0u);
+        check_null(session_data(&session)->subdialog_snapshot_params);
+        vxml_session_destroy(&session);
+
+        options = subdialog_param_session_options(
+            &root, both_undefined, 2u, &probe, 1024u);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_subdialog_prepare(&session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(probe.prepare_calls, (size_t)0u);
+        check_null(session_data(&session)->subdialog_snapshot_params);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);

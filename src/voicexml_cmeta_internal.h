@@ -67,7 +67,19 @@ typedef struct vxml_cmeta_subdialog_row {
     const char *src;
     size_t src_size;
     size_t condition;
+    size_t first_param;
+    size_t param_count;
 } vxml_cmeta_subdialog_row;
+
+typedef struct vxml_cmeta_subdialog_param_row {
+    size_t subdialog;
+    const char *name;
+    size_t name_size;
+    vxml_cmeta_subdialog_param_source source;
+    size_t expression;
+    const char *literal;
+    size_t literal_size;
+} vxml_cmeta_subdialog_param_row;
 
 typedef struct vxml_cmeta_form_row {
     size_t scope;
@@ -303,6 +315,8 @@ typedef struct vxml_cmeta_program_data {
     size_t initial_count;
     vxml_cmeta_subdialog_row *subdialogs;
     size_t subdialog_count;
+    vxml_cmeta_subdialog_param_row *subdialog_params;
+    size_t subdialog_param_count;
     vxml_cmeta_form_item_row *form_items;
     size_t form_item_count;
     vxml_cmeta_prompt_row *prompts;
@@ -342,6 +356,7 @@ typedef struct vxml_cmeta_program_data {
     size_t max_conditional_depth;
     size_t max_data_bind_depth;
     size_t max_data_bind_items;
+    size_t max_subdialog_param_value_bytes;
 } vxml_cmeta_program_data;
 
 typedef struct vxml_cmeta_root_storage {
@@ -428,6 +443,18 @@ typedef struct vxml_cmeta_session_data {
     size_t active_initial;
     size_t active_subdialog;
     uint64_t subdialog_generation;
+    const vxml_cmeta_subdialog_adapter_v1 *subdialog_adapter;
+    void *subdialog_user;
+    vxml_cmeta_subdialog_ticket_v1 subdialog_ticket;
+    bool subdialog_prepared;
+    bool subdialog_in_flight;
+    vxml_cmeta_subdialog_param_v1 *subdialog_snapshot_params;
+    size_t subdialog_snapshot_param_count;
+    uint64_t subdialog_snapshot_generation;
+    char *subdialog_snapshot_storage;
+    size_t subdialog_snapshot_storage_size;
+    size_t subdialog_snapshot_storage_capacity;
+    size_t max_subdialog_snapshot_bytes;
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;
