@@ -8055,6 +8055,241 @@ spec("VoiceXML CMeta session execution") {
         check_equal(value.data.sint, INT64_C(4));
     }
 
+    it("starts the default child form with typed and literal parameters atomically") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form id='entry'>"
+            "<var name='value'/><var name='text'/><var name='flag'/>"
+            "<var name='other' expr='4'/><block/></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 100, .other = 200, .late = 300, .flag = true};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        char text_bytes[] = "child";
+        const char false_bytes[] = "false";
+        vxml_cmeta_subdialog_param_v1 params[3] = {
+            {
+                .name = {"value", sizeof("value") - 1u},
+                .source = VXML_CMETA_SUBDIALOG_PARAM_TYPED,
+                .value = {
+                    .kind = VXML_CMETA_VALUE_SINT,
+                    .data.sint = INT64_C(7)}
+            },
+            {
+                .name = {"text", sizeof("text") - 1u},
+                .source = VXML_CMETA_SUBDIALOG_PARAM_TYPED,
+                .value = {
+                    .kind = VXML_CMETA_VALUE_STRING,
+                    .data.string = {
+                        text_bytes, sizeof(text_bytes) - 1u}}
+            },
+            {
+                .name = {"flag", sizeof("flag") - 1u},
+                .source = VXML_CMETA_SUBDIALOG_PARAM_LITERAL,
+                .literal = {
+                    false_bytes, sizeof(false_bytes) - 1u}
+            }
+        };
+        const vxml_cmeta_child_entry_v1 entry = {
+            .abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_child_entry_v1),
+            .params = params,
+            .param_count = 3u
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_value_view text = {0};
+        vxml_cmeta_value_view flag = {0};
+        vxml_cmeta_value_view other = {0};
+
+        reset_session_text_probe();
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_start_child(&session, &entry),
+            VXML_OK);
+        memset(text_bytes, 'x', sizeof(text_bytes) - 1u);
+        check_equal(
+            vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "value", sizeof("value") - 1u, &value),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "text", sizeof("text") - 1u, &text),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "flag", sizeof("flag") - 1u, &flag),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "other", sizeof("other") - 1u, &other),
+            VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(7));
+        check_equal(text.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(text.data.string.size, sizeof("child") - 1u);
+        check_equal(
+            memcmp(text.data.string.data, "child", sizeof("child") - 1u),
+            0);
+        check_equal(flag.kind, VXML_CMETA_VALUE_BOOL);
+        check_false(flag.data.boolean);
+        check_equal(other.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(other.data.sint, INT64_C(4));
+        check_true(session_text_assign_calls >= (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(session_text_live_resources, (size_t)0u);
+        check_equal(session_text_invalid_operations, (size_t)0u);
+    }
+
+    it("starts an explicit child fragment form through the same entry boundary") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<form id='first'><var name='value'/><block/></form>"
+            "<form id='second'><var name='late'/><block/></form>"
+            "</vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 1, .other = 2, .late = 3, .flag = true};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        const char literal[] = "12";
+        const vxml_cmeta_subdialog_param_v1 param = {
+            .name = {"late", sizeof("late") - 1u},
+            .source = VXML_CMETA_SUBDIALOG_PARAM_LITERAL,
+            .literal = {literal, sizeof(literal) - 1u}
+        };
+        const vxml_cmeta_child_entry_v1 entry = {
+            .abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_child_entry_v1),
+            .form_id = {"second", sizeof("second") - 1u},
+            .params = &param,
+            .param_count = 1u
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_value_view late = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_start_child(&session, &entry),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "late", sizeof("late") - 1u, &late),
+            VXML_OK);
+        check_equal(late.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(late.data.sint, INT64_C(12));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects missing unknown duplicate and incompatible child parameters atomically") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<var name='value'/><var name='other' expr='4'/><block/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 10, .other = 20, .late = 30, .flag = true};
+        size_t pass;
+
+        for (pass = 0u; pass < 4u; ++pass) {
+            const vxml_cmeta_session_options_v1 options =
+                session_options(&root);
+            vxml_cmeta_subdialog_param_v1 params[2] = {0};
+            vxml_cmeta_child_entry_v1 entry = {
+                .abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1,
+                .struct_size = sizeof(vxml_cmeta_child_entry_v1)
+            };
+            vxml_program program = {0};
+            vxml_session session = {0};
+            const vxml_cmeta_program_data *compiled;
+            vxml_cmeta_session_data *runtime;
+            bool declared = true;
+            bool bound = true;
+
+            if (pass == 1u) {
+                params[0].name = (vxml_cmeta_name_view){
+                    "missing", sizeof("missing") - 1u};
+                params[0].source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+                params[0].value.kind = VXML_CMETA_VALUE_SINT;
+                params[0].value.data.sint = INT64_C(7);
+                entry.params = params;
+                entry.param_count = 1u;
+            } else if (pass == 2u) {
+                params[0].name = (vxml_cmeta_name_view){
+                    "value", sizeof("value") - 1u};
+                params[0].source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+                params[0].value.kind = VXML_CMETA_VALUE_SINT;
+                params[0].value.data.sint = INT64_C(7);
+                params[1] = params[0];
+                params[1].value.data.sint = INT64_C(8);
+                entry.params = params;
+                entry.param_count = 2u;
+            } else if (pass == 3u) {
+                params[0].name = (vxml_cmeta_name_view){
+                    "value", sizeof("value") - 1u};
+                params[0].source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+                params[0].value.kind = VXML_CMETA_VALUE_BOOL;
+                params[0].value.data.boolean = true;
+                entry.params = params;
+                entry.param_count = 1u;
+            }
+
+            check_equal(
+                vxml_compile_cmeta(
+                    source, sizeof(source) - 1u, NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(&session, &program, &options),
+                VXML_OK);
+            check_equal(
+                vxml_session_cmeta_start_child(&session, &entry),
+                VXML_SEMANTIC_ERROR);
+            check_equal(
+                vxml_session_get_state(&session), VXML_SESSION_FAILED);
+            check_equal(
+                vxml_session_error(&session), VXML_SEMANTIC_ERROR);
+            compiled = program_data(&program);
+            runtime = session_data(&session);
+            check_true(scope_state(
+                runtime, compiled, compiled->forms[0].scope,
+                "value", &declared, &bound));
+            check_false(declared);
+            check_false(bound);
+            check_true(scope_state(
+                runtime, compiled, compiled->forms[0].scope,
+                "other", &declared, &bound));
+            check_false(declared);
+            check_false(bound);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+
     it("starts a named non-first CMeta form through the shared form-entry API") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "

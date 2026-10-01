@@ -236,6 +236,20 @@ typedef struct vxml_cmeta_subdialog_request_v1 {
     size_t param_count;
 } vxml_cmeta_subdialog_request_v1;
 
+#define VXML_CMETA_CHILD_ENTRY_ABI_V1 1u
+
+/*
+ * Public child-start request. form_id is optional: an empty view selects the
+ * document entry form. Parameter views are borrowed only for the start call.
+ */
+typedef struct vxml_cmeta_child_entry_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_cmeta_name_view form_id;
+    const vxml_cmeta_subdialog_param_v1 *params;
+    size_t param_count;
+} vxml_cmeta_child_entry_v1;
+
 typedef struct vxml_cmeta_subdialog_ticket_v1 {
     void (*commit)(void *user);
     void (*discard)(void *user);
@@ -673,6 +687,17 @@ vxml_status vxml_compile_cmeta(
 vxml_status vxml_session_init_cmeta(
     vxml_session *session, const vxml_program *program,
     const vxml_cmeta_session_options_v1 *options);
+
+/**
+ * Start one independent READY CMeta Session as a subdialog child.
+ *
+ * The selected form's form-level declarations are initialized in child-owned
+ * staged storage, then entry parameters are imported in the same transaction
+ * before FIA selection. No entry bytes survive the call.
+ */
+vxml_status vxml_session_cmeta_start_child(
+    vxml_session *session,
+    const vxml_cmeta_child_entry_v1 *entry);
 
 vxml_status vxml_session_cmeta_read(
     const vxml_session *session, const char *name, size_t name_size,

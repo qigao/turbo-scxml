@@ -9,9 +9,11 @@
 #include <data_bind_xml_provider.h>
 #include <data_bind_yaml_provider.h>
 
+#include <errno.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static vxml_status read_scalar_value(
@@ -3349,8 +3351,241 @@ static vxml_status select_menu(
     return VXML_OK;
 }
 
-vxml_status vxml_cmeta_session_start_profile_at(
-    vxml_session_impl *session, size_t form_index) {
+static const vxml_cmeta_declaration_row *child_form_parameter(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    vxml_cmeta_name_view name) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        name.data == NULL || name.size == 0u ||
+        memchr(name.data, '\0', name.size) != NULL ||
+        !range_valid(
+            form->first_declaration, form->declaration_count,
+            program->declaration_count) ||
+        (form->declaration_count != 0u &&
+         program->declarations == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->declaration_count; ++offset) {
+        const vxml_cmeta_declaration_row *row =
+            &program->declarations[form->first_declaration + offset];
+        if (row->scope == form->scope &&
+            row->name != NULL &&
+            row->name_size == name.size &&
+            memcmp(row->name, name.data, name.size) == 0)
+            return row;
+    }
+    return NULL;
+}
+
+static bool child_entry_contains_parameter(
+    const vxml_cmeta_child_entry_v1 *entry,
+    vxml_cmeta_name_view name) {
+    size_t index;
+    if (entry == NULL ||
+        (entry->param_count != 0u && entry->params == NULL))
+        return false;
+    for (index = 0u; index < entry->param_count; ++index) {
+        const vxml_cmeta_name_view candidate = entry->params[index].name;
+        if (candidate.data != NULL &&
+            candidate.size == name.size &&
+            memcmp(candidate.data, name.data, name.size) == 0)
+            return true;
+    }
+    return false;
+}
+
+static vxml_status child_literal_value(
+    const cmeta_data_desc *target,
+    vxml_cmeta_name_view literal,
+    size_t max_literal_bytes,
+    vxml_cmeta_value_view *out) {
+    char *text = NULL;
+    char *end = NULL;
+    vxml_status status = VXML_SEMANTIC_ERROR;
+
+    if (out == NULL || !cmeta_data_desc_valid(target) ||
+        target->storage_type == NULL ||
+        (literal.size != 0u &&
+         (literal.data == NULL ||
+          memchr(literal.data, '\0', literal.size) != NULL)) ||
+        max_literal_bytes == 0u ||
+        literal.size > max_literal_bytes)
+        return literal.size > max_literal_bytes
+            ? VXML_LIMIT_EXCEEDED : VXML_SEMANTIC_ERROR;
+
+    *out = (vxml_cmeta_value_view){0};
+    if (target->kind == CMETA_DATA_STRING) {
+        out->kind = VXML_CMETA_VALUE_STRING;
+        out->data.string.data = literal.data;
+        out->data.string.size = literal.size;
+        return VXML_OK;
+    }
+    if (literal.size == 0u || literal.size == SIZE_MAX)
+        return VXML_SEMANTIC_ERROR;
+
+    text = (char *)vxml_malloc(literal.size + 1u);
+    if (text == NULL)
+        return VXML_ALLOCATION_FAILED;
+    memcpy(text, literal.data, literal.size);
+    text[literal.size] = '\0';
+
+    errno = 0;
+    switch (target->kind) {
+    case CMETA_DATA_BOOL:
+        if (literal.size == sizeof("true") - 1u &&
+            memcmp(text, "true", sizeof("true") - 1u) == 0) {
+            out->kind = VXML_CMETA_VALUE_BOOL;
+            out->data.boolean = true;
+            status = VXML_OK;
+        } else if (literal.size == sizeof("false") - 1u &&
+                   memcmp(text, "false", sizeof("false") - 1u) == 0) {
+            out->kind = VXML_CMETA_VALUE_BOOL;
+            out->data.boolean = false;
+            status = VXML_OK;
+        }
+        break;
+    case CMETA_DATA_SINT: {
+        const long long value = strtoll(text, &end, 10);
+        if (errno != ERANGE && end != text && *end == '\0') {
+            out->kind = VXML_CMETA_VALUE_SINT;
+            out->data.sint = (int64_t)value;
+            status = VXML_OK;
+        }
+        break;
+    }
+    case CMETA_DATA_UINT: {
+        unsigned long long value;
+        if (text[0] == '-')
+            break;
+        value = strtoull(text, &end, 10);
+        if (errno != ERANGE && end != text && *end == '\0') {
+            out->kind = VXML_CMETA_VALUE_UINT;
+            out->data.uint_value = (uint64_t)value;
+            status = VXML_OK;
+        }
+        break;
+    }
+    case CMETA_DATA_FLOAT: {
+        const double value = strtod(text, &end);
+        if (errno != ERANGE && end != text && *end == '\0' &&
+            isfinite(value)) {
+            out->kind = VXML_CMETA_VALUE_FLOAT;
+            out->data.number = value;
+            status = VXML_OK;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    vxml_free(text);
+    return status;
+}
+
+static vxml_status import_child_entry_parameters(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_child_entry_v1 *entry) {
+    const cmeta_scope_schema *schema;
+    size_t index;
+    size_t declaration_offset;
+
+    if (profile == NULL || program == NULL || form == NULL ||
+        entry == NULL ||
+        form->scope >= program->scope_count ||
+        (entry->param_count != 0u && entry->params == NULL) ||
+        entry->param_count > form->declaration_count ||
+        !range_valid(
+            form->first_declaration, form->declaration_count,
+            program->declaration_count) ||
+        (form->declaration_count != 0u &&
+         program->declarations == NULL))
+        return VXML_SEMANTIC_ERROR;
+    schema = &program->scopes[form->scope].schema;
+
+    for (index = 0u; index < entry->param_count; ++index) {
+        const vxml_cmeta_subdialog_param_v1 *param =
+            &entry->params[index];
+        const vxml_cmeta_declaration_row *row;
+        const cmeta_scope_slot *slot;
+        vxml_cmeta_value_view value = {0};
+        vxml_status status;
+        size_t prior;
+
+        if (param->name.data == NULL || param->name.size == 0u ||
+            memchr(param->name.data, '\0', param->name.size) != NULL)
+            return VXML_SEMANTIC_ERROR;
+        for (prior = 0u; prior < index; ++prior) {
+            const vxml_cmeta_name_view previous =
+                entry->params[prior].name;
+            if (previous.data != NULL &&
+                previous.size == param->name.size &&
+                memcmp(
+                    previous.data, param->name.data,
+                    param->name.size) == 0)
+                return VXML_SEMANTIC_ERROR;
+        }
+
+        row = child_form_parameter(program, form, param->name);
+        if (row == NULL || row->slot >= schema->slot_count)
+            return VXML_SEMANTIC_ERROR;
+        slot = &schema->slots[row->slot];
+        if (slot->value == NULL || slot->value->storage_type == NULL)
+            return VXML_INVALID_STRUCTURE;
+
+        if (param->source == VXML_CMETA_SUBDIALOG_PARAM_TYPED) {
+            if (param->literal.data != NULL ||
+                param->literal.size != 0u ||
+                param->value.kind == VXML_CMETA_VALUE_UNDEFINED)
+                return VXML_SEMANTIC_ERROR;
+            value = param->value;
+        } else if (param->source ==
+                       VXML_CMETA_SUBDIALOG_PARAM_LITERAL) {
+            const size_t literal_limit =
+                program->max_subdialog_param_value_bytes != 0u
+                    ? program->max_subdialog_param_value_bytes
+                    : program->max_string_bytes;
+            if (param->value.kind != VXML_CMETA_VALUE_UNDEFINED)
+                return VXML_SEMANTIC_ERROR;
+            status = child_literal_value(
+                slot->value, param->literal,
+                literal_limit, &value);
+            if (status != VXML_OK)
+                return status;
+        } else {
+            return VXML_SEMANTIC_ERROR;
+        }
+
+        status = assign_scope_slot(
+            profile, program, true,
+            form->scope, row->slot, &value);
+        if (status != VXML_OK)
+            return status;
+    }
+
+    for (declaration_offset = 0u;
+         declaration_offset < form->declaration_count;
+         ++declaration_offset) {
+        const vxml_cmeta_declaration_row *row =
+            &program->declarations[
+                form->first_declaration + declaration_offset];
+        const vxml_cmeta_name_view name = {
+            row->name, row->name_size};
+        if (row->scope != form->scope ||
+            row->slot >= schema->slot_count ||
+            row->name == NULL || row->name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        if (row->expression == VXML_CMETA_NO_INDEX &&
+            !child_entry_contains_parameter(entry, name))
+            return VXML_SEMANTIC_ERROR;
+    }
+    return VXML_OK;
+}
+
+static vxml_status cmeta_session_start_profile_at_entry(
+    vxml_session_impl *session, size_t form_index,
+    const vxml_cmeta_child_entry_v1 *entry) {
     const vxml_cmeta_program_data *program;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_form_row *form;
@@ -3410,6 +3645,9 @@ vxml_status vxml_cmeta_session_start_profile_at(
     if (!transaction_begin(profile, program))
         return session_fail(session, VXML_ALLOCATION_FAILED);
     status = initialize_form(profile, program, form, form_index);
+    if (status == VXML_OK && entry != NULL)
+        status = import_child_entry_parameters(
+            profile, program, form, entry);
     if (status != VXML_OK) {
         transaction_reset(profile, program);
         return session_fail(session, status);
@@ -3491,6 +3729,12 @@ vxml_status vxml_cmeta_session_start_profile_at(
     }
 }
 
+vxml_status vxml_cmeta_session_start_profile_at(
+    vxml_session_impl *session, size_t form_index) {
+    return cmeta_session_start_profile_at_entry(
+        session, form_index, NULL);
+}
+
 vxml_status vxml_cmeta_session_start_profile(vxml_session_impl *session) {
     return vxml_cmeta_session_start_profile_at(session, 0u);
 }
@@ -3522,6 +3766,78 @@ vxml_status vxml_session_init_cmeta(
             options))
         return VXML_INVALID_CONTRACT;
     return vxml_session_init_profile(session, program, options);
+}
+
+
+vxml_status vxml_session_cmeta_start_child(
+    vxml_session *session,
+    const vxml_cmeta_child_entry_v1 *entry) {
+    vxml_session_impl *impl;
+    size_t form_index = 0u;
+    const size_t entry_prefix =
+        offsetof(vxml_cmeta_child_entry_v1, param_count) +
+        sizeof(((vxml_cmeta_child_entry_v1 *)0)->param_count);
+
+    if (session == NULL || entry == NULL ||
+        entry->abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
+        entry->struct_size < entry_prefix ||
+        ((entry->form_id.data == NULL) !=
+         (entry->form_id.size == 0u)) ||
+        (entry->form_id.size != 0u &&
+         memchr(entry->form_id.data, '\0', entry->form_id.size) != NULL) ||
+        ((entry->params == NULL) != (entry->param_count == 0u)))
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_READY)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL ||
+        impl->program->forms == NULL ||
+        impl->program->form_count == 0u)
+        return VXML_INVALID_CONTRACT;
+
+    if (entry->form_id.size != 0u) {
+        for (form_index = 0u;
+             form_index < impl->program->form_count;
+             ++form_index) {
+            const vxml_form_row *row =
+                &impl->program->forms[form_index];
+            if (row->id != NULL &&
+                row->id_size == entry->form_id.size &&
+                memcmp(
+                    row->id, entry->form_id.data,
+                    entry->form_id.size) == 0)
+                break;
+        }
+        if (form_index == impl->program->form_count) {
+            impl->state = VXML_SESSION_RUNNING;
+            return session_fail(impl, VXML_SEMANTIC_ERROR);
+        }
+    }
+
+    impl->state = VXML_SESSION_RUNNING;
+    impl->error = VXML_OK;
+    impl->navigation_uri = NULL;
+    impl->navigation_uri_size = 0u;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->submit_uri = NULL;
+    impl->submit_uri_size = 0u;
+    impl->submit_method = 0;
+    impl->submit_enctype = 0;
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
+
+    return cmeta_session_start_profile_at_entry(
+        impl, form_index, entry);
 }
 
 static const vxml_session_impl *cmeta_session(const vxml_session *session) {

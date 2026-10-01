@@ -48,6 +48,9 @@ int main(void) {
     vxml_cmeta_subdialog_request_v1 subdialog_request = {
         .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_subdialog_request_v1)};
+    vxml_cmeta_child_entry_v1 child_entry = {
+        .abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_child_entry_v1)};
     vxml_cmeta_subdialog_result_entry_v1 subdialog_result = {0};
     vxml_cmeta_subdialog_completion_v1 subdialog_completion = {
         .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1,
@@ -146,6 +149,9 @@ int main(void) {
     vxml_status (*query_terminal_event)(
         const vxml_session *, vxml_cmeta_name_view *) =
         vxml_session_cmeta_terminal_event;
+    vxml_status (*start_child)(
+        vxml_session *, const vxml_cmeta_child_entry_v1 *) =
+        vxml_session_cmeta_start_child;
     vxml_status (*prepare_subdialog)(
         vxml_session *, const char **) =
         vxml_session_cmeta_subdialog_prepare;
@@ -177,6 +183,8 @@ int main(void) {
     if (raise_event == NULL || query_prompt == NULL ||
         report_mark == NULL || query_mark == NULL ||
         query_terminal == NULL || query_terminal_event == NULL ||
+        start_child == NULL ||
+        child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
         prepare_subdialog == NULL || commit_subdialog == NULL ||
         discard_subdialog == NULL ||
         complete_subdialog == NULL || run_subdialog_completion == NULL ||
