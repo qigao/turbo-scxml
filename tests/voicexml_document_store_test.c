@@ -100,6 +100,48 @@ static const vxml_dialog_document_adapter_v1 legacy_document_adapter = {
     .open = probe_open,
     .close = probe_close};
 
+typedef struct compile_probe {
+    size_t calls;
+    const void *provider_source;
+    const void *last_source;
+    size_t last_source_size;
+    bool saw_store_owned_source;
+    vxml_status result_override;
+    bool compile_before_failure;
+} compile_probe;
+
+static vxml_status probe_compile(
+    void *user,
+    const void *source, size_t source_size,
+    vxml_program *out_program,
+    vxml_diagnostic *diagnostic) {
+    compile_probe *probe = (compile_probe *)user;
+    vxml_status status;
+    vxml_limits limits = vxml_default_limits();
+    if (probe == NULL || source == NULL || source_size == 0u ||
+        out_program == NULL)
+        return VXML_INVALID_ARGUMENT;
+    ++probe->calls;
+    probe->last_source = source;
+    probe->last_source_size = source_size;
+    probe->saw_store_owned_source =
+        source != probe->provider_source;
+    if (probe->result_override != VXML_OK &&
+        !probe->compile_before_failure)
+        return probe->result_override;
+    status = vxml_compile(
+        source, source_size, &limits, out_program, diagnostic);
+    if (status != VXML_OK)
+        return status;
+    return probe->result_override != VXML_OK
+        ? probe->result_override : VXML_OK;
+}
+
+static const vxml_document_compile_adapter_v1 compile_adapter = {
+    .abi_version = VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_document_compile_adapter_v1),
+    .compile = probe_compile};
+
 typedef struct fetch_audio_probe {
     document_probe *document;
     vxml_fetch_audio_begin_result result;
@@ -211,6 +253,170 @@ static vxml_document_store_status resolve_uri(
 }
 
 spec("VoiceXML bounded document store") {
+    it("uses an optional compiler once per cache miss over Store-owned source") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        compile_probe compiler = {
+            .provider_source = valid_document,
+            .result_override = VXML_OK};
+        vxml_document_store_config_v1 config =
+            store_config(&document, 2u, 4096u);
+        vxml_document_store store = {0};
+        vxml_document_ref first = {0};
+        vxml_document_ref second = {0};
+        vxml_document_view first_view = {0};
+        vxml_document_view second_view = {0};
+        static const char uri[] =
+            "https://voice.example/profile.vxml";
+
+        config.compiler = &compile_adapter;
+        config.compiler_user = &compiler;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store, uri, sizeof(uri) - 1u, &first, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(compiler.calls, (size_t)1u);
+        check_true(compiler.saw_store_owned_source);
+        check_equal(
+            compiler.last_source_size,
+            sizeof(valid_document) - 1u);
+        check_equal(document.open_calls, (size_t)1u);
+        check_equal(document.close_calls, (size_t)1u);
+        check_equal(
+            vxml_document_store_view(&store, first, &first_view),
+            VXML_DOCUMENT_STORE_OK);
+        check_not_null(first_view.program);
+        check_equal(
+            vxml_document_store_release(&store, &first),
+            VXML_DOCUMENT_STORE_OK);
+
+        check_equal(
+            vxml_document_store_acquire(
+                &store, uri, sizeof(uri) - 1u, &second, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(compiler.calls, (size_t)1u);
+        check_equal(document.open_calls, (size_t)1u);
+        check_equal(
+            vxml_document_store_view(&store, second, &second_view),
+            VXML_DOCUMENT_STORE_OK);
+        check_true(second_view.program == first_view.program);
+        check_equal(
+            vxml_document_store_release(&store, &second),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("destroys compiler output and publishes no row when the adapter fails") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        compile_probe compiler = {
+            .provider_source = valid_document,
+            .result_override = VXML_SEMANTIC_ERROR,
+            .compile_before_failure = true};
+        vxml_document_store_config_v1 config =
+            store_config(&document, 1u, 2048u);
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+        vxml_document_store_error error = {0};
+        vxml_document_store_stats stats = {0};
+
+        config.compiler = &compile_adapter;
+        config.compiler_user = &compiler;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store,
+                "https://voice.example/compiler-fail.vxml",
+                sizeof("https://voice.example/compiler-fail.vxml") - 1u,
+                &ref, &error),
+            VXML_DOCUMENT_STORE_COMPILE_ERROR);
+        check_equal(compiler.calls, (size_t)1u);
+        check_true(compiler.saw_store_owned_source);
+        check_equal(error.voice_status, VXML_SEMANTIC_ERROR);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)0u);
+        check_equal(stats.active_borrows, (size_t)0u);
+        check_equal(document.open_calls, (size_t)1u);
+        check_equal(document.close_calls, (size_t)1u);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("preserves historical config behavior and ignores an unavailable compiler tail") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        compile_probe compiler = {
+            .provider_source = valid_document,
+            .result_override = VXML_SEMANTIC_ERROR};
+        vxml_document_store_config_v1 config =
+            store_config(&document, 1u, 2048u);
+        vxml_document_store store = {0};
+        vxml_document_ref ref = {0};
+
+        config.struct_size =
+            offsetof(vxml_document_store_config_v1, fetch_audio_user) +
+            sizeof(config.fetch_audio_user);
+        config.compiler = &compile_adapter;
+        config.compiler_user = &compiler;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store,
+                "https://voice.example/legacy-compiler.vxml",
+                sizeof("https://voice.example/legacy-compiler.vxml") - 1u,
+                &ref, NULL),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(compiler.calls, (size_t)0u);
+        check_equal(
+            vxml_document_store_release(&store, &ref),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("rejects an invalid compiler adapter before store publication") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_compile_adapter_v1 invalid = compile_adapter;
+        vxml_document_store_config_v1 config =
+            store_config(&document, 1u, 2048u);
+        vxml_document_store store = {0};
+
+        invalid.compile = NULL;
+        config.compiler = &invalid;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_INVALID_ARGUMENT);
+        check_null(store.impl);
+
+        invalid = compile_adapter;
+        invalid.abi_version = 99u;
+        config.compiler = &invalid;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_INVALID_ARGUMENT);
+        check_null(store.impl);
+    }
+
     it("resolves relative paths, queries, network paths and fragments separately") {
         document_probe probe = {
             .open_status = VXML_DIALOG_MANAGER_OK,
