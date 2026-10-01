@@ -40,6 +40,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_request_v1>::value,
     "subdialog request must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_child_entry_v1>::value,
+    "child entry must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_ticket_v1>::value,
     "subdialog ticket must remain C-compatible");
 static_assert(
@@ -117,6 +120,7 @@ int main() {
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_subdialog_param_v1 subdialog_param{};
     vxml_cmeta_subdialog_request_v1 subdialog_request{};
+    vxml_cmeta_child_entry_v1 child_entry{};
     vxml_cmeta_subdialog_result_entry_v1 subdialog_result{};
     vxml_cmeta_subdialog_completion_v1 subdialog_completion{};
     vxml_cmeta_subdialog_ticket_v1 subdialog_ticket{};
@@ -152,6 +156,7 @@ int main() {
     auto query_mark = &vxml_session_cmeta_prompt_media_last_mark;
     auto query_terminal = &vxml_session_cmeta_terminal_kind;
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
+    auto start_child = &vxml_session_cmeta_start_child;
     auto prepare_subdialog = &vxml_session_cmeta_subdialog_prepare;
     auto commit_subdialog = &vxml_session_cmeta_subdialog_commit;
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
@@ -166,6 +171,8 @@ int main() {
     subdialog_param.source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
     subdialog_request.abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1;
     subdialog_request.struct_size = sizeof(subdialog_request);
+    child_entry.abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1;
+    child_entry.struct_size = sizeof(child_entry);
     subdialog_completion.abi_version =
         VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1;
     subdialog_completion.struct_size = sizeof(subdialog_completion);
@@ -197,6 +204,8 @@ int main() {
     if (raise_event == nullptr || query_prompt == nullptr ||
         report_mark == nullptr || query_mark == nullptr ||
         query_terminal == nullptr || query_terminal_event == nullptr ||
+        start_child == nullptr ||
+        child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
         prepare_subdialog == nullptr || commit_subdialog == nullptr ||
         discard_subdialog == nullptr ||
         complete_subdialog == nullptr || run_subdialog_completion == nullptr ||
