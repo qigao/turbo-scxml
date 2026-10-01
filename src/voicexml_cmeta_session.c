@@ -765,18 +765,12 @@ static void exit_snapshot_destroy(vxml_cmeta_exit_snapshot *snapshot) {
     memset(snapshot, 0, sizeof(*snapshot));
 }
 
-static vxml_status exit_snapshot_prepare_range(
+static vxml_status exit_snapshot_prepare_capacity(
     vxml_cmeta_exit_snapshot *snapshot,
-    const vxml_cmeta_program_data *program,
-    size_t first_action, size_t action_end) {
-    size_t entry_capacity;
-    size_t name_capacity;
-    size_t string_capacity;
+    size_t entry_capacity,
+    size_t name_capacity,
+    size_t string_capacity) {
     exit_snapshot_destroy(snapshot);
-    if (!exit_capacity_measure(
-            program, first_action, action_end,
-            &entry_capacity, &name_capacity, &string_capacity))
-        return VXML_INVALID_STRUCTURE;
     if (entry_capacity != 0u) {
         snapshot->entries = (vxml_cmeta_exit_entry *)vxml_calloc(
             entry_capacity, sizeof(*snapshot->entries));
@@ -798,6 +792,21 @@ static vxml_status exit_snapshot_prepare_range(
 allocation_failure:
     exit_snapshot_destroy(snapshot);
     return VXML_ALLOCATION_FAILED;
+}
+
+static vxml_status exit_snapshot_prepare_range(
+    vxml_cmeta_exit_snapshot *snapshot,
+    const vxml_cmeta_program_data *program,
+    size_t first_action, size_t action_end) {
+    size_t entry_capacity;
+    size_t name_capacity;
+    size_t string_capacity;
+    if (!exit_capacity_measure(
+            program, first_action, action_end,
+            &entry_capacity, &name_capacity, &string_capacity))
+        return VXML_INVALID_STRUCTURE;
+    return exit_snapshot_prepare_capacity(
+        snapshot, entry_capacity, name_capacity, string_capacity);
 }
 
 static vxml_status exit_snapshot_append(
