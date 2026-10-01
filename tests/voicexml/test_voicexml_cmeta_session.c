@@ -244,6 +244,7 @@ static const cmeta_data_desc session_root_data = {
 
 typedef struct vxml_cmeta_subdialog_result {
     int code;
+    vxml_cmeta_session_text label;
 } vxml_cmeta_subdialog_result;
 
 typedef struct vxml_cmeta_subdialog_test_root {
@@ -259,12 +260,56 @@ static const cmeta_type_identity subdialog_root_identity =
 static const cmeta_type_traits subdialog_trivial_traits = {
     .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
 };
+
+static bool subdialog_result_copy(
+    void *destination, const void *source) {
+    vxml_cmeta_subdialog_result *out =
+        (vxml_cmeta_subdialog_result *)destination;
+    const vxml_cmeta_subdialog_result *in =
+        (const vxml_cmeta_subdialog_result *)source;
+    if (out == NULL || in == NULL)
+        return false;
+    memset(out, 0, sizeof(*out));
+    out->code = in->code;
+    return session_text_copy(&out->label, &in->label);
+}
+
+static void subdialog_result_move(
+    void *destination, void *source) {
+    vxml_cmeta_subdialog_result *out =
+        (vxml_cmeta_subdialog_result *)destination;
+    vxml_cmeta_subdialog_result *in =
+        (vxml_cmeta_subdialog_result *)source;
+    if (out == NULL || in == NULL)
+        return;
+    memset(out, 0, sizeof(*out));
+    out->code = in->code;
+    session_text_move(&out->label, &in->label);
+    in->code = 0;
+}
+
+static void subdialog_result_destroy(void *object) {
+    vxml_cmeta_subdialog_result *result =
+        (vxml_cmeta_subdialog_result *)object;
+    if (result == NULL)
+        return;
+    session_text_destroy(&result->label);
+    memset(result, 0, sizeof(*result));
+}
+
+static const cmeta_type_traits subdialog_result_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = subdialog_result_copy,
+    .move_construct = subdialog_result_move,
+    .destroy = subdialog_result_destroy
+};
+
 static const cmeta_type_desc subdialog_result_type = {
     .name = "vxml_cmeta_subdialog_result",
     .size = sizeof(vxml_cmeta_subdialog_result),
     .align = _Alignof(vxml_cmeta_subdialog_result),
     .kind = CMETA_T_OBJECT,
-    .traits = &subdialog_trivial_traits,
+    .traits = &subdialog_result_traits,
     .identity = &subdialog_result_identity
 };
 static const cmeta_type_desc subdialog_root_type = {
@@ -277,23 +322,29 @@ static const cmeta_type_desc subdialog_root_type = {
 };
 static const cmeta_field_desc subdialog_result_layout_fields[] = {
     {"code", "int", offsetof(vxml_cmeta_subdialog_result, code),
-     sizeof(int), _Alignof(int), &cmeta_type_int, NULL}
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
+    {"label", "vxml_cmeta_session_text",
+     offsetof(vxml_cmeta_subdialog_result, label),
+     sizeof(vxml_cmeta_session_text),
+     _Alignof(vxml_cmeta_session_text), &session_text_type, NULL}
 };
 static const cmeta_struct_desc subdialog_result_layout = {
     .name = "vxml_cmeta_subdialog_result",
     .size = sizeof(vxml_cmeta_subdialog_result),
     .align = _Alignof(vxml_cmeta_subdialog_result),
     .fields = subdialog_result_layout_fields,
-    .field_count = 1u
+    .field_count = 2u
 };
 static const cmeta_data_field_desc subdialog_result_fields[] = {
     {"test.voicexml.cmeta.subdialog.result.code", "code",
-     offsetof(vxml_cmeta_subdialog_result, code), &cmeta_data_int}
+     offsetof(vxml_cmeta_subdialog_result, code), &cmeta_data_int},
+    {"test.voicexml.cmeta.subdialog.result.label", "label",
+     offsetof(vxml_cmeta_subdialog_result, label), &session_text_data}
 };
 static const cmeta_data_struct_shape subdialog_result_shape = {
     .layout = &subdialog_result_layout,
     .fields = subdialog_result_fields,
-    .field_count = 1u
+    .field_count = 2u
 };
 static const cmeta_data_desc subdialog_result_data = {
     .struct_size = sizeof(cmeta_data_desc),
