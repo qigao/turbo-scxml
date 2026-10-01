@@ -69,6 +69,7 @@ typedef struct vxml_cmeta_subdialog_row {
     size_t condition;
     size_t first_param;
     size_t param_count;
+    size_t filled;
 } vxml_cmeta_subdialog_row;
 
 typedef struct vxml_cmeta_subdialog_param_row {
