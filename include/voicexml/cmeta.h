@@ -644,7 +644,12 @@ vxml_status vxml_session_cmeta_subdialog_prepare(
 /** Commit the prepared child-owner ticket; provider callback is no-fail. */
 vxml_status vxml_session_cmeta_subdialog_commit(vxml_session *session);
 
-/** Discard the prepared child-owner ticket and release the owned snapshot. */
+/**
+ * Discard only the prepared child-owner admission ticket. The parent-owned
+ * snapshot remains valid for the same generation so a later prepare does not
+ * re-evaluate parent expressions. It is released when the generation settles
+ * or the Session is destroyed.
+ */
 vxml_status vxml_session_cmeta_subdialog_discard(vxml_session *session);
 
 /** Borrow the currently selected directed-field collect request. */
