@@ -1399,6 +1399,10 @@ static vxml_status build_subdialog_snapshot(
                 subdialog_snapshot_destroy(session);
                 return status;
             }
+            if (value.kind == VXML_CMETA_VALUE_UNDEFINED) {
+                subdialog_snapshot_destroy(session);
+                return VXML_SEMANTIC_ERROR;
+            }
             if (value.kind == VXML_CMETA_VALUE_STRING) {
                 char *owned_string = NULL;
                 if ((value.data.string.size != 0u &&
