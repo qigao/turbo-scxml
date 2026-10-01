@@ -252,11 +252,13 @@ if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
     string(JOIN ", " _TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS_TEXT
       ${_TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS})
     set(TurboSCXML_VoiceXMLCMeta_FOUND FALSE)
+    set(TurboSCXML_VoiceXMLSubdialogOwner_FOUND FALSE)
     if(_TURBOSCXML_PACKAGE_WIDE OR
-       TurboSCXML_FIND_REQUIRED_VoiceXMLCMeta)
+       TurboSCXML_FIND_REQUIRED_VoiceXMLCMeta OR
+       TurboSCXML_FIND_REQUIRED_VoiceXMLSubdialogOwner)
       set(TurboSCXML_FOUND FALSE)
       set(TurboSCXML_NOT_FOUND_MESSAGE
-        "The VoiceXMLCMeta component requires these CMeta/DataBind targets from the selected Salts/SaltsUtils SDKs: ${_TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS_TEXT}")
+        "The VoiceXMLCMeta/VoiceXMLSubdialogOwner components require these CMeta/DataBind targets from the selected Salts/SaltsUtils SDKs: ${_TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS_TEXT}")
       return()
     endif()
   endif()
