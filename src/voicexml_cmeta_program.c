@@ -3087,6 +3087,11 @@ static vxml_status cmeta_measure_subdialog(
                     cmeta_known_profile_element(child)
                         ? "VoiceXML element has invalid subdialog placement"
                         : "unsupported VoiceXML subdialog child element");
+            if (!cmeta_subdialog_param_options_valid(options))
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_CONTRACT,
+                    salts_xml_node_location(child),
+                    "VoiceXML subdialog param requires enabled parameter bounds");
             if (param_count >= options->max_subdialog_params)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
