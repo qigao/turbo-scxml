@@ -104,6 +104,16 @@ static bool session_collect_options_valid(
 }
 
 
+static bool session_subdialog_completion_options_present(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_subdialog_completion_bytes) +
+        sizeof(options->max_subdialog_completion_bytes);
+    return options != NULL && options->struct_size >= tail_size &&
+        (options->max_subdialog_completion_entries != 0u ||
+         options->max_subdialog_completion_bytes != 0u);
+}
+
 static bool session_subdialog_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     const size_t tail_size =
@@ -942,6 +952,19 @@ static void session_data_destroy(
         &session->prompt_media_mailbox.generation,
         UINT64_C(0), memory_order_relaxed);
     settle_prompt_media(session);
+    {
+        const unsigned previous_subdialog_state =
+            atomic_exchange_explicit(
+                &session->subdialog_mailbox.state,
+                VXML_CMETA_SUBDIALOG_MAILBOX_CLOSED,
+                memory_order_acq_rel);
+        atomic_store_explicit(
+            &session->subdialog_mailbox.generation,
+            UINT64_C(0), memory_order_relaxed);
+        if (previous_subdialog_state ==
+                VXML_CMETA_SUBDIALOG_MAILBOX_READY)
+            session->subdialog_in_flight = false;
+    }
     atomic_store_explicit(
         &session->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_CLOSED,
@@ -970,6 +993,8 @@ static void session_data_destroy(
     if (session->committed_scopes != NULL)
         for (index = 0u; index < program->scope_count; ++index)
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
+    vxml_free(session->subdialog_mailbox.storage);
+    vxml_free(session->subdialog_mailbox.entries);
     vxml_free(session->initial_retry_reset_pending);
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
@@ -2716,6 +2741,11 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->max_transaction_bytes = options->max_transaction_bytes;
     profile->max_execution_steps = options->max_execution_steps;
     atomic_init(
+        &profile->subdialog_mailbox.state,
+        VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED);
+    atomic_init(
+        &profile->subdialog_mailbox.generation, UINT64_C(0));
+    atomic_init(
         &profile->collect_mailbox.state,
         VXML_CMETA_COLLECT_MAILBOX_DISARMED);
     atomic_init(&profile->collect_mailbox.generation, UINT64_C(0));
@@ -2763,6 +2793,33 @@ vxml_status vxml_cmeta_session_init_profile(
             profile->subdialog_user = options->subdialog_user;
             profile->max_subdialog_snapshot_bytes =
                 options->max_subdialog_snapshot_bytes;
+        }
+    }
+    if (session_subdialog_completion_options_present(options)) {
+        if (options->max_subdialog_completion_bytes == 0u) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->subdialog_mailbox.entry_capacity =
+            options->max_subdialog_completion_entries;
+        profile->subdialog_mailbox.storage_capacity =
+            options->max_subdialog_completion_bytes;
+        if (profile->subdialog_mailbox.entry_capacity != 0u) {
+            profile->subdialog_mailbox.entries =
+                (vxml_cmeta_subdialog_result_entry_v1 *)vxml_calloc(
+                    profile->subdialog_mailbox.entry_capacity,
+                    sizeof(*profile->subdialog_mailbox.entries));
+            if (profile->subdialog_mailbox.entries == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+        }
+        profile->subdialog_mailbox.storage =
+            (char *)vxml_malloc(
+                profile->subdialog_mailbox.storage_capacity);
+        if (profile->subdialog_mailbox.storage == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
         }
     }
     if (program->event_handler_count != 0u) {
@@ -3558,6 +3615,27 @@ vxml_status vxml_session_cmeta_subdialog_commit(
         profile->subdialog_generation == 0u)
         return VXML_INVALID_STATE;
     ticket = profile->subdialog_ticket;
+    if (profile->subdialog_mailbox.storage_capacity != 0u) {
+        unsigned state = atomic_load_explicit(
+            &profile->subdialog_mailbox.state, memory_order_acquire);
+        if (state != VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED)
+            return VXML_INVALID_STATE;
+        profile->subdialog_mailbox.kind = 0;
+        profile->subdialog_mailbox.global_exit_kind =
+            VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL;
+        profile->subdialog_mailbox.entry_count = 0u;
+        profile->subdialog_mailbox.storage_size = 0u;
+        profile->subdialog_mailbox.event =
+            (vxml_cmeta_name_view){0};
+        atomic_store_explicit(
+            &profile->subdialog_mailbox.generation,
+            profile->subdialog_generation,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &profile->subdialog_mailbox.state,
+            VXML_CMETA_SUBDIALOG_MAILBOX_EMPTY,
+            memory_order_release);
+    }
     profile->subdialog_ticket = (vxml_cmeta_subdialog_ticket_v1){0};
     profile->subdialog_prepared = false;
     profile->subdialog_in_flight = true;
