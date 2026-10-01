@@ -5923,6 +5923,235 @@ static vxml_status cmeta_raise_event_impl(
     }
 }
 
+
+static vxml_status subdialog_publish_global_exit(
+    vxml_session_impl *impl,
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_subdialog_completion_mailbox *mailbox) {
+    size_t entry_capacity = 0u;
+    size_t name_capacity = 0u;
+    size_t string_capacity = 0u;
+    size_t index;
+    vxml_status status;
+
+    if (impl == NULL || profile == NULL || mailbox == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    switch (mailbox->global_exit_kind) {
+    case VXML_CMETA_SUBDIALOG_GLOBAL_NATURAL:
+        profile->pending_terminal_kind = VXML_CMETA_TERMINAL_NONE;
+        break;
+    case VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_EMPTY:
+        profile->pending_terminal_kind = VXML_CMETA_TERMINAL_EXIT;
+        break;
+    case VXML_CMETA_SUBDIALOG_GLOBAL_DISCONNECT:
+        profile->pending_terminal_kind = VXML_CMETA_TERMINAL_DISCONNECT;
+        break;
+    case VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_EXPRESSION:
+        if (mailbox->entry_count != 1u ||
+            mailbox->entries == NULL ||
+            mailbox->entries[0].name.data != NULL ||
+            mailbox->entries[0].name.size != 0u)
+            return VXML_INVALID_STRUCTURE;
+        entry_capacity = 1u;
+        if (mailbox->entries[0].value.kind ==
+                VXML_CMETA_VALUE_STRING)
+            string_capacity =
+                mailbox->entries[0].value.data.string.size;
+        profile->pending_terminal_kind = VXML_CMETA_TERMINAL_EXIT;
+        break;
+    case VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_NAMELIST:
+        if (mailbox->entry_count == 0u ||
+            mailbox->entries == NULL)
+            return VXML_INVALID_STRUCTURE;
+        entry_capacity = mailbox->entry_count;
+        for (index = 0u; index < mailbox->entry_count; ++index) {
+            const vxml_cmeta_subdialog_result_entry_v1 *entry =
+                &mailbox->entries[index];
+            if (entry->name.data == NULL || entry->name.size == 0u ||
+                name_capacity > SIZE_MAX - entry->name.size)
+                return VXML_INVALID_STRUCTURE;
+            name_capacity += entry->name.size;
+            if (entry->value.kind == VXML_CMETA_VALUE_STRING) {
+                const size_t bytes =
+                    entry->value.data.string.size;
+                if (string_capacity > SIZE_MAX - bytes)
+                    return VXML_LIMIT_EXCEEDED;
+                string_capacity += bytes;
+            }
+        }
+        profile->pending_terminal_kind = VXML_CMETA_TERMINAL_EXIT;
+        break;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    status = exit_snapshot_prepare_capacity(
+        &profile->pending_exit,
+        entry_capacity, name_capacity, string_capacity);
+    if (status != VXML_OK) return status;
+
+    if (mailbox->global_exit_kind ==
+            VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_EXPRESSION) {
+        status = exit_snapshot_append(
+            &profile->pending_exit, NULL, 0u,
+            &mailbox->entries[0].value);
+        if (status != VXML_OK) goto failure;
+        profile->pending_exit.kind =
+            VXML_CMETA_EXIT_EXPRESSION;
+    } else if (mailbox->global_exit_kind ==
+                   VXML_CMETA_SUBDIALOG_GLOBAL_EXIT_NAMELIST) {
+        for (index = 0u; index < mailbox->entry_count; ++index) {
+            const vxml_cmeta_subdialog_result_entry_v1 *entry =
+                &mailbox->entries[index];
+            status = exit_snapshot_append(
+                &profile->pending_exit,
+                entry->name.data, entry->name.size,
+                &entry->value);
+            if (status != VXML_OK) goto failure;
+        }
+        profile->pending_exit.kind = VXML_CMETA_EXIT_NAMELIST;
+    } else {
+        profile->pending_exit.kind = VXML_CMETA_EXIT_EMPTY;
+    }
+
+    profile->pending_terminal_event = NULL;
+    profile->pending_terminal_event_size = 0u;
+    profile->exit_requested = true;
+    terminal_publish(profile);
+    impl->state = VXML_SESSION_EXITED;
+    impl->error = VXML_OK;
+    return VXML_OK;
+
+failure:
+    exit_snapshot_destroy(&profile->pending_exit);
+    terminal_pending_reset(profile);
+    return status;
+}
+
+vxml_status vxml_session_cmeta_subdialog_run_ready(
+    vxml_session *session,
+    bool *out_progressed) {
+    vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_subdialog_completion_mailbox *mailbox;
+    const vxml_cmeta_form_row *form;
+    uint64_t generation;
+    unsigned expected;
+    vxml_status status;
+
+    if (out_progressed != NULL) *out_progressed = false;
+    if (session == NULL || out_progressed == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL) return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    mailbox = &profile->subdialog_mailbox;
+    if (!profile->subdialog_in_flight ||
+        profile->active_subdialog == VXML_CMETA_NO_INDEX ||
+        profile->active_subdialog >= program->subdialog_count ||
+        program->subdialogs == NULL ||
+        profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STATE;
+
+    expected = VXML_CMETA_SUBDIALOG_MAILBOX_READY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_SUBDIALOG_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_SUBDIALOG_MAILBOX_EMPTY ||
+            expected == VXML_CMETA_SUBDIALOG_MAILBOX_WRITING)
+            return VXML_OK;
+        if (expected == VXML_CMETA_SUBDIALOG_MAILBOX_CLOSED)
+            return VXML_CLOSED;
+        if (expected == VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED)
+            return VXML_INVALID_STATE;
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    *out_progressed = true;
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (generation == 0u ||
+        generation != profile->subdialog_generation) {
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED,
+            memory_order_release);
+        profile->subdialog_in_flight = false;
+        subdialog_snapshot_destroy(profile);
+        subdialog_mailbox_payload_reset(mailbox);
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+    }
+
+    form = &program->forms[profile->active_form];
+
+    /*
+     * Settle provider ownership before any parent PROCESS/Event work.
+     * An accepted completion is terminal for this child generation, so close
+     * and destroy must never call cancel for it.
+     */
+    profile->subdialog_in_flight = false;
+    atomic_store_explicit(
+        &mailbox->generation, UINT64_C(0), memory_order_relaxed);
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_SUBDIALOG_MAILBOX_DISARMED,
+        memory_order_release);
+    subdialog_snapshot_destroy(profile);
+
+    if (mailbox->kind == VXML_CMETA_SUBDIALOG_RETURN_EVENT) {
+        const vxml_cmeta_name_view event = mailbox->event;
+        if (event.data == NULL || event.size == 0u) {
+            subdialog_mailbox_payload_reset(mailbox);
+            return session_fail(impl, VXML_INVALID_STRUCTURE);
+        }
+        status = cmeta_raise_event_impl(
+            session, event.data, event.size, true);
+        subdialog_mailbox_payload_reset(mailbox);
+        if (status != VXML_OK) return status;
+        if (impl->state != VXML_SESSION_RUNNING) {
+            profile->active_subdialog = VXML_CMETA_NO_INDEX;
+            return VXML_OK;
+        }
+        return select_directed_item(
+            impl, program, profile, form, profile->active_form);
+    }
+
+    if (mailbox->kind == VXML_CMETA_SUBDIALOG_GLOBAL_EXIT) {
+        status = subdialog_publish_global_exit(
+            impl, profile, mailbox);
+        subdialog_mailbox_payload_reset(mailbox);
+        profile->active_subdialog = VXML_CMETA_NO_INDEX;
+        if (status != VXML_OK)
+            return session_fail(impl, status);
+        return VXML_OK;
+    }
+
+    /*
+     * RETURN_DATA uses this envelope but is intentionally executable only
+     * after #191 adds the atomic parent-result transaction.
+     */
+    subdialog_mailbox_payload_reset(mailbox);
+    profile->active_subdialog = VXML_CMETA_NO_INDEX;
+    return session_fail(impl, VXML_UNSUPPORTED_FEATURE);
+}
+
 vxml_status vxml_session_cmeta_raise(
     vxml_session *session,
     const char *event_name,
