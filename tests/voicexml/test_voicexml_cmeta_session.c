@@ -1783,6 +1783,7 @@ spec("VoiceXML CMeta session execution") {
             vxml_session_cmeta_subdialog_try_complete(
                 &session, &completion),
             VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+        probe.active = false;
         memset(event, 'x', sizeof(event) - 1u);
         check_equal(
             vxml_session_cmeta_subdialog_try_complete(
@@ -1883,8 +1884,8 @@ spec("VoiceXML CMeta session execution") {
                 entry.name = (vxml_cmeta_name_view){
                     name, sizeof(name) - 1u};
                 entry.value.kind = VXML_CMETA_VALUE_STRING;
-                entry.value.data.string = (vxml_cmeta_name_view){
-                    text, sizeof(text) - 1u};
+                entry.value.data.string.data = text;
+                entry.value.data.string.size = sizeof(text) - 1u;
                 completion.entries = &entry;
                 completion.entry_count = 1u;
                 completion.global_exit_kind =
