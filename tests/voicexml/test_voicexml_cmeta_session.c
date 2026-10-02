@@ -7,6 +7,7 @@
 #include <cmeta/cmeta.h>
 
 #include <limits.h>
+#include <stdio.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -534,6 +535,26 @@ static const vxml_test_allocator session_test_allocator = {
     session_test_realloc,
     session_test_free
 };
+
+static vxml_status debug_compile_cmeta(
+    const char *label,
+    const void *bytes, size_t size,
+    const vxml_cmeta_compile_options_v1 *options,
+    vxml_program *program) {
+    vxml_diagnostic diagnostic = {0};
+    const vxml_status status = vxml_compile_cmeta(
+        bytes, size, NULL, options, program, &diagnostic);
+    if (status != VXML_OK)
+        fprintf(
+            stderr,
+            "DYNAMIC_GRAMMAR_DIAG[%s]: status=%d line=%zu column=%zu message=%s\n",
+            label != NULL ? label : "?",
+            (int)status,
+            diagnostic.location.line,
+            diagnostic.location.column,
+            diagnostic.message);
+    return status;
+}
 
 static vxml_cmeta_compile_options_v1 compile_options(void) {
     return (vxml_cmeta_compile_options_v1){
@@ -13661,9 +13682,10 @@ spec("VoiceXML CMeta session execution") {
         options.initially_undefined_count = 1u;
 
         check_equal(
-            vxml_compile_cmeta(
-                source, sizeof(source) - 1u, NULL,
-                &compile, &program, NULL),
+            debug_compile_cmeta(
+                "field-reactivation",
+                source, sizeof(source) - 1u,
+                &compile, &program),
             VXML_OK);
         check_equal(
             vxml_session_init_cmeta(&session, &program, &options),
@@ -13766,9 +13788,10 @@ spec("VoiceXML CMeta session execution") {
         options.initially_undefined_count = 1u;
 
         check_equal(
-            vxml_compile_cmeta(
-                source, sizeof(source) - 1u, NULL,
-                &compile, &program, NULL),
+            debug_compile_cmeta(
+                "form-scope",
+                source, sizeof(source) - 1u,
+                &compile, &program),
             VXML_OK);
         check_equal(
             vxml_session_init_cmeta(&session, &program, &options),
@@ -13910,9 +13933,10 @@ spec("VoiceXML CMeta session execution") {
                 case_index == 0u ? 2u : 1u;
 
             check_equal(
-                vxml_compile_cmeta(
-                    cases[case_index], sizes[case_index], NULL,
-                    &compile, &program, NULL),
+                debug_compile_cmeta(
+                    "runtime-invalid-uri",
+                    cases[case_index], sizes[case_index],
+                    &compile, &program),
                 VXML_OK);
             check_equal(
                 vxml_session_init_cmeta(
