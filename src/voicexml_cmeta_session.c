@@ -10804,13 +10804,15 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     return VXML_OK;
 }
 
-vxml_cmeta_prompt_barge_result
-vxml_session_cmeta_prompt_media_barge_in(
+static vxml_cmeta_prompt_barge_result prompt_media_barge_impl(
     vxml_session *session,
     uint64_t collect_generation,
-    vxml_cmeta_prompt_bargein_type signal_type) {
+    vxml_cmeta_prompt_bargein_type signal_type,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     const vxml_cmeta_field_row *field = NULL;
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
@@ -10826,11 +10828,14 @@ vxml_session_cmeta_prompt_media_barge_in(
         return VXML_CMETA_PROMPT_BARGE_STALE;
     if (impl->program == NULL ||
         impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
         impl->profile_data == NULL ||
         impl->state != VXML_SESSION_RUNNING)
         return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     if (collect_generation != profile->collect_generation ||
         !profile->prompt_media_in_flight ||
         profile->prompt_media_generation != collect_generation)
@@ -10849,12 +10854,47 @@ vxml_session_cmeta_prompt_media_barge_in(
         prompt->bargein_type != signal_type)
         return VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH;
 
+    if (timing_valid) {
+        status = prompt_mark_result_publish(
+            profile, program, collect_generation,
+            playback_elapsed_ms);
+        if (status != VXML_OK)
+            return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+    } else {
+        prompt_mark_result_reset(profile);
+    }
+
     profile->prompt_media_barged_generation =
         collect_generation;
     settle_prompt_media(profile);
     return VXML_CMETA_PROMPT_BARGE_CANCELED;
 }
 
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in(
+    vxml_session *session,
+    uint64_t collect_generation,
+    vxml_cmeta_prompt_bargein_type signal_type) {
+    return prompt_media_barge_impl(
+        session, collect_generation, signal_type,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_barge_v2 *barge) {
+    if (barge == NULL ||
+        barge->abi_version != VXML_CMETA_PROMPT_BARGE_ABI_V2 ||
+        barge->struct_size < sizeof(*barge))
+        return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+    return prompt_media_barge_impl(
+        session,
+        barge->collect_generation,
+        barge->signal_type,
+        true,
+        barge->playback_elapsed_ms);
+}
 
 
 static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
