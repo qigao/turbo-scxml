@@ -12536,6 +12536,7 @@ spec("VoiceXML CMeta session execution") {
             "<field name='value'><grammar type='application/srgs+xml' "
             "src='v.grxml'/><filled>"
             "<clear namelist='value'/>"
+            "<assign name='total' expr='value$.recordingsize'/>"
             "<exit expr='application.lastresult$.recordingsize'/>"
             "</filled></field></form></vxml>";
         static const unsigned char recording_bytes[] = {
@@ -12581,6 +12582,7 @@ spec("VoiceXML CMeta session execution") {
         vxml_cmeta_recording_ref_view_v1 recording = {0};
         vxml_cmeta_name_view exit_name = {0};
         vxml_cmeta_value_view exit_value = {0};
+        vxml_cmeta_value_view total = {0};
         bool progressed = false;
 
         options.initially_undefined = &undefined;
@@ -12627,6 +12629,12 @@ spec("VoiceXML CMeta session execution") {
         check_equal(
             exit_value.data.uint_value,
             (uint64_t)sizeof(recording_bytes));
+
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "total", sizeof("total") - 1u, &total),
+            VXML_OK);
+        check_equal(total.kind, VXML_CMETA_VALUE_UNDEFINED);
 
         check_equal(
             vxml_session_cmeta_recording_shadow_value(
