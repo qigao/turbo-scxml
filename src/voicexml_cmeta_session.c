@@ -2129,6 +2129,32 @@ static vxml_status initialize_form(
         }
     }
 
+    if (!range_valid(
+            form->first_transfer, form->transfer_count,
+            program->transfer_count) ||
+        (form->transfer_count != 0u && program->transfers == NULL))
+        return VXML_INVALID_STRUCTURE;
+    {
+        size_t transfer_offset;
+        for (transfer_offset = 0u;
+             transfer_offset < form->transfer_count;
+             ++transfer_offset) {
+            const vxml_cmeta_transfer_row *transfer =
+                &program->transfers[
+                    form->first_transfer + transfer_offset];
+            unsigned char *form_declared;
+            if (transfer->form != form_index ||
+                transfer->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            form_declared = session_declared(
+                session, program, true, form->scope);
+            if (form_declared == NULL)
+                return VXML_INVALID_STRUCTURE;
+            form_declared[transfer->form_item_slot] = 1u;
+        }
+    }
+
     for (block_offset = 0u; block_offset < form->block_count; ++block_offset) {
         const size_t block_index = form->first_block + block_offset;
         const vxml_cmeta_block_row *block = &program->blocks[block_index];
@@ -2402,10 +2428,13 @@ static vxml_status execute_clear(
                          program->subdialog_count) ||
             !range_valid(form->first_record, form->record_count,
                          program->record_count) ||
+            !range_valid(form->first_transfer, form->transfer_count,
+                         program->transfer_count) ||
             (form->field_count != 0u && program->fields == NULL) ||
             (form->initial_count != 0u && program->initials == NULL) ||
             (form->subdialog_count != 0u && program->subdialogs == NULL) ||
-            (form->record_count != 0u && program->records == NULL))
+            (form->record_count != 0u && program->records == NULL) ||
+            (form->transfer_count != 0u && program->transfers == NULL))
             return VXML_INVALID_STRUCTURE;
         for (index = 0u; index < form->block_count; ++index) {
             const vxml_cmeta_block_row *block =
@@ -2456,6 +2485,17 @@ static vxml_status execute_clear(
             cmeta_scope_view_clear_slot(
                 &session->staged_scopes[form->scope].view,
                 record->form_item_slot);
+        }
+        for (index = 0u; index < form->transfer_count; ++index) {
+            const vxml_cmeta_transfer_row *transfer =
+                &program->transfers[form->first_transfer + index];
+            if (transfer->form != session->active_form ||
+                transfer->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                transfer->form_item_slot);
         }
         return VXML_OK;
     }
