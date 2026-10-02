@@ -180,6 +180,12 @@ typedef struct vxml_cmeta_compile_options_v1 {
      */
     size_t max_collect_recording_media_type_bytes;
     uint64_t max_collect_recording_duration_us;
+
+    /*
+     * Optional append-only VoiceXML 2.1 mark@nameexpr result bound.
+     * Zero keeps dynamic mark names disabled; literal mark@name is unchanged.
+     */
+    size_t max_dynamic_mark_name_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
