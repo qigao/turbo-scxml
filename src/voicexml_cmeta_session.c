@@ -3328,14 +3328,21 @@ static vxml_status execute_goto(
         action->navigation_fetchaudio_uri != NULL
             ? action->navigation_fetchaudio_uri_size
             : form->fetch_audio.uri_size;
-    session->pending_navigation_has_fetchaudio_delay =
-        form->fetch_audio.has_delay;
-    session->pending_navigation_fetchaudio_delay_us =
-        form->fetch_audio.delay_us;
-    session->pending_navigation_has_fetchaudio_minimum =
-        form->fetch_audio.has_minimum;
-    session->pending_navigation_fetchaudio_minimum_us =
-        form->fetch_audio.minimum_us;
+    if (session->pending_navigation_fetchaudio_uri != NULL) {
+        session->pending_navigation_has_fetchaudio_delay =
+            form->fetch_audio.has_delay;
+        session->pending_navigation_fetchaudio_delay_us =
+            form->fetch_audio.delay_us;
+        session->pending_navigation_has_fetchaudio_minimum =
+            form->fetch_audio.has_minimum;
+        session->pending_navigation_fetchaudio_minimum_us =
+            form->fetch_audio.minimum_us;
+    } else {
+        session->pending_navigation_has_fetchaudio_delay = false;
+        session->pending_navigation_fetchaudio_delay_us = UINT64_C(0);
+        session->pending_navigation_has_fetchaudio_minimum = false;
+        session->pending_navigation_fetchaudio_minimum_us = UINT64_C(0);
+    }
     return VXML_OK;
 }
 
@@ -9245,6 +9252,10 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             impl->navigation_uri_size = target->target_size;
             impl->navigation_fetchaudio_uri = NULL;
             impl->navigation_fetchaudio_uri_size = 0u;
+            impl->navigation_has_fetchaudio_delay = false;
+            impl->navigation_fetchaudio_delay_us = UINT64_C(0);
+            impl->navigation_has_fetchaudio_minimum = false;
+            impl->navigation_fetchaudio_minimum_us = UINT64_C(0);
             impl->state = VXML_SESSION_NAVIGATING;
             impl->error = VXML_OK;
             return VXML_OK;
