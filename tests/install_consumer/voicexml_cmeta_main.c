@@ -172,6 +172,12 @@ int main(void) {
         .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2,
         .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v2),
         .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+    vxml_navigation_request_v1 navigation_request = {
+        .abi_version = VXML_NAVIGATION_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_navigation_request_v1)};
+    vxml_status (*query_navigation)(
+        const vxml_session *, vxml_navigation_request_v1 *) =
+        vxml_session_navigation_request;
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_terminal_kind terminal_kind = VXML_CMETA_TERMINAL_NONE;
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
@@ -300,7 +306,9 @@ int main(void) {
         vxml_session_cmeta_menu_try_complete;
     int result = 1;
 
-    if (raise_event == NULL || query_prompt == NULL ||
+    if (query_navigation == NULL ||
+        navigation_request.abi_version != VXML_NAVIGATION_REQUEST_ABI_V1 ||
+        raise_event == NULL || query_prompt == NULL ||
         report_mark == NULL || report_mark_v2 == NULL ||
         complete_prompt_v2 == NULL || barge_prompt_v2 == NULL ||
         query_mark_shadow == NULL || query_mark == NULL ||

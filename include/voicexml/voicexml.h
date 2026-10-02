@@ -3,6 +3,7 @@
 
 #include <xml_parser/xml_parser.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -116,6 +117,12 @@ typedef struct vxml_navigation_request_v1 {
     size_t uri_size;
     const char *fetchaudio_uri;
     size_t fetchaudio_uri_size;
+
+    /* Optional append-only inherited VoiceXML fetch-audio timing policy. */
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
 } vxml_navigation_request_v1;
 
 /**

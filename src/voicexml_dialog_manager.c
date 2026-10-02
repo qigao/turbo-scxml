@@ -1200,6 +1200,14 @@ static vxml_dialog_manager_status follow_external_navigation(
                 fetchaudio_resolved.document_uri;
             policy.fetchaudio_uri_size =
                 fetchaudio_resolved.document_uri_size;
+            policy.has_fetchaudio_delay =
+                navigation.has_fetchaudio_delay;
+            policy.fetchaudio_delay_us =
+                navigation.fetchaudio_delay_us;
+            policy.has_fetchaudio_minimum =
+                navigation.has_fetchaudio_minimum;
+            policy.fetchaudio_minimum_us =
+                navigation.fetchaudio_minimum_us;
             store_status =
                 vxml_document_store_acquire_with_policy(
                     impl->document_store,

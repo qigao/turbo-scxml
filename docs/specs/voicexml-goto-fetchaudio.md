@@ -1,18 +1,30 @@
 # VoiceXML goto fetchaudio language handoff
 
-This slice wires literal `goto@fetchaudio` into the backend-neutral
-DocumentStore fetch-audio boundary delivered by #144.
+The original #154 slice wired literal `goto@fetchaudio` into the
+backend-neutral DocumentStore fetch-audio boundary delivered by #144. #224
+extends the same handoff with static document/form property inheritance for
+`fetchaudio`, `fetchaudiodelay`, and `fetchaudiominimum`.
 
 ## Compile boundary
 
-For an external goto, the compiler decodes and copies both `next` and
-`fetchaudio` into immutable Program storage.
+The compiler resolves the effective fetch-audio policy once:
 
-A local fragment goto accepts a syntactically valid `fetchaudio` attribute
-but does not retain it in the executable action because no document fetch
-occurs.
+```text
+document properties
+  -> form overrides
+     -> explicit goto@fetchaudio URI override
+        -> immutable goto action policy
+```
 
-Empty or malformed literal fetchaudio values reject at compile time.
+URI, delay, and minimum inherit independently. An explicit
+`goto@fetchaudio` replaces only the URI and keeps inherited timing. Delay and
+minimum use the existing bounded VoiceXML Time Designation parser and are
+stored as exact microseconds with explicit presence bits.
+
+A local fragment goto accepts syntactically valid fetch-audio inputs but clears
+the effective policy because no document fetch occurs. Duplicate properties in
+one scope, empty fetchaudio values, and invalid timing designations reject at
+compile time.
 
 ## Navigation ABI
 
@@ -28,6 +40,11 @@ typedef struct vxml_navigation_request_v1 {
     size_t uri_size;
     const char *fetchaudio_uri;
     size_t fetchaudio_uri_size;
+
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
 } vxml_navigation_request_v1;
 ```
 
@@ -42,14 +59,13 @@ For external navigation:
 3. strip any fragment through the existing RFC3986 DocumentStore resolver;
 4. build `vxml_document_fetch_policy_v1` with
    `has_fetchaudio=true`;
-5. acquire the target through `vxml_document_store_acquire_with_policy()`.
+5. copy the inherited delay/minimum presence bits and microseconds unchanged;
+6. acquire the target through `vxml_document_store_acquire_with_policy()`.
 
 The #144 store boundary guarantees that a cache hit invokes no fetch-audio
-callback. On a real cache miss, the resolved absolute URI reaches the
-fetch-audio adapter and STARTED/SKIPPED semantics remain authoritative.
-
-This slice does not add fetchaudiodelay/fetchaudiominimum defaults. Those are
-property/default inheritance work for #50.
+callback. On a real cache miss, the resolved absolute URI plus the exact
+delay/minimum policy reaches the fetch-audio adapter and STARTED/SKIPPED
+semantics remain authoritative.
 
 ## Ownership
 
