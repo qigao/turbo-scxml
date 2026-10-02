@@ -1969,11 +1969,12 @@ static vxml_status evaluate_mark_shadow_expression(
         break;
     case VXML_CMETA_EXPRESSION_FIELD_MARK_NAME:
     case VXML_CMETA_EXPRESSION_FIELD_MARK_TIME:
-        if (row->source_field >= program->field_count ||
-            session->field_mark_shadows == NULL ||
+        if (row->source_field >= program->field_count)
+            return VXML_INVALID_STRUCTURE;
+        if (session->field_mark_shadows == NULL ||
             row->source_field >=
                 session->field_mark_shadow_count)
-            return VXML_INVALID_STRUCTURE;
+            return VXML_OK;
         if (staged &&
             collect_pending_mark_for_field(
                 session, program, row->source_field))
@@ -7839,6 +7840,181 @@ vxml_status vxml_session_cmeta_recording_shadow(
         .size = result->recording.size,
         .duration_ms = result->duration_us / UINT64_C(1000)
     };
+    return VXML_OK;
+}
+
+typedef enum vxml_cmeta_mark_shadow_path_kind {
+    VXML_CMETA_MARK_SHADOW_INVALID = 0,
+    VXML_CMETA_MARK_SHADOW_APP_NAME,
+    VXML_CMETA_MARK_SHADOW_APP_TIME,
+    VXML_CMETA_MARK_SHADOW_FIELD_NAME,
+    VXML_CMETA_MARK_SHADOW_FIELD_TIME
+} vxml_cmeta_mark_shadow_path_kind;
+
+typedef struct vxml_cmeta_mark_shadow_path {
+    vxml_cmeta_mark_shadow_path_kind kind;
+    size_t field;
+} vxml_cmeta_mark_shadow_path;
+
+static vxml_status resolve_mark_shadow_path(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_data *profile,
+    const char *path, size_t path_size,
+    vxml_cmeta_mark_shadow_path *out) {
+    static const char app_name[] =
+        "application.lastresult$.markname";
+    static const char app_time[] =
+        "application.lastresult$.marktime";
+    static const char field_name_suffix[] = "$.markname";
+    static const char field_time_suffix[] = "$.marktime";
+    size_t owner_size = 0u;
+    size_t offset;
+    vxml_cmeta_mark_shadow_path_kind field_kind =
+        VXML_CMETA_MARK_SHADOW_INVALID;
+
+    if (out != NULL)
+        *out = (vxml_cmeta_mark_shadow_path){
+            VXML_CMETA_MARK_SHADOW_INVALID,
+            VXML_CMETA_NO_INDEX};
+    if (program == NULL || profile == NULL ||
+        path == NULL || path_size == 0u || out == NULL ||
+        memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (path_size == sizeof(app_name) - 1u &&
+        memcmp(path, app_name, path_size) == 0) {
+        out->kind = VXML_CMETA_MARK_SHADOW_APP_NAME;
+        return VXML_OK;
+    }
+    if (path_size == sizeof(app_time) - 1u &&
+        memcmp(path, app_time, path_size) == 0) {
+        out->kind = VXML_CMETA_MARK_SHADOW_APP_TIME;
+        return VXML_OK;
+    }
+
+    if (recording_shadow_suffix(
+            path, path_size,
+            field_name_suffix,
+            sizeof(field_name_suffix) - 1u,
+            &owner_size))
+        field_kind = VXML_CMETA_MARK_SHADOW_FIELD_NAME;
+    else if (recording_shadow_suffix(
+                 path, path_size,
+                 field_time_suffix,
+                 sizeof(field_time_suffix) - 1u,
+                 &owner_size))
+        field_kind = VXML_CMETA_MARK_SHADOW_FIELD_TIME;
+    else
+        return VXML_INVALID_ARGUMENT;
+
+    if (owner_size == 0u ||
+        profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STATE;
+
+    {
+        const vxml_cmeta_form_row *form =
+            &program->forms[profile->active_form];
+        if (!range_valid(
+                form->first_field, form->field_count,
+                program->field_count) ||
+            (form->field_count != 0u &&
+             program->fields == NULL))
+            return VXML_INVALID_STRUCTURE;
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index =
+                form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &program->fields[field_index];
+            if (field->name != NULL &&
+                field->name_size == owner_size &&
+                memcmp(field->name, path, owner_size) == 0) {
+                out->kind = field_kind;
+                out->field = field_index;
+                return VXML_OK;
+            }
+        }
+    }
+    return VXML_INVALID_ARGUMENT;
+}
+
+vxml_status vxml_session_cmeta_mark_shadow_value(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_value_view *out_value) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    vxml_cmeta_mark_shadow_path resolved;
+    const vxml_cmeta_mark_result_slot *result = NULL;
+    const vxml_cmeta_field_mark_shadow *shadow = NULL;
+    vxml_status status;
+
+    if (out_value != NULL)
+        *out_value = (vxml_cmeta_value_view){
+            .kind = VXML_CMETA_VALUE_UNDEFINED};
+    if (session == NULL || path == NULL || path_size == 0u ||
+        out_value == NULL || memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    status = resolve_mark_shadow_path(
+        program, profile, path, path_size, &resolved);
+    if (status != VXML_OK) return status;
+
+    switch (resolved.kind) {
+    case VXML_CMETA_MARK_SHADOW_APP_NAME:
+    case VXML_CMETA_MARK_SHADOW_APP_TIME:
+        if (profile->prompt_mark_result.live)
+            result = &profile->prompt_mark_result;
+        break;
+    case VXML_CMETA_MARK_SHADOW_FIELD_NAME:
+    case VXML_CMETA_MARK_SHADOW_FIELD_TIME:
+        if (profile->field_mark_shadows != NULL &&
+            resolved.field <
+                profile->field_mark_shadow_count) {
+            shadow =
+                &profile->field_mark_shadows[resolved.field];
+            if (!shadow->assigned || !shadow->has_mark)
+                shadow = NULL;
+        }
+        break;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (result == NULL && shadow == NULL)
+        return VXML_OK;
+
+    if (resolved.kind == VXML_CMETA_MARK_SHADOW_APP_NAME ||
+        resolved.kind == VXML_CMETA_MARK_SHADOW_FIELD_NAME) {
+        const char *name =
+            result != NULL ? result->name : shadow->name;
+        const size_t name_size =
+            result != NULL ? result->name_size : shadow->name_size;
+        if (name == NULL || name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        out_value->kind = VXML_CMETA_VALUE_STRING;
+        out_value->data.string =
+            (vxml_cmeta_name_view){name, name_size};
+    } else {
+        out_value->kind = VXML_CMETA_VALUE_UINT;
+        out_value->data.uint_value =
+            result != NULL
+                ? result->marktime_ms
+                : shadow->marktime_ms;
+    }
     return VXML_OK;
 }
 
