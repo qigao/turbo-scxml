@@ -819,6 +819,7 @@ typedef struct vxml_cmeta_session_data {
     unsigned char *prompt_foreach_snapshot;
     size_t prompt_foreach_snapshot_capacity;
     bool prompt_foreach_transaction;
+    bool prompt_media_noop_prepared;
     char *prompt_media_dynamic_mark_storage;
     size_t prompt_media_dynamic_mark_storage_capacity;
     uint64_t prompt_media_projected_generation;
