@@ -18,11 +18,14 @@ extern "C" {
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
+#define VXML_CMETA_COLLECT_REQUEST_ABI_V2 2u
 #define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V2 2u
 #define VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
+#define VXML_CMETA_COLLECT_COMPLETION_ABI_V3 3u
+#define VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1 1u
 #define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
@@ -41,6 +44,8 @@ extern "C" {
 #define VXML_CMETA_COLLECT_CAP_MENU_SPEECH_APPROXIMATE UINT64_C(8)
 #define VXML_CMETA_COLLECT_CAP_MENU_GRAMMAR_EXTERNAL UINT64_C(16)
 #define VXML_CMETA_COLLECT_CAP_INITIAL_MULTI UINT64_C(32)
+#define VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE UINT64_C(64)
+#define VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE UINT64_C(128)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_TEXT UINT64_C(1)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_SSML UINT64_C(2)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO UINT64_C(4)
@@ -167,6 +172,13 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_transfer_uri_bytes;
     uint64_t max_transfer_connect_timeout_us;
     uint64_t max_transfer_duration_us;
+
+    /*
+     * Optional append-only VoiceXML 2.1 recorded-utterance compile bounds.
+     * Zero disables recordutterance policy.
+     */
+    size_t max_collect_recording_media_type_bytes;
+    uint64_t max_collect_recording_duration_us;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -217,6 +229,12 @@ typedef struct vxml_cmeta_session_options_v1 {
     /* Optional append-only transfer provider admission tail. */
     const struct vxml_cmeta_transfer_adapter_v1 *transfer;
     void *transfer_user;
+
+    /*
+     * Optional append-only VoiceXML 2.1 recorded-utterance owner ceiling.
+     * Required only when the compiled document enables recordutterance.
+     */
+    size_t max_collect_recording_bytes;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -539,6 +557,27 @@ typedef struct vxml_cmeta_collect_request_v1 {
     uint64_t timeout_us;
 } vxml_cmeta_collect_request_v1;
 
+/*
+ * Separate caller-owned V2 field request. V1 remains byte-for-byte stable.
+ * recording_media_type is empty when the platform may choose its default
+ * supported VoiceXML recording format.
+ */
+typedef struct vxml_cmeta_collect_request_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view field;
+    vxml_cmeta_name_view grammar_type;
+    vxml_cmeta_name_view grammar_src;
+    bool has_timeout;
+    uint64_t timeout_us;
+    bool record_utterance;
+    vxml_cmeta_name_view recording_media_type;
+    uint64_t max_recording_duration_us;
+    size_t max_recording_bytes;
+} vxml_cmeta_collect_request_v2;
+
 /**
  * Menu-specific collect request.
  *
@@ -654,6 +693,23 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
         const vxml_cmeta_initial_collect_request_v1 *request,
         vxml_cmeta_collect_ticket_v1 *out_ticket,
         const char **out_error);
+
+    /*
+     * Optional append-only VoiceXML 2.1 directed-field admission. Required
+     * only when the selected field requests recorded utterance capture.
+     */
+    vxml_status (*prepare_v2)(
+        void *user,
+        const vxml_cmeta_collect_request_v2 *request,
+        vxml_cmeta_collect_ticket_v1 *out_ticket,
+        const char **out_error);
+
+    /*
+     * Optional V2 owner barrier. Required for recorded-utterance capture.
+     * Returns only after no callback for generation can still enter the
+     * Session, matching the owned record-result handoff contract.
+     */
+    void (*quiesce)(void *user, uint64_t generation);
 } vxml_cmeta_collect_adapter_v1;
 
 typedef enum vxml_cmeta_collect_ingress_result {
@@ -686,6 +742,36 @@ typedef struct vxml_cmeta_collect_completion_v2 {
     const vxml_cmeta_collect_result_slot_v1 *slots;
     size_t slot_count;
 } vxml_cmeta_collect_completion_v2;
+
+/*
+ * V3 adds one move-only utterance recording to the bounded V2 scalar result.
+ * Before ACCEPTED the producer owns recording. ACCEPTED transfers recording
+ * into the collect mailbox; the Session adopts it only after transaction
+ * commit.
+ */
+typedef struct vxml_cmeta_collect_completion_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    const vxml_cmeta_collect_result_slot_v1 *slots;
+    size_t slot_count;
+    uint64_t recording_duration_us;
+    vxml_cmeta_name_view recording_media_type;
+    vxml_cmeta_recording_lease_v1 recording;
+} vxml_cmeta_collect_completion_v3;
+
+/*
+ * Borrowed view of the Session-owned most recent committed recognition
+ * recording. Bytes/media_type remain valid until replacement or Session close.
+ */
+typedef struct vxml_cmeta_collect_utterance_result_view_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t duration_us;
+    vxml_cmeta_name_view media_type;
+    const void *data;
+    size_t size;
+} vxml_cmeta_collect_utterance_result_view_v1;
 
 typedef struct vxml_cmeta_menu_completion_v1 {
     uint32_t abi_version;
@@ -1009,6 +1095,15 @@ vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request);
 
+/**
+ * Borrow the currently selected directed-field request including VoiceXML 2.1
+ * recorded-utterance policy. Returns VXML_UNSUPPORTED_FEATURE when the active
+ * item is not a directed field.
+ */
+vxml_status vxml_session_cmeta_collect_request_v2(
+    const vxml_session *session,
+    vxml_cmeta_collect_request_v2 *out_request);
+
 /** Borrow the currently selected static-menu collect request. */
 vxml_status vxml_session_cmeta_menu_collect_request(
     const vxml_session *session,
@@ -1062,6 +1157,21 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
 vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     vxml_session *session,
     const vxml_cmeta_collect_completion_v2 *completion);
+
+/**
+ * MPSC admission of a bounded scalar result plus one optional move-only
+ * recorded utterance lease. ACCEPTED transfers recording ownership.
+ */
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v3(
+    vxml_session *session,
+    const vxml_cmeta_collect_completion_v3 *completion);
+
+/**
+ * Borrow the Session-owned most recent committed recorded utterance.
+ */
+vxml_status vxml_session_cmeta_collect_utterance_result(
+    const vxml_session *session,
+    vxml_cmeta_collect_utterance_result_view_v1 *out_result);
 
 /**
  * MPSC admission of one menu choice ordinal for the active menu generation.

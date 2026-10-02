@@ -1209,6 +1209,13 @@ static vxml_cmeta_compile_options_v1 field_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 recorded_utterance_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = field_compile_options();
+    options.max_collect_recording_media_type_bytes = 64u;
+    options.max_collect_recording_duration_us = UINT64_C(5000000);
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 initial_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = field_compile_options();
     options.max_initials = 8u;
@@ -1234,6 +1241,7 @@ static vxml_cmeta_compile_options_v1 initial_prompt_compile_options(void) {
 typedef struct cmeta_collect_probe {
     vxml_status prepare_status;
     size_t prepare_calls;
+    size_t v2_prepare_calls;
     size_t menu_prepare_calls;
     size_t menu_v2_prepare_calls;
     size_t initial_prepare_calls;
@@ -1241,6 +1249,8 @@ typedef struct cmeta_collect_probe {
     size_t commit_calls;
     size_t discard_calls;
     size_t cancel_calls;
+    size_t quiesce_calls;
+    size_t recording_release_calls;
     bool reserved;
     bool active;
     uint64_t generation;
@@ -1260,6 +1270,10 @@ typedef struct cmeta_collect_probe {
     char field[32];
     char grammar_type[64];
     char grammar_src[64];
+    bool record_utterance;
+    char recording_media_type[64];
+    uint64_t max_recording_duration_us;
+    size_t max_recording_bytes;
 } cmeta_collect_probe;
 
 static void cmeta_collect_commit(void *user) {
@@ -1320,6 +1334,58 @@ static vxml_status cmeta_collect_prepare(
         .discard = cmeta_collect_discard,
         .user = probe};
     return VXML_OK;
+}
+
+static vxml_status cmeta_collect_prepare_v2(
+    void *user,
+    const vxml_cmeta_collect_request_v2 *request,
+    vxml_cmeta_collect_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    vxml_cmeta_collect_request_v1 base = {0};
+    vxml_status status;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_COLLECT_REQUEST_ABI_V2 ||
+        request->struct_size < sizeof(*request) ||
+        !request->record_utterance ||
+        request->max_recording_duration_us == UINT64_C(0) ||
+        request->max_recording_bytes == 0u ||
+        (request->required_capabilities &
+         VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE) == 0u ||
+        request->recording_media_type.size >=
+            sizeof(probe->recording_media_type))
+        return VXML_INVALID_CONTRACT;
+    ++probe->v2_prepare_calls;
+    probe->record_utterance = request->record_utterance;
+    probe->max_recording_duration_us =
+        request->max_recording_duration_us;
+    probe->max_recording_bytes = request->max_recording_bytes;
+    memset(
+        probe->recording_media_type, 0,
+        sizeof(probe->recording_media_type));
+    if (request->recording_media_type.size != 0u) {
+        if (request->recording_media_type.data == NULL)
+            return VXML_INVALID_CONTRACT;
+        memcpy(
+            probe->recording_media_type,
+            request->recording_media_type.data,
+            request->recording_media_type.size);
+    }
+    base = (vxml_cmeta_collect_request_v1){
+        .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_collect_request_v1),
+        .generation = request->generation,
+        .required_capabilities = request->required_capabilities,
+        .field = request->field,
+        .grammar_type = request->grammar_type,
+        .grammar_src = request->grammar_src,
+        .has_timeout = request->has_timeout,
+        .timeout_us = request->timeout_us
+    };
+    status = cmeta_collect_prepare(
+        user, &base, out_ticket, out_error);
+    return status;
 }
 
 static vxml_status cmeta_collect_prepare_menu(
@@ -1528,6 +1594,22 @@ static void cmeta_collect_cancel(void *user, uint64_t generation) {
         probe->active = false;
 }
 
+static void cmeta_collect_quiesce(
+    void *user, uint64_t generation) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (probe == NULL) return;
+    ++probe->quiesce_calls;
+    if (probe->generation == generation)
+        probe->active = false;
+}
+
+static void cmeta_collect_recording_release(
+    void *user, void *lease) {
+    cmeta_collect_probe *probe = (cmeta_collect_probe *)user;
+    if (probe == NULL || lease == NULL) return;
+    ++probe->recording_release_calls;
+}
+
 static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
     uint64_t capabilities) {
     return (vxml_cmeta_collect_adapter_v1){
@@ -1538,7 +1620,9 @@ static vxml_cmeta_collect_adapter_v1 cmeta_collect_adapter(
         .cancel = cmeta_collect_cancel,
         .prepare_menu = cmeta_collect_prepare_menu,
         .prepare_menu_v2 = cmeta_collect_prepare_menu_v2,
-        .prepare_initial = cmeta_collect_prepare_initial};
+        .prepare_initial = cmeta_collect_prepare_initial,
+        .prepare_v2 = cmeta_collect_prepare_v2,
+        .quiesce = cmeta_collect_quiesce};
 }
 
 static vxml_cmeta_session_options_v1 field_session_options(
@@ -1548,6 +1632,17 @@ static vxml_cmeta_session_options_v1 field_session_options(
     vxml_cmeta_session_options_v1 options = session_options(root);
     options.collect = adapter;
     options.collect_user = probe;
+    return options;
+}
+
+static vxml_cmeta_session_options_v1 recorded_utterance_session_options(
+    const vxml_cmeta_session_root *root,
+    const vxml_cmeta_collect_adapter_v1 *adapter,
+    cmeta_collect_probe *probe,
+    size_t max_recording_bytes) {
+    vxml_cmeta_session_options_v1 options =
+        field_session_options(root, adapter, probe);
+    options.max_collect_recording_bytes = max_recording_bytes;
     return options;
 }
 
@@ -11788,4 +11883,311 @@ spec("VoiceXML CMeta session execution") {
                         frozen_before[scope]);
         vxml_program_destroy(&program);
     }
+
+    it("owns recorded-utterance V3 results only after committed recognition") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<property name='recordutterance' value='true'/>"
+            "<property name='recordutterancetype' value='audio/wav'/>"
+            "<field name='value'><grammar type='application/srgs+xml' "
+            "src='v.grxml'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' "
+            "src='o.grxml'/></field>"
+            "</form></vxml>";
+        static const unsigned char first_recording[] = {0x11u, 0x12u};
+        static const unsigned char second_recording[] = {0x21u, 0x22u, 0x23u};
+        const vxml_cmeta_compile_options_v1 compile =
+            recorded_utterance_compile_options();
+        vxml_cmeta_session_root root = {
+            .value = 1, .other = 2, .late = 0, .flag = false};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE |
+                VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE);
+        vxml_cmeta_session_options_v1 options =
+            recorded_utterance_session_options(
+                &root, &adapter, &probe, 32u);
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}
+        };
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 legacy_request = {0};
+        vxml_cmeta_collect_request_v2 request = {0};
+        vxml_cmeta_collect_utterance_result_view_v1 result = {0};
+        int first_value = 7;
+        int second_value = 9;
+        vxml_cmeta_collect_result_slot_v1 first_slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &first_value};
+        vxml_cmeta_collect_result_slot_v1 second_slot = {
+            {"other", sizeof("other") - 1u},
+            &cmeta_data_int, &second_value};
+        vxml_cmeta_collect_completion_v2 legacy_completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
+            .slots = &first_slot,
+            .slot_count = 1u
+        };
+        vxml_cmeta_collect_completion_v3 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V3,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v3),
+            .slots = &first_slot,
+            .slot_count = 1u,
+            .recording_duration_us = UINT64_C(750000),
+            .recording_media_type = {
+                "audio/wav", sizeof("audio/wav") - 1u},
+            .recording = {
+                .data = first_recording,
+                .size = sizeof(first_recording),
+                .lease = (void *)first_recording,
+                .release = cmeta_collect_recording_release,
+                .release_user = &probe}
+        };
+        bool progressed = false;
+
+        options.initially_undefined = undefined;
+        options.initially_undefined_count =
+            sizeof(undefined) / sizeof(undefined[0]);
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_request(
+                &session, &legacy_request),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_cmeta_collect_request_v2(
+                &session, &request),
+            VXML_OK);
+        check_true(request.record_utterance);
+        check_equal(
+            request.required_capabilities,
+            VXML_CMETA_COLLECT_CAP_SRGS_XML |
+            VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE |
+            VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE);
+        check_equal(
+            request.max_recording_duration_us,
+            UINT64_C(5000000));
+        check_equal(request.max_recording_bytes, (size_t)32u);
+        check_equal(
+            request.recording_media_type.size,
+            sizeof("audio/wav") - 1u);
+        check_equal(
+            memcmp(
+                request.recording_media_type.data,
+                "audio/wav", sizeof("audio/wav") - 1u),
+            0);
+
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.v2_prepare_calls, (size_t)1u);
+        check_true(probe.record_utterance);
+        check_equal(
+            strcmp(probe.recording_media_type, "audio/wav"), 0);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session), VXML_OK);
+
+        legacy_completion.generation = request.generation;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v2(
+                &session, &legacy_completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+
+        completion.generation = request.generation + UINT64_C(1);
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_STALE);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        completion.generation = request.generation;
+        completion.recording_media_type =
+            (vxml_cmeta_name_view){
+                "audio/basic", sizeof("audio/basic") - 1u};
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        completion.recording_media_type =
+            (vxml_cmeta_name_view){
+                "audio/wav", sizeof("audio/wav") - 1u};
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        check_equal(
+            vxml_session_cmeta_collect_utterance_result(
+                &session, &result),
+            VXML_OK);
+        check_equal(result.duration_us, UINT64_C(750000));
+        check_equal(result.size, sizeof(first_recording));
+        check_equal(
+            memcmp(result.data, first_recording, sizeof(first_recording)),
+            0);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        check_equal(
+            vxml_session_cmeta_collect_request_v2(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        completion.generation = request.generation;
+        completion.slots = &second_slot;
+        completion.recording_duration_us = UINT64_C(900000);
+        completion.recording.data = second_recording;
+        completion.recording.size = sizeof(second_recording);
+        completion.recording.lease = (void *)second_recording;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        progressed = false;
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(probe.quiesce_calls, (size_t)2u);
+        check_equal(probe.recording_release_calls, (size_t)1u);
+        check_equal(
+            vxml_session_cmeta_collect_utterance_result(
+                &session, &result),
+            VXML_OK);
+        check_equal(result.duration_us, UINT64_C(900000));
+        check_equal(result.size, sizeof(second_recording));
+        check_equal(
+            memcmp(result.data, second_recording, sizeof(second_recording)),
+            0);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.recording_release_calls, (size_t)2u);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects recorded-utterance policy outside the explicit bounded contract") {
+        static const char v20_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><form>"
+            "<property name='recordutterance' value='true'/>"
+            "<field name='value'><grammar type='application/srgs+xml' "
+            "src='v.grxml'/></field></form></vxml>";
+        static const char v21_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<property name='recordutterance' value='true'/>"
+            "<field name='value'><grammar type='application/srgs+xml' "
+            "src='v.grxml'/></field></form></vxml>";
+        static const unsigned char recording[] = {
+            0x31u, 0x32u, 0x33u, 0x34u, 0x35u};
+        const vxml_cmeta_compile_options_v1 compile =
+            recorded_utterance_compile_options();
+        vxml_cmeta_session_root root = {
+            .value = 1, .other = 2, .late = 0, .flag = false};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE);
+        vxml_cmeta_session_options_v1 options =
+            recorded_utterance_session_options(
+                &root, &adapter, &probe, 4u);
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v2 request = {0};
+        int value = 5;
+        vxml_cmeta_collect_result_slot_v1 slot = {
+            {"value", sizeof("value") - 1u},
+            &cmeta_data_int, &value};
+        vxml_cmeta_collect_completion_v3 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V3,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v3),
+            .slots = &slot,
+            .slot_count = 1u,
+            .recording_duration_us = UINT64_C(500000),
+            .recording_media_type = {
+                "audio/basic", sizeof("audio/basic") - 1u},
+            .recording = {
+                .data = recording,
+                .size = sizeof(recording),
+                .lease = (void *)recording,
+                .release = cmeta_collect_recording_release,
+                .release_user = &probe}
+        };
+
+        check_equal(
+            vxml_compile_cmeta(
+                v20_source, sizeof(v20_source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        vxml_program_destroy(&program);
+
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                v21_source, sizeof(v21_source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_request_v2(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        completion.generation = request.generation;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        completion.recording.size = 4u;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        check_equal(probe.recording_release_calls, (size_t)1u);
+        vxml_program_destroy(&program);
+    }
+
 }

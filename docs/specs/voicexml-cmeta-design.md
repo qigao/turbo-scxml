@@ -377,3 +377,54 @@ external evaluation, and runtime-missing path semantics remain unchanged.
 - Final gates run fresh Release and Debug/ASan presets, install presets,
   external package consumers, `git diff --check`, and a public-header scan that
   rejects media callbacks, tickets, tokens, and wait-state APIs.
+
+## Later VoiceXML 2.1 recorded-utterance extension
+
+The later #209 slice extends the recognition collect boundary without widening
+the generic CMeta expression grammar. Form-scoped VoiceXML 2.1
+`recordutterance` and `recordutterancetype` properties compile into immutable
+policy. A separate collect request V2 exposes recording intent, requested media
+type, duration ceiling, and byte ceiling; the caller-owned V1 request remains
+byte-for-byte safe.
+
+Collect completion V3 combines the existing bounded typed result slots with one
+optional move-only `vxml_cmeta_recording_lease_v1`. An explicit
+`recordutterancetype` is fail-fast: a completion that substitutes another MIME
+type is incompatible rather than silently accepted.
+
+Ownership is generation-safe:
+
+```text
+provider owns lease
+    |
+completion V3 -> mailbox WRITING
+    |
+WRITING -> READY     == ownership transfer
+    |
+quiesce(generation)
+    |
+scalar transaction
+    +-- failure -> release mailbox lease exactly once
+    '-- commit  -> replace Session-owned utterance result
+                        |
+                 replacement / close
+                        |
+                   release once
+```
+
+Stale, full, incompatible, or closed ingress before READY transfers no media
+ownership and invokes no release callback. A READY completion is quiesced before
+the Session uses or releases its lease. Recording bytes never enter CMeta scalar
+storage; the public utterance-result view only borrows the Session-owned media
+and bounded metadata.
+
+The adapter extension is append-only: legacy field/menu/initial providers remain
+valid when recorded utterance capture is not requested. Recorded-utterance
+capture requires the V2 field admission tail plus its generation quiescence
+barrier.
+
+This slice deliberately does not admit `$` into the generic CMeta lexer.
+VoiceXML-specific lowering for `application.lastresult$.recording`,
+`recordingsize`, `recordingduration`, and matching input-item shadow
+properties is a separate #50 slice over the explicit Session-owned result.
+

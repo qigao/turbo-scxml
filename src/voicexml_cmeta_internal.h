@@ -158,6 +158,13 @@ typedef struct vxml_cmeta_form_row {
     const char *grammar_src;
     size_t grammar_src_size;
     uint64_t grammar_required_capabilities;
+
+    /* VoiceXML 2.1 form-scoped recorded-utterance policy. */
+    bool record_utterance;
+    const char *recording_media_type;
+    size_t recording_media_type_size;
+    size_t max_recording_media_type_bytes;
+    uint64_t max_recording_duration_us;
 } vxml_cmeta_form_row;
 
 typedef enum vxml_cmeta_prompt_owner_kind {
@@ -502,7 +509,24 @@ typedef struct vxml_cmeta_collect_mailbox {
     size_t *root_fields;
     size_t slot_count;
     size_t slot_capacity;
+
+    bool record_utterance_expected;
+    uint64_t max_recording_duration_us;
+    uint64_t recording_duration_us;
+    char *recording_media_type;
+    size_t recording_media_type_size;
+    size_t recording_media_type_capacity;
+    vxml_cmeta_recording_lease_v1 recording;
 } vxml_cmeta_collect_mailbox;
+
+typedef struct vxml_cmeta_collect_utterance_result_slot {
+    bool live;
+    uint64_t duration_us;
+    char *media_type;
+    size_t media_type_size;
+    size_t media_type_capacity;
+    vxml_cmeta_recording_lease_v1 recording;
+} vxml_cmeta_collect_utterance_result_slot;
 
 typedef enum vxml_cmeta_prompt_media_mailbox_state {
     VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED = 0,
@@ -607,7 +631,11 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_collect_ticket_v1 collect_ticket;
     bool collect_prepared;
     bool collect_in_flight;
+    uint64_t collect_quiesced_generation;
     vxml_cmeta_collect_mailbox collect_mailbox;
+    size_t max_collect_recording_bytes;
+    vxml_cmeta_collect_utterance_result_slot collect_utterance_result;
+    char *collect_utterance_result_media_type;
     vxml_cmeta_event_counter *event_counters;
     size_t event_counter_count;
     unsigned char *retry_reset_pending;

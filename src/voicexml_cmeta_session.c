@@ -198,6 +198,17 @@ static bool collect_adapter_has_initial(
         adapter->prepare_initial != NULL;
 }
 
+static bool collect_adapter_has_field_v2(
+    const vxml_cmeta_collect_adapter_v1 *adapter) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_collect_adapter_v1, quiesce) +
+        sizeof(((vxml_cmeta_collect_adapter_v1 *)0)->quiesce);
+    return adapter != NULL &&
+        adapter->struct_size >= tail_size &&
+        adapter->prepare_v2 != NULL &&
+        adapter->quiesce != NULL;
+}
+
 static const DataBindFormatProvider *data_format_provider(
     vxml_cmeta_data_format format) {
     switch (format) {
@@ -1101,6 +1112,52 @@ static void record_release_lease(
     *recording = (vxml_cmeta_recording_lease_v1){0};
 }
 
+static void collect_recording_payload_reset(
+    vxml_cmeta_collect_mailbox *mailbox,
+    bool release_recording) {
+    vxml_cmeta_recording_lease_v1 recording;
+    if (mailbox == NULL) return;
+    recording = mailbox->recording;
+    mailbox->recording = (vxml_cmeta_recording_lease_v1){0};
+    mailbox->recording_duration_us = UINT64_C(0);
+    mailbox->recording_media_type_size = 0u;
+    if (release_recording)
+        record_release_lease(&recording);
+}
+
+static void collect_utterance_result_reset(
+    vxml_cmeta_session_data *session) {
+    vxml_cmeta_collect_utterance_result_slot *result;
+    vxml_cmeta_recording_lease_v1 recording;
+    char *media_type;
+    size_t media_type_capacity;
+    bool live;
+    if (session == NULL) return;
+    result = &session->collect_utterance_result;
+    recording = result->recording;
+    media_type = result->media_type;
+    media_type_capacity = result->media_type_capacity;
+    live = result->live;
+    *result = (vxml_cmeta_collect_utterance_result_slot){0};
+    result->media_type = media_type;
+    result->media_type_capacity = media_type_capacity;
+    if (live)
+        record_release_lease(&recording);
+}
+
+static void collect_quiesce_generation(
+    vxml_cmeta_session_data *session,
+    uint64_t generation) {
+    if (session == NULL || generation == UINT64_C(0) ||
+        session->collect_adapter == NULL ||
+        !collect_adapter_has_field_v2(session->collect_adapter) ||
+        session->collect_quiesced_generation == generation)
+        return;
+    session->collect_adapter->quiesce(
+        session->collect_user, generation);
+    session->collect_quiesced_generation = generation;
+}
+
 static void record_mailbox_payload_reset(
     vxml_cmeta_record_completion_mailbox *mailbox,
     bool release_recording) {
@@ -1295,25 +1352,59 @@ static void session_data_destroy(
                 VXML_CMETA_SUBDIALOG_MAILBOX_READY)
             session->subdialog_in_flight = false;
     }
-    atomic_store_explicit(
-        &session->collect_mailbox.state,
-        VXML_CMETA_COLLECT_MAILBOX_CLOSED,
-        memory_order_release);
-    settle_subdialog(session);
-    settle_record(session);
-    settle_transfer(session);
-    if (session->collect_prepared) {
-        vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
-        session->collect_prepared = false;
-        session->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
-        if (ticket.discard != NULL)
-            ticket.discard(ticket.user);
-    } else if (session->collect_in_flight &&
-               session->collect_adapter != NULL) {
-        const uint64_t generation = session->collect_generation;
-        session->collect_in_flight = false;
-        session->collect_adapter->cancel(
-            session->collect_user, generation);
+    {
+        const unsigned previous_collect_state =
+            atomic_exchange_explicit(
+                &session->collect_mailbox.state,
+                VXML_CMETA_COLLECT_MAILBOX_CLOSED,
+                memory_order_acq_rel);
+        const uint64_t collect_generation =
+            atomic_load_explicit(
+                &session->collect_mailbox.generation,
+                memory_order_relaxed);
+        settle_subdialog(session);
+        settle_record(session);
+        settle_transfer(session);
+        if (session->collect_prepared) {
+            vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
+            session->collect_prepared = false;
+            session->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
+            if (ticket.discard != NULL)
+                ticket.discard(ticket.user);
+        } else if (session->collect_in_flight &&
+                   session->collect_adapter != NULL) {
+            const bool recorded_utterance =
+                session->collect_mailbox.record_utterance_expected;
+
+            /*
+             * Preserve the legacy collect contract: close cancels an active
+             * generation even when a scalar completion is already READY.
+             *
+             * Recorded-utterance V3 is different after ACCEPTED: READY means
+             * the media lease already transferred to the mailbox, so close
+             * quiesces instead of manufacturing a cancel after completion.
+             * Before an accepted completion, cancel then quiesce.
+             */
+            if (!recorded_utterance ||
+                previous_collect_state ==
+                    VXML_CMETA_COLLECT_MAILBOX_EMPTY ||
+                previous_collect_state ==
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+                session->collect_adapter->cancel(
+                    session->collect_user, collect_generation);
+            if (recorded_utterance)
+                collect_quiesce_generation(
+                    session, collect_generation);
+            session->collect_in_flight = false;
+        }
+        collect_recording_payload_reset(
+            &session->collect_mailbox,
+            previous_collect_state ==
+                VXML_CMETA_COLLECT_MAILBOX_READY);
+        collect_utterance_result_reset(session);
+        atomic_store_explicit(
+            &session->collect_mailbox.generation,
+            UINT64_C(0), memory_order_relaxed);
     }
     exit_snapshot_destroy(&session->terminal_exit);
     exit_snapshot_destroy(&session->pending_exit);
@@ -1334,6 +1425,8 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->collect_mailbox.recording_media_type);
+    vxml_free(session->collect_utterance_result_media_type);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
@@ -3488,6 +3581,9 @@ vxml_status vxml_cmeta_session_init_profile(
         goto failure;
     }
     if (program->field_count != 0u) {
+        size_t form_index;
+        size_t max_collect_recording_media_type_bytes = 0u;
+        bool uses_collect_recording = false;
         const size_t multi_tail_size =
             offsetof(
                 vxml_cmeta_session_options_v1,
@@ -3496,6 +3592,50 @@ vxml_status vxml_cmeta_session_init_profile(
         size_t requested_slots = 1u;
         size_t mailbox_allocation_bytes;
         size_t remainder;
+
+        for (form_index = 0u; form_index < program->form_count; ++form_index) {
+            const vxml_cmeta_form_row *form = &program->forms[form_index];
+            if (!form->record_utterance) continue;
+            uses_collect_recording = true;
+            if (form->max_recording_media_type_bytes >
+                    max_collect_recording_media_type_bytes)
+                max_collect_recording_media_type_bytes =
+                    form->max_recording_media_type_bytes;
+        }
+        if (uses_collect_recording) {
+            const size_t recording_tail_size =
+                offsetof(
+                    vxml_cmeta_session_options_v1,
+                    max_collect_recording_bytes) +
+                sizeof(options->max_collect_recording_bytes);
+            if (options->struct_size < recording_tail_size ||
+                options->max_collect_recording_bytes == 0u ||
+                max_collect_recording_media_type_bytes == 0u ||
+                !collect_adapter_has_field_v2(profile->collect_adapter)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->max_collect_recording_bytes =
+                options->max_collect_recording_bytes;
+            profile->collect_mailbox.recording_media_type_capacity =
+                max_collect_recording_media_type_bytes;
+            profile->collect_mailbox.recording_media_type =
+                (char *)vxml_malloc(
+                    max_collect_recording_media_type_bytes);
+            profile->collect_utterance_result_media_type =
+                (char *)vxml_malloc(
+                    max_collect_recording_media_type_bytes);
+            if (profile->collect_mailbox.recording_media_type == NULL ||
+                profile->collect_utterance_result_media_type == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->collect_utterance_result.media_type =
+                profile->collect_utterance_result_media_type;
+            profile->collect_utterance_result.media_type_capacity =
+                max_collect_recording_media_type_bytes;
+        }
+
         if (options->struct_size >= multi_tail_size &&
             options->max_collect_result_slots != 0u)
             requested_slots = options->max_collect_result_slots;
@@ -5575,6 +5715,60 @@ static vxml_status collect_request_from_impl(
     return VXML_OK;
 }
 
+static vxml_status collect_request_v2_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_collect_request_v2 *out_request) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_form_row *form;
+    vxml_cmeta_collect_request_v1 base = {0};
+    vxml_status status;
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_collect_request_v2){0};
+    status = collect_request_from_impl(impl, &base);
+    if (status != VXML_OK) return status;
+    program = (const vxml_cmeta_program_data *)impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STRUCTURE;
+    form = &program->forms[profile->active_form];
+    *out_request = (vxml_cmeta_collect_request_v2){
+        .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_collect_request_v2),
+        .generation = base.generation,
+        .required_capabilities = base.required_capabilities,
+        .field = base.field,
+        .grammar_type = base.grammar_type,
+        .grammar_src = base.grammar_src,
+        .has_timeout = base.has_timeout,
+        .timeout_us = base.timeout_us,
+        .record_utterance = form->record_utterance
+    };
+    if (form->record_utterance) {
+        out_request->required_capabilities |=
+            VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE;
+        if (form->recording_media_type_size != 0u) {
+            if (form->recording_media_type == NULL)
+                return VXML_INVALID_STRUCTURE;
+            out_request->required_capabilities |=
+                VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE;
+            out_request->recording_media_type =
+                (vxml_cmeta_name_view){
+                    form->recording_media_type,
+                    form->recording_media_type_size};
+        }
+        if (form->max_recording_duration_us == UINT64_C(0) ||
+            profile->max_collect_recording_bytes == 0u)
+            return VXML_INVALID_CONTRACT;
+        out_request->max_recording_duration_us =
+            form->max_recording_duration_us;
+        out_request->max_recording_bytes =
+            profile->max_collect_recording_bytes;
+    }
+    return VXML_OK;
+}
+
 static vxml_status menu_collect_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_menu_collect_request_v1 *out_request) {
@@ -5849,7 +6043,29 @@ vxml_status vxml_session_cmeta_collect_request(
         *out_request = (vxml_cmeta_collect_request_v1){0};
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     if (impl == NULL) return VXML_INVALID_CONTRACT;
+    {
+        const vxml_cmeta_program_data *program =
+            (const vxml_cmeta_program_data *)impl->program->profile_data;
+        const vxml_cmeta_session_data *profile =
+            (const vxml_cmeta_session_data *)impl->profile_data;
+        if (profile != NULL && program != NULL &&
+            profile->active_form < program->form_count &&
+            program->forms != NULL &&
+            program->forms[profile->active_form].record_utterance)
+            return VXML_UNSUPPORTED_FEATURE;
+    }
     return collect_request_from_impl(impl, out_request);
+}
+
+vxml_status vxml_session_cmeta_collect_request_v2(
+    const vxml_session *session,
+    vxml_cmeta_collect_request_v2 *out_request) {
+    const vxml_session_impl *impl = cmeta_session(session);
+    if (out_request != NULL)
+        *out_request = (vxml_cmeta_collect_request_v2){0};
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    if (impl == NULL) return VXML_INVALID_CONTRACT;
+    return collect_request_v2_from_impl(impl, out_request);
 }
 
 vxml_status vxml_session_cmeta_menu_collect_request(
@@ -5954,24 +6170,41 @@ vxml_status vxml_session_cmeta_collect_prepare(
                 profile->collect_user, &request, &ticket, out_error);
         }
     } else {
-        vxml_cmeta_collect_request_v1 request = {0};
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
-        status = collect_request_from_impl(impl, &request);
-        if (status != VXML_OK) return status;
+        const vxml_cmeta_form_row *form;
         if (profile->active_field >= program->field_count ||
-            program->fields == NULL ||
+            profile->active_form >= program->form_count ||
+            program->fields == NULL || program->forms == NULL ||
             !collect_fixed_scalar_data(
                 program->fields[profile->active_field].field_data))
             return VXML_UNSUPPORTED_FEATURE;
-        if ((profile->collect_adapter->capabilities &
-             request.required_capabilities) !=
-            request.required_capabilities)
-            return VXML_UNSUPPORTED_FEATURE;
-        if (profile->collect_adapter->prepare == NULL)
-            return VXML_INVALID_CONTRACT;
-        status = profile->collect_adapter->prepare(
-            profile->collect_user, &request, &ticket, out_error);
+        form = &program->forms[profile->active_form];
+        if (form->record_utterance) {
+            vxml_cmeta_collect_request_v2 request = {0};
+            status = collect_request_v2_from_impl(impl, &request);
+            if (status != VXML_OK) return status;
+            if ((profile->collect_adapter->capabilities &
+                 request.required_capabilities) !=
+                request.required_capabilities)
+                return VXML_UNSUPPORTED_FEATURE;
+            if (!collect_adapter_has_field_v2(profile->collect_adapter))
+                return VXML_UNSUPPORTED_FEATURE;
+            status = profile->collect_adapter->prepare_v2(
+                profile->collect_user, &request, &ticket, out_error);
+        } else {
+            vxml_cmeta_collect_request_v1 request = {0};
+            status = collect_request_from_impl(impl, &request);
+            if (status != VXML_OK) return status;
+            if ((profile->collect_adapter->capabilities &
+                 request.required_capabilities) !=
+                request.required_capabilities)
+                return VXML_UNSUPPORTED_FEATURE;
+            if (profile->collect_adapter->prepare == NULL)
+                return VXML_INVALID_CONTRACT;
+            status = profile->collect_adapter->prepare(
+                profile->collect_user, &request, &ticket, out_error);
+        }
     }
 
     if (status != VXML_OK) {
@@ -6018,6 +6251,11 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
         profile->collect_mailbox.data = NULL;
         profile->collect_mailbox.slot_count = 0u;
         profile->collect_mailbox.choice_index = SIZE_MAX;
+        profile->collect_mailbox.record_utterance_expected = false;
+        profile->collect_mailbox.max_recording_duration_us = UINT64_C(0);
+        collect_recording_payload_reset(
+            &profile->collect_mailbox, false);
+        profile->collect_quiesced_generation = UINT64_C(0);
 
         if (profile->active_initial != VXML_CMETA_NO_INDEX) {
             const vxml_cmeta_form_row *form;
@@ -6057,11 +6295,15 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
                 VXML_CMETA_COLLECT_ITEM_MENU;
         } else {
             const vxml_cmeta_field_row *field;
+            const vxml_cmeta_form_row *form;
             if (profile->active_field >= program->field_count ||
-                program->fields == NULL)
+                profile->active_form >= program->form_count ||
+                program->fields == NULL || program->forms == NULL)
                 return VXML_INVALID_STRUCTURE;
             field = &program->fields[profile->active_field];
-            if (!collect_fixed_scalar_data(field->field_data) ||
+            form = &program->forms[profile->active_form];
+            if (field->form != profile->active_form ||
+                !collect_fixed_scalar_data(field->field_data) ||
                 profile->collect_mailbox.storage == NULL ||
                 field->field_data->storage_type->size >
                     profile->collect_mailbox.storage_bytes)
@@ -6069,6 +6311,15 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
             profile->collect_mailbox.item_kind =
                 VXML_CMETA_COLLECT_ITEM_FIELD;
             profile->collect_mailbox.data = field->field_data;
+            profile->collect_mailbox.record_utterance_expected =
+                form->record_utterance;
+            if (form->record_utterance) {
+                if (form->max_recording_duration_us == UINT64_C(0) ||
+                    profile->max_collect_recording_bytes == 0u)
+                    return VXML_INVALID_CONTRACT;
+                profile->collect_mailbox.max_recording_duration_us =
+                    form->max_recording_duration_us;
+            }
         }
         atomic_store_explicit(
             &profile->collect_mailbox.generation,
@@ -6164,7 +6415,8 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete(
     if (completion->generation != generation)
         return VXML_CMETA_COLLECT_INGRESS_STALE;
     if (mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD ||
-        profile->active_menu != VXML_CMETA_NO_INDEX)
+        profile->active_menu != VXML_CMETA_NO_INDEX ||
+        mailbox->record_utterance_expected)
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     if (!cmeta_data_desc_equal(completion->data, mailbox->data) ||
         !collect_fixed_scalar_data(completion->data))
@@ -6281,6 +6533,8 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
     if (profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     initial_mode = profile->active_initial != VXML_CMETA_NO_INDEX;
+    if (mailbox->record_utterance_expected)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 
     if (initial_mode) {
         const vxml_cmeta_initial_row *initial;
@@ -6457,6 +6711,339 @@ incompatible:
         VXML_CMETA_COLLECT_MAILBOX_EMPTY,
         memory_order_release);
     return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+}
+
+vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v3(
+    vxml_session *session,
+    const vxml_cmeta_collect_completion_v3 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const cmeta_data_struct_shape *root_shape;
+    const vxml_cmeta_field_row *selected = NULL;
+    const vxml_cmeta_form_row *form = NULL;
+    vxml_cmeta_collect_mailbox *mailbox;
+    bool initial_mode;
+    bool recording_present;
+    uint64_t generation;
+    unsigned state;
+    unsigned expected;
+    size_t slot_index;
+    size_t selected_count = 0u;
+
+    if (session == NULL || completion == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (completion->abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V3 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == 0u ||
+        completion->slots == NULL ||
+        completion->slot_count == 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_COLLECT_INGRESS_CLOSED
+            : VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    mailbox = &profile->collect_mailbox;
+
+    if (profile->active_menu != VXML_CMETA_NO_INDEX)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    initial_mode = profile->active_initial != VXML_CMETA_NO_INDEX;
+    if (initial_mode || !mailbox->record_utterance_expected)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
+    recording_present =
+        completion->recording.data != NULL ||
+        completion->recording.size != 0u ||
+        completion->recording.lease != NULL ||
+        completion->recording.release != NULL ||
+        completion->recording.release_user != NULL ||
+        completion->recording_duration_us != UINT64_C(0) ||
+        completion->recording_media_type.data != NULL ||
+        completion->recording_media_type.size != 0u;
+    if (recording_present) {
+        if (completion->recording.data == NULL ||
+            completion->recording.size == 0u ||
+            completion->recording.lease == NULL ||
+            completion->recording.release == NULL ||
+            completion->recording.size >
+                profile->max_collect_recording_bytes ||
+            completion->recording_duration_us >
+                mailbox->max_recording_duration_us ||
+            completion->recording_media_type.data == NULL ||
+            completion->recording_media_type.size == 0u ||
+            completion->recording_media_type.size >
+                mailbox->recording_media_type_capacity ||
+            mailbox->recording_media_type == NULL ||
+            memchr(
+                completion->recording_media_type.data,
+                '\0',
+                completion->recording_media_type.size) != NULL)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    } else if (completion->recording_duration_us != UINT64_C(0) ||
+               completion->recording_media_type.data != NULL ||
+               completion->recording_media_type.size != 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
+    if (initial_mode) {
+        const vxml_cmeta_initial_row *initial;
+        if (profile->active_field != VXML_CMETA_NO_INDEX ||
+            profile->active_initial >= program->initial_count ||
+            profile->active_form >= program->form_count ||
+            program->initials == NULL || program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        initial = &program->initials[profile->active_initial];
+        form = &program->forms[profile->active_form];
+        if (initial->form != profile->active_form ||
+            form->initial_count == 0u ||
+            form->field_count == 0u)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    } else {
+        if (profile->active_field >= program->field_count ||
+            program->fields == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        selected = &program->fields[profile->active_field];
+        if (profile->active_form >= program->form_count ||
+            program->forms == NULL)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        form = &program->forms[profile->active_form];
+        if (selected->form != profile->active_form)
+            return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+    }
+
+    if (recording_present &&
+        form->recording_media_type_size != 0u &&
+        (form->recording_media_type == NULL ||
+         completion->recording_media_type.size !=
+             form->recording_media_type_size ||
+         memcmp(
+             completion->recording_media_type.data,
+             form->recording_media_type,
+             form->recording_media_type_size) != 0))
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL || mailbox->root_fields == NULL ||
+        mailbox->slot_capacity == 0u ||
+        mailbox->storage == NULL ||
+        mailbox->storage_stride == 0u)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+    if (completion->slot_count > mailbox->slot_capacity)
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+        return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if (state == VXML_CMETA_COLLECT_MAILBOX_WRITING ||
+        state == VXML_CMETA_COLLECT_MAILBOX_READY)
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    if (state != VXML_CMETA_COLLECT_MAILBOX_EMPTY)
+        return VXML_CMETA_COLLECT_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (completion->generation != generation)
+        return VXML_CMETA_COLLECT_INGRESS_STALE;
+    if ((!initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_FIELD) ||
+        (initial_mode &&
+         mailbox->item_kind != VXML_CMETA_COLLECT_ITEM_INITIAL))
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
+    expected = VXML_CMETA_COLLECT_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED)
+            return VXML_CMETA_COLLECT_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_COLLECT_MAILBOX_DISARMED)
+            return VXML_CMETA_COLLECT_INGRESS_STALE;
+        return VXML_CMETA_COLLECT_INGRESS_FULL;
+    }
+
+    mailbox->slot_count = 0u;
+    for (slot_index = 0u;
+         slot_index < completion->slot_count;
+         ++slot_index) {
+        const vxml_cmeta_collect_result_slot_v1 *slot =
+            &completion->slots[slot_index];
+        size_t root_field;
+        const cmeta_data_field_desc *target = NULL;
+        const cmeta_type_desc *type;
+        size_t prior;
+
+        if (slot->name.data == NULL || slot->name.size == 0u ||
+            memchr(slot->name.data, '\0', slot->name.size) != NULL ||
+            slot->data == NULL || slot->value == NULL)
+            goto incompatible;
+
+        for (root_field = 0u;
+             root_field < root_shape->field_count;
+             ++root_field) {
+            const char *name = root_shape->fields[root_field].name;
+            if (name != NULL &&
+                strlen(name) == slot->name.size &&
+                memcmp(name, slot->name.data, slot->name.size) == 0) {
+                target = &root_shape->fields[root_field];
+                break;
+            }
+        }
+        if (target == NULL ||
+            !cmeta_data_desc_equal(slot->data, target->value) ||
+            !collect_fixed_scalar_data(target->value))
+            goto incompatible;
+
+        if (initial_mode) {
+            size_t field_offset;
+            bool same_form = false;
+            if (!range_valid(
+                    form->first_field, form->field_count,
+                    program->field_count) ||
+                program->fields == NULL)
+                goto incompatible;
+            for (field_offset = 0u;
+                 field_offset < form->field_count;
+                 ++field_offset) {
+                const vxml_cmeta_field_row *candidate =
+                    &program->fields[form->first_field + field_offset];
+                if (candidate->form != profile->active_form)
+                    goto incompatible;
+                if (candidate->root_field == root_field) {
+                    same_form = true;
+                    break;
+                }
+            }
+            if (!same_form) goto incompatible;
+        }
+
+        type = target->value->storage_type;
+        if (type == NULL ||
+            type->size > mailbox->storage_stride)
+            goto incompatible;
+        for (prior = 0u; prior < slot_index; ++prior)
+            if (mailbox->root_fields[prior] == root_field)
+                goto incompatible;
+        if (!initial_mode && root_field == selected->root_field)
+            ++selected_count;
+
+        mailbox->root_fields[slot_index] = root_field;
+        memcpy(
+            mailbox->storage +
+                slot_index * mailbox->storage_stride,
+            slot->value, type->size);
+    }
+
+    if (!initial_mode && selected_count != 1u)
+        goto incompatible;
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+            completion->generation)
+        goto stale_after_claim;
+
+    mailbox->slot_count = completion->slot_count;
+    mailbox->data = initial_mode ? NULL : selected->field_data;
+    collect_recording_payload_reset(mailbox, false);
+    if (recording_present) {
+        memcpy(
+            mailbox->recording_media_type,
+            completion->recording_media_type.data,
+            completion->recording_media_type.size);
+        mailbox->recording_media_type_size =
+            completion->recording_media_type.size;
+        mailbox->recording_duration_us =
+            completion->recording_duration_us;
+        mailbox->recording = completion->recording;
+    }
+    expected = VXML_CMETA_COLLECT_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_COLLECT_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire)) {
+        /*
+         * READY was not published, so ownership never transferred. Clear the
+         * borrowed copy without invoking release; producer still owns it.
+         */
+        collect_recording_payload_reset(mailbox, false);
+        return expected == VXML_CMETA_COLLECT_MAILBOX_CLOSED
+            ? VXML_CMETA_COLLECT_INGRESS_CLOSED
+            : VXML_CMETA_COLLECT_INGRESS_FULL;
+    }
+    return VXML_CMETA_COLLECT_INGRESS_ACCEPTED;
+
+stale_after_claim:
+    collect_recording_payload_reset(mailbox, false);
+    mailbox->slot_count = 0u;
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+        memory_order_release);
+    return VXML_CMETA_COLLECT_INGRESS_STALE;
+
+incompatible:
+    collect_recording_payload_reset(mailbox, false);
+    mailbox->slot_count = 0u;
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_COLLECT_MAILBOX_EMPTY,
+        memory_order_release);
+    return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+}
+
+vxml_status vxml_session_cmeta_collect_utterance_result(
+    const vxml_session *session,
+    vxml_cmeta_collect_utterance_result_view_v1 *out_result) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_collect_utterance_result_slot *result;
+    if (out_result != NULL)
+        *out_result =
+            (vxml_cmeta_collect_utterance_result_view_v1){0};
+    if (session == NULL || out_result == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    result = &profile->collect_utterance_result;
+    if (!result->live ||
+        result->recording.data == NULL ||
+        result->recording.size == 0u ||
+        result->recording.lease == NULL ||
+        result->media_type == NULL ||
+        result->media_type_size == 0u)
+        return VXML_INVALID_STATE;
+    *out_result = (vxml_cmeta_collect_utterance_result_view_v1){
+        .abi_version =
+            VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1,
+        .struct_size =
+            sizeof(vxml_cmeta_collect_utterance_result_view_v1),
+        .duration_us = result->duration_us,
+        .media_type = {
+            result->media_type, result->media_type_size},
+        .data = result->recording.data,
+        .size = result->recording.size
+    };
+    return VXML_OK;
 }
 
 static bool root_field_list_contains(
@@ -6998,8 +7585,14 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         &mailbox->generation, memory_order_relaxed);
     form = &program->forms[profile->active_form];
 
+    if (mailbox->record_utterance_expected)
+        collect_quiesce_generation(profile, generation);
+
     if (generation != profile->collect_generation) {
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->choice_index = SIZE_MAX;
@@ -7050,6 +7643,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         target = &program->menu_choice_targets[absolute_choice];
 
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->choice_index = SIZE_MAX;
@@ -7110,7 +7706,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
                 program->fields == NULL)
                 return session_fail(impl, VXML_INVALID_STRUCTURE);
             field = &program->fields[profile->active_field];
-            if (field->form != profile->active_form)
+            if (field->form != profile->active_form ||
+                mailbox->record_utterance_expected !=
+                    form->record_utterance)
                 return session_fail(impl, VXML_INVALID_STRUCTURE);
         }
 
@@ -7122,6 +7720,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             mailbox->storage == NULL ||
             mailbox->storage_stride == 0u) {
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7134,6 +7735,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
         if (!transaction_begin(profile, program)) {
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7221,6 +7825,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         if (status != VXML_OK) {
             transaction_reset(profile, program);
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7242,10 +7849,52 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         }
 
         transaction_commit(profile, program);
+
+        /*
+         * A committed recognition replaces the prior last-result recording.
+         * The scalar transaction is already durable; only now may the Session
+         * adopt the ACCEPTED media lease from the mailbox.
+         */
+        collect_utterance_result_reset(profile);
+        if (mailbox->record_utterance_expected &&
+            mailbox->recording.lease != NULL) {
+            vxml_cmeta_collect_utterance_result_slot *result =
+                &profile->collect_utterance_result;
+            if (mailbox->recording_media_type_size == 0u ||
+                result->media_type == NULL ||
+                mailbox->recording_media_type_size >
+                    result->media_type_capacity) {
+                collect_recording_payload_reset(mailbox, true);
+                mailbox->record_utterance_expected = false;
+                mailbox->max_recording_duration_us = UINT64_C(0);
+                profile->collect_in_flight = false;
+                atomic_store_explicit(
+                    &mailbox->state,
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                    memory_order_release);
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
+            }
+            memcpy(
+                result->media_type,
+                mailbox->recording_media_type,
+                mailbox->recording_media_type_size);
+            result->media_type_size =
+                mailbox->recording_media_type_size;
+            result->duration_us =
+                mailbox->recording_duration_us;
+            result->recording = mailbox->recording;
+            result->live = true;
+            mailbox->recording =
+                (vxml_cmeta_recording_lease_v1){0};
+        }
+
         profile->reprompt_requested = false;
         profile->handler_reprompt_requested = false;
 
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7273,6 +7922,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
 invalid_ready:
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7284,6 +7936,9 @@ invalid_ready:
 
 semantic_ready:
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;

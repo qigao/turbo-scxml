@@ -84,6 +84,9 @@ int main(void) {
         .abi_version = VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_subdialog_adapter_v1)};
     vxml_cmeta_collect_request_v1 collect_request = {0};
+    vxml_cmeta_collect_request_v2 collect_request_v2 = {
+        .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_collect_request_v2)};
     vxml_cmeta_collect_completion_v1 collect_completion = {
         .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_completion_v1)};
@@ -108,6 +111,15 @@ int main(void) {
         .struct_size = sizeof(vxml_cmeta_collect_completion_v2),
         .slots = &collect_slot,
         .slot_count = 1u};
+    vxml_cmeta_collect_completion_v3 collect_completion_v3 = {
+        .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V3,
+        .struct_size = sizeof(vxml_cmeta_collect_completion_v3),
+        .slots = &collect_slot,
+        .slot_count = 1u};
+    vxml_cmeta_collect_utterance_result_view_v1 collect_utterance = {
+        .abi_version = VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1,
+        .struct_size =
+            sizeof(vxml_cmeta_collect_utterance_result_view_v1)};
     vxml_cmeta_collect_adapter_v1 collect_adapter = {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
@@ -218,6 +230,16 @@ int main(void) {
     vxml_status (*run_subdialog_completion)(
         vxml_session *, bool *) =
         vxml_session_cmeta_subdialog_run_ready;
+    vxml_status (*query_collect_v2)(
+        const vxml_session *, vxml_cmeta_collect_request_v2 *) =
+        vxml_session_cmeta_collect_request_v2;
+    vxml_cmeta_collect_ingress_result (*complete_collect_v3)(
+        vxml_session *, const vxml_cmeta_collect_completion_v3 *) =
+        vxml_session_cmeta_collect_try_complete_v3;
+    vxml_status (*query_collect_utterance)(
+        const vxml_session *,
+        vxml_cmeta_collect_utterance_result_view_v1 *) =
+        vxml_session_cmeta_collect_utterance_result;
     vxml_status (*query_menu)(
         const vxml_session *, vxml_cmeta_menu_collect_request_v1 *) =
         vxml_session_cmeta_menu_collect_request;
@@ -279,6 +301,8 @@ int main(void) {
         VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED != 0 ||
         subdialog_param.source != VXML_CMETA_SUBDIALOG_PARAM_TYPED ||
         subdialog_ticket.commit != NULL ||
+        query_collect_v2 == NULL || complete_collect_v3 == NULL ||
+        query_collect_utterance == NULL ||
         query_menu == NULL || query_menu_v2 == NULL ||
         query_initial == NULL || complete_menu == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
@@ -316,9 +340,18 @@ int main(void) {
         collect_request.timeout_us != UINT64_C(0) ||
         collect_completion.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
+        collect_request_v2.abi_version !=
+            VXML_CMETA_COLLECT_REQUEST_ABI_V2 ||
         collect_completion_v2.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V2 ||
         collect_completion_v2.slot_count != 1u ||
+        collect_completion_v3.abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V3 ||
+        collect_completion_v3.slot_count != 1u ||
+        collect_utterance.abi_version !=
+            VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1 ||
+        VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE == 0u ||
+        VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE == 0u ||
         menu_request.abi_version !=
             VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
         menu_request_v2.abi_version !=
