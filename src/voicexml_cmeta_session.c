@@ -8531,6 +8531,66 @@ static vxml_status execute_record_filled_process(
 }
 
 
+static vxml_status execute_transfer_filled_process(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_transfer_row *transfer,
+    size_t transfer_index) {
+    size_t offset;
+    vxml_status status;
+    bool run = false;
+
+    if (profile == NULL || program == NULL || form == NULL ||
+        transfer == NULL ||
+        transfer_index >= program->transfer_count ||
+        transfer->form != profile->active_form)
+        return VXML_INVALID_STRUCTURE;
+
+    if (transfer->filled != VXML_CMETA_NO_INDEX) {
+        const vxml_cmeta_filled_row *filled;
+        if (transfer->filled >= program->filled_count ||
+            program->filled == NULL)
+            return VXML_INVALID_STRUCTURE;
+        filled = &program->filled[transfer->filled];
+        if (filled->form != profile->active_form ||
+            filled->mode != VXML_CMETA_FILLED_FIELD ||
+            filled->field != VXML_CMETA_NO_INDEX)
+            return VXML_INVALID_STRUCTURE;
+        status = execute_filled_handler(
+            profile, program, form, filled);
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
+            return status;
+    }
+
+    if (form->filled_count == 0u)
+        return VXML_OK;
+    if (form->first_filled == VXML_CMETA_NO_INDEX ||
+        !range_valid(
+            form->first_filled, form->filled_count,
+            program->filled_count) ||
+        program->filled == NULL)
+        return VXML_INVALID_STRUCTURE;
+
+    for (offset = 0u; offset < form->filled_count; ++offset) {
+        const vxml_cmeta_filled_row *filled =
+            &program->filled[form->first_filled + offset];
+        status = filled_should_run_for_results(
+            profile, program, form, filled,
+            NULL, 0u, &transfer_index, 1u, &run);
+        if (status != VXML_OK) return status;
+        if (!run) continue;
+        status = execute_filled_handler(
+            profile, program, form, filled);
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
+            return status;
+    }
+    return VXML_OK;
+}
+
+
 static vxml_status execute_subdialog_filled_process(
     vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program,
