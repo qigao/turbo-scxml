@@ -1457,8 +1457,17 @@ static void transfer_quiesce_generation(
     session->transfer_quiesced_generation = generation;
 }
 
+static void transfer_mailbox_payload_reset(
+    vxml_cmeta_transfer_completion_mailbox *mailbox) {
+    if (mailbox == NULL) return;
+    mailbox->kind = (vxml_cmeta_transfer_completion_kind)0;
+    mailbox->result = (vxml_cmeta_transfer_result)0;
+    mailbox->protocol_code = 0u;
+}
+
 static void settle_transfer(
-    vxml_cmeta_session_data *session) {
+    vxml_cmeta_session_data *session,
+    unsigned previous_mailbox_state) {
     uint64_t generation;
     if (session == NULL) return;
     generation = session->transfer_generation;
@@ -1472,11 +1481,22 @@ static void settle_transfer(
             ticket.discard(ticket.user);
     } else if (session->transfer_in_flight &&
                session->transfer_adapter != NULL) {
-        session->transfer_in_flight = false;
-        session->transfer_adapter->cancel(
-            session->transfer_user, generation);
+        /*
+         * READY means completion ownership already transferred to the
+         * Session. Do not manufacture a duplicate cancel after acceptance.
+         * EMPTY/WRITING still belong to the active provider generation.
+         */
+        if (previous_mailbox_state !=
+                VXML_CMETA_TRANSFER_MAILBOX_READY)
+            session->transfer_adapter->cancel(
+                session->transfer_user, generation);
         transfer_quiesce_generation(session, generation);
+        session->transfer_in_flight = false;
     }
+    transfer_mailbox_payload_reset(&session->transfer_mailbox);
+    atomic_store_explicit(
+        &session->transfer_mailbox.generation,
+        UINT64_C(0), memory_order_relaxed);
 }
 
 static void session_data_destroy(
@@ -1517,7 +1537,15 @@ static void session_data_destroy(
                 memory_order_relaxed);
         settle_subdialog(session);
         settle_record(session);
-        settle_transfer(session);
+        {
+            const unsigned previous_transfer_state =
+                atomic_exchange_explicit(
+                    &session->transfer_mailbox.state,
+                    VXML_CMETA_TRANSFER_MAILBOX_CLOSED,
+                    memory_order_acq_rel);
+            settle_transfer(
+                session, previous_transfer_state);
+        }
         if (session->collect_prepared) {
             vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
             session->collect_prepared = false;
