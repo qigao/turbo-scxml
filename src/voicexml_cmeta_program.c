@@ -962,22 +962,6 @@ static vxml_status cmeta_measure_repeated_vars(
     size_t index;
     for (index = 0u; index < salts_xml_node_child_count(container); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(container, index);
-        if (cmeta_node_named(child, "property")) {
-            vxml_status property_status;
-            if (saw_block || saw_directed || saw_filled)
-                return cmeta_program_fail(
-                    diagnostic, VXML_INVALID_STRUCTURE,
-                    salts_xml_node_location(child),
-                    "form property must precede form items");
-            property_status = cmeta_measure_record_utterance_property(
-                child, version_21, options, measurement, limits,
-                &saw_record_utterance,
-                &saw_record_utterance_type,
-                diagnostic);
-            if (property_status != VXML_OK) return property_status;
-            continue;
-        }
-
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute name_attribute = cmeta_attribute(child, "name");
             bool reached_target = false;
@@ -3834,6 +3818,22 @@ static vxml_status cmeta_measure_form(
     for (index = 0u; index < salts_xml_node_child_count(form); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(form, index);
         if (cmeta_node_ignorable(child)) continue;
+
+        if (cmeta_node_named(child, "property")) {
+            vxml_status property_status;
+            if (saw_block || saw_directed || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form property must precede form items");
+            property_status = cmeta_measure_record_utterance_property(
+                child, version_21, options, measurement, limits,
+                &saw_record_utterance,
+                &saw_record_utterance_type,
+                diagnostic);
+            if (property_status != VXML_OK) return property_status;
+            continue;
+        }
 
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
