@@ -1279,7 +1279,7 @@ static vxml_status cmeta_measure_executable(
         const salts_xml_attribute nextexpr =
             cmeta_attribute(node, "nextexpr");
         size_t decoded_size = 0u;
-        status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
+        status = cmeta_validate_attributes(node, allowed, 3u, diagnostic);
         if (status == VXML_OK && nextexpr.impl != NULL)
             status = cmeta_program_fail(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
