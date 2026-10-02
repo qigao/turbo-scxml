@@ -6469,11 +6469,21 @@ static bool event_scope_owner(
         }
         if (profile->active_initial != VXML_CMETA_NO_INDEX) {
             if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_record != VXML_CMETA_NO_INDEX ||
                 profile->active_initial >= program->initial_count ||
                 program->initials == NULL)
                 return false;
             *out_kind = VXML_CMETA_EVENT_INITIAL;
             *out_owner = profile->active_initial;
+            return true;
+        }
+        if (profile->active_record != VXML_CMETA_NO_INDEX) {
+            if (profile->active_field != VXML_CMETA_NO_INDEX ||
+                profile->active_record >= program->record_count ||
+                program->records == NULL)
+                return false;
+            *out_kind = VXML_CMETA_EVENT_RECORD;
+            *out_owner = profile->active_record;
             return true;
         }
         if (profile->active_field == VXML_CMETA_NO_INDEX ||
@@ -6566,7 +6576,8 @@ static vxml_status execute_event_handler(
     } else if (handler->scope_kind == VXML_CMETA_EVENT_FORM ||
                handler->scope_kind == VXML_CMETA_EVENT_FIELD ||
                handler->scope_kind == VXML_CMETA_EVENT_INITIAL ||
-               handler->scope_kind == VXML_CMETA_EVENT_SUBDIALOG) {
+               handler->scope_kind == VXML_CMETA_EVENT_SUBDIALOG ||
+               handler->scope_kind == VXML_CMETA_EVENT_RECORD) {
         if (form == NULL || form->scope >= program->scope_count)
             return VXML_INVALID_STRUCTURE;
         scope_values[0] = form->scope;
