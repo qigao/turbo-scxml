@@ -1187,6 +1187,99 @@ static void field_mark_shadow_reset(
     shadow->name_capacity = capacity;
 }
 
+static vxml_status snapshot_field_mark_shadow(
+    vxml_cmeta_session_data *session,
+    size_t field_index,
+    uint64_t collect_generation) {
+    vxml_cmeta_field_mark_shadow *shadow;
+    if (session == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (session->field_mark_shadows == NULL ||
+        field_index >= session->field_mark_shadow_count)
+        return VXML_OK;
+
+    field_mark_shadow_reset(session, field_index);
+    shadow = &session->field_mark_shadows[field_index];
+    shadow->assigned = true;
+    if (!session->prompt_mark_result.live ||
+        session->prompt_mark_result.generation !=
+            collect_generation)
+        return VXML_OK;
+
+    if (session->prompt_mark_result.name == NULL ||
+        session->prompt_mark_result.name_size == 0u ||
+        shadow->name == NULL ||
+        session->prompt_mark_result.name_size >
+            shadow->name_capacity)
+        return VXML_INVALID_STRUCTURE;
+
+    memcpy(
+        shadow->name,
+        session->prompt_mark_result.name,
+        session->prompt_mark_result.name_size);
+    shadow->name_size =
+        session->prompt_mark_result.name_size;
+    shadow->marktime_ms =
+        session->prompt_mark_result.marktime_ms;
+    shadow->has_mark = true;
+    return VXML_OK;
+}
+
+static vxml_status snapshot_committed_mark_shadows(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_collect_mailbox *mailbox,
+    uint64_t collect_generation) {
+    const cmeta_data_struct_shape *root_shape;
+    size_t field_offset;
+    if (session == NULL || program == NULL ||
+        form == NULL || mailbox == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (session->field_mark_shadows == NULL)
+        return VXML_OK;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL ||
+        !range_valid(
+            form->first_field, form->field_count,
+            program->field_count) ||
+        (form->field_count != 0u && program->fields == NULL))
+        return VXML_INVALID_STRUCTURE;
+
+    for (field_offset = 0u;
+         field_offset < form->field_count;
+         ++field_offset) {
+        const size_t field_index =
+            form->first_field + field_offset;
+        const vxml_cmeta_field_row *field =
+            &program->fields[field_index];
+        size_t slot;
+        bool completed = false;
+        if (field->root_field >= root_shape->field_count ||
+            session->committed_root.bound == NULL)
+            return VXML_INVALID_STRUCTURE;
+        for (slot = 0u; slot < mailbox->slot_count; ++slot)
+            if (mailbox->root_fields[slot] ==
+                field->root_field) {
+                completed = true;
+                break;
+            }
+        if (!completed ||
+            session->committed_root.bound[
+                field->root_field] == 0u)
+            continue;
+        {
+            const vxml_status status =
+                snapshot_field_mark_shadow(
+                    session, field_index,
+                    collect_generation);
+            if (status != VXML_OK)
+                return status;
+        }
+    }
+    return VXML_OK;
+}
+
 static void collect_quiesce_generation(
     vxml_cmeta_session_data *session,
     uint64_t generation) {
