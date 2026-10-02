@@ -13,11 +13,23 @@ typedef struct vxml_decoded_id {
     size_t size;
 } vxml_decoded_id;
 
+typedef struct vxml_literal_fetch_audio_policy {
+    salts_xml_attribute uri_value;
+    bool has_delay;
+    uint64_t delay_us;
+    bool has_minimum;
+    uint64_t minimum_us;
+} vxml_literal_fetch_audio_policy;
+
 typedef struct vxml_decoded_goto {
     char *target;
     size_t target_size;
     char *fetchaudio;
     size_t fetchaudio_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
     size_t target_form;
     salts_xml_location location;
     bool external;
@@ -444,7 +456,8 @@ static bool node_is_known_profile_element(salts_xml_node node) {
             view_equal(local_name, "exit") ||
             view_equal(local_name, "goto") ||
             view_equal(local_name, "submit") ||
-            view_equal(local_name, "script"));
+            view_equal(local_name, "script") ||
+            view_equal(local_name, "property"));
 }
 
 static salts_xml_attribute unqualified_attribute(
