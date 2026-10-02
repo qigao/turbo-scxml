@@ -782,7 +782,6 @@ typedef struct vxml_cmeta_collect_utterance_result_view_v1 {
 typedef struct vxml_cmeta_recording_ref_view_v1 {
     uint32_t abi_version;
     size_t struct_size;
-    vxml_cmeta_name_view path;
     vxml_cmeta_name_view media_type;
     const void *data;
     size_t size;
