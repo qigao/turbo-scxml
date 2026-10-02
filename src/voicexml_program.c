@@ -958,6 +958,7 @@ static vxml_status append_goto(
     vxml_measurement *measurement,
     salts_xml_attribute attribute,
     salts_xml_attribute fetchaudio_attribute,
+    const vxml_literal_fetch_audio_policy *inherited,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     vxml_decoded_goto entry = {0};
     const salts_xml_string_view raw =
@@ -1033,6 +1034,11 @@ static vxml_status append_goto(
         }
     }
 
+    if (fetchaudio_attribute.impl == NULL &&
+        inherited != NULL &&
+        inherited->uri_value.impl != NULL)
+        fetchaudio_attribute = inherited->uri_value;
+
     if (fetchaudio_attribute.impl != NULL) {
         const salts_xml_string_view raw_fetchaudio =
             salts_xml_attribute_value(fetchaudio_attribute);
@@ -1079,6 +1085,16 @@ static vxml_status append_goto(
             }
             entry.fetchaudio[fetchaudio_size] = '\0';
             entry.fetchaudio_size = fetchaudio_size;
+            if (inherited != NULL) {
+                entry.has_fetchaudio_delay =
+                    inherited->has_delay;
+                entry.fetchaudio_delay_us =
+                    inherited->delay_us;
+                entry.has_fetchaudio_minimum =
+                    inherited->has_minimum;
+                entry.fetchaudio_minimum_us =
+                    inherited->minimum_us;
+            }
         }
     }
 
