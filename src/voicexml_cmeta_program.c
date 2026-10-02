@@ -6085,6 +6085,257 @@ static vxml_status cmeta_compile_record_schema(
     return VXML_OK;
 }
 
+static vxml_status cmeta_register_transfer_item(
+    cmeta_program_builder *builder,
+    salts_xml_node transfer,
+    size_t form_index,
+    size_t form_scope,
+    size_t transfer_index,
+    vxml_cmeta_transfer_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(transfer, "name");
+    cmeta_decoded_value decoded = {0};
+    char control_name[48];
+    bool conflict = false;
+    size_t prior;
+    int written;
+    vxml_status status;
+
+    if (builder == NULL || out == NULL ||
+        name_attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->condition = VXML_CMETA_NO_INDEX;
+    out->filled = VXML_CMETA_NO_INDEX;
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML transfer name must be a decoded XML NCName");
+        goto done;
+    }
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            decoded.view.data, decoded.view.size, NULL) != NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML transfer name collides with a form lexical variable");
+        goto done;
+    }
+    for (prior = 0u; prior < builder->field_index; ++prior) {
+        const vxml_cmeta_field_row *field =
+            &builder->profile->fields[prior];
+        if (field->form == form_index &&
+            field->name != NULL &&
+            field->name_size == decoded.view.size &&
+            memcmp(
+                field->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML transfer name collides with a field");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < builder->subdialog_index; ++prior) {
+        const vxml_cmeta_subdialog_row *subdialog =
+            &builder->profile->subdialogs[prior];
+        if (subdialog->form == form_index &&
+            subdialog->name != NULL &&
+            subdialog->name_size == decoded.view.size &&
+            memcmp(
+                subdialog->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML transfer name collides with a subdialog");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < builder->record_index; ++prior) {
+        const vxml_cmeta_record_row *record =
+            &builder->profile->records[prior];
+        if (record->form == form_index &&
+            record->name != NULL &&
+            record->name_size == decoded.view.size &&
+            memcmp(
+                record->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML transfer name collides with a record");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < transfer_index; ++prior) {
+        const vxml_cmeta_transfer_row *previous =
+            &builder->profile->transfers[prior];
+        if (previous->form == form_index &&
+            previous->name != NULL &&
+            previous->name_size == decoded.view.size &&
+            memcmp(
+                previous->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML transfer name");
+            goto done;
+        }
+    }
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+
+    written = snprintf(
+        control_name, sizeof(control_name),
+        "\x1f" "transfer:%zu", transfer_index);
+    if (written <= 0 || (size_t)written >= sizeof(control_name)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer control identity overflow");
+        goto done;
+    }
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &cmeta_data_bool)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer control slot exceeds form scope bounds");
+        goto done;
+    }
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            control_name, (size_t)written, &cmeta_data_bool,
+            &out->form_item_slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(transfer),
+            conflict ? "VoiceXML transfer control slot type conflict"
+                     : "VoiceXML transfer control slot allocation failed");
+        goto done;
+    }
+    out->form = form_index;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    if (status != VXML_OK)
+        memset(out, 0, sizeof(*out));
+    return status;
+}
+
+static vxml_status cmeta_compile_transfer_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node transfer,
+    size_t form_index,
+    size_t form_scope,
+    size_t transfer_index,
+    vxml_cmeta_transfer_row *out) {
+    const salts_xml_attribute dest = cmeta_attribute(transfer, "dest");
+    const salts_xml_attribute bridge = cmeta_attribute(transfer, "bridge");
+    const salts_xml_attribute connecttimeout =
+        cmeta_attribute(transfer, "connecttimeout");
+    const salts_xml_attribute maxtime =
+        cmeta_attribute(transfer, "maxtime");
+    const salts_xml_attribute transferaudio =
+        cmeta_attribute(transfer, "transferaudio");
+    bool bridge_value = false;
+    vxml_status status = cmeta_register_transfer_item(
+        builder, transfer, form_index, form_scope,
+        transfer_index, out);
+
+    if (status != VXML_OK) return status;
+    status = cmeta_record_bool(
+        bridge, false,
+        "VoiceXML transfer bridge must be true or false",
+        &bridge_value, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    out->mode = bridge_value
+        ? VXML_CMETA_TRANSFER_BRIDGE
+        : VXML_CMETA_TRANSFER_BLIND;
+    out->max_connect_timeout_us =
+        builder->options->max_transfer_connect_timeout_us;
+    out->max_duration_us =
+        builder->options->max_transfer_duration_us;
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(dest),
+        salts_xml_attribute_location(dest),
+        &out->destination, &out->destination_size);
+    if (status != VXML_OK) return status;
+    if (out->destination_size == 0u ||
+        out->destination_size > builder->options->max_transfer_uri_bytes)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(dest),
+            "VoiceXML transfer dest changed between compiler passes");
+
+    status = cmeta_parse_prompt_timeout(
+        connecttimeout, &out->has_connect_timeout,
+        &out->connect_timeout_us, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        maxtime, &out->has_maxtime,
+        &out->maxtime_us, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    if ((out->has_connect_timeout &&
+         out->connect_timeout_us > out->max_connect_timeout_us) ||
+        (out->has_maxtime &&
+         out->maxtime_us > out->max_duration_us))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer timing changed between compiler passes");
+
+    if (transferaudio.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(transferaudio),
+            salts_xml_attribute_location(transferaudio),
+            &out->transfer_audio, &out->transfer_audio_size);
+        if (status != VXML_OK) return status;
+        if (out->transfer_audio_size == 0u ||
+            out->transfer_audio_size > builder->options->max_transfer_uri_bytes)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(transferaudio),
+                "VoiceXML transferaudio changed between compiler passes");
+    }
+
+    out->required_capabilities =
+        out->mode == VXML_CMETA_TRANSFER_BRIDGE
+            ? VXML_CMETA_TRANSFER_CAP_BRIDGE
+            : VXML_CMETA_TRANSFER_CAP_BLIND;
+    if (out->has_connect_timeout)
+        out->required_capabilities |=
+            VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT;
+    if (out->has_maxtime)
+        out->required_capabilities |=
+            VXML_CMETA_TRANSFER_CAP_MAXTIME;
+    if (out->transfer_audio_size != 0u)
+        out->required_capabilities |=
+            VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_compile_subdialog_schema(
     cmeta_program_builder *builder,
     salts_xml_node node,
@@ -6388,6 +6639,8 @@ static vxml_status cmeta_build_schemas(
             form->subdialog_count = 0u;
             form->first_record = builder->record_index;
             form->record_count = 0u;
+            form->first_transfer = builder->transfer_index;
+            form->transfer_count = 0u;
             form->first_item = builder->form_item_index;
             form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
@@ -6418,6 +6671,7 @@ static vxml_status cmeta_build_schemas(
             form->first_initial = builder->initial_index;
             form->first_subdialog = builder->subdialog_index;
             form->first_record = builder->record_index;
+            form->first_transfer = builder->transfer_index;
             form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
@@ -6617,6 +6871,60 @@ static vxml_status cmeta_build_schemas(
                     order->index = builder->record_index++;
                     continue;
                 }
+                if (cmeta_node_named(item, "transfer")) {
+                    vxml_cmeta_transfer_row *transfer;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->transfer_index >=
+                            builder->profile->transfer_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count ||
+                        builder->profile->transfers == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML transfer/form-item rows changed between compiler passes");
+                    transfer = &builder->profile->transfers[
+                        builder->transfer_index];
+                    status = cmeta_compile_transfer_schema(
+                        builder, item, form_index, form_scope,
+                        builder->transfer_index, transfer);
+                    if (status != VXML_OK) return status;
+                    {
+                        size_t nested_index;
+                        for (nested_index = 0u;
+                             nested_index <
+                                 salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, nested_index);
+                            if (!cmeta_node_named(nested, "filled"))
+                                continue;
+                            if (builder->filled_index >=
+                                    builder->profile->filled_count ||
+                                builder->profile->filled == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML transfer filled rows changed between compiler passes");
+                            transfer->filled = builder->filled_index;
+                            builder->profile->filled[
+                                builder->filled_index++] =
+                                (vxml_cmeta_filled_row){
+                                    .form = form_index,
+                                    .field = VXML_CMETA_NO_INDEX,
+                                    .mode = VXML_CMETA_FILLED_FIELD};
+                            break;
+                        }
+                    }
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_TRANSFER;
+                    order->index = builder->transfer_index++;
+                    continue;
+                }
                 if (cmeta_node_named(item, "field")) {
                     vxml_cmeta_field_row *field;
                     if (builder->field_index >=
@@ -6754,6 +7062,8 @@ static vxml_status cmeta_build_schemas(
                 builder->subdialog_index - form->first_subdialog;
             form->record_count =
                 builder->record_index - form->first_record;
+            form->transfer_count =
+                builder->transfer_index - form->first_transfer;
             form->item_count =
                 builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
@@ -7836,6 +8146,7 @@ static vxml_status cmeta_lower_program(
     size_t initial_index = 0u;
     size_t subdialog_index = 0u;
     size_t record_index = 0u;
+    size_t transfer_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -8191,6 +8502,76 @@ static vxml_status cmeta_lower_program(
                             salts_xml_node_location(nested),
                             "VoiceXML record child changed during lowering");
                     }
+                } else if (cmeta_node_named(item, "transfer")) {
+                    vxml_cmeta_transfer_row *transfer;
+                    const size_t current_transfer_index = transfer_index;
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    size_t nested_index;
+                    if (transfer_index >= builder->profile->transfer_count ||
+                        builder->profile->transfers == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML transfer rows changed during lowering");
+                    transfer =
+                        &builder->profile->transfers[transfer_index++];
+                    if (transfer->form != form_index ||
+                        transfer->form_item_slot == VXML_CMETA_NO_INDEX)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML transfer form ownership changed during lowering");
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &transfer->condition);
+                        if (status != VXML_OK) return status;
+                    }
+                    for (nested_index = 0u;
+                         nested_index <
+                             salts_xml_node_child_count(item);
+                         ++nested_index) {
+                        const salts_xml_node nested =
+                            salts_xml_node_child_at(item, nested_index);
+                        if (cmeta_node_ignorable(nested)) continue;
+                        if (cmeta_node_named(nested, "catch") ||
+                            cmeta_node_named(nested, "help") ||
+                            cmeta_node_named(nested, "noinput") ||
+                            cmeta_node_named(nested, "nomatch")) {
+                            status = cmeta_lower_catch(
+                                builder, nested,
+                                VXML_CMETA_EVENT_TRANSFER,
+                                current_transfer_index,
+                                form->scope, scopes, 2u);
+                            if (status != VXML_OK) return status;
+                            continue;
+                        }
+                        if (cmeta_node_named(nested, "filled")) {
+                            if (transfer->filled == VXML_CMETA_NO_INDEX ||
+                                transfer->filled >=
+                                    builder->profile->filled_count ||
+                                builder->profile->filled == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML transfer filled row changed between passes");
+                            status = cmeta_lower_filled_actions(
+                                builder, nested, form,
+                                &builder->profile->filled[
+                                    transfer->filled]);
+                            if (status != VXML_OK) return status;
+                            continue;
+                        }
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(nested),
+                            "VoiceXML transfer child changed during lowering");
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -8352,7 +8733,8 @@ static vxml_status cmeta_lower_program(
     if (field_index != builder->profile->field_count ||
         initial_index != builder->profile->initial_count ||
         subdialog_index != builder->profile->subdialog_count ||
-        record_index != builder->profile->record_count)
+        record_index != builder->profile->record_count ||
+        transfer_index != builder->profile->transfer_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
