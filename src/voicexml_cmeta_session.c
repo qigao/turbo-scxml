@@ -1620,6 +1620,9 @@ static void session_data_destroy(
     vxml_free(session->prompt_mark_result_name);
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
+    vxml_free(session->prompt_media_projected_source_segments);
+    vxml_free(session->prompt_media_projected_fallbacks);
+    vxml_free(session->prompt_foreach_snapshot_allocation);
     vxml_free(session->prompt_media_projected_segments);
     vxml_free(session->collect_dynamic_grammar_uri);
     vxml_free(session->collect_mailbox.recording_media_type);
@@ -3893,6 +3896,7 @@ vxml_status vxml_cmeta_session_init_profile(
     atomic_init(
         &profile->transfer_mailbox.generation, UINT64_C(0));
     profile->prompt_media_last_mark_segment = SIZE_MAX;
+    profile->prompt_media_last_mark_batch_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
@@ -11782,6 +11786,7 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
     profile->prompt_media_mark_generation =
         profile->prompt_media_generation;
     profile->prompt_media_last_mark_segment = SIZE_MAX;
+    profile->prompt_media_last_mark_batch_segment = SIZE_MAX;
     profile->prompt_media_last_mark_name_size = 0u;
     atomic_store_explicit(
         &profile->prompt_media_last_mark_elapsed_valid,
@@ -12271,8 +12276,10 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
     const vxml_cmeta_program_data *program;
     const vxml_cmeta_field_row *field = NULL;
     const vxml_cmeta_prompt_row *prompt = NULL;
+    const vxml_cmeta_prompt_media_segment_v1 *observed_segment;
     unsigned prompt_count = 0u;
-    size_t absolute_index;
+    size_t source_absolute;
+    size_t observed_count;
     vxml_status status;
 
     if (session == NULL || generation == 0u)
@@ -12303,8 +12310,6 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
     (void)prompt_count;
     if (status != VXML_OK || prompt == NULL)
         return VXML_CMETA_PROMPT_MARK_STALE;
-    if (segment_index >= prompt->segment_count)
-        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
 
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
@@ -12313,13 +12318,47 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
             program->prompt_segment_count) ||
         program->prompt_segments == NULL)
         return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
-    absolute_index = prompt->first_segment + segment_index;
-    if (program->prompt_segments[absolute_index].kind !=
-        VXML_CMETA_PROMPT_MEDIA_MARK)
+
+    if (profile->prompt_media_projected_generation == generation &&
+        profile->prompt_media_projected_segment_count != 0u) {
+        observed_count =
+            profile->prompt_media_projected_segment_count;
+        if (segment_index >= observed_count ||
+            profile->prompt_media_projected_segments == NULL ||
+            segment_index >=
+                profile->prompt_media_projected_segment_capacity)
+            return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+        observed_segment =
+            &profile->prompt_media_projected_segments[segment_index];
+        if (profile->prompt_media_projected_source_segments != NULL) {
+            source_absolute =
+                profile->prompt_media_projected_source_segments[
+                    segment_index];
+        } else {
+            if (segment_index >= prompt->segment_count)
+                return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+            source_absolute =
+                prompt->first_segment + segment_index;
+        }
+    } else {
+        observed_count = prompt->segment_count;
+        if (segment_index >= observed_count)
+            return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+        source_absolute =
+            prompt->first_segment + segment_index;
+        observed_segment =
+            &program->prompt_segments[source_absolute];
+    }
+
+    if (source_absolute >= program->prompt_segment_count ||
+        program->prompt_segments[source_absolute].kind !=
+            VXML_CMETA_PROMPT_MEDIA_MARK ||
+        observed_segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK)
         return VXML_CMETA_PROMPT_MARK_NOT_MARK;
 
-    if (profile->prompt_media_last_mark_segment != SIZE_MAX &&
-        absolute_index <= profile->prompt_media_last_mark_segment)
+    if (profile->prompt_media_last_mark_batch_segment != SIZE_MAX &&
+        segment_index <=
+            profile->prompt_media_last_mark_batch_segment)
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
     if (timing_valid &&
         atomic_load_explicit(
@@ -12332,39 +12371,23 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
 
     profile->prompt_media_last_mark_name_size = 0u;
-    if (profile->prompt_media_projected_generation == generation &&
-        profile->prompt_media_projected_first_segment != SIZE_MAX &&
-        absolute_index >=
-            profile->prompt_media_projected_first_segment &&
-        absolute_index -
-            profile->prompt_media_projected_first_segment <
-            profile->prompt_media_projected_segment_count) {
-        const size_t relative =
-            absolute_index -
-            profile->prompt_media_projected_first_segment;
-        const vxml_cmeta_prompt_media_segment_v1 *projected;
-        if (profile->prompt_media_projected_segments == NULL ||
-            relative >=
-                profile->prompt_media_projected_segment_capacity)
-            return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
-        projected =
-            &profile->prompt_media_projected_segments[relative];
-        if (projected->kind != VXML_CMETA_PROMPT_MEDIA_MARK ||
-            projected->payload.data == NULL ||
-            projected->payload.size == 0u ||
+    if (profile->prompt_media_projected_generation == generation) {
+        if (observed_segment->payload.data == NULL ||
+            observed_segment->payload.size == 0u ||
             profile->prompt_media_last_mark_name == NULL ||
-            projected->payload.size >
+            observed_segment->payload.size >
                 profile->prompt_media_last_mark_name_capacity)
             return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
         memcpy(
             profile->prompt_media_last_mark_name,
-            projected->payload.data,
-            projected->payload.size);
+            observed_segment->payload.data,
+            observed_segment->payload.size);
         profile->prompt_media_last_mark_name_size =
-            projected->payload.size;
+            observed_segment->payload.size;
     }
 
-    profile->prompt_media_last_mark_segment = absolute_index;
+    profile->prompt_media_last_mark_segment = source_absolute;
+    profile->prompt_media_last_mark_batch_segment = segment_index;
     if (timing_valid) {
         atomic_store_explicit(
             &profile->prompt_media_last_mark_elapsed_ms,
@@ -12459,31 +12482,10 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
         return VXML_INVALID_STRUCTURE;
     }
 
-    {
-        size_t prompt_index;
-        bool found = false;
-        for (prompt_index = 0u;
-             prompt_index < program->prompt_count;
-             ++prompt_index) {
-            const vxml_cmeta_prompt_row *prompt =
-                &program->prompts[prompt_index];
-            if (range_valid(
-                    prompt->first_segment, prompt->segment_count,
-                    program->prompt_segment_count) &&
-                profile->prompt_media_last_mark_segment >=
-                    prompt->first_segment &&
-                profile->prompt_media_last_mark_segment -
-                    prompt->first_segment <
-                    prompt->segment_count) {
-                out_mark->segment_index =
-                    profile->prompt_media_last_mark_segment -
-                    prompt->first_segment;
-                found = true;
-                break;
-            }
-        }
-        if (!found) return VXML_INVALID_STRUCTURE;
-    }
+    if (profile->prompt_media_last_mark_batch_segment == SIZE_MAX)
+        return VXML_INVALID_STRUCTURE;
+    out_mark->segment_index =
+        profile->prompt_media_last_mark_batch_segment;
     out_mark->name =
         profile->prompt_media_last_mark_name_size != 0u
             ? (vxml_cmeta_name_view){
