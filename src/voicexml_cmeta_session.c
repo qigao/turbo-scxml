@@ -1033,27 +1033,32 @@ static void record_release_lease(
 static void record_mailbox_payload_reset(
     vxml_cmeta_record_completion_mailbox *mailbox,
     bool release_recording) {
+    vxml_cmeta_recording_lease_v1 recording;
     if (mailbox == NULL) return;
-    if (release_recording)
-        record_release_lease(&mailbox->recording);
-    else
-        mailbox->recording = (vxml_cmeta_recording_lease_v1){0};
+    recording = mailbox->recording;
+    mailbox->recording = (vxml_cmeta_recording_lease_v1){0};
     mailbox->outcome = (vxml_cmeta_record_outcome)0;
     mailbox->duration_us = UINT64_C(0);
     mailbox->has_termchar = false;
     mailbox->termchar = '\0';
     mailbox->media_type_size = 0u;
+    if (release_recording)
+        record_release_lease(&recording);
 }
 
 static void record_result_slot_reset(
     vxml_cmeta_record_result_slot *slot) {
+    vxml_cmeta_recording_lease_v1 recording;
     char *media_type;
+    bool live;
     if (slot == NULL) return;
     media_type = slot->media_type;
-    if (slot->live)
-        record_release_lease(&slot->recording);
+    recording = slot->recording;
+    live = slot->live;
     *slot = (vxml_cmeta_record_result_slot){0};
     slot->media_type = media_type;
+    if (live)
+        record_release_lease(&recording);
 }
 
 static void record_quiesce_generation(
