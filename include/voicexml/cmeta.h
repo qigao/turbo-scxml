@@ -26,6 +26,7 @@ extern "C" {
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V2 2u
 #define VXML_CMETA_COLLECT_COMPLETION_ABI_V3 3u
 #define VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1 1u
+#define VXML_CMETA_RECORDING_REF_VIEW_ABI_V1 1u
 #define VXML_CMETA_MENU_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 1u
@@ -773,6 +774,21 @@ typedef struct vxml_cmeta_collect_utterance_result_view_v1 {
     size_t size;
 } vxml_cmeta_collect_utterance_result_view_v1;
 
+/*
+ * Borrowed VoiceXML 2.1 recording shadow reference. This is intentionally not a
+ * CMeta scalar kind. data/media_type remain valid only while the referenced
+ * Session-owned recognition result is still current.
+ */
+typedef struct vxml_cmeta_recording_ref_view_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_cmeta_name_view path;
+    vxml_cmeta_name_view media_type;
+    const void *data;
+    size_t size;
+    uint64_t duration_ms;
+} vxml_cmeta_recording_ref_view_v1;
+
 typedef struct vxml_cmeta_menu_completion_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -1172,6 +1188,34 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v3(
 vxml_status vxml_session_cmeta_collect_utterance_result(
     const vxml_session *session,
     vxml_cmeta_collect_utterance_result_view_v1 *out_result);
+
+/**
+ * Read one exact VoiceXML 2.1 recorded-utterance scalar shadow path.
+ *
+ * Supported paths are application.lastresult$.recordingsize,
+ * application.lastresult$.recordingduration, and matching active-form
+ * field_name$ paths. A defined value is UINT; no-audio/stale item shadows are
+ * returned as VXML_CMETA_VALUE_UNDEFINED.
+ */
+vxml_status vxml_session_cmeta_recording_shadow_value(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_value_view *out_value);
+
+/**
+ * Borrow one exact VoiceXML 2.1 recording shadow reference.
+ *
+ * Supported paths are application.lastresult$.recording and matching
+ * active-form field_name$.recording. The item recording alias is valid only
+ * while it still names the current Session-owned recognition lease; otherwise
+ * VXML_INVALID_STATE is returned. No retain/release authority is transferred.
+ */
+vxml_status vxml_session_cmeta_recording_shadow(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_recording_ref_view_v1 *out_recording);
 
 /**
  * MPSC admission of one menu choice ordinal for the active menu generation.
