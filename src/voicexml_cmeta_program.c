@@ -8994,7 +8994,9 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
             status = cmeta_lower_prompt_mark_nameexprs(
                 builder, child, &nested, scopes, scope_count);
             if (status != VXML_OK) return status;
-            if (foreach_row->dynamic_mark_count >
+            if (dynamic_offset > prompt->dynamic_mark_count ||
+                side_index > builder->profile->prompt_mark_expr_count ||
+                foreach_row->dynamic_mark_count >
                     prompt->dynamic_mark_count - dynamic_offset ||
                 foreach_row->dynamic_mark_count >
                     builder->profile->prompt_mark_expr_count - side_index)
