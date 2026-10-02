@@ -10467,50 +10467,33 @@ vxml_status vxml_session_cmeta_prompt_media_discard(
     return VXML_OK;
 }
 
-vxml_cmeta_prompt_media_ingress_result
-vxml_session_cmeta_prompt_media_try_complete(
+static vxml_cmeta_prompt_media_ingress_result
+prompt_media_try_complete_impl(
     vxml_session *session,
-    const vxml_cmeta_prompt_media_completion_v1 *completion) {
+    uint64_t generation_value,
+    vxml_cmeta_prompt_media_outcome outcome,
+    vxml_cmeta_prompt_media_failure failure,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned state;
     unsigned expected;
     uint64_t generation;
-    vxml_cmeta_prompt_media_failure failure =
-        VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE;
-    const size_t completion_prefix =
-        offsetof(vxml_cmeta_prompt_media_completion_v1, outcome) +
-        sizeof(completion->outcome);
-    const size_t failure_tail =
-        offsetof(vxml_cmeta_prompt_media_completion_v1, failure) +
-        sizeof(completion->failure);
 
-    if (session == NULL || completion == NULL ||
-        completion->abi_version !=
-            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
-        completion->struct_size < completion_prefix ||
-        completion->generation == 0u ||
-        (completion->outcome !=
-             VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
-         completion->outcome !=
-             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
+    if (session == NULL || generation_value == 0u ||
+        (outcome != VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+         outcome != VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
-
-    if (completion->outcome ==
-            VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) {
-        if (completion->struct_size >= failure_tail)
-            failure = completion->failure;
+    if (outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) {
         if (failure == VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE)
             failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE;
         if (failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH &&
-            failure !=
-                VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
+            failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
             failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE)
             return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
-    } else if (completion->struct_size >= failure_tail &&
-               completion->failure !=
-                    VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) {
+    } else if (failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) {
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
     }
 
@@ -10543,9 +10526,18 @@ vxml_session_cmeta_prompt_media_try_complete(
     generation = atomic_load_explicit(
         &mailbox->generation, memory_order_relaxed);
     if (!profile->prompt_media_in_flight ||
-        completion->generation != generation ||
-        completion->generation != profile->prompt_media_generation)
+        generation_value != generation ||
+        generation_value != profile->prompt_media_generation)
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+    if (timing_valid &&
+        atomic_load_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            memory_order_acquire) &&
+        playback_elapsed_ms <
+            atomic_load_explicit(
+                &profile->prompt_media_last_mark_elapsed_ms,
+                memory_order_relaxed))
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
 
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY;
     if (!atomic_compare_exchange_strong_explicit(
@@ -10561,9 +10553,9 @@ vxml_session_cmeta_prompt_media_try_complete(
 
     if (atomic_load_explicit(
             &mailbox->generation, memory_order_relaxed) !=
-            completion->generation ||
+            generation_value ||
         !profile->prompt_media_in_flight ||
-        profile->prompt_media_generation != completion->generation) {
+        profile->prompt_media_generation != generation_value) {
         expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
         (void)atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
@@ -10572,13 +10564,18 @@ vxml_session_cmeta_prompt_media_try_complete(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
     }
 
-    mailbox->outcome = completion->outcome;
+    mailbox->outcome = outcome;
     mailbox->failure = failure;
+    mailbox->timing_valid = timing_valid;
+    mailbox->playback_elapsed_ms =
+        timing_valid ? playback_elapsed_ms : UINT64_C(0);
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
             VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY,
             memory_order_acq_rel, memory_order_acquire)) {
+        mailbox->timing_valid = false;
+        mailbox->playback_elapsed_ms = UINT64_C(0);
         if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
             return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
         if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
@@ -10586,6 +10583,46 @@ vxml_session_cmeta_prompt_media_try_complete(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_FULL;
     }
     return VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED;
+}
+
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v1 *completion) {
+    vxml_cmeta_prompt_media_failure failure =
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE;
+    const size_t completion_prefix =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, outcome) +
+        sizeof(completion->outcome);
+    const size_t failure_tail =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, failure) +
+        sizeof(completion->failure);
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
+        completion->struct_size < completion_prefix)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    if (completion->struct_size >= failure_tail)
+        failure = completion->failure;
+    return prompt_media_try_complete_impl(
+        session, completion->generation,
+        completion->outcome, failure,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v2 *completion) {
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2 ||
+        completion->struct_size < sizeof(*completion))
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    return prompt_media_try_complete_impl(
+        session, completion->generation,
+        completion->outcome, completion->failure,
+        true, completion->playback_elapsed_ms);
 }
 
 vxml_status vxml_session_cmeta_prompt_media_run_ready(
