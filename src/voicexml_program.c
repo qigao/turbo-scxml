@@ -555,6 +555,289 @@ static vxml_status validate_goto_attributes(
     return VXML_OK;
 }
 
+static vxml_status parse_time_designation(
+    salts_xml_attribute attribute,
+    uint64_t *out_us,
+    vxml_diagnostic *diagnostic) {
+    const salts_xml_string_view raw =
+        salts_xml_attribute_value(attribute);
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t number_size;
+    size_t cursor = 0u;
+    size_t fractional_digits = 0u;
+    size_t fractional_limit;
+    uint64_t unit_us;
+    uint64_t integer_part = UINT64_C(0);
+    uint64_t fractional_part = UINT64_C(0);
+    bool saw_digit = false;
+    bool saw_decimal = false;
+    vxml_status status = VXML_OK;
+
+    if (attribute.impl == NULL || out_us == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_us = UINT64_C(0);
+
+    if (!decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size < 2u)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML property requires a non-negative time designation");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation allocation failed");
+    if (!decode_entities(
+            raw, decoded, decoded_size, &decoded_size)) {
+        status = fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation decoding changed");
+        goto done;
+    }
+    decoded[decoded_size] = '\0';
+
+    if (decoded_size >= 2u &&
+        decoded[decoded_size - 2u] == 'm' &&
+        decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000);
+        fractional_limit = 3u;
+        number_size = decoded_size - 2u;
+    } else if (decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000000);
+        fractional_limit = 6u;
+        number_size = decoded_size - 1u;
+    } else {
+        status = fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation requires ms or s units");
+        goto done;
+    }
+
+    if (number_size == 0u) {
+        status = fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation is missing its numeric value");
+        goto done;
+    }
+
+    while (cursor < number_size) {
+        const unsigned char ch =
+            (unsigned char)decoded[cursor++];
+        if (ch == '.') {
+            if (saw_decimal || !saw_digit ||
+                cursor == number_size) {
+                status = fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation has an invalid decimal form");
+                goto done;
+            }
+            saw_decimal = true;
+            continue;
+        }
+        if (ch < '0' || ch > '9') {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML time designation must be a non-negative decimal");
+            goto done;
+        }
+        saw_digit = true;
+        if (!saw_decimal) {
+            const uint64_t digit = (uint64_t)(ch - '0');
+            if (integer_part >
+                (UINT64_MAX - digit) / UINT64_C(10)) {
+                status = fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation overflows");
+                goto done;
+            }
+            integer_part =
+                integer_part * UINT64_C(10) + digit;
+        } else {
+            if (fractional_digits >= fractional_limit) {
+                status = fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation exceeds microsecond precision");
+                goto done;
+            }
+            fractional_part =
+                fractional_part * UINT64_C(10) +
+                (uint64_t)(ch - '0');
+            ++fractional_digits;
+        }
+    }
+
+    if (!saw_digit ||
+        integer_part > UINT64_MAX / unit_us) {
+        status = fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation exceeds uint64 microseconds");
+        goto done;
+    }
+
+    *out_us = integer_part * unit_us;
+    if (fractional_digits != 0u) {
+        uint64_t scale = unit_us;
+        size_t index;
+        for (index = 0u; index < fractional_digits; ++index)
+            scale /= UINT64_C(10);
+        if (fractional_part >
+            (UINT64_MAX - *out_us) / scale) {
+            status = fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML time designation exceeds uint64 microseconds");
+            goto done;
+        }
+        *out_us += fractional_part * scale;
+    }
+
+done:
+    vxml_free(decoded);
+    return status;
+}
+
+static vxml_status validate_property_attributes(
+    salts_xml_node node,
+    vxml_diagnostic *diagnostic) {
+    bool seen_name = false;
+    bool seen_value = false;
+    size_t index;
+
+    for (index = 0u;
+         index < salts_xml_node_attribute_count(node);
+         ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        bool *seen = NULL;
+
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(local, "name"))
+            seen = &seen_name;
+        else if (
+            salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(local, "value"))
+            seen = &seen_value;
+
+        if (seen == NULL || *seen)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML property attribute");
+        *seen = true;
+    }
+
+    if (!seen_name || !seen_value)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML property requires name and value");
+
+    for (index = 0u;
+         index < salts_xml_node_child_count(node);
+         ++index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(node, index);
+        if (!node_is_ignorable(child))
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML property must be empty");
+    }
+    return VXML_OK;
+}
+
+static vxml_status apply_fetch_audio_property(
+    salts_xml_node node,
+    vxml_literal_fetch_audio_policy *policy,
+    bool *saw_uri,
+    bool *saw_delay,
+    bool *saw_minimum,
+    vxml_diagnostic *diagnostic) {
+    const salts_xml_attribute name =
+        unqualified_attribute(node, "name");
+    const salts_xml_attribute value =
+        unqualified_attribute(node, "value");
+    vxml_status status;
+
+    if (policy == NULL || saw_uri == NULL ||
+        saw_delay == NULL || saw_minimum == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    status = validate_property_attributes(node, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (normalized_view_equal(
+            salts_xml_attribute_value(name), "fetchaudio")) {
+        size_t decoded_size = 0u;
+        if (*saw_uri)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudio property");
+        *saw_uri = true;
+        if (!decode_entities(
+                salts_xml_attribute_value(value),
+                NULL, 0u, &decoded_size) ||
+            decoded_size == 0u)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio must be one nonempty URI");
+        policy->uri_value = value;
+        return VXML_OK;
+    }
+
+    if (normalized_view_equal(
+            salts_xml_attribute_value(name),
+            "fetchaudiodelay")) {
+        if (*saw_delay)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiodelay property");
+        *saw_delay = true;
+        status = parse_time_designation(
+            value, &policy->delay_us, diagnostic);
+        if (status == VXML_OK)
+            policy->has_delay = true;
+        return status;
+    }
+
+    if (normalized_view_equal(
+            salts_xml_attribute_value(name),
+            "fetchaudiominimum")) {
+        if (*saw_minimum)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiominimum property");
+        *saw_minimum = true;
+        status = parse_time_designation(
+            value, &policy->minimum_us, diagnostic);
+        if (status == VXML_OK)
+            policy->has_minimum = true;
+        return status;
+    }
+
+    return fail(
+        diagnostic, VXML_UNSUPPORTED_FEATURE,
+        salts_xml_attribute_location(name),
+        "unsupported VoiceXML property in literal profile");
+}
+
 static void measurement_destroy(vxml_measurement *measurement) {
     size_t index;
     if (measurement == NULL) return;
