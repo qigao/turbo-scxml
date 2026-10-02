@@ -14305,4 +14305,431 @@ spec("VoiceXML CMeta session execution") {
         }
     }
 
+
+    it("admits VoiceXML 2.1 transfer type and preserves consultation request policy") {
+        static const char v20[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='consultation'/></form></vxml>";
+        static const char conflict[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "bridge='true' type='bridge'/></form></vxml>";
+        static const char invalid[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='attended'/></form></vxml>";
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='consultation' connecttimeout='3s' maxtime='9s' "
+            "transferaudio='hold.wav'/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        const uint64_t caps =
+            VXML_CMETA_TRANSFER_CAP_CONSULTATION |
+            VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT |
+            VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO;
+        vxml_program program = {0};
+        vxml_session session = {0};
+        cmeta_transfer_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            transfer_session_options(
+                &root, &probe, caps);
+        vxml_cmeta_transfer_request_v1 request = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                v20, sizeof(v20) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                conflict, sizeof(conflict) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                invalid, sizeof(invalid) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            request.mode,
+            VXML_CMETA_TRANSFER_CONSULTATION);
+        check_true(request.has_connect_timeout);
+        check_equal(
+            request.connect_timeout_us,
+            UINT64_C(3000000));
+        check_false(request.has_maxtime);
+        check_equal(request.maxtime_us, UINT64_C(0));
+        check_equal(
+            request.transfer_audio.size,
+            sizeof("hold.wav") - 1u);
+        check_equal(
+            memcmp(
+                request.transfer_audio.data,
+                "hold.wav",
+                sizeof("hold.wav") - 1u),
+            0);
+        check_equal(request.required_capabilities, caps);
+
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(
+            probe.request.mode,
+            VXML_CMETA_TRANSFER_CONSULTATION);
+        check_equal(
+            vxml_session_cmeta_transfer_discard(&session),
+            VXML_OK);
+        vxml_session_destroy(&session);
+
+        probe = (cmeta_transfer_probe){
+            .prepare_status = VXML_OK};
+        options = transfer_session_options(
+            &root, &probe,
+            VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT |
+            VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO);
+        session = (vxml_session){0};
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(
+                &session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(probe.prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("maps type blind and bridge onto the legacy transfer request modes") {
+        static const char legacy_blind[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "bridge='false'/></form></vxml>";
+        static const char typed_blind[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='blind'/></form></vxml>";
+        static const char legacy_bridge[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "bridge='true'/></form></vxml>";
+        static const char typed_bridge[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='bridge'/></form></vxml>";
+        const char *documents[] = {
+            legacy_blind, typed_blind,
+            legacy_bridge, typed_bridge};
+        const size_t sizes[] = {
+            sizeof(legacy_blind) - 1u,
+            sizeof(typed_blind) - 1u,
+            sizeof(legacy_bridge) - 1u,
+            sizeof(typed_bridge) - 1u};
+        const vxml_cmeta_transfer_mode modes[] = {
+            VXML_CMETA_TRANSFER_BLIND,
+            VXML_CMETA_TRANSFER_BLIND,
+            VXML_CMETA_TRANSFER_BRIDGE,
+            VXML_CMETA_TRANSFER_BRIDGE};
+        const uint64_t caps[] = {
+            VXML_CMETA_TRANSFER_CAP_BLIND,
+            VXML_CMETA_TRANSFER_CAP_BLIND,
+            VXML_CMETA_TRANSFER_CAP_BRIDGE,
+            VXML_CMETA_TRANSFER_CAP_BRIDGE};
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        size_t index;
+
+        for (index = 0u; index < 4u; ++index) {
+            vxml_program program = {0};
+            vxml_session session = {0};
+            cmeta_transfer_probe probe = {
+                .prepare_status = VXML_OK};
+            vxml_cmeta_session_options_v1 options =
+                transfer_session_options(
+                    &root, &probe, caps[index]);
+            vxml_cmeta_transfer_request_v1 request = {0};
+
+            check_equal(
+                vxml_compile_cmeta(
+                    documents[index], sizes[index], NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(
+                    &session, &program, &options),
+                VXML_OK);
+            check_equal(
+                vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_cmeta_transfer_request(
+                    &session, &request),
+                VXML_OK);
+            check_equal(request.mode, modes[index]);
+            check_equal(
+                request.required_capabilities,
+                caps[index]);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+
+    it("settles consultation results and exact consultation terminal Events") {
+        static const char result_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='consultation'>"
+            "<filled><exit expr='call'/></filled>"
+            "</transfer></form></vxml>";
+        static const char event_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' "
+            "type='consultation'>"
+            "<catch event='connection.disconnect.transfer'>"
+            "<exit expr='call'/></catch>"
+            "<catch event='error.unsupported.transfer.consultation'>"
+            "<exit expr='9'/></catch>"
+            "</transfer></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        const uint64_t caps =
+            VXML_CMETA_TRANSFER_CAP_CONSULTATION;
+        vxml_program program = {0};
+        vxml_session session = {0};
+        cmeta_transfer_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            transfer_session_options(
+                &root, &probe, caps);
+        vxml_cmeta_transfer_request_v1 request = {0};
+        vxml_cmeta_transfer_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_TRANSFER_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_transfer_completion_v1),
+            .kind = VXML_CMETA_TRANSFER_COMPLETION_RESULT,
+            .result = VXML_CMETA_TRANSFER_RESULT_BUSY};
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
+        bool progressed = false;
+
+        check_equal(
+            vxml_compile_cmeta(
+                result_source, sizeof(result_source) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_commit(&session),
+            VXML_OK);
+        completion.generation = request.generation;
+        check_equal(
+            vxml_session_cmeta_transfer_try_complete(
+                &session, &completion),
+            VXML_CMETA_TRANSFER_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_transfer_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &name, &value),
+            VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(
+            value.data.string.size,
+            sizeof("busy") - 1u);
+        check_equal(
+            memcmp(
+                value.data.string.data,
+                "busy", sizeof("busy") - 1u),
+            0);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        program = (vxml_program){0};
+        session = (vxml_session){0};
+        probe = (cmeta_transfer_probe){
+            .prepare_status = VXML_OK};
+        options = transfer_session_options(
+            &root, &probe, caps);
+        check_equal(
+            vxml_compile_cmeta(
+                result_source, sizeof(result_source) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_commit(&session),
+            VXML_OK);
+        completion = (vxml_cmeta_transfer_completion_v1){
+            .abi_version =
+                VXML_CMETA_TRANSFER_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_transfer_completion_v1),
+            .generation = request.generation,
+            .kind = VXML_CMETA_TRANSFER_COMPLETION_RESULT,
+            .result =
+                VXML_CMETA_TRANSFER_RESULT_MAXTIME_DISCONNECT};
+        check_equal(
+            vxml_session_cmeta_transfer_try_complete(
+                &session, &completion),
+            VXML_CMETA_TRANSFER_INGRESS_INCOMPATIBLE_RESULT);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        {
+            const vxml_cmeta_transfer_completion_kind kinds[] = {
+                VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_TRANSFER,
+                VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_CONSULTATION};
+            const int64_t expected[] = {0, 9};
+            size_t index;
+            check_equal(
+                vxml_compile_cmeta(
+                    event_source, sizeof(event_source) - 1u,
+                    NULL, &compile, &program, NULL),
+                VXML_OK);
+
+            for (index = 0u; index < 2u; ++index) {
+                session = (vxml_session){0};
+                probe = (cmeta_transfer_probe){
+                    .prepare_status = VXML_OK};
+                options = transfer_session_options(
+                    &root, &probe, caps);
+                check_equal(
+                    vxml_session_init_cmeta(
+                        &session, &program, &options),
+                    VXML_OK);
+                check_equal(
+                    vxml_session_start(&session), VXML_OK);
+                check_equal(
+                    vxml_session_cmeta_transfer_request(
+                        &session, &request),
+                    VXML_OK);
+                check_equal(
+                    vxml_session_cmeta_transfer_prepare(
+                        &session, NULL),
+                    VXML_OK);
+                check_equal(
+                    vxml_session_cmeta_transfer_commit(
+                        &session),
+                    VXML_OK);
+                completion =
+                    (vxml_cmeta_transfer_completion_v1){
+                        .abi_version =
+                            VXML_CMETA_TRANSFER_COMPLETION_ABI_V1,
+                        .struct_size =
+                            sizeof(vxml_cmeta_transfer_completion_v1),
+                        .generation = request.generation,
+                        .kind = kinds[index]};
+                check_equal(
+                    vxml_session_cmeta_transfer_try_complete(
+                        &session, &completion),
+                    VXML_CMETA_TRANSFER_INGRESS_ACCEPTED);
+                progressed = false;
+                check_equal(
+                    vxml_session_cmeta_transfer_run_ready(
+                        &session, &progressed),
+                    VXML_OK);
+                check_true(progressed);
+                check_equal(
+                    vxml_session_get_state(&session),
+                    VXML_SESSION_EXITED);
+                check_equal(
+                    vxml_session_cmeta_exit_at(
+                        &session, 0u, &name, &value),
+                    VXML_OK);
+                if (index == 0u) {
+                    check_equal(
+                        value.kind,
+                        VXML_CMETA_VALUE_UNDEFINED);
+                } else {
+                    check_equal(
+                        value.kind,
+                        VXML_CMETA_VALUE_SINT);
+                    check_equal(
+                        value.data.sint,
+                        expected[index]);
+                }
+                check_equal(
+                    probe.cancel_calls, (size_t)0u);
+                check_equal(
+                    probe.quiesce_calls, (size_t)1u);
+                vxml_session_destroy(&session);
+            }
+            vxml_program_destroy(&program);
+        }
+    }
+
 }
