@@ -6549,6 +6549,17 @@ vxml_cmeta_collect_ingress_result vxml_session_cmeta_collect_try_complete_v2(
             return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
     }
 
+    if (recording_present &&
+        form->recording_media_type_size != 0u &&
+        (form->recording_media_type == NULL ||
+         completion->recording_media_type.size !=
+             form->recording_media_type_size ||
+         memcmp(
+             completion->recording_media_type.data,
+             form->recording_media_type,
+             form->recording_media_type_size) != 0))
+        return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
+
     root_shape = session_root_shape(program);
     if (root_shape == NULL || mailbox->root_fields == NULL ||
         mailbox->slot_capacity == 0u ||
