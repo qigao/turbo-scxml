@@ -4489,6 +4489,7 @@ typedef struct cmeta_program_builder {
     size_t prompt_fallback_index;
     size_t filled_index;
     size_t filled_target_index;
+    size_t filled_transfer_target_index;
     size_t event_handler_index;
     size_t block_index;
     size_t declaration_index;
@@ -4549,6 +4550,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->actions);
     vxml_free(profile->declarations);
     vxml_free(profile->event_handlers);
+    vxml_free(profile->filled_transfer_targets);
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->prompt_fallbacks);
@@ -4624,6 +4626,8 @@ static bool cmeta_allocate_rows(
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
+    profile->filled_transfer_target_count =
+        measurement->filled_target_count;
     profile->event_handler_count = measurement->event_handler_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
@@ -4677,6 +4681,8 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
+    CMETA_ALLOC_ROWS(
+        filled_transfer_targets, measurement->filled_target_count);
     CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
@@ -9695,7 +9701,16 @@ static vxml_status cmeta_write_program(
              measurement->prompt_mark_expr_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
          builder.filled_index != measurement->filled_count ||
-         builder.filled_target_index != measurement->filled_target_count ||
+         builder.filled_target_index >
+             measurement->filled_target_count ||
+         builder.filled_transfer_target_index >
+             measurement->filled_target_count ||
+         builder.filled_target_index >
+             measurement->filled_target_count -
+                 builder.filled_transfer_target_index ||
+         builder.filled_target_index +
+                 builder.filled_transfer_target_index !=
+             measurement->filled_target_count ||
          builder.event_handler_index != measurement->event_handler_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
@@ -9710,6 +9725,10 @@ static vxml_status cmeta_write_program(
             "VoiceXML CMeta document changed between compiler passes");
     if (status == VXML_OK) {
         profile->location_candidate_count = builder.candidate_index;
+        profile->filled_root_field_count =
+            builder.filled_target_index;
+        profile->filled_transfer_target_count =
+            builder.filled_transfer_target_index;
         profile->string_size = builder.string_index;
         impl->storage = profile->strings;
         impl->storage_size = profile->string_size;
