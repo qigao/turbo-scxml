@@ -9843,17 +9843,32 @@ static vxml_status prompt_media_request_from_impl(
     return VXML_OK;
 }
 
+static bool prompt_media_unresolved_dynamic_mark(
+    const vxml_cmeta_prompt_media_segment_v1 *segment) {
+    return segment != NULL &&
+        segment->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+        (segment->payload.data == NULL ||
+         segment->payload.size == 0u);
+}
+
 vxml_status vxml_session_cmeta_prompt_media_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_request_v1 *out_request) {
     const vxml_session_impl *impl;
+    vxml_status status;
     if (out_request != NULL)
         *out_request = (vxml_cmeta_prompt_media_request_v1){0};
     if (session == NULL || out_request == NULL)
         return VXML_INVALID_ARGUMENT;
     impl = cmeta_session(session);
     if (impl == NULL) return VXML_INVALID_CONTRACT;
-    return prompt_media_request_from_impl(impl, out_request);
+    status = prompt_media_request_from_impl(impl, out_request);
+    if (status == VXML_OK &&
+        out_request->segment_count != 0u &&
+        prompt_media_unresolved_dynamic_mark(
+            &out_request->segment))
+        return VXML_UNSUPPORTED_FEATURE;
+    return status;
 }
 
 static vxml_status prompt_media_batch_request_from_impl(
@@ -9920,13 +9935,21 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_batch_request_v1 *out_request) {
     const vxml_session_impl *impl;
+    vxml_status status;
+    size_t index;
     if (out_request != NULL)
         *out_request = (vxml_cmeta_prompt_media_batch_request_v1){0};
     if (session == NULL || out_request == NULL)
         return VXML_INVALID_ARGUMENT;
     impl = cmeta_session(session);
     if (impl == NULL) return VXML_INVALID_CONTRACT;
-    return prompt_media_batch_request_from_impl(impl, out_request);
+    status = prompt_media_batch_request_from_impl(impl, out_request);
+    if (status != VXML_OK) return status;
+    for (index = 0u; index < out_request->segment_count; ++index)
+        if (prompt_media_unresolved_dynamic_mark(
+                &out_request->segments[index]))
+            return VXML_UNSUPPORTED_FEATURE;
+    return VXML_OK;
 }
 
 static vxml_status prompt_media_project_dynamic_marks(
