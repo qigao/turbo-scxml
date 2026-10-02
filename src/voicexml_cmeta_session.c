@@ -9822,8 +9822,8 @@ static vxml_status cmeta_raise_event_impl(
          profile->active_menu != VXML_CMETA_NO_INDEX ||
          profile->active_block != VXML_CMETA_NO_INDEX))
         return session_fail(impl, VXML_INVALID_STRUCTURE);
-    if (!cmeta_location_path_valid(
-            event_name, event_name_size, SIZE_MAX))
+    if (!vxml_cmeta_event_token_valid(
+            event_name, event_name_size))
         return VXML_INVALID_ARGUMENT;
     if (program->event_handler_count == 0u)
         return session_fail(impl, VXML_SEMANTIC_ERROR);
@@ -10647,6 +10647,16 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
         transfer_completion_disarm(profile);
     profile->active_transfer = VXML_CMETA_NO_INDEX;
 
+    /*
+     * Event dispatch owns terminal publication. If a transfer-local catch
+     * already exited/disconnected the Session, do not publish the now-empty
+     * pending snapshot a second time.
+     *
+     * Direct RESULT/filled processing still leaves impl RUNNING and therefore
+     * continues through the pending navigation/terminal handoff below.
+     */
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_OK;
     if (profile->pending_navigation_uri != NULL) {
         status = publish_pending_navigation(impl, profile);
         if (status != VXML_OK)
@@ -10659,8 +10669,6 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
         impl->error = VXML_OK;
         return VXML_OK;
     }
-    if (impl->state != VXML_SESSION_RUNNING)
-        return VXML_OK;
 
     return select_directed_item(
         impl, program, profile, form,
