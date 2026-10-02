@@ -9721,6 +9721,145 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("inherits static fetchaudio policy from document to form to goto") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<property name='fetchaudio' value='../media/doc.wav'/>"
+            "<property name='fetchaudiodelay' value='1s'/>"
+            "<property name='fetchaudiominimum' value='2s'/>"
+            "<form id='doc'><block><goto next='doc.vxml'/></block></form>"
+            "<form id='form'>"
+            "<property name='fetchaudio' value='../media/form.wav'/>"
+            "<property name='fetchaudiodelay' value='250ms'/>"
+            "<block><goto next='form.vxml'/></block></form>"
+            "<form id='explicit'>"
+            "<property name='fetchaudio' value='../media/form2.wav'/>"
+            "<property name='fetchaudiodelay' value='500ms'/>"
+            "<block><goto next='explicit.vxml' "
+            "fetchaudio='../media/goto.wav'/></block></form>"
+            "<form id='local'><block><goto next='#inside'/></block></form>"
+            "</vxml>";
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        const vxml_cmeta_session_root root = {.value = 1, .other = 2};
+        const vxml_cmeta_session_options_v1 options = session_options(&root);
+        static const struct {
+            const char *form;
+            const char *uri;
+            const char *audio;
+            bool has_delay;
+            uint64_t delay_us;
+            bool has_minimum;
+            uint64_t minimum_us;
+        } cases[] = {
+            {"doc", "doc.vxml", "../media/doc.wav",
+             true, UINT64_C(1000000), true, UINT64_C(2000000)},
+            {"form", "form.vxml", "../media/form.wav",
+             true, UINT64_C(250000), true, UINT64_C(2000000)},
+            {"explicit", "explicit.vxml", "../media/goto.wav",
+             true, UINT64_C(500000), true, UINT64_C(2000000)},
+            {"local", "#inside", NULL,
+             false, UINT64_C(0), false, UINT64_C(0)}
+        };
+        vxml_program program = {0};
+        size_t index;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+
+        for (index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            vxml_session session = {0};
+            vxml_navigation_request_v1 navigation = {0};
+            check_equal(
+                vxml_session_init_cmeta(&session, &program, &options),
+                VXML_OK);
+            check_equal(
+                vxml_session_start_at_form(
+                    &session, cases[index].form,
+                    strlen(cases[index].form)),
+                VXML_OK);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_NAVIGATING);
+            check_equal(
+                vxml_session_navigation_request(
+                    &session, &navigation),
+                VXML_OK);
+            check_equal(
+                navigation.uri_size, strlen(cases[index].uri));
+            check_equal(
+                memcmp(
+                    navigation.uri, cases[index].uri,
+                    navigation.uri_size),
+                0);
+            if (cases[index].audio != NULL) {
+                check_not_null(navigation.fetchaudio_uri);
+                check_equal(
+                    navigation.fetchaudio_uri_size,
+                    strlen(cases[index].audio));
+                check_equal(
+                    memcmp(
+                        navigation.fetchaudio_uri,
+                        cases[index].audio,
+                        navigation.fetchaudio_uri_size),
+                    0);
+            } else {
+                check_null(navigation.fetchaudio_uri);
+                check_equal(
+                    navigation.fetchaudio_uri_size, (size_t)0u);
+            }
+            check_equal(
+                navigation.has_fetchaudio_delay,
+                cases[index].has_delay);
+            check_equal(
+                navigation.fetchaudio_delay_us,
+                cases[index].delay_us);
+            check_equal(
+                navigation.has_fetchaudio_minimum,
+                cases[index].has_minimum);
+            check_equal(
+                navigation.fetchaudio_minimum_us,
+                cases[index].minimum_us);
+            vxml_session_destroy(&session);
+        }
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects duplicate empty and invalid static fetchaudio properties") {
+        static const char *const invalid[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<property name='fetchaudio' value='a.wav'/>"
+            "<property name='fetchaudio' value='b.wav'/>"
+            "<form><block><exit/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<property name='fetchaudio' value=''/>"
+            "<block><exit/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<property name='fetchaudiodelay' value='-1s'/>"
+            "<block><exit/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<property name='fetchaudiominimum' value='100'/>"
+            "<block><exit/></block></form></vxml>"
+        };
+        const vxml_cmeta_compile_options_v1 compile = compile_options();
+        size_t index;
+        for (index = 0u; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+            vxml_program program = {0};
+            check_true(
+                vxml_compile_cmeta(
+                    invalid[index], strlen(invalid[index]), NULL,
+                    &compile, &program, NULL) != VXML_OK);
+            vxml_program_destroy(&program);
+        }
+    }
+
     it("starts a named non-first CMeta form through the shared form-entry API") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
