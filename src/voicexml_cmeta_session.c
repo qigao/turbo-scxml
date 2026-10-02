@@ -10719,11 +10719,12 @@ vxml_session_cmeta_prompt_media_barge_in(
 
 
 
-vxml_cmeta_prompt_mark_result
-vxml_session_cmeta_prompt_media_mark(
+static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
     vxml_session *session,
     uint64_t generation,
-    size_t segment_index) {
+    size_t segment_index,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
@@ -10775,6 +10776,15 @@ vxml_session_cmeta_prompt_media_mark(
     if (profile->prompt_media_last_mark_segment != SIZE_MAX &&
         absolute_index <= profile->prompt_media_last_mark_segment)
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
+    if (timing_valid &&
+        atomic_load_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            memory_order_acquire) &&
+        playback_elapsed_ms <
+            atomic_load_explicit(
+                &profile->prompt_media_last_mark_elapsed_ms,
+                memory_order_relaxed))
+        return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
 
     profile->prompt_media_last_mark_name_size = 0u;
     if (profile->prompt_media_projected_generation == generation &&
@@ -10808,8 +10818,51 @@ vxml_session_cmeta_prompt_media_mark(
         profile->prompt_media_last_mark_name_size =
             projected->payload.size;
     }
+
     profile->prompt_media_last_mark_segment = absolute_index;
+    if (timing_valid) {
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_ms,
+            playback_elapsed_ms, memory_order_relaxed);
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            true, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            false, memory_order_release);
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_ms,
+            UINT64_C(0), memory_order_relaxed);
+    }
     return VXML_CMETA_PROMPT_MARK_ACCEPTED;
+}
+
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark(
+    vxml_session *session,
+    uint64_t generation,
+    size_t segment_index) {
+    return prompt_media_mark_impl(
+        session, generation, segment_index,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_mark_progress_v2 *progress) {
+    if (progress == NULL ||
+        progress->abi_version !=
+            VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2 ||
+        progress->struct_size < sizeof(*progress))
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+    return prompt_media_mark_impl(
+        session,
+        progress->generation,
+        progress->segment_index,
+        true,
+        progress->playback_elapsed_ms);
 }
 
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
