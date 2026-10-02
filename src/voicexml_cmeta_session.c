@@ -3325,6 +3325,7 @@ static vxml_status select_directed_item(
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
+    profile->active_record = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
 
@@ -3447,6 +3448,38 @@ static vxml_status select_directed_item(
             if (profile->subdialog_generation == 0u)
                 profile->subdialog_generation = 1u;
             return VXML_OK;
+        } else if (item->kind == VXML_CMETA_FORM_ITEM_RECORD) {
+            const vxml_cmeta_record_row *record;
+            if (item->index >= program->record_count ||
+                program->records == NULL)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            record = &program->records[item->index];
+            if (record->form != form_index ||
+                item->index < form->first_record ||
+                item->index - form->first_record >= form->record_count ||
+                form->scope >= program->scope_count ||
+                record->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count ||
+                form_scope->view.bound == NULL ||
+                record->name == NULL || record->name_size == 0u)
+                return session_fail(session, VXML_INVALID_STRUCTURE);
+            if (form_scope->view.bound[record->form_item_slot] != 0u)
+                continue;
+            if (record->condition != VXML_CMETA_NO_INDEX) {
+                const size_t scopes[2] = {
+                    form->scope, program->document_scope};
+                status = evaluate_condition(
+                    profile, program, false,
+                    record->condition, scopes, 2u, &eligible);
+                if (status != VXML_OK)
+                    return session_fail(session, status);
+            }
+            if (!eligible) continue;
+            profile->active_record = item->index;
+            ++profile->record_generation;
+            if (profile->record_generation == 0u)
+                profile->record_generation = 1u;
+            return VXML_OK;
         } else {
             return session_fail(session, VXML_INVALID_STRUCTURE);
         }
@@ -3485,6 +3518,7 @@ static vxml_status select_menu(
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
+    profile->active_record = VXML_CMETA_NO_INDEX;
     profile->active_menu = form->menu;
     profile->active_block = VXML_CMETA_NO_INDEX;
     ++profile->collect_generation;
