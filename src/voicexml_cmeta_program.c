@@ -7893,6 +7893,76 @@ static vxml_status cmeta_compile_declaration_expression(
     return VXML_OK;
 }
 
+static vxml_status cmeta_lower_prompt_mark_nameexprs(
+    cmeta_program_builder *builder,
+    salts_xml_node prompt_node,
+    vxml_cmeta_prompt_row *prompt,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    size_t child_index;
+    size_t dynamic_offset = 0u;
+    if (builder == NULL || prompt == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (prompt->dynamic_mark_count == 0u)
+        return VXML_OK;
+    if (!range_valid(
+            prompt->first_dynamic_mark,
+            prompt->dynamic_mark_count,
+            builder->profile->prompt_mark_expr_count) ||
+        builder->profile->prompt_mark_exprs == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(prompt_node),
+            "VoiceXML dynamic mark range changed between passes");
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(prompt_node);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(prompt_node, child_index);
+        const salts_xml_attribute nameexpr =
+            cmeta_attribute(child, "nameexpr");
+        vxml_cmeta_prompt_mark_expr_row *row;
+        vxml_status status;
+        if (!cmeta_node_named(child, "mark") ||
+            nameexpr.impl == NULL)
+            continue;
+        if (dynamic_offset >= prompt->dynamic_mark_count)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML dynamic mark count changed between passes");
+        row = &builder->profile->prompt_mark_exprs[
+            prompt->first_dynamic_mark + dynamic_offset++];
+        if (row->segment_index < prompt->first_segment ||
+            row->segment_index >=
+                prompt->first_segment + prompt->segment_count ||
+            row->expression != VXML_CMETA_NO_INDEX)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child),
+                "VoiceXML dynamic mark row is invalid");
+        status = cmeta_append_expression(
+            builder, nameexpr, scopes, scope_count,
+            false, &row->expression);
+        if (status != VXML_OK) return status;
+        if (cmeta_expression_value_kind(
+                &builder->profile->expressions[
+                    row->expression]) !=
+                VXML_CMETA_VALUE_STRING)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(nameexpr),
+                "VoiceXML mark nameexpr must produce STRING");
+    }
+    if (dynamic_offset != prompt->dynamic_mark_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(prompt_node),
+            "VoiceXML dynamic mark rows disappeared between passes");
+    return VXML_OK;
+}
+
 static void cmeta_action_init(vxml_cmeta_action_row *action) {
     memset(action, 0, sizeof(*action));
     action->scope = VXML_CMETA_NO_INDEX;
@@ -8805,6 +8875,11 @@ static vxml_status cmeta_lower_program(
                                         &prompt->condition);
                                     if (status != VXML_OK) return status;
                                 }
+                                status =
+                                    cmeta_lower_prompt_mark_nameexprs(
+                                        builder, nested, prompt,
+                                        scopes, 2u);
+                                if (status != VXML_OK) return status;
                                 continue;
                             }
                             if (!cmeta_node_named(nested, "catch") &&
@@ -9161,6 +9236,11 @@ static vxml_status cmeta_lower_program(
                                     &prompt->condition);
                                 if (status != VXML_OK) return status;
                             }
+                            status =
+                                cmeta_lower_prompt_mark_nameexprs(
+                                    builder, nested, prompt,
+                                    scopes, 2u);
+                            if (status != VXML_OK) return status;
                         }
                         if (prompt_offset != field->prompt_count)
                             return cmeta_program_fail(
