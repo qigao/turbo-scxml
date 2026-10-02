@@ -530,3 +530,42 @@ it across collect generations.
 No timing thread, wall-clock read, sleep, or timer is introduced in the
 VoiceXML runtime.
 
+## VoiceXML 2.1 dynamic grammar activation
+
+Issue #220 adds `grammar@srcexpr` without creating a second grammar or collect
+runtime.
+
+The compiler accepts `srcexpr` only for VoiceXML 2.1 and only as the
+alternative to a literal `src`. The expression is compiled once in the same
+form/document scope chain used by the owning field or mixed-initiative form
+grammar, and the CMeta profile requires a STRING result. Inline SRGS remains
+outside this bounded external-grammar slice.
+
+At activation time the existing collect request is projected as follows:
+
+```text
+Program grammar row
+  +-- literal src -------------------------> Program-owned URI view
+  '-- grammar_expression
+          |
+          +-> evaluate in current form/document scope
+          +-> require non-empty bounded STRING
+          +-> copy into Session grammar activation buffer
+          '--> existing V1/V2 collect request grammar_src
+```
+
+The public collect request structs and provider adapter remain unchanged.
+Dynamic URI bytes never point at expression scratch and are never retained in
+the Program. Querying or preparing a later activation evaluates the expression
+again, so re-entry observes current variable state rather than a memoized URI.
+
+Evaluation failure, undefined/non-string values, embedded NUL, empty URI, or a
+URI over `max_grammar_bytes` fail before provider admission. The provider path
+raises `error.semantic` for these dynamic expression failures. Static
+`grammar@src` behavior is unchanged.
+
+Form-level mixed-initiative grammar uses the same projection and the same
+Session buffer. There is one grammar activation scratch owner per Session; no
+network fetcher, SRGS parser, worker, queue, or second provider lifecycle is
+introduced.
+
