@@ -5676,6 +5676,167 @@ vxml_status vxml_session_cmeta_transfer_discard(
     return VXML_OK;
 }
 
+static bool transfer_completion_compatible(
+    const vxml_cmeta_transfer_row *transfer,
+    const vxml_cmeta_transfer_completion_v1 *completion) {
+    vxml_cmeta_name_view ignored = {0};
+    if (transfer == NULL || completion == NULL)
+        return false;
+
+    switch (completion->kind) {
+    case VXML_CMETA_TRANSFER_COMPLETION_RESULT:
+        return transfer->mode == VXML_CMETA_TRANSFER_BRIDGE &&
+            completion->protocol_code == 0u &&
+            vxml_cmeta_transfer_result_name(
+                completion->result, &ignored);
+    case VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_HANGUP:
+        return completion->result == 0 &&
+            completion->protocol_code == 0u;
+    case VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_TRANSFER:
+        return transfer->mode == VXML_CMETA_TRANSFER_BLIND &&
+            completion->result == 0 &&
+            completion->protocol_code == 0u;
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_NOAUTHORIZATION:
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_BADDESTINATION:
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_NOROUTE:
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_NORESOURCE:
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_URI:
+        return completion->result == 0 &&
+            completion->protocol_code == 0u;
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_PROTOCOL:
+        return completion->result == 0 &&
+            completion->protocol_code <= 999u;
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_BLIND:
+        return transfer->mode == VXML_CMETA_TRANSFER_BLIND &&
+            completion->result == 0 &&
+            completion->protocol_code == 0u;
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_BRIDGE:
+        return transfer->mode == VXML_CMETA_TRANSFER_BRIDGE &&
+            completion->result == 0 &&
+            completion->protocol_code == 0u;
+    case VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_CONSULTATION:
+        /* Consultation mode is not admitted until the VoiceXML 2.1 type slice. */
+        return false;
+    default:
+        return false;
+    }
+}
+
+vxml_cmeta_transfer_ingress_result
+vxml_session_cmeta_transfer_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_transfer_completion_v1 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_transfer_row *transfer;
+    vxml_cmeta_transfer_completion_mailbox *mailbox;
+    uint64_t generation;
+    unsigned state;
+    unsigned expected;
+
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_TRANSFER_COMPLETION_ABI_V1 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == UINT64_C(0))
+        return VXML_CMETA_TRANSFER_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_TRANSFER_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_TRANSFER_INGRESS_CLOSED
+            : VXML_CMETA_TRANSFER_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_TRANSFER_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    mailbox = &profile->transfer_mailbox;
+
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_TRANSFER_MAILBOX_CLOSED)
+        return VXML_CMETA_TRANSFER_INGRESS_CLOSED;
+    if (state == VXML_CMETA_TRANSFER_MAILBOX_DISARMED)
+        return VXML_CMETA_TRANSFER_INGRESS_STALE;
+    if (state == VXML_CMETA_TRANSFER_MAILBOX_WRITING ||
+        state == VXML_CMETA_TRANSFER_MAILBOX_READY)
+        return VXML_CMETA_TRANSFER_INGRESS_FULL;
+    if (state != VXML_CMETA_TRANSFER_MAILBOX_EMPTY)
+        return VXML_CMETA_TRANSFER_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (!profile->transfer_in_flight ||
+        completion->generation != generation ||
+        completion->generation != profile->transfer_generation ||
+        profile->active_transfer == VXML_CMETA_NO_INDEX ||
+        profile->active_transfer >= program->transfer_count ||
+        program->transfers == NULL)
+        return VXML_CMETA_TRANSFER_INGRESS_STALE;
+
+    transfer = &program->transfers[profile->active_transfer];
+    if (transfer->form != profile->active_form ||
+        !transfer_completion_compatible(transfer, completion))
+        return VXML_CMETA_TRANSFER_INGRESS_INCOMPATIBLE_RESULT;
+
+    expected = VXML_CMETA_TRANSFER_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_TRANSFER_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_TRANSFER_MAILBOX_CLOSED)
+            return VXML_CMETA_TRANSFER_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_TRANSFER_MAILBOX_DISARMED)
+            return VXML_CMETA_TRANSFER_INGRESS_STALE;
+        return VXML_CMETA_TRANSFER_INGRESS_FULL;
+    }
+
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+            completion->generation ||
+        !profile->transfer_in_flight ||
+        profile->transfer_generation != completion->generation ||
+        profile->active_transfer == VXML_CMETA_NO_INDEX ||
+        profile->active_transfer >= program->transfer_count ||
+        program->transfers == NULL ||
+        !transfer_completion_compatible(
+            &program->transfers[profile->active_transfer],
+            completion)) {
+        transfer_mailbox_payload_reset(mailbox);
+        expected = VXML_CMETA_TRANSFER_MAILBOX_WRITING;
+        (void)atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_TRANSFER_MAILBOX_DISARMED,
+            memory_order_acq_rel, memory_order_acquire);
+        return VXML_CMETA_TRANSFER_INGRESS_STALE;
+    }
+
+    mailbox->kind = completion->kind;
+    mailbox->result = completion->result;
+    mailbox->protocol_code = completion->protocol_code;
+    expected = VXML_CMETA_TRANSFER_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_TRANSFER_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire)) {
+        transfer_mailbox_payload_reset(mailbox);
+        if (expected == VXML_CMETA_TRANSFER_MAILBOX_CLOSED)
+            return VXML_CMETA_TRANSFER_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_TRANSFER_MAILBOX_DISARMED)
+            return VXML_CMETA_TRANSFER_INGRESS_STALE;
+        return VXML_CMETA_TRANSFER_INGRESS_FULL;
+    }
+    return VXML_CMETA_TRANSFER_INGRESS_ACCEPTED;
+}
+
 static bool record_termchar_valid(char value) {
     return (value >= '0' && value <= '9') ||
         value == '*' || value == '#' ||
