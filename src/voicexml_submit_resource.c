@@ -545,6 +545,7 @@ static vxml_submit_resource_status multipart_validate(
     size_t metadata = 0u;
     size_t body = 0u;
     size_t segments = 1u; /* final trailer */
+    size_t part_index = 0u;
     size_t index;
     unsigned attempt;
     size_t boundary_size = 0u;
@@ -592,10 +593,15 @@ static vxml_submit_resource_status multipart_validate(
         if (!multipart_quoted_size(
                 field->name, field->name_size, &quoted_name) ||
             !bytes_valid(field->value, field->value_size, true) ||
+            field->value_size > request->max_body_bytes ||
             multipart_name_duplicate(
                 request, field->name, field->name_size,
                 index, 0u))
             return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        if (part_index != 0u &&
+            !checked_add_size(&header_size, 2u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        ++part_index;
         if (!checked_add_size(&header_size, quoted_name) ||
             !checked_add_size(&metadata, header_size) ||
             !checked_add_size(&body, header_size) ||
@@ -630,10 +636,15 @@ static vxml_submit_resource_status multipart_validate(
                 field->media_type,
                 field->media_type_size, false) ||
             field->data == NULL || field->size == 0u ||
+            field->size > request->max_body_bytes ||
             multipart_name_duplicate(
                 request, field->name, field->name_size,
                 request->field_count, index))
             return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        if (part_index != 0u &&
+            !checked_add_size(&header_size, 2u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        ++part_index;
         if (!checked_add_size(&header_size, quoted_name) ||
             !checked_add_size(&header_size, quoted_filename) ||
             !checked_add_size(&header_size, field->media_type_size) ||
