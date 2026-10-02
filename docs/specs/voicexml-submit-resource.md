@@ -102,5 +102,16 @@ one provider attempt.
 For CMeta record results, the caller first borrows the explicit
 `vxml_cmeta_record_result_view_v1` selected by `record@name`, then projects
 that view's `data`, `size`, and `media_type` into one
-`vxml_submit_recording_field_v1`. SubmitResource does not acquire, replace, or
-release that Session-owned recording result.
+`vxml_submit_recording_field_v1`.
+
+VoiceXML 2.1 recognition recordings use the same explicit boundary. The caller
+resolves `application.lastresult$.recording` or a current
+`<field-name>$.recording` through
+`vxml_session_cmeta_recording_shadow()` and projects the returned borrowed
+`vxml_cmeta_recording_ref_view_v1` into one
+`vxml_submit_recording_field_v1`. A stale item alias is rejected before
+SubmitResource is invoked.
+
+SubmitResource does not acquire, replace, or release either Session-owned
+recording result. The segmented provider call remains exactly one POST attempt;
+shadow projection adds no retry path.

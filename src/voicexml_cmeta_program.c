@@ -7360,6 +7360,164 @@ static bool cmeta_value_compatible(
     return cmeta_data_value_kind(target) == value_kind;
 }
 
+static salts_xml_string_view cmeta_trim_expression_view(
+    salts_xml_string_view source) {
+    while (source.size != 0u &&
+           (source.data[0] == ' ' || source.data[0] == '\t' ||
+            source.data[0] == '\r' || source.data[0] == '\n')) {
+        ++source.data;
+        --source.size;
+    }
+    while (source.size != 0u) {
+        const char tail = source.data[source.size - 1u];
+        if (tail != ' ' && tail != '\t' && tail != '\r' && tail != '\n')
+            break;
+        --source.size;
+    }
+    return source;
+}
+
+static bool cmeta_shadow_property(
+    salts_xml_string_view source,
+    const char *property,
+    salts_xml_string_view *out_owner) {
+    const size_t property_size = strlen(property);
+    const size_t suffix_size = 2u + property_size;
+    size_t owner_size;
+    if (out_owner != NULL) *out_owner = (salts_xml_string_view){0};
+    if (source.data == NULL || source.size <= suffix_size)
+        return false;
+    owner_size = source.size - suffix_size;
+    if ((unsigned char)source.data[owner_size] != 0x24u ||
+        source.data[owner_size + 1u] != '.' ||
+        memcmp(
+            source.data + owner_size + 2u,
+            property, property_size) != 0)
+        return false;
+    if (out_owner != NULL)
+        *out_owner =
+            (salts_xml_string_view){source.data, owner_size};
+    return true;
+}
+
+static size_t cmeta_expression_form_from_scopes(
+    const vxml_cmeta_program_data *profile,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    size_t index;
+    if (profile == NULL || (scope_count != 0u && scopes == NULL))
+        return VXML_CMETA_NO_INDEX;
+    for (index = 0u; index < scope_count; ++index) {
+        const size_t scope = scopes[index].scope_id;
+        if (scope < profile->scope_count &&
+            profile->scopes[scope].kind == VXML_CMETA_SCOPE_FORM)
+            return profile->scopes[scope].owner;
+    }
+    return VXML_CMETA_NO_INDEX;
+}
+
+static vxml_status cmeta_lower_recording_scalar_expression(
+    cmeta_program_builder *builder,
+    salts_xml_string_view source,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    vxml_cmeta_expression_row *row,
+    bool *out_lowered) {
+    static const char app_owner[] = "application.lastresult";
+    salts_xml_string_view owner = {0};
+    vxml_cmeta_expression_source_kind app_kind;
+    vxml_cmeta_expression_source_kind field_kind;
+    size_t form_index;
+    size_t offset;
+
+    if (builder == NULL || row == NULL || out_lowered == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_lowered = false;
+    source = cmeta_trim_expression_view(source);
+
+    if (cmeta_shadow_property(
+            source, "recordingsize", &owner)) {
+        app_kind =
+            VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_SIZE;
+        field_kind =
+            VXML_CMETA_EXPRESSION_FIELD_RECORDING_SIZE;
+    } else if (cmeta_shadow_property(
+                   source, "recordingduration", &owner)) {
+        app_kind =
+            VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_DURATION;
+        field_kind =
+            VXML_CMETA_EXPRESSION_FIELD_RECORDING_DURATION;
+    } else {
+        return VXML_OK;
+    }
+
+    if (owner.size == sizeof(app_owner) - 1u &&
+        memcmp(owner.data, app_owner, sizeof(app_owner) - 1u) == 0) {
+        row->source_kind = app_kind;
+        row->value_kind = VXML_CMETA_VALUE_UINT;
+        row->source_field = VXML_CMETA_NO_INDEX;
+        *out_lowered = true;
+        return VXML_OK;
+    }
+
+    if (!cmeta_ascii_ncname(owner))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            row->location,
+            "VoiceXML recording shadow owner must be application.lastresult or a field NCName");
+
+    form_index = cmeta_expression_form_from_scopes(
+        builder->profile, scopes, scope_count);
+    if (form_index == VXML_CMETA_NO_INDEX ||
+        form_index >= builder->profile->form_count ||
+        builder->profile->forms == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            row->location,
+            "VoiceXML input-item recording shadow requires form scope");
+
+    {
+        const vxml_cmeta_form_row *form =
+            &builder->profile->forms[form_index];
+        if (!range_valid(
+                form->first_field, form->field_count,
+                builder->profile->field_count) ||
+            (form->field_count != 0u &&
+             builder->profile->fields == NULL))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                row->location,
+                "VoiceXML field rows are invalid for recording shadow lowering");
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index =
+                form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &builder->profile->fields[field_index];
+            if (field->name != NULL &&
+                field->name_size == owner.size &&
+                memcmp(field->name, owner.data, owner.size) == 0) {
+                row->source_kind = field_kind;
+                row->value_kind = VXML_CMETA_VALUE_UINT;
+                row->source_field = field_index;
+                *out_lowered = true;
+                return VXML_OK;
+            }
+        }
+    }
+
+    return cmeta_program_fail(
+        builder->diagnostic, VXML_SEMANTIC_ERROR,
+        row->location,
+        "VoiceXML recording shadow field name does not exist in the active form");
+}
+
+static vxml_cmeta_value_kind cmeta_expression_value_kind(
+    const vxml_cmeta_expression_row *row) {
+    return row != NULL
+        ? row->value_kind
+        : VXML_CMETA_VALUE_UNDEFINED;
+}
+
 static vxml_status cmeta_append_expression(
     cmeta_program_builder *builder, salts_xml_attribute attribute,
     const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
@@ -7380,7 +7538,27 @@ static vxml_status cmeta_append_expression(
         builder, salts_xml_attribute_value(attribute),
         salts_xml_attribute_location(attribute), &source);
     if (status != VXML_OK) return status;
-    row = &builder->profile->expressions[builder->expression_index];
+    row = &builder->profile->expressions[
+        builder->expression_index];
+    memset(row, 0, sizeof(*row));
+    row->location = salts_xml_attribute_location(attribute);
+    row->source_field = VXML_CMETA_NO_INDEX;
+    if (!condition) {
+        bool lowered = false;
+        status = cmeta_lower_recording_scalar_expression(
+            builder, source.view, scopes, scope_count,
+            row, &lowered);
+        if (status != VXML_OK) {
+            cmeta_decoded_value_destroy(&source);
+            return status;
+        }
+        if (lowered) {
+            cmeta_decoded_value_destroy(&source);
+            *out_expression = builder->expression_index++;
+            return VXML_OK;
+        }
+    }
+    row->source_kind = VXML_CMETA_EXPRESSION_GENERIC;
     status = condition
         ? vxml_cmeta_expr_compile_condition(
             &row->program, source.view.data, source.view.size,
@@ -7407,8 +7585,10 @@ static vxml_status cmeta_append_expression(
         }
         return status;
     }
-    row->location = salts_xml_attribute_location(attribute);
-    scratch_bytes = vxml_cmeta_expr_program_scratch_bytes(&row->program);
+    row->value_kind =
+        vxml_cmeta_expr_program_value_kind(&row->program);
+    scratch_bytes =
+        vxml_cmeta_expr_program_scratch_bytes(&row->program);
     if (scratch_bytes > builder->profile->expression_scratch_bytes)
         builder->profile->expression_scratch_bytes = scratch_bytes;
     *out_expression = builder->expression_index++;
@@ -7630,9 +7810,9 @@ static vxml_status cmeta_compile_declaration_expression(
     if (!cmeta_value_compatible(
             builder->profile->scopes[declaration->scope]
                 .schema.slots[declaration->slot].value,
-            vxml_cmeta_expr_program_value_kind(
+            cmeta_expression_value_kind(
                 &builder->profile->expressions[
-                    declaration->expression].program)))
+                    declaration->expression])))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             salts_xml_attribute_location(expression),
@@ -8001,9 +8181,9 @@ static vxml_status cmeta_lower_simple_action(
             }
             if (!cmeta_value_compatible(
                     slot->value,
-                    vxml_cmeta_expr_program_value_kind(
+                    cmeta_expression_value_kind(
                         &builder->profile->expressions[
-                            action->expression].program))) {
+                            action->expression]))) {
                 cmeta_decoded_value_destroy(&decoded_name);
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
@@ -8032,9 +8212,9 @@ static vxml_status cmeta_lower_simple_action(
             if (status != VXML_OK) return status;
             if (!cmeta_value_compatible(
                     builder->profile->locations[action->target].value,
-                    vxml_cmeta_expr_program_value_kind(
+                    cmeta_expression_value_kind(
                         &builder->profile->expressions[
-                            action->expression].program)))
+                            action->expression])))
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(expression),

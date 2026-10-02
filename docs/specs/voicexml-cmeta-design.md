@@ -428,3 +428,49 @@ VoiceXML-specific lowering for `application.lastresult$.recording`,
 `recordingsize`, `recordingduration`, and matching input-item shadow
 properties is a separate #50 slice over the explicit Session-owned result.
 
+## VoiceXML 2.1 recorded-utterance shadow projection
+
+Issue #211 projects the Session-owned recognition result into the standard
+VoiceXML 2.1 shadow surface without adding `$` to the generic CMeta grammar.
+
+Only complete scalar expressions are lowered specially:
+
+```text
+application.lastresult$.recordingsize
+application.lastresult$.recordingduration
+<field-name>$.recordingsize
+<field-name>$.recordingduration
+```
+
+`recordingsize` is exposed as an unsigned byte count.
+`recordingduration` is exposed as an unsigned millisecond count. A compound
+expression such as `application.lastresult$.recordingsize + 1` is not rewritten;
+it reaches the generic CMeta lexer and remains invalid. This keeps the CMeta
+language contract unchanged.
+
+A field `filled` handler executes before the recognition transaction commits,
+so scalar shadow evaluation first consults the accepted generation's WRITING
+mailbox. After commit, application metadata comes from the Session-owned
+last-result and field metadata comes from a per-field scalar snapshot.
+
+The recording object itself is never coerced to a CMeta string or byte-array.
+The public APIs
+
+```c
+vxml_session_cmeta_recording_shadow_value(...)
+vxml_session_cmeta_recording_shadow(...)
+```
+
+resolve the exact standard paths. The first returns UINT/UNDEFINED scalar
+metadata. The second returns a borrowed `vxml_cmeta_recording_ref_view_v1`
+for `application.lastresult$.recording` or `<field-name>$.recording`.
+
+There is still exactly one media owner. Each committed recognition advances a
+last-result generation. Field size/duration snapshots may remain after a later
+recognition, but an old field recording alias is rejected once its generation
+no longer matches the current Session-owned recording. `clear` removes the
+field snapshot transactionally; a field cleared from its own `filled` handler
+does not get a shadow re-created after commit. Session close releases the
+current owner lease exactly once and invalidates every borrowed recording
+reference.
+
