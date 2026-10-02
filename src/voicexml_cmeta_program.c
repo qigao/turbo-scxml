@@ -3769,7 +3769,6 @@ static vxml_status cmeta_measure_transfer(
     const salts_xml_attribute aai = cmeta_attribute(transfer, "aai");
     const salts_xml_attribute aaiexpr =
         cmeta_attribute(transfer, "aaiexpr");
-    const salts_xml_attribute type = cmeta_attribute(transfer, "type");
     vxml_cmeta_transfer_mode mode = VXML_CMETA_TRANSFER_BLIND;
     bool has_connect_timeout = false;
     bool has_maxtime = false;
@@ -6834,6 +6833,7 @@ static vxml_status cmeta_compile_transfer_schema(
     vxml_cmeta_transfer_row *out) {
     const salts_xml_attribute dest = cmeta_attribute(transfer, "dest");
     const salts_xml_attribute bridge = cmeta_attribute(transfer, "bridge");
+    const salts_xml_attribute type = cmeta_attribute(transfer, "type");
     const salts_xml_attribute connecttimeout =
         cmeta_attribute(transfer, "connecttimeout");
     const salts_xml_attribute maxtime =
