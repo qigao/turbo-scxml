@@ -138,6 +138,15 @@ bool vxml_cmeta_transfer_result_name(
     vxml_cmeta_transfer_result result,
     vxml_cmeta_name_view *out);
 
+typedef struct vxml_cmeta_fetchaudio_policy {
+    const char *uri;
+    size_t uri_size;
+    bool has_delay;
+    uint64_t delay_us;
+    bool has_minimum;
+    uint64_t minimum_us;
+} vxml_cmeta_fetchaudio_policy;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
@@ -165,6 +174,8 @@ typedef struct vxml_cmeta_form_row {
     size_t grammar_src_size;
     size_t grammar_expression;
     uint64_t grammar_required_capabilities;
+
+    vxml_cmeta_fetchaudio_policy fetchaudio;
 
     /* VoiceXML 2.1 form-scoped recorded-utterance policy. */
     bool record_utterance;
@@ -386,6 +397,7 @@ typedef struct vxml_cmeta_action_row {
     size_t event_name_size;
     const char *navigation_uri;
     size_t navigation_uri_size;
+    vxml_cmeta_fetchaudio_policy fetchaudio;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
 
@@ -424,6 +436,7 @@ static inline bool vxml_cmeta_event_token_valid(
 
 typedef struct vxml_cmeta_program_data {
     const cmeta_data_desc *root;
+    vxml_cmeta_fetchaudio_policy document_fetchaudio;
     const cmeta_data_desc **semantic_data;
     size_t semantic_data_count;
     vxml_cmeta_scope_row *scopes;
@@ -832,6 +845,7 @@ typedef struct vxml_cmeta_session_data {
     size_t terminal_event_size;
     const char *pending_navigation_uri;
     size_t pending_navigation_uri_size;
+    vxml_cmeta_fetchaudio_policy pending_navigation_fetchaudio;
     bool exit_requested;
 } vxml_cmeta_session_data;
 
