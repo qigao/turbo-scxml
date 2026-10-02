@@ -2008,8 +2008,8 @@ static vxml_status evaluate_mark_shadow_expression(
         if (name == NULL || name_size == 0u)
             return VXML_INVALID_STRUCTURE;
         out_value->kind = VXML_CMETA_VALUE_STRING;
-        out_value->data.string =
-            (vxml_cmeta_name_view){name, name_size};
+        out_value->data.string.data = name;
+        out_value->data.string.size = name_size;
     } else {
         out_value->kind = VXML_CMETA_VALUE_UINT;
         out_value->data.uint_value =
@@ -8008,8 +8008,8 @@ vxml_status vxml_session_cmeta_mark_shadow_value(
         if (name == NULL || name_size == 0u)
             return VXML_INVALID_STRUCTURE;
         out_value->kind = VXML_CMETA_VALUE_STRING;
-        out_value->data.string =
-            (vxml_cmeta_name_view){name, name_size};
+        out_value->data.string.data = name;
+        out_value->data.string.size = name_size;
     } else {
         out_value->kind = VXML_CMETA_VALUE_UINT;
         out_value->data.uint_value =
