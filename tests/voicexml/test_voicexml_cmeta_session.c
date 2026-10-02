@@ -13114,4 +13114,510 @@ spec("VoiceXML CMeta session execution") {
         session_text_destroy(&root.text);
     }
 
+
+    it("publishes timed dynamic mark results on completion and snapshots filled fields") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'>"
+            "<prompt><mark nameexpr='text'/>one</prompt>"
+            "<grammar type='application/srgs+xml' src='v.grxml'/>"
+            "</field>"
+            "<field name='other'>"
+            "<prompt>two</prompt>"
+            "<grammar type='application/srgs+xml' src='o.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u},
+            {"other", sizeof("other") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_mark_progress_v2 progress = {
+            .abi_version = VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_prompt_mark_progress_v2)};
+        vxml_cmeta_prompt_media_completion_v2 media_completion = {
+            .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v2),
+            .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED,
+            .failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE};
+        vxml_cmeta_collect_request_v1 collect_request = {0};
+        vxml_cmeta_collect_completion_v1 collect_completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v1),
+            .data = &cmeta_data_int};
+        vxml_cmeta_value_view value_view = {0};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        int value = 17;
+        bool progressed = false;
+
+        memcpy(root.text.bytes, "queued_mark", sizeof("queued_mark") - 1u);
+        root.text.size = sizeof("queued_mark") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        progress.generation = media_probe.generation;
+        progress.segment_index = 0u;
+        progress.playback_elapsed_ms = UINT64_C(100);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+
+        memset(root.text.bytes, 'x', root.text.size);
+        media_completion.generation = media_probe.generation;
+        media_completion.playback_elapsed_ms = UINT64_C(90);
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete_v2(
+                &session, &media_completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT);
+        media_completion.playback_elapsed_ms = UINT64_C(145);
+        media_probe.active = false;
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete_v2(
+                &session, &media_completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_STALE);
+        check_equal(
+            vxml_session_cmeta_prompt_media_run_ready(
+                &session, &progressed, &outcome),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(outcome, VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED);
+
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.markname",
+                sizeof("application.lastresult$.markname") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value_view.data.string.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                value_view.data.string.data,
+                "queued_mark", sizeof("queued_mark") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.marktime",
+                sizeof("application.lastresult$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(45));
+
+        check_equal(
+            vxml_session_cmeta_collect_request(
+                &session, &collect_request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session),
+            VXML_OK);
+        collect_completion.generation = collect_request.generation;
+        collect_completion.value = &value;
+        collect_probe.active = false;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete(
+                &session, &collect_completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        progressed = false;
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "value$.markname",
+                sizeof("value$.markname") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value_view.data.string.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "value$.marktime",
+                sizeof("value$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(45));
+
+        /*
+         * The second prompt has no MARK. A timed V2 completion replaces
+         * application lastresult with undefined mark metadata, but the
+         * already-filled first field retains its snapshot.
+         */
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        media_completion.generation = media_probe.generation;
+        media_completion.playback_elapsed_ms = UINT64_C(20);
+        media_probe.active = false;
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete_v2(
+                &session, &media_completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        progressed = false;
+        check_equal(
+            vxml_session_cmeta_prompt_media_run_ready(
+                &session, &progressed, &outcome),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.markname",
+                sizeof("application.lastresult$.markname") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UNDEFINED);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "value$.marktime",
+                sizeof("value$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(45));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&root.text);
+    }
+
+    it("publishes timed barge results and exposes pending field mark shadows in filled") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt bargein='true' bargeintype='speech'>"
+            "<mark name='first'/>x<mark name='second'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "<filled>"
+            "<assign name='total' expr='value$.marktime'/>"
+            "<exit expr='application.lastresult$.markname'/>"
+            "</filled></field></form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_mark_progress_v2 progress = {
+            .abi_version = VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_prompt_mark_progress_v2)};
+        vxml_cmeta_prompt_barge_v2 barge = {
+            .abi_version = VXML_CMETA_PROMPT_BARGE_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_prompt_barge_v2),
+            .signal_type = VXML_CMETA_PROMPT_BARGEIN_SPEECH};
+        vxml_cmeta_collect_request_v1 collect_request = {0};
+        vxml_cmeta_collect_completion_v1 collect_completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v1),
+            .data = &cmeta_data_int};
+        vxml_cmeta_value_view value_view = {0};
+        vxml_cmeta_name_view exit_name = {0};
+        vxml_cmeta_value_view exit_value = {0};
+        int value = 9;
+        bool progressed = false;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+
+        progress.generation = media_probe.generation;
+        progress.segment_index = 0u;
+        progress.playback_elapsed_ms = UINT64_C(100);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        progress.segment_index = 2u;
+        progress.playback_elapsed_ms = UINT64_C(90);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER);
+        progress.playback_elapsed_ms = UINT64_C(120);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+
+        barge.collect_generation = media_probe.generation;
+        barge.playback_elapsed_ms = UINT64_C(110);
+        check_equal(
+            vxml_session_cmeta_prompt_media_barge_in_v2(
+                &session, &barge),
+            VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT);
+        check_equal(media_probe.cancel_calls, (size_t)0u);
+        check_true(media_probe.active);
+        barge.playback_elapsed_ms = UINT64_C(155);
+        check_equal(
+            vxml_session_cmeta_prompt_media_barge_in_v2(
+                &session, &barge),
+            VXML_CMETA_PROMPT_BARGE_CANCELED);
+        check_equal(media_probe.cancel_calls, (size_t)1u);
+
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.markname",
+                sizeof("application.lastresult$.markname") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value_view.data.string.size, sizeof("second") - 1u);
+        check_equal(
+            memcmp(
+                value_view.data.string.data,
+                "second", sizeof("second") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.marktime",
+                sizeof("application.lastresult$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(35));
+
+        check_equal(
+            vxml_session_cmeta_collect_request(
+                &session, &collect_request),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session),
+            VXML_OK);
+        collect_completion.generation = collect_request.generation;
+        collect_completion.value = &value;
+        collect_probe.active = false;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete(
+                &session, &collect_completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "total", sizeof("total") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(35));
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &exit_name, &exit_value),
+            VXML_OK);
+        check_equal(exit_value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(exit_value.data.string.size, sizeof("second") - 1u);
+        check_equal(
+            memcmp(
+                exit_value.data.string.data,
+                "second", sizeof("second") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "value$.marktime",
+                sizeof("value$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UINT);
+        check_equal(value_view.data.uint_value, UINT64_C(35));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("does not fabricate mark timing from V1 terminal observations") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark name='legacy'/>one</prompt>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_mark_progress_v2 progress = {
+            .abi_version = VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2,
+            .struct_size = sizeof(vxml_cmeta_prompt_mark_progress_v2),
+            .playback_elapsed_ms = UINT64_C(100)};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        vxml_cmeta_value_view value_view = {0};
+        bool progressed = false;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        progress.generation = media_probe.generation;
+        progress.segment_index = 0u;
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark_v2(
+                &session, &progress),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        completion.generation = media_probe.generation;
+        media_probe.active = false;
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete(
+                &session, &completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_run_ready(
+                &session, &progressed, &outcome),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.markname",
+                sizeof("application.lastresult$.markname") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UNDEFINED);
+        check_equal(
+            vxml_session_cmeta_mark_shadow_value(
+                &session,
+                "application.lastresult$.marktime",
+                sizeof("application.lastresult$.marktime") - 1u,
+                &value_view),
+            VXML_OK);
+        check_equal(value_view.kind, VXML_CMETA_VALUE_UNDEFINED);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
 }
