@@ -3691,6 +3691,58 @@ static vxml_status cmeta_measure_record(
     return VXML_OK;
 }
 
+static vxml_status cmeta_transfer_mode_attributes(
+    salts_xml_attribute bridge,
+    salts_xml_attribute type,
+    bool version_21,
+    vxml_cmeta_transfer_mode *out_mode,
+    vxml_diagnostic *diagnostic) {
+    bool bridge_value = false;
+    vxml_status status;
+    if (out_mode == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_mode = VXML_CMETA_TRANSFER_BLIND;
+
+    if (type.impl != NULL) {
+        if (!version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(type),
+                "VoiceXML transfer type requires version 2.1");
+        if (bridge.impl != NULL)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(type),
+                "VoiceXML transfer bridge and type are mutually exclusive");
+        if (cmeta_decoded_equal(
+                salts_xml_attribute_value(type), "blind"))
+            *out_mode = VXML_CMETA_TRANSFER_BLIND;
+        else if (cmeta_decoded_equal(
+                     salts_xml_attribute_value(type), "bridge"))
+            *out_mode = VXML_CMETA_TRANSFER_BRIDGE;
+        else if (cmeta_decoded_equal(
+                     salts_xml_attribute_value(type),
+                     "consultation"))
+            *out_mode = VXML_CMETA_TRANSFER_CONSULTATION;
+        else
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(type),
+                "VoiceXML transfer type must be blind, bridge, or consultation");
+        return VXML_OK;
+    }
+
+    status = cmeta_record_bool(
+        bridge, false,
+        "VoiceXML transfer bridge must be true or false",
+        &bridge_value, diagnostic);
+    if (status != VXML_OK) return status;
+    *out_mode = bridge_value
+        ? VXML_CMETA_TRANSFER_BRIDGE
+        : VXML_CMETA_TRANSFER_BLIND;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_transfer(
     salts_xml_node transfer,
     const vxml_cmeta_compile_options_v1 *options,
@@ -3717,7 +3769,7 @@ static vxml_status cmeta_measure_transfer(
     const salts_xml_attribute aaiexpr =
         cmeta_attribute(transfer, "aaiexpr");
     const salts_xml_attribute type = cmeta_attribute(transfer, "type");
-    bool bridge_value = false;
+    vxml_cmeta_transfer_mode mode = VXML_CMETA_TRANSFER_BLIND;
     bool has_connect_timeout = false;
     bool has_maxtime = false;
     uint64_t connect_timeout_us = UINT64_C(0);
@@ -3756,16 +3808,9 @@ static vxml_status cmeta_measure_transfer(
                 ? salts_xml_attribute_location(aai)
                 : salts_xml_attribute_location(aaiexpr),
             "VoiceXML transfer AAI is deferred in the bounded CMeta profile");
-    if (type.impl != NULL)
-        return cmeta_program_fail(
-            diagnostic, VXML_UNSUPPORTED_FEATURE,
-            salts_xml_attribute_location(type),
-            "VoiceXML 2.1 transfer type is implemented by #50");
-
-    status = cmeta_record_bool(
-        bridge, false,
-        "VoiceXML transfer bridge must be true or false",
-        &bridge_value, diagnostic);
+    status = cmeta_transfer_mode_attributes(
+        bridge, type, measurement->version_21,
+        &mode, diagnostic);
     if (status != VXML_OK) return status;
 
     if (!cmeta_decode_entities(
