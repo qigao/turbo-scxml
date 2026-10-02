@@ -101,6 +101,9 @@ static_assert(
         vxml_cmeta_collect_utterance_result_view_v1>::value,
     "collect utterance result view must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_recording_ref_view_v1>::value,
+    "recording shadow ref view must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_menu_choice_v1>::value,
     "menu choice must remain C-compatible");
 static_assert(
@@ -184,6 +187,7 @@ int main() {
     vxml_cmeta_collect_completion_v2 collect_completion_v2{};
     vxml_cmeta_collect_completion_v3 collect_completion_v3{};
     vxml_cmeta_collect_utterance_result_view_v1 collect_utterance{};
+    vxml_cmeta_recording_ref_view_v1 recording_shadow{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
@@ -227,6 +231,10 @@ int main() {
         &vxml_session_cmeta_collect_try_complete_v3;
     auto query_collect_utterance =
         &vxml_session_cmeta_collect_utterance_result;
+    auto query_recording_shadow_value =
+        &vxml_session_cmeta_recording_shadow_value;
+    auto query_recording_shadow =
+        &vxml_session_cmeta_recording_shadow;
     auto query_menu = &vxml_session_cmeta_menu_collect_request;
     auto query_menu_v2 = &vxml_session_cmeta_menu_collect_request_v2;
     auto query_initial = &vxml_session_cmeta_initial_collect_request;
@@ -329,6 +337,8 @@ int main() {
         query_collect_v2 == nullptr ||
         complete_collect_v3 == nullptr ||
         query_collect_utterance == nullptr ||
+        query_recording_shadow_value == nullptr ||
+        query_recording_shadow == nullptr ||
         query_menu == nullptr || query_menu_v2 == nullptr ||
         query_initial == nullptr || complete_menu == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
@@ -385,6 +395,9 @@ int main() {
     collect_utterance.abi_version =
         VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1;
     collect_utterance.struct_size = sizeof(collect_utterance);
+    recording_shadow.abi_version =
+        VXML_CMETA_RECORDING_REF_VIEW_ABI_V1;
+    recording_shadow.struct_size = sizeof(recording_shadow);
     if (collect_request.abi_version != 0u ||
         collect_request.has_timeout ||
         collect_request.timeout_us != UINT64_C(0) ||
@@ -400,6 +413,8 @@ int main() {
         collect_completion_v3.slot_count != 1u ||
         collect_utterance.abi_version !=
             VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1 ||
+        recording_shadow.abi_version !=
+            VXML_CMETA_RECORDING_REF_VIEW_ABI_V1 ||
         VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE == 0u ||
         VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE == 0u ||
         menu_request.abi_version !=
