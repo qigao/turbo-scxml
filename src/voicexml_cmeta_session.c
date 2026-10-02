@@ -1165,6 +1165,8 @@ static bool transaction_begin(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
+    session->pending_navigation_uri = NULL;
+    session->pending_navigation_uri_size = 0u;
     transaction_reset(session, program);
     if (!root_storage_copy(
             &session->staged_root, &session->committed_root, program))
@@ -1208,6 +1210,31 @@ static vxml_status session_fail(
     session->state = VXML_SESSION_FAILED;
     session->error = status;
     return status;
+}
+
+static vxml_status publish_pending_navigation(
+    vxml_session_impl *impl,
+    vxml_cmeta_session_data *profile) {
+    if (impl == NULL || profile == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (profile->pending_navigation_uri == NULL)
+        return VXML_OK;
+    if (profile->pending_navigation_uri_size == 0u ||
+        memchr(
+            profile->pending_navigation_uri, '\0',
+            profile->pending_navigation_uri_size) != NULL)
+        return VXML_INVALID_STRUCTURE;
+    impl->navigation_uri =
+        profile->pending_navigation_uri;
+    impl->navigation_uri_size =
+        profile->pending_navigation_uri_size;
+    impl->navigation_fetchaudio_uri = NULL;
+    impl->navigation_fetchaudio_uri_size = 0u;
+    profile->pending_navigation_uri = NULL;
+    profile->pending_navigation_uri_size = 0u;
+    impl->state = VXML_SESSION_NAVIGATING;
+    impl->error = VXML_OK;
+    return VXML_OK;
 }
 
 static bool consume_step(vxml_cmeta_session_data *session) {
@@ -2288,6 +2315,25 @@ static vxml_status execute_rethrow(
     return VXML_OK;
 }
 
+static vxml_status execute_goto(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_action_row *action) {
+    if (session == NULL || action == NULL ||
+        action->kind != VXML_CMETA_ACTION_GOTO ||
+        action->navigation_uri == NULL ||
+        action->navigation_uri_size == 0u ||
+        memchr(
+            action->navigation_uri, '\0',
+            action->navigation_uri_size) != NULL ||
+        session->pending_navigation_uri != NULL)
+        return VXML_INVALID_STRUCTURE;
+    session->pending_navigation_uri =
+        action->navigation_uri;
+    session->pending_navigation_uri_size =
+        action->navigation_uri_size;
+    return VXML_OK;
+}
+
 static vxml_status execute_reprompt(
     vxml_cmeta_session_data *session) {
     if (session == NULL || !session->event_dispatch_active)
@@ -2448,6 +2494,12 @@ static vxml_status execute_action_range(
                     execute_reprompt(session);
                 if (status != VXML_OK) return status;
                 break;
+            }
+            case VXML_CMETA_ACTION_GOTO: {
+                const vxml_status status =
+                    execute_goto(session, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
             }
             default:
                 return VXML_INVALID_STRUCTURE;
@@ -3719,6 +3771,13 @@ static vxml_status cmeta_session_start_profile_at_entry(
             }
         }
         transaction_commit(profile, program);
+        if (profile->pending_navigation_uri != NULL) {
+            status = publish_pending_navigation(
+                session, profile);
+            exit_snapshot_destroy(&profile->pending_exit);
+            return status != VXML_OK
+                ? session_fail(session, status) : VXML_OK;
+        }
         if (profile->exit_requested) {
             terminal_publish(profile);
             session->state = VXML_SESSION_EXITED;
@@ -5381,7 +5440,8 @@ static vxml_status execute_filled_process(
             status = execute_filled_handler(
                 profile, program, form,
                 &program->filled[selected->filled]);
-            if (status != VXML_OK || profile->exit_requested)
+            if (status != VXML_OK || profile->exit_requested ||
+                profile->pending_navigation_uri != NULL)
                 return status;
         }
     }
@@ -5404,7 +5464,8 @@ static vxml_status execute_filled_process(
         if (!run) continue;
         status = execute_filled_handler(
             profile, program, form, filled);
-        if (status != VXML_OK || profile->exit_requested)
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
             return status;
     }
     return VXML_OK;
@@ -5442,7 +5503,8 @@ static vxml_status execute_subdialog_filled_process(
             return VXML_INVALID_STRUCTURE;
         status = execute_filled_handler(
             profile, program, form, filled);
-        if (status != VXML_OK || profile->exit_requested)
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
             return status;
     }
 
@@ -5465,7 +5527,8 @@ static vxml_status execute_subdialog_filled_process(
         if (!run) continue;
         status = execute_filled_handler(
             profile, program, form, filled);
-        if (status != VXML_OK || profile->exit_requested)
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
             return status;
     }
     return VXML_OK;
@@ -5645,7 +5708,8 @@ static vxml_status execute_initial_filled_process(
         status = execute_filled_handler(
             profile, program, form,
             &program->filled[field->filled]);
-        if (status != VXML_OK || profile->exit_requested)
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
             return status;
     }
 
@@ -5667,7 +5731,8 @@ static vxml_status execute_initial_filled_process(
         if (!run) continue;
         status = execute_filled_handler(
             profile, program, form, filled);
-        if (status != VXML_OK || profile->exit_requested)
+        if (status != VXML_OK || profile->exit_requested ||
+            profile->pending_navigation_uri != NULL)
             return status;
     }
     return VXML_OK;
@@ -5986,6 +6051,13 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
 
+        if (profile->pending_navigation_uri != NULL) {
+            status = publish_pending_navigation(
+                impl, profile);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            return VXML_OK;
+        }
         if (profile->exit_requested) {
             terminal_publish(profile);
             impl->state = VXML_SESSION_EXITED;
@@ -6239,6 +6311,13 @@ static vxml_status execute_event_handler(
         return status;
     }
     transaction_commit(profile, program);
+    if (profile->pending_navigation_uri != NULL) {
+        status = publish_pending_navigation(
+            impl, profile);
+        profile->handler_reprompt_requested = false;
+        exit_snapshot_destroy(&profile->pending_exit);
+        return status;
+    }
     if (profile->handler_reprompt_requested)
         profile->reprompt_requested = true;
     profile->handler_reprompt_requested = false;
@@ -6737,6 +6816,13 @@ vxml_status vxml_session_cmeta_subdialog_run_ready(
         subdialog_mailbox_payload_reset(mailbox);
         profile->active_subdialog = VXML_CMETA_NO_INDEX;
 
+        if (profile->pending_navigation_uri != NULL) {
+            status = publish_pending_navigation(
+                impl, profile);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            return VXML_OK;
+        }
         if (profile->exit_requested) {
             terminal_publish(profile);
             impl->state = VXML_SESSION_EXITED;

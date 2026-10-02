@@ -119,7 +119,9 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CMETA_MISSING)
 elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY)
   set(TURBOSCXML_INSTALL_COMPONENTS VoiceXML)
 elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
-  set(TURBOSCXML_INSTALL_COMPONENTS VoiceXMLCMeta)
+  set(TURBOSCXML_INSTALL_COMPONENTS
+    VoiceXMLCMeta
+    VoiceXMLSubdialogOwner)
 elseif(NOT TURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS)
   set(TURBOSCXML_INSTALL_COMPONENTS SCXML CCXML)
 endif()
@@ -267,6 +269,8 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
   foreach(TURBOSCXML_EXPECTED_TARGET IN ITEMS
       TurboSCXML::VoiceXML
       TurboSCXML::VoiceXMLCMeta
+      TurboSCXML::VoiceXMLSubdialogOwner
+      TurboSCXML::VoiceXMLDocumentStore
       TurboSCXML::_CMetaRuntime
       Salts::XmlParser
       Salts::CMeta
@@ -300,6 +304,16 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
       "${TURBOSCXML_VOICEXML_CMETA_LINKS}")
   endif()
 
+  get_target_property(
+    TURBOSCXML_VOICEXML_SUBDIALOG_OWNER_LINKS
+    TurboSCXML::VoiceXMLSubdialogOwner INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_VOICEXML_SUBDIALOG_OWNER_LINKS STREQUAL
+     "TurboSCXML::VoiceXMLCMeta;TurboSCXML::VoiceXMLDocumentStore")
+    message(FATAL_ERROR
+      "Unexpected VoiceXMLSubdialogOwner link closure: "
+      "${TURBOSCXML_VOICEXML_SUBDIALOG_OWNER_LINKS}")
+  endif()
+
   set(TURBOSCXML_VOICEXML_CMETA_CONSUMER_SOURCES
     voicexml_cmeta_descriptor_root.c
     voicexml_cmeta_descriptor_peer.c)
@@ -320,6 +334,22 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
   target_link_libraries(
     turboscxml_voicexml_cmeta_install_consumer_cpp
     PRIVATE TurboSCXML::VoiceXMLCMeta)
+
+  add_executable(turboscxml_voicexml_subdialog_owner_install_consumer
+    voicexml_subdialog_owner_main.c)
+  target_compile_features(
+    turboscxml_voicexml_subdialog_owner_install_consumer PRIVATE c_std_11)
+  target_link_libraries(
+    turboscxml_voicexml_subdialog_owner_install_consumer
+    PRIVATE TurboSCXML::VoiceXMLSubdialogOwner)
+
+  add_executable(turboscxml_voicexml_subdialog_owner_install_consumer_cpp
+    voicexml_subdialog_owner_main.cpp)
+  target_compile_features(
+    turboscxml_voicexml_subdialog_owner_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(
+    turboscxml_voicexml_subdialog_owner_install_consumer_cpp
+    PRIVATE TurboSCXML::VoiceXMLSubdialogOwner)
 else()
   add_executable(turboscxml_install_consumer main.c)
   target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)

@@ -567,7 +567,8 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "if") || cmeta_node_named(node, "elseif") ||
         cmeta_node_named(node, "else") || cmeta_node_named(node, "exit") ||
         cmeta_node_named(node, "return") ||
-        cmeta_node_named(node, "disconnect");
+        cmeta_node_named(node, "disconnect") ||
+        cmeta_node_named(node, "goto");
 }
 
 static bool cmeta_event_options_valid(
@@ -1037,7 +1038,8 @@ static vxml_status cmeta_measure_executable(
          !cmeta_node_named(node, "disconnect") &&
          !cmeta_node_named(node, "throw") &&
          !cmeta_node_named(node, "rethrow") &&
-         !cmeta_node_named(node, "reprompt")))
+         !cmeta_node_named(node, "reprompt") &&
+         !cmeta_node_named(node, "goto")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -1054,6 +1056,35 @@ static vxml_status cmeta_measure_executable(
     } else if (cmeta_node_named(node, "clear")) {
         static const char *const allowed[] = {"namelist"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
+    } else if (cmeta_node_named(node, "goto")) {
+        static const char *const allowed[] = {"next", "nextexpr"};
+        const salts_xml_attribute next =
+            cmeta_attribute(node, "next");
+        const salts_xml_attribute nextexpr =
+            cmeta_attribute(node, "nextexpr");
+        size_t decoded_size = 0u;
+        status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
+        if (status == VXML_OK && nextexpr.impl != NULL)
+            status = cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(nextexpr),
+                "dynamic VoiceXML goto nextexpr is not enabled in the bounded CMeta profile");
+        if (status == VXML_OK && next.impl == NULL)
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML goto requires literal next");
+        if (status == VXML_OK &&
+            (!cmeta_decode_entities(
+                 salts_xml_attribute_value(next),
+                 NULL, 0u, &decoded_size) ||
+             decoded_size == 0u))
+            status = cmeta_program_fail(
+                diagnostic,
+                decoded_size == 0u
+                    ? VXML_INVALID_STRUCTURE : VXML_XML_ERROR,
+                salts_xml_attribute_location(next),
+                "VoiceXML goto next is empty or contains an invalid XML reference");
     } else if (cmeta_node_named(node, "if")) {
         static const char *const allowed[] = {"cond"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
@@ -1112,6 +1143,11 @@ static vxml_status cmeta_measure_executable(
     if (cmeta_node_named(node, "throw")) {
         status = cmeta_measure_name(
             cmeta_attribute(node, "event"), measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (cmeta_node_named(node, "goto")) {
+        status = cmeta_measure_name(
+            cmeta_attribute(node, "next"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     if (!cmeta_node_named(node, "if") &&
@@ -6613,6 +6649,26 @@ static vxml_status cmeta_lower_simple_action(
                     &action->first_location, &action->location_count);
                 if (status != VXML_OK) return status;
             }
+    } else if (cmeta_node_named(node, "goto")) {
+            const salts_xml_attribute next =
+                cmeta_attribute(node, "next");
+            action->kind = VXML_CMETA_ACTION_GOTO;
+            if (next.impl == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(node),
+                    "VoiceXML goto target changed between compiler passes");
+            status = cmeta_retain_decoded_view(
+                builder, salts_xml_attribute_value(next),
+                salts_xml_attribute_location(next),
+                &action->navigation_uri,
+                &action->navigation_uri_size);
+            if (status != VXML_OK) return status;
+            if (action->navigation_uri_size == 0u)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(next),
+                    "VoiceXML goto next disappeared between compiler passes");
     } else if (cmeta_node_named(node, "exit")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(node, "expr");

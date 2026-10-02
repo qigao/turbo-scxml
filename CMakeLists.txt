@@ -375,6 +375,27 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
       Salts::DataBindXmlAdapter
       Salts::QueryVM
       TurboSCXML::_CMetaRuntime)
+
+  add_library(turbo_voicexml_subdialog_owner STATIC
+    src/voicexml_subdialog_owner.c)
+  add_library(TurboSCXML::VoiceXMLSubdialogOwner ALIAS
+    turbo_voicexml_subdialog_owner)
+  set_target_properties(turbo_voicexml_subdialog_owner PROPERTIES
+    EXPORT_NAME VoiceXMLSubdialogOwner
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_voicexml_subdialog_owner PUBLIC c_std_11)
+  target_compile_options(turbo_voicexml_subdialog_owner
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_voicexml_subdialog_owner
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_voicexml_subdialog_owner
+    PUBLIC
+      TurboSCXML::VoiceXMLCMeta
+      TurboSCXML::VoiceXMLDocumentStore)
 endif()
 
 if(BUILD_TESTING AND TURBOSCXML_ENABLE_VOICEXML_CMETA)
@@ -542,6 +563,15 @@ if(BUILD_TESTING)
       message(FATAL_ERROR
         "TurboSCXML::VoiceXMLCMeta dependency contract changed")
     endif()
+
+    get_target_property(
+      TURBOVOICEXML_SUBDIALOG_OWNER_PUBLIC_LINKS
+      turbo_voicexml_subdialog_owner INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOVOICEXML_SUBDIALOG_OWNER_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::VoiceXMLCMeta;TurboSCXML::VoiceXMLDocumentStore")
+      message(FATAL_ERROR
+        "TurboSCXML::VoiceXMLSubdialogOwner dependency contract changed")
+    endif()
   endif()
 
   get_target_property(
@@ -651,7 +681,9 @@ install(TARGETS turbo_voicexml
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
-  install(TARGETS turbo_voicexml_cmeta
+  install(TARGETS
+      turbo_voicexml_cmeta
+      turbo_voicexml_subdialog_owner
     EXPORT TurboSCXMLVoiceXMLCMetaTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -704,7 +736,9 @@ install(
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
   install(
-    FILES include/voicexml/cmeta.h
+    FILES
+      include/voicexml/cmeta.h
+      include/voicexml/subdialog_owner.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 endif()
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)

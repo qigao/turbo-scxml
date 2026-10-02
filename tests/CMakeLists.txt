@@ -99,6 +99,19 @@ target_include_directories(voicexml_cmeta_session_test PRIVATE
 target_link_libraries(voicexml_cmeta_session_test PRIVATE
   TurboSCXML::VoiceXMLCMeta Salts::TinyTest)
 add_test(NAME voicexml_cmeta_session_test COMMAND voicexml_cmeta_session_test)
+
+add_executable(
+  voicexml_subdialog_owner_test voicexml_subdialog_owner_test.c)
+target_compile_features(voicexml_subdialog_owner_test PRIVATE c_std_11)
+set_target_properties(voicexml_subdialog_owner_test PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_link_libraries(voicexml_subdialog_owner_test PRIVATE
+  TurboSCXML::VoiceXMLSubdialogOwner
+  Salts::TinyTest)
+add_test(NAME voicexml_subdialog_owner_test
+  COMMAND voicexml_subdialog_owner_test)
 endif()
 
 add_executable(voicexml_program_test voicexml/test_voicexml_program.c)
