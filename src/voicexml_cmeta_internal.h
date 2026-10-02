@@ -163,6 +163,7 @@ typedef struct vxml_cmeta_form_row {
     size_t grammar_type_size;
     const char *grammar_src;
     size_t grammar_src_size;
+    size_t grammar_expression;
     uint64_t grammar_required_capabilities;
 
     /* VoiceXML 2.1 form-scoped recorded-utterance policy. */
@@ -238,6 +239,7 @@ typedef struct vxml_cmeta_field_row {
     size_t grammar_type_size;
     const char *grammar_src;
     size_t grammar_src_size;
+    size_t grammar_expression;
     uint64_t required_capabilities;
     size_t first_prompt;
     size_t prompt_count;
@@ -458,6 +460,7 @@ typedef struct vxml_cmeta_program_data {
     size_t string_size;
     size_t expression_scratch_bytes;
     size_t max_string_bytes;
+    size_t max_grammar_bytes;
     size_t max_conditional_depth;
     size_t max_data_bind_depth;
     size_t max_data_bind_items;
@@ -713,6 +716,8 @@ typedef struct vxml_cmeta_session_data {
     bool collect_in_flight;
     uint64_t collect_quiesced_generation;
     vxml_cmeta_collect_mailbox collect_mailbox;
+    char *collect_dynamic_grammar_uri;
+    size_t collect_dynamic_grammar_uri_capacity;
     size_t max_collect_recording_bytes;
     uint64_t collect_lastresult_generation;
     vxml_cmeta_collect_utterance_result_slot collect_utterance_result;

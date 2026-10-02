@@ -13993,4 +13993,316 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+
+    it("reevaluates field grammar srcexpr for every activation") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='text'/>"
+            "<filled>"
+            "<assign name='text' expr='&quot;two.grxml&quot;'/>"
+            "<clear namelist='value'/>"
+            "</filled>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options =
+            field_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_collect_request_v1 first_request = {0};
+        vxml_cmeta_collect_request_v1 second_request = {0};
+        int recognized = 7;
+        vxml_cmeta_collect_completion_v1 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_collect_completion_v1),
+            .data = &cmeta_data_int,
+            .value = &recognized};
+        bool progressed = false;
+
+        memcpy(root.text.bytes, "one.grxml", sizeof("one.grxml") - 1u);
+        root.text.size = sizeof("one.grxml") - 1u;
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(
+            vxml_session_cmeta_collect_request(
+                &session, &first_request),
+            VXML_OK);
+        check_equal(
+            first_request.grammar_src.size,
+            sizeof("one.grxml") - 1u);
+        check_equal(
+            memcmp(
+                first_request.grammar_src.data,
+                "one.grxml", sizeof("one.grxml") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(strcmp(probe.grammar_src, "one.grxml"), 0);
+        check_equal(
+            vxml_session_cmeta_collect_commit(&session),
+            VXML_OK);
+
+        completion.generation = first_request.generation;
+        probe.active = false;
+        check_equal(
+            vxml_session_cmeta_collect_try_complete(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_collect_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_RUNNING);
+
+        check_equal(
+            vxml_session_cmeta_collect_request(
+                &session, &second_request),
+            VXML_OK);
+        check_true(
+            second_request.generation != first_request.generation);
+        check_equal(
+            second_request.grammar_src.size,
+            sizeof("two.grxml") - 1u);
+        check_equal(
+            memcmp(
+                second_request.grammar_src.data,
+                "two.grxml", sizeof("two.grxml") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(strcmp(probe.grammar_src, "two.grxml"), 0);
+
+        check_equal(
+            vxml_session_cmeta_collect_discard(&session),
+            VXML_OK);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("evaluates mixed-initiative grammar srcexpr in form scope") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<var name='text' expr='&quot;form.grxml&quot;'/>"
+            "<grammar type='application/srgs+xml' srcexpr='text'/>"
+            "<initial/>"
+            "<field name='value'>"
+            "<grammar type='application/srgs+xml' src='field.grxml'/>"
+            "</field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined[] = {
+            {"value", sizeof("value") - 1u}};
+        const vxml_cmeta_compile_options_v1 compile =
+            initial_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe probe = {.prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 adapter =
+            cmeta_collect_adapter(
+                VXML_CMETA_COLLECT_CAP_SRGS_XML |
+                VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        vxml_cmeta_session_options_v1 options =
+            initial_session_options(&root, &adapter, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_initial_collect_request_v1 request = {0};
+
+        memcpy(root.text.bytes, "root.grxml", sizeof("root.grxml") - 1u);
+        root.text.size = sizeof("root.grxml") - 1u;
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(&session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_initial_collect_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(
+            request.grammar_src.size,
+            sizeof("form.grxml") - 1u);
+        check_equal(
+            memcmp(
+                request.grammar_src.data,
+                "form.grxml", sizeof("form.grxml") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_collect_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.initial_prepare_calls, (size_t)1u);
+        check_equal(strcmp(probe.grammar_src, "form.grxml"), 0);
+        check_equal(
+            vxml_session_cmeta_collect_discard(&session),
+            VXML_OK);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid grammar srcexpr language contracts") {
+        static const char v20[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' "
+            "srcexpr='&quot;a.grxml&quot;'/>"
+            "</field></form></vxml>";
+        static const char both[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a.grxml' "
+            "srcexpr='&quot;b.grxml&quot;'/>"
+            "</field></form></vxml>";
+        static const char missing[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml'/>"
+            "</field></form></vxml>";
+        static const char non_string[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='1'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            field_compile_options();
+        vxml_program program = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                v20, sizeof(v20) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                both, sizeof(both) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                missing, sizeof(missing) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_cmeta(
+                non_string, sizeof(non_string) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_SEMANTIC_ERROR);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid dynamic grammar URI before provider admission") {
+        static const char undefined_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='text'/>"
+            "<catch event='error.semantic'><exit/></catch>"
+            "</field></form></vxml>";
+        static const char empty_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='&quot;&quot;'/>"
+            "<catch event='error.semantic'><exit/></catch>"
+            "</field></form></vxml>";
+        static const char large_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<grammar type='application/srgs+xml' "
+            "srcexpr='&quot;0123456789012345678901234567890123456789&quot;'/>"
+            "<catch event='error.semantic'><exit/></catch>"
+            "</field></form></vxml>";
+        const char *cases[] = {
+            undefined_source, empty_source, large_source};
+        const size_t sizes[] = {
+            sizeof(undefined_source) - 1u,
+            sizeof(empty_source) - 1u,
+            sizeof(large_source) - 1u};
+        size_t case_index;
+
+        for (case_index = 0u;
+             case_index < sizeof(cases) / sizeof(cases[0]);
+             ++case_index) {
+            vxml_cmeta_compile_options_v1 compile =
+                event_compile_options();
+            vxml_cmeta_session_root root = {0};
+            cmeta_collect_probe probe = {
+                .prepare_status = VXML_OK};
+            vxml_cmeta_collect_adapter_v1 adapter =
+                cmeta_collect_adapter(
+                    VXML_CMETA_COLLECT_CAP_SRGS_XML);
+            vxml_cmeta_session_options_v1 options =
+                event_session_options(
+                    &root, &adapter, &probe);
+            const vxml_cmeta_name_view undefined[] = {
+                {"value", sizeof("value") - 1u},
+                {"text", sizeof("text") - 1u}};
+            vxml_program program = {0};
+            vxml_session session = {0};
+
+            if (case_index == 2u)
+                compile.max_grammar_bytes = 32u;
+            options.initially_undefined = undefined;
+            options.initially_undefined_count =
+                case_index == 0u ? 2u : 1u;
+
+            check_equal(
+                vxml_compile_cmeta(
+                    cases[case_index], sizes[case_index], NULL,
+                    &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_cmeta(
+                    &session, &program, &options),
+                VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(
+                vxml_session_cmeta_collect_prepare(
+                    &session, NULL),
+                VXML_SEMANTIC_ERROR);
+            check_equal(probe.prepare_calls, (size_t)0u);
+            check_equal(
+                vxml_session_get_state(&session),
+                VXML_SESSION_EXITED);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+
 }
