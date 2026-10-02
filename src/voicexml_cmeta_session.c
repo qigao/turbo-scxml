@@ -10596,6 +10596,8 @@ prompt_media_try_complete_impl(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     mailbox = &profile->prompt_media_mailbox;
     state = atomic_load_explicit(
         &mailbox->state, memory_order_acquire);
@@ -10713,10 +10715,14 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     vxml_cmeta_prompt_media_outcome *out_outcome) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned expected;
     uint64_t generation;
     vxml_cmeta_prompt_media_failure failure;
+    bool has_terminal_timing;
+    uint64_t terminal_elapsed_ms;
+    vxml_status status;
 
     if (out_progressed != NULL) *out_progressed = false;
     if (out_outcome != NULL) *out_outcome = 0;
@@ -10777,6 +10783,25 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     *out_progressed = true;
     *out_outcome = mailbox->outcome;
     failure = mailbox->failure;
+    has_terminal_timing = mailbox->has_terminal_timing;
+    terminal_elapsed_ms = mailbox->terminal_elapsed_ms;
+
+    if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED) {
+        status = prompt_mark_capture_terminal(
+            profile, program, generation,
+            has_terminal_timing, terminal_elapsed_ms);
+        if (status != VXML_OK) {
+            profile->prompt_media_in_flight = false;
+            profile->prompt_media_generation = 0u;
+            prompt_media_mailbox_disarm(profile);
+            return status;
+        }
+    } else if (profile->pending_mark_result.assigned &&
+               profile->pending_mark_result.generation == generation) {
+        mark_result_slot_reset(
+            &profile->pending_mark_result);
+    }
+
     profile->prompt_media_in_flight = false;
     profile->prompt_media_generation = 0u;
     prompt_media_mailbox_disarm(profile);
