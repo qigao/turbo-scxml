@@ -46,6 +46,15 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_record_adapter_v1>::value,
     "record adapter must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_recording_lease_v1>::value,
+    "recording lease must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_record_completion_v1>::value,
+    "record completion must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_record_result_view_v1>::value,
+    "record result view must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_request_v1>::value,
     "subdialog request must remain C-compatible");
 static_assert(
@@ -131,6 +140,9 @@ int main() {
     vxml_cmeta_record_request_v1 record_request{};
     vxml_cmeta_record_ticket_v1 record_ticket{};
     vxml_cmeta_record_adapter_v1 record_adapter{};
+    vxml_cmeta_recording_lease_v1 recording_lease{};
+    vxml_cmeta_record_completion_v1 record_completion{};
+    vxml_cmeta_record_result_view_v1 record_result{};
     vxml_cmeta_subdialog_request_v1 subdialog_request{};
     vxml_cmeta_child_entry_v1 child_entry{};
     vxml_cmeta_subdialog_result_entry_v1 subdialog_result{};
@@ -173,6 +185,9 @@ int main() {
     auto prepare_record = &vxml_session_cmeta_record_prepare;
     auto commit_record = &vxml_session_cmeta_record_commit;
     auto discard_record = &vxml_session_cmeta_record_discard;
+    auto complete_record = &vxml_session_cmeta_record_try_complete;
+    auto run_record_completion = &vxml_session_cmeta_record_run_ready;
+    auto query_record_result = &vxml_session_cmeta_record_result;
     auto prepare_subdialog = &vxml_session_cmeta_subdialog_prepare;
     auto commit_subdialog = &vxml_session_cmeta_subdialog_commit;
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
@@ -189,6 +204,11 @@ int main() {
     record_request.struct_size = sizeof(record_request);
     record_adapter.abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1;
     record_adapter.struct_size = sizeof(record_adapter);
+    record_completion.abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1;
+    record_completion.struct_size = sizeof(record_completion);
+    record_completion.outcome = VXML_CMETA_RECORD_OUTCOME_NOINPUT;
+    record_result.abi_version = VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1;
+    record_result.struct_size = sizeof(record_result);
     subdialog_request.abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1;
     subdialog_request.struct_size = sizeof(subdialog_request);
     child_entry.abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1;
@@ -228,8 +248,17 @@ int main() {
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
         query_record == nullptr || prepare_record == nullptr ||
         commit_record == nullptr || discard_record == nullptr ||
+        complete_record == nullptr || run_record_completion == nullptr ||
+        query_record_result == nullptr ||
         record_request.abi_version != VXML_CMETA_RECORD_REQUEST_ABI_V1 ||
         record_adapter.abi_version != VXML_CMETA_RECORD_ADAPTER_ABI_V1 ||
+        record_completion.abi_version !=
+            VXML_CMETA_RECORD_COMPLETION_ABI_V1 ||
+        record_completion.outcome != VXML_CMETA_RECORD_OUTCOME_NOINPUT ||
+        record_result.abi_version !=
+            VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1 ||
+        recording_lease.data != nullptr ||
+        VXML_CMETA_RECORD_INGRESS_ACCEPTED != 0 ||
         record_ticket.commit != nullptr ||
         VXML_CMETA_RECORD_CAP_BEEP == 0u ||
         VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
