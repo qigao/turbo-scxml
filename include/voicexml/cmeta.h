@@ -1404,8 +1404,10 @@ vxml_session_cmeta_prompt_media_mark_v2(
 
 /**
  * Borrow the last MARK executed for the most recently committed prompt
- * generation. segment_index is relative to that prompt batch. The returned
- * name borrows immutable Program storage.
+ * generation. segment_index is relative to that prompt batch. Literal names
+ * borrow immutable Program storage; dynamic nameexpr results borrow the
+ * Session-owned generation snapshot. The view is invalidated by Session close
+ * or the next committed prompt generation.
  */
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
     const vxml_session *session,
