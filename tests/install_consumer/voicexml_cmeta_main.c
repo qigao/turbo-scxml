@@ -152,11 +152,21 @@ int main(void) {
         .abi_version = VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_mark_view_v1),
         .segment_index = SIZE_MAX};
+    vxml_cmeta_prompt_mark_progress_v2 prompt_mark_v2 = {
+        .abi_version = VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_prompt_mark_progress_v2)};
+    vxml_cmeta_prompt_barge_v2 prompt_barge_v2 = {
+        .abi_version = VXML_CMETA_PROMPT_BARGE_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_prompt_barge_v2)};
     vxml_cmeta_prompt_media_completion_v1 prompt_media_completion = {
         .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v1),
         .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED,
         .failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH};
+    vxml_cmeta_prompt_media_completion_v2 prompt_media_completion_v2 = {
+        .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2,
+        .struct_size = sizeof(vxml_cmeta_prompt_media_completion_v2),
+        .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
     vxml_cmeta_value_view read_value = {0};
     vxml_cmeta_terminal_kind terminal_kind = VXML_CMETA_TERMINAL_NONE;
     vxml_cmeta_exit_kind exit_kind = VXML_CMETA_EXIT_EMPTY;
@@ -177,6 +187,20 @@ int main(void) {
     vxml_cmeta_prompt_mark_result (*report_mark)(
         vxml_session *, uint64_t, size_t) =
         vxml_session_cmeta_prompt_media_mark;
+    vxml_cmeta_prompt_mark_result (*report_mark_v2)(
+        vxml_session *, const vxml_cmeta_prompt_mark_progress_v2 *) =
+        vxml_session_cmeta_prompt_media_mark_v2;
+    vxml_cmeta_prompt_media_ingress_result (*complete_prompt_v2)(
+        vxml_session *,
+        const vxml_cmeta_prompt_media_completion_v2 *) =
+        vxml_session_cmeta_prompt_media_try_complete_v2;
+    vxml_cmeta_prompt_barge_result (*barge_prompt_v2)(
+        vxml_session *, const vxml_cmeta_prompt_barge_v2 *) =
+        vxml_session_cmeta_prompt_media_barge_in_v2;
+    vxml_status (*query_mark_shadow)(
+        const vxml_session *, const char *, size_t,
+        vxml_cmeta_value_view *) =
+        vxml_session_cmeta_mark_shadow_value;
     vxml_status (*query_mark)(
         const vxml_session *, vxml_cmeta_prompt_mark_view_v1 *) =
         vxml_session_cmeta_prompt_media_last_mark;
@@ -266,7 +290,9 @@ int main(void) {
     int result = 1;
 
     if (raise_event == NULL || query_prompt == NULL ||
-        report_mark == NULL || query_mark == NULL ||
+        report_mark == NULL || report_mark_v2 == NULL ||
+        complete_prompt_v2 == NULL || barge_prompt_v2 == NULL ||
+        query_mark_shadow == NULL || query_mark == NULL ||
         query_terminal == NULL || query_terminal_event == NULL ||
         start_child == NULL ||
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
@@ -325,6 +351,11 @@ int main(void) {
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
         prompt_mark.abi_version != VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 ||
         prompt_mark.segment_index != SIZE_MAX ||
+        prompt_mark_v2.abi_version !=
+            VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2 ||
+        prompt_barge_v2.abi_version != VXML_CMETA_PROMPT_BARGE_ABI_V2 ||
+        prompt_media_completion_v2.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2 ||
         prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1 ||
         prompt_media_request.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
