@@ -12445,7 +12445,9 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
 
     profile->prompt_media_last_mark_name_size = 0u;
-    if (profile->prompt_media_projected_generation == generation) {
+    if (profile->prompt_media_projected_generation == generation &&
+        (program->prompt_segments[source_absolute].payload.data == NULL ||
+         program->prompt_segments[source_absolute].payload.size == 0u)) {
         if (observed_segment->payload.data == NULL ||
             observed_segment->payload.size == 0u ||
             profile->prompt_media_last_mark_name == NULL ||
