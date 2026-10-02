@@ -91,6 +91,16 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_collect_completion_v2>::value,
     "collect completion V2 must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_request_v2>::value,
+    "collect request V2 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_collect_completion_v3>::value,
+    "collect completion V3 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<
+        vxml_cmeta_collect_utterance_result_view_v1>::value,
+    "collect utterance result view must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_menu_choice_v1>::value,
     "menu choice must remain C-compatible");
 static_assert(
@@ -145,6 +155,7 @@ int main() {
     vxml_cmeta_prompt_mark_view_v1 prompt_mark{};
     vxml_cmeta_prompt_media_completion_v1 prompt_media_completion{};
     vxml_cmeta_collect_request_v1 collect_request{};
+    vxml_cmeta_collect_request_v2 collect_request_v2{};
     vxml_cmeta_subdialog_param_v1 subdialog_param{};
     vxml_cmeta_record_request_v1 record_request{};
     vxml_cmeta_record_ticket_v1 record_ticket{};
@@ -171,6 +182,8 @@ int main() {
     vxml_cmeta_menu_completion_v1 menu_completion{};
     vxml_cmeta_initial_collect_request_v1 initial_request{};
     vxml_cmeta_collect_completion_v2 collect_completion_v2{};
+    vxml_cmeta_collect_completion_v3 collect_completion_v3{};
+    vxml_cmeta_collect_utterance_result_view_v1 collect_utterance{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
@@ -209,6 +222,11 @@ int main() {
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
     auto complete_subdialog = &vxml_session_cmeta_subdialog_try_complete;
     auto run_subdialog_completion = &vxml_session_cmeta_subdialog_run_ready;
+    auto query_collect_v2 = &vxml_session_cmeta_collect_request_v2;
+    auto complete_collect_v3 =
+        &vxml_session_cmeta_collect_try_complete_v3;
+    auto query_collect_utterance =
+        &vxml_session_cmeta_collect_utterance_result;
     auto query_menu = &vxml_session_cmeta_menu_collect_request;
     auto query_menu_v2 = &vxml_session_cmeta_menu_collect_request_v2;
     auto query_initial = &vxml_session_cmeta_initial_collect_request;
@@ -308,6 +326,9 @@ int main() {
         VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED != 0 ||
         subdialog_param.source != VXML_CMETA_SUBDIALOG_PARAM_TYPED ||
         subdialog_ticket.commit != nullptr ||
+        query_collect_v2 == nullptr ||
+        complete_collect_v3 == nullptr ||
+        query_collect_utterance == nullptr ||
         query_menu == nullptr || query_menu_v2 == nullptr ||
         query_initial == nullptr || complete_menu == nullptr ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
@@ -348,19 +369,39 @@ int main() {
     initial_request.abi_version =
         VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1;
     initial_request.struct_size = sizeof(initial_request);
+    collect_request_v2.abi_version =
+        VXML_CMETA_COLLECT_REQUEST_ABI_V2;
+    collect_request_v2.struct_size = sizeof(collect_request_v2);
     collect_completion_v2.abi_version =
         VXML_CMETA_COLLECT_COMPLETION_ABI_V2;
     collect_completion_v2.struct_size = sizeof(collect_completion_v2);
     collect_completion_v2.slots = &collect_slot;
     collect_completion_v2.slot_count = 1u;
+    collect_completion_v3.abi_version =
+        VXML_CMETA_COLLECT_COMPLETION_ABI_V3;
+    collect_completion_v3.struct_size = sizeof(collect_completion_v3);
+    collect_completion_v3.slots = &collect_slot;
+    collect_completion_v3.slot_count = 1u;
+    collect_utterance.abi_version =
+        VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1;
+    collect_utterance.struct_size = sizeof(collect_utterance);
     if (collect_request.abi_version != 0u ||
         collect_request.has_timeout ||
         collect_request.timeout_us != UINT64_C(0) ||
         collect_completion.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V1 ||
+        collect_request_v2.abi_version !=
+            VXML_CMETA_COLLECT_REQUEST_ABI_V2 ||
         collect_completion_v2.abi_version !=
             VXML_CMETA_COLLECT_COMPLETION_ABI_V2 ||
         collect_completion_v2.slot_count != 1u ||
+        collect_completion_v3.abi_version !=
+            VXML_CMETA_COLLECT_COMPLETION_ABI_V3 ||
+        collect_completion_v3.slot_count != 1u ||
+        collect_utterance.abi_version !=
+            VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1 ||
+        VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE == 0u ||
+        VXML_CMETA_COLLECT_CAP_RECORD_UTTERANCE_TYPE == 0u ||
         menu_request.abi_version !=
             VXML_CMETA_MENU_COLLECT_REQUEST_ABI_V1 ||
         menu_request_v2.abi_version !=
