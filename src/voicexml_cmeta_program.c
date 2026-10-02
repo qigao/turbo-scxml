@@ -8486,13 +8486,17 @@ static vxml_status cmeta_add_location_candidate(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             row->location,
             "VoiceXML location candidate count changed between passes");
-    if (cmeta_data_value_kind(location.value) == VXML_CMETA_VALUE_UNDEFINED)
+    if (!row->collection &&
+        cmeta_data_value_kind(location.value) ==
+            VXML_CMETA_VALUE_UNDEFINED)
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             row->location,
             "VoiceXML location terminal is not a supported scalar at byte offset 0");
     if (row->candidate_count != 0u &&
-        !cmeta_same_location_type(row->value, location.value))
+        (row->collection
+            ? !cmeta_data_desc_equal(row->value, location.value)
+            : !cmeta_same_location_type(row->value, location.value)))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             row->location,
@@ -8530,7 +8534,7 @@ static vxml_status cmeta_append_location_view(
     cmeta_program_builder *builder, salts_xml_string_view name,
     salts_xml_location source_location,
     const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
-    size_t *out_location) {
+    bool collection, size_t *out_location) {
     vxml_cmeta_location_row *row;
     size_t index;
     size_t first_size = 0u;
@@ -8565,6 +8569,7 @@ static vxml_status cmeta_append_location_view(
     }
     row = &builder->profile->locations[builder->location_index];
     row->location = source_location;
+    row->collection = collection;
     row->first_candidate = builder->candidate_index;
     row->name = cmeta_retain_view(builder, name);
     row->name_size = name.size;
@@ -8648,9 +8653,45 @@ static vxml_status cmeta_append_location(
     if (status == VXML_OK)
         status = cmeta_append_location_view(
             builder, decoded.view, salts_xml_attribute_location(attribute),
-            scopes, scope_count, out_location);
+            scopes, scope_count, false, out_location);
     cmeta_decoded_value_destroy(&decoded);
     return status;
+}
+
+static vxml_status cmeta_append_collection_location(
+    cmeta_program_builder *builder, salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
+    size_t *out_location, const cmeta_data_desc **out_element) {
+    cmeta_decoded_value decoded = {0};
+    const cmeta_data_collection_ops *ops;
+    const cmeta_data_desc *element;
+    vxml_cmeta_location_row *row;
+    vxml_status status;
+    if (out_element != NULL) *out_element = NULL;
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(attribute),
+        salts_xml_attribute_location(attribute), &decoded);
+    if (status == VXML_OK)
+        status = cmeta_append_location_view(
+            builder, decoded.view, salts_xml_attribute_location(attribute),
+            scopes, scope_count, true, out_location);
+    cmeta_decoded_value_destroy(&decoded);
+    if (status != VXML_OK) return status;
+    if (*out_location >= builder->profile->location_count)
+        return VXML_INVALID_STRUCTURE;
+    row = &builder->profile->locations[*out_location];
+    ops = cmeta_data_collection_ops_of(row->value);
+    element = cmeta_data_collection_element_data(row->value);
+    if (ops == NULL || element == NULL ||
+        (ops->flags & CMETA_DATA_COLLECTION_ORDERED) == 0u ||
+        element->storage_type == NULL ||
+        !cmeta_data_value_copy_supported(element))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML foreach array must be an ordered reflected collection with a copyable static element type");
+    if (out_element != NULL) *out_element = element;
+    return VXML_OK;
 }
 
 static void cmeta_compile_scope_chain(
@@ -8833,7 +8874,7 @@ static vxml_status cmeta_lower_namelist(
         size_t ignored_location;
         status = cmeta_append_location_view(
             builder, name, location, scopes, scope_count,
-            &ignored_location);
+            false, &ignored_location);
         if (status != VXML_OK) goto done;
         ++*out_count;
     }
