@@ -4877,6 +4877,22 @@ static vxml_status cmeta_compile_field_schema(
             goto done;
         }
     }
+    for (prior = 0u; prior < builder->transfer_index; ++prior) {
+        const vxml_cmeta_transfer_row *transfer =
+            &builder->profile->transfers[prior];
+        if (transfer->form == form_index &&
+            transfer->name != NULL &&
+            transfer->name_size == decoded_name.view.size &&
+            memcmp(
+                transfer->name, decoded_name.view.data,
+                decoded_name.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML field name collides with a transfer");
+            goto done;
+        }
+    }
     root_field = cmeta_root_field(
         builder->profile->root, decoded_name.view, &root_field_index);
     if (root_field == NULL) {
@@ -5381,6 +5397,26 @@ static vxml_status cmeta_register_initial_item(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_attribute_location(name_attribute),
                     "VoiceXML initial name collides with a record");
+        }
+    }
+
+    if (name_attribute.impl != NULL) {
+        size_t transfer_index;
+        const size_t form_index =
+            builder->profile->scopes[form_scope].owner;
+        for (transfer_index = 0u;
+             transfer_index < builder->transfer_index;
+             ++transfer_index) {
+            const vxml_cmeta_transfer_row *transfer =
+                &builder->profile->transfers[transfer_index];
+            if (transfer->form == form_index &&
+                transfer->name != NULL &&
+                transfer->name_size == name.size &&
+                memcmp(transfer->name, name.data, name.size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name_attribute),
+                    "VoiceXML initial name collides with a transfer");
         }
     }
 
@@ -5924,6 +5960,22 @@ static vxml_status cmeta_register_record_item(
             goto done;
         }
     }
+    for (prior = 0u; prior < builder->transfer_index; ++prior) {
+        const vxml_cmeta_transfer_row *transfer =
+            &builder->profile->transfers[prior];
+        if (transfer->form == form_index &&
+            transfer->name != NULL &&
+            transfer->name_size == decoded.view.size &&
+            memcmp(
+                transfer->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML record name collides with a transfer");
+            goto done;
+        }
+    }
     for (prior = 0u; prior < record_index; ++prior) {
         const vxml_cmeta_record_row *previous =
             &builder->profile->records[prior];
@@ -6391,6 +6443,22 @@ static vxml_status cmeta_compile_subdialog_schema(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(name_attribute),
                 "VoiceXML subdialog name collides with a record");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < builder->transfer_index; ++prior) {
+        const vxml_cmeta_transfer_row *transfer =
+            &builder->profile->transfers[prior];
+        if (transfer->form == form_index &&
+            transfer->name != NULL &&
+            transfer->name_size == decoded_name.view.size &&
+            memcmp(
+                transfer->name, decoded_name.view.data,
+                decoded_name.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML subdialog name collides with a transfer");
             goto done;
         }
     }
