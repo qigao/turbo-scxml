@@ -3648,6 +3648,16 @@ vxml_status vxml_cmeta_session_init_profile(
                 profile->collect_utterance_result_media_type;
             profile->collect_utterance_result.media_type_capacity =
                 max_collect_recording_media_type_bytes;
+            profile->field_recording_shadows =
+                (vxml_cmeta_field_recording_shadow *)vxml_calloc(
+                    program->field_count,
+                    sizeof(*profile->field_recording_shadows));
+            if (profile->field_recording_shadows == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->field_recording_shadow_count =
+                program->field_count;
         }
 
         if (options->struct_size >= multi_tail_size &&
