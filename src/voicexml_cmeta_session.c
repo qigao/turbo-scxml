@@ -1436,6 +1436,10 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->field_mark_name_storage);
+    vxml_free(session->field_mark_shadows);
+    vxml_free(session->collect_mark_result_name);
+    vxml_free(session->pending_mark_result_name);
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
@@ -3525,6 +3529,53 @@ vxml_status vxml_cmeta_session_init_profile(
             dynamic_storage_bytes;
         profile->prompt_media_last_mark_name_capacity =
             program->max_dynamic_mark_name_bytes;
+    }
+
+    if (program->max_mark_result_name_bytes != 0u) {
+        size_t field_name_bytes = 0u;
+        size_t index;
+        profile->mark_result_name_stride =
+            program->max_mark_result_name_bytes;
+        profile->pending_mark_result_name =
+            (char *)vxml_malloc(program->max_mark_result_name_bytes);
+        profile->collect_mark_result_name =
+            (char *)vxml_malloc(program->max_mark_result_name_bytes);
+        if (profile->pending_mark_result_name == NULL ||
+            profile->collect_mark_result_name == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        profile->pending_mark_result.name =
+            profile->pending_mark_result_name;
+        profile->collect_mark_result.name =
+            profile->collect_mark_result_name;
+
+        if (program->field_count != 0u) {
+            if (!checked_multiply(
+                    program->field_count,
+                    program->max_mark_result_name_bytes,
+                    &field_name_bytes)) {
+                status = VXML_LIMIT_EXCEEDED;
+                goto failure;
+            }
+            profile->field_mark_shadows =
+                (vxml_cmeta_mark_result_slot *)vxml_calloc(
+                    program->field_count,
+                    sizeof(*profile->field_mark_shadows));
+            profile->field_mark_name_storage =
+                (char *)vxml_malloc(field_name_bytes);
+            if (profile->field_mark_shadows == NULL ||
+                profile->field_mark_name_storage == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->field_mark_shadow_count =
+                program->field_count;
+            for (index = 0u; index < program->field_count; ++index)
+                profile->field_mark_shadows[index].name =
+                    profile->field_mark_name_storage +
+                    index * profile->mark_result_name_stride;
+        }
     }
 
     {
