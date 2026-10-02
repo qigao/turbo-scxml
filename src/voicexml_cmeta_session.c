@@ -4186,6 +4186,181 @@ vxml_status vxml_session_cmeta_subdialog_discard(
 }
 
 
+static vxml_status record_request_from_impl(
+    const vxml_session_impl *impl,
+    vxml_cmeta_record_request_v1 *out_request) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_record_row *record;
+
+    if (out_request == NULL) return VXML_INVALID_ARGUMENT;
+    *out_request = (vxml_cmeta_record_request_v1){0};
+    if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
+        impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_record == VXML_CMETA_NO_INDEX ||
+        profile->active_record >= program->record_count ||
+        program->records == NULL ||
+        profile->record_generation == UINT64_C(0) ||
+        profile->max_record_bytes == 0u)
+        return VXML_INVALID_STATE;
+    record = &program->records[profile->active_record];
+    if (record->form != profile->active_form ||
+        record->name == NULL || record->name_size == 0u ||
+        record->max_duration_us == UINT64_C(0) ||
+        record->max_final_silence_us == UINT64_C(0))
+        return VXML_INVALID_STRUCTURE;
+
+    *out_request = (vxml_cmeta_record_request_v1){
+        .abi_version = VXML_CMETA_RECORD_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_request_v1),
+        .generation = profile->record_generation,
+        .required_capabilities = record->required_capabilities,
+        .name = {record->name, record->name_size},
+        .modal = record->modal,
+        .beep = record->beep,
+        .dtmf_term = record->dtmf_term,
+        .has_maxtime = record->has_maxtime,
+        .maxtime_us = record->maxtime_us,
+        .max_duration_us = record->max_duration_us,
+        .has_final_silence = record->has_final_silence,
+        .final_silence_us = record->final_silence_us,
+        .max_final_silence_us = record->max_final_silence_us,
+        .media_type = {
+            record->media_type, record->media_type_size},
+        .max_bytes = profile->max_record_bytes
+    };
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_record_request(
+    const vxml_session *session,
+    vxml_cmeta_record_request_v1 *out_request) {
+    if (session == NULL)
+        return VXML_INVALID_ARGUMENT;
+    return record_request_from_impl(
+        (const vxml_session_impl *)session->impl,
+        out_request);
+}
+
+vxml_status vxml_session_cmeta_record_prepare(
+    vxml_session *session, const char **out_error) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_record_request_v1 request = {0};
+    vxml_cmeta_record_ticket_v1 ticket = {0};
+    vxml_status status;
+
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->record_adapter == NULL ||
+        profile->active_record == VXML_CMETA_NO_INDEX ||
+        profile->record_generation == UINT64_C(0) ||
+        profile->record_prepared || profile->record_in_flight)
+        return VXML_INVALID_STATE;
+
+    status = record_request_from_impl(impl, &request);
+    if (status != VXML_OK) return status;
+    if ((profile->record_adapter->capabilities &
+         request.required_capabilities) !=
+        request.required_capabilities)
+        return VXML_UNSUPPORTED_FEATURE;
+
+    status = profile->record_adapter->prepare(
+        profile->record_user, &request, &ticket, out_error);
+    if (status != VXML_OK) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return status;
+    }
+    if (ticket.commit == NULL || ticket.discard == NULL) {
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+        return VXML_INVALID_CONTRACT;
+    }
+    profile->record_ticket = ticket;
+    profile->record_prepared = true;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_record_commit(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_record_ticket_v1 ticket;
+
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->record_prepared ||
+        profile->record_in_flight ||
+        profile->record_ticket.commit == NULL ||
+        profile->record_ticket.discard == NULL ||
+        profile->active_record == VXML_CMETA_NO_INDEX ||
+        profile->record_generation == UINT64_C(0))
+        return VXML_INVALID_STATE;
+
+    ticket = profile->record_ticket;
+    profile->record_ticket = (vxml_cmeta_record_ticket_v1){0};
+    profile->record_prepared = false;
+    profile->record_in_flight = true;
+    ticket.commit(ticket.user);
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_record_discard(
+    vxml_session *session) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_record_ticket_v1 ticket;
+
+    if (session == NULL || session->impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (!profile->record_prepared ||
+        profile->record_in_flight ||
+        profile->record_ticket.discard == NULL)
+        return VXML_INVALID_STATE;
+
+    ticket = profile->record_ticket;
+    profile->record_ticket = (vxml_cmeta_record_ticket_v1){0};
+    profile->record_prepared = false;
+    ticket.discard(ticket.user);
+    return VXML_OK;
+}
+
+
 static void subdialog_mailbox_payload_reset(
     vxml_cmeta_subdialog_completion_mailbox *mailbox) {
     if (mailbox == NULL) return;
