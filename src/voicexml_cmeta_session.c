@@ -1577,6 +1577,7 @@ static void session_data_destroy(
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
+    vxml_free(session->collect_dynamic_grammar_uri);
     vxml_free(session->collect_mailbox.recording_media_type);
     vxml_free(session->collect_utterance_result_media_type);
     vxml_free(session->field_recording_shadows);
@@ -3979,6 +3980,42 @@ vxml_status vxml_cmeta_session_init_profile(
                 profile->event_counter_names +
                 index * profile->event_name_stride;
     }
+    {
+        bool uses_dynamic_grammar = false;
+        size_t index;
+        for (index = 0u; index < program->field_count; ++index) {
+            if (program->fields != NULL &&
+                program->fields[index].grammar_expression !=
+                    VXML_CMETA_NO_INDEX) {
+                uses_dynamic_grammar = true;
+                break;
+            }
+        }
+        if (!uses_dynamic_grammar)
+            for (index = 0u; index < program->form_count; ++index) {
+                if (program->forms != NULL &&
+                    program->forms[index].grammar_expression !=
+                        VXML_CMETA_NO_INDEX) {
+                    uses_dynamic_grammar = true;
+                    break;
+                }
+            }
+        if (uses_dynamic_grammar) {
+            if (program->max_grammar_bytes == 0u) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->collect_dynamic_grammar_uri =
+                (char *)vxml_malloc(program->max_grammar_bytes);
+            if (profile->collect_dynamic_grammar_uri == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->collect_dynamic_grammar_uri_capacity =
+                program->max_grammar_bytes;
+        }
+    }
+
     if (program->field_count != 0u ||
         program->initial_count != 0u ||
         program->menu_count != 0u) {
@@ -4425,8 +4462,10 @@ static vxml_status select_directed_item(
             if (!eligible) continue;
             if (form->grammar_type == NULL ||
                 form->grammar_type_size == 0u ||
-                form->grammar_src == NULL ||
-                form->grammar_src_size == 0u ||
+                ((form->grammar_src == NULL ||
+                  form->grammar_src_size == 0u) ==
+                 (form->grammar_expression ==
+                  VXML_CMETA_NO_INDEX)) ||
                 form->grammar_required_capabilities == 0u)
                 return session_fail(session, VXML_INVALID_STRUCTURE);
             profile->active_initial = item->index;
@@ -5279,7 +5318,7 @@ static vxml_status record_request_from_impl(
 
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_record == VXML_CMETA_NO_INDEX ||
         profile->active_record >= program->record_count ||
         program->records == NULL ||
@@ -6201,13 +6240,89 @@ static vxml_status selected_prompt_row(
     const vxml_cmeta_prompt_row **out_prompt,
     unsigned *out_prompt_count);
 
+static vxml_status collect_materialize_grammar_uri(
+    const vxml_session_impl *impl,
+    size_t expression,
+    const char *static_src,
+    size_t static_src_size,
+    size_t form_scope,
+    vxml_cmeta_name_view *out_uri) {
+    const vxml_cmeta_program_data *program;
+    vxml_cmeta_session_data *profile;
+    size_t scopes[2];
+    vxml_cmeta_value_view value = {0};
+    vxml_status status;
+
+    if (out_uri == NULL) return VXML_INVALID_ARGUMENT;
+    *out_uri = (vxml_cmeta_name_view){0};
+    if (impl == NULL || impl->program == NULL ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+
+    if (expression == VXML_CMETA_NO_INDEX) {
+        if (static_src == NULL || static_src_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        *out_uri =
+            (vxml_cmeta_name_view){static_src, static_src_size};
+        return VXML_OK;
+    }
+
+    if (static_src != NULL || static_src_size != 0u ||
+        expression >= program->expression_count ||
+        form_scope >= program->scope_count ||
+        profile->collect_dynamic_grammar_uri == NULL ||
+        profile->collect_dynamic_grammar_uri_capacity == 0u)
+        return VXML_INVALID_STRUCTURE;
+
+    scopes[0] = form_scope;
+    scopes[1] = program->document_scope;
+    status = evaluate_expression(
+        profile, program, false,
+        expression, scopes, 2u, &value);
+    if (status != VXML_OK)
+        return VXML_SEMANTIC_ERROR;
+    if (value.kind != VXML_CMETA_VALUE_STRING ||
+        value.data.string.data == NULL ||
+        value.data.string.size == 0u ||
+        value.data.string.size >
+            profile->collect_dynamic_grammar_uri_capacity ||
+        memchr(
+            value.data.string.data, '\0',
+            value.data.string.size) != NULL)
+        return VXML_SEMANTIC_ERROR;
+
+    memcpy(
+        profile->collect_dynamic_grammar_uri,
+        value.data.string.data,
+        value.data.string.size);
+    *out_uri = (vxml_cmeta_name_view){
+        profile->collect_dynamic_grammar_uri,
+        value.data.string.size};
+    return VXML_OK;
+}
+
+static vxml_status collect_raise_semantic(
+    vxml_session *session) {
+    vxml_status event_status = vxml_session_cmeta_raise(
+        session, "error.semantic",
+        sizeof("error.semantic") - 1u);
+    return event_status == VXML_OK
+        ? VXML_SEMANTIC_ERROR : event_status;
+}
+
 static vxml_status collect_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_collect_request_v1 *out_request) {
     const vxml_cmeta_program_data *program;
-    const vxml_cmeta_session_data *profile;
+    vxml_cmeta_session_data *profile;
     const vxml_cmeta_field_row *field;
+    const vxml_cmeta_form_row *form;
     const vxml_cmeta_prompt_row *prompt = NULL;
+    vxml_cmeta_name_view grammar_uri = {0};
     unsigned prompt_count = 0u;
     vxml_status status;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
@@ -6217,7 +6332,7 @@ static vxml_status collect_request_from_impl(
         impl->profile_data == NULL)
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_initial != VXML_CMETA_NO_INDEX ||
         profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_INVALID_STATE;
@@ -6233,8 +6348,15 @@ static vxml_status collect_request_from_impl(
     (void)prompt_count;
     if (field->name == NULL || field->name_size == 0u ||
         field->grammar_type == NULL || field->grammar_type_size == 0u ||
-        field->grammar_src == NULL || field->grammar_src_size == 0u)
+        field->form >= program->form_count ||
+        program->forms == NULL)
         return VXML_INVALID_STRUCTURE;
+    form = &program->forms[field->form];
+    status = collect_materialize_grammar_uri(
+        impl, field->grammar_expression,
+        field->grammar_src, field->grammar_src_size,
+        form->scope, &grammar_uri);
+    if (status != VXML_OK) return status;
     *out_request = (vxml_cmeta_collect_request_v1){
         .abi_version = VXML_CMETA_COLLECT_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_request_v1),
@@ -6244,7 +6366,7 @@ static vxml_status collect_request_from_impl(
             ? (vxml_cmeta_name_view){field->name, field->name_size}
             : (vxml_cmeta_name_view){0},
         .grammar_type = {field->grammar_type, field->grammar_type_size},
-        .grammar_src = {field->grammar_src, field->grammar_src_size},
+        .grammar_src = grammar_uri,
         .has_timeout = prompt != NULL ? prompt->has_timeout : false,
         .timeout_us = prompt != NULL ? prompt->timeout_us : UINT64_C(0)
     };
@@ -6321,7 +6443,7 @@ static vxml_status menu_collect_request_from_impl(
         impl->profile_data == NULL)
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_field != VXML_CMETA_NO_INDEX ||
         profile->active_initial != VXML_CMETA_NO_INDEX ||
         profile->active_menu == VXML_CMETA_NO_INDEX ||
@@ -6527,9 +6649,11 @@ static vxml_status initial_collect_request_from_impl(
     const vxml_session_impl *impl,
     vxml_cmeta_initial_collect_request_v1 *out_request) {
     const vxml_cmeta_program_data *program;
-    const vxml_cmeta_session_data *profile;
+    vxml_cmeta_session_data *profile;
     const vxml_cmeta_initial_row *initial;
     const vxml_cmeta_form_row *form;
+    vxml_cmeta_name_view grammar_uri = {0};
+    vxml_status status;
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     *out_request = (vxml_cmeta_initial_collect_request_v1){0};
     if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
@@ -6553,11 +6677,15 @@ static vxml_status initial_collect_request_from_impl(
         profile->active_initial - form->first_initial >=
             form->initial_count ||
         form->grammar_type == NULL || form->grammar_type_size == 0u ||
-        form->grammar_src == NULL || form->grammar_src_size == 0u ||
         form->grammar_required_capabilities !=
             (VXML_CMETA_COLLECT_CAP_SRGS_XML |
              VXML_CMETA_COLLECT_CAP_INITIAL_MULTI))
         return VXML_INVALID_STRUCTURE;
+    status = collect_materialize_grammar_uri(
+        impl, form->grammar_expression,
+        form->grammar_src, form->grammar_src_size,
+        form->scope, &grammar_uri);
+    if (status != VXML_OK) return status;
     *out_request = (vxml_cmeta_initial_collect_request_v1){
         .abi_version = VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_initial_collect_request_v1),
@@ -6565,8 +6693,7 @@ static vxml_status initial_collect_request_from_impl(
         .required_capabilities = form->grammar_required_capabilities,
         .grammar_type = {
             form->grammar_type, form->grammar_type_size},
-        .grammar_src = {
-            form->grammar_src, form->grammar_src_size}
+        .grammar_src = grammar_uri
     };
     return VXML_OK;
 }
@@ -6662,7 +6789,9 @@ vxml_status vxml_session_cmeta_collect_prepare(
     if (profile->active_initial != VXML_CMETA_NO_INDEX) {
         vxml_cmeta_initial_collect_request_v1 request = {0};
         status = initial_collect_request_from_impl(impl, &request);
-        if (status != VXML_OK) return status;
+        if (status != VXML_OK)
+            return status == VXML_SEMANTIC_ERROR
+                ? collect_raise_semantic(session) : status;
         if ((profile->collect_adapter->capabilities &
              request.required_capabilities) !=
             request.required_capabilities)
@@ -6719,7 +6848,9 @@ vxml_status vxml_session_cmeta_collect_prepare(
         if (form->record_utterance) {
             vxml_cmeta_collect_request_v2 request = {0};
             status = collect_request_v2_from_impl(impl, &request);
-            if (status != VXML_OK) return status;
+            if (status != VXML_OK)
+                return status == VXML_SEMANTIC_ERROR
+                    ? collect_raise_semantic(session) : status;
             if ((profile->collect_adapter->capabilities &
                  request.required_capabilities) !=
                 request.required_capabilities)
@@ -6731,7 +6862,9 @@ vxml_status vxml_session_cmeta_collect_prepare(
         } else {
             vxml_cmeta_collect_request_v1 request = {0};
             status = collect_request_from_impl(impl, &request);
-            if (status != VXML_OK) return status;
+            if (status != VXML_OK)
+                return status == VXML_SEMANTIC_ERROR
+                    ? collect_raise_semantic(session) : status;
             if ((profile->collect_adapter->capabilities &
                  request.required_capabilities) !=
                 request.required_capabilities)
