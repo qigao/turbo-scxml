@@ -1373,13 +1373,26 @@ static void session_data_destroy(
                 ticket.discard(ticket.user);
         } else if (session->collect_in_flight &&
                    session->collect_adapter != NULL) {
-            if (previous_collect_state ==
+            const bool recorded_utterance =
+                session->collect_mailbox.record_utterance_expected;
+
+            /*
+             * Preserve the legacy collect contract: close cancels an active
+             * generation even when a scalar completion is already READY.
+             *
+             * Recorded-utterance V3 is different after ACCEPTED: READY means
+             * the media lease already transferred to the mailbox, so close
+             * quiesces instead of manufacturing a cancel after completion.
+             * Before an accepted completion, cancel then quiesce.
+             */
+            if (!recorded_utterance ||
+                previous_collect_state ==
                     VXML_CMETA_COLLECT_MAILBOX_EMPTY ||
                 previous_collect_state ==
                     VXML_CMETA_COLLECT_MAILBOX_DISARMED)
                 session->collect_adapter->cancel(
                     session->collect_user, collect_generation);
-            if (session->collect_mailbox.record_utterance_expected)
+            if (recorded_utterance)
                 collect_quiesce_generation(
                     session, collect_generation);
             session->collect_in_flight = false;
