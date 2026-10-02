@@ -933,12 +933,13 @@ static vxml_status cmeta_measure_event_name(
             "VoiceXML Event name decoding changed between passes");
     }
     decoded[decoded_size] = '\0';
-    if (!cmeta_location_path_valid(decoded, decoded_size, SIZE_MAX)) {
+    if (!vxml_cmeta_event_token_valid(
+            decoded, decoded_size)) {
         vxml_free(decoded);
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(attribute),
-            "VoiceXML Event name must be a dotted NCName path");
+            "VoiceXML Event must be one non-empty token without whitespace");
     }
     vxml_free(decoded);
     status = cmeta_measure_name(
@@ -8700,8 +8701,8 @@ static vxml_status cmeta_retain_event_attribute(
     if (status != VXML_OK) return status;
     if (decoded.view.size == 0u ||
         decoded.view.size > builder->options->max_event_name_bytes ||
-        !cmeta_location_path_valid(
-            decoded.view.data, decoded.view.size, SIZE_MAX)) {
+        !vxml_cmeta_event_token_valid(
+            decoded.view.data, decoded.view.size)) {
         cmeta_decoded_value_destroy(&decoded);
         return cmeta_program_fail(
             builder->diagnostic,
