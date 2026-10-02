@@ -780,6 +780,15 @@ static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
 
+static vxml_cmeta_value_kind session_expression_value_kind(
+    const vxml_cmeta_expression_row *row) {
+    if (row == NULL)
+        return VXML_CMETA_VALUE_UNDEFINED;
+    if (row->source_kind != VXML_CMETA_EXPRESSION_GENERIC)
+        return row->value_kind;
+    return vxml_cmeta_expr_program_value_kind(&row->program);
+}
+
 static bool exit_action_capacity(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_action_row *action,
@@ -793,8 +802,8 @@ static bool exit_action_capacity(
             program->expressions == NULL)
             return false;
         entries = 1u;
-        if (vxml_cmeta_expr_program_value_kind(
-                &program->expressions[action->expression].program) ==
+        if (session_expression_value_kind(
+                &program->expressions[action->expression]) ==
             VXML_CMETA_VALUE_STRING)
             strings = program->max_string_bytes;
     } else if (action->exit_kind == VXML_CMETA_EXIT_NAMELIST) {
@@ -1034,6 +1043,8 @@ static void prompt_media_mailbox_disarm(
     vxml_cmeta_session_data *session) {
     unsigned state;
     if (session == NULL) return;
+    session->prompt_media_mailbox.timing_valid = false;
+    session->prompt_media_mailbox.playback_elapsed_ms = UINT64_C(0);
     atomic_store_explicit(
         &session->prompt_media_mailbox.generation,
         UINT64_C(0), memory_order_relaxed);
@@ -1154,6 +1165,130 @@ static void field_recording_shadow_reset(
         return;
     session->field_recording_shadows[field_index] =
         (vxml_cmeta_field_recording_shadow){0};
+}
+
+static void prompt_mark_result_reset(
+    vxml_cmeta_session_data *session) {
+    char *name;
+    size_t capacity;
+    if (session == NULL) return;
+    name = session->prompt_mark_result.name;
+    capacity = session->prompt_mark_result.name_capacity;
+    session->prompt_mark_result =
+        (vxml_cmeta_mark_result_slot){0};
+    session->prompt_mark_result.name = name;
+    session->prompt_mark_result.name_capacity = capacity;
+}
+
+static void field_mark_shadow_reset(
+    vxml_cmeta_session_data *session,
+    size_t field_index) {
+    vxml_cmeta_field_mark_shadow *shadow;
+    char *name;
+    size_t capacity;
+    if (session == NULL ||
+        session->field_mark_shadows == NULL ||
+        field_index >= session->field_mark_shadow_count)
+        return;
+    shadow = &session->field_mark_shadows[field_index];
+    name = shadow->name;
+    capacity = shadow->name_capacity;
+    *shadow = (vxml_cmeta_field_mark_shadow){0};
+    shadow->name = name;
+    shadow->name_capacity = capacity;
+}
+
+static vxml_status snapshot_field_mark_shadow(
+    vxml_cmeta_session_data *session,
+    size_t field_index,
+    uint64_t collect_generation) {
+    vxml_cmeta_field_mark_shadow *shadow;
+    if (session == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (session->field_mark_shadows == NULL ||
+        field_index >= session->field_mark_shadow_count)
+        return VXML_OK;
+
+    field_mark_shadow_reset(session, field_index);
+    shadow = &session->field_mark_shadows[field_index];
+    shadow->assigned = true;
+    if (!session->prompt_mark_result.live ||
+        session->prompt_mark_result.generation !=
+            collect_generation)
+        return VXML_OK;
+
+    if (session->prompt_mark_result.name == NULL ||
+        session->prompt_mark_result.name_size == 0u ||
+        shadow->name == NULL ||
+        session->prompt_mark_result.name_size >
+            shadow->name_capacity)
+        return VXML_INVALID_STRUCTURE;
+
+    memcpy(
+        shadow->name,
+        session->prompt_mark_result.name,
+        session->prompt_mark_result.name_size);
+    shadow->name_size =
+        session->prompt_mark_result.name_size;
+    shadow->marktime_ms =
+        session->prompt_mark_result.marktime_ms;
+    shadow->has_mark = true;
+    return VXML_OK;
+}
+
+static vxml_status snapshot_committed_mark_shadows(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_collect_mailbox *mailbox,
+    uint64_t collect_generation) {
+    const cmeta_data_struct_shape *root_shape;
+    size_t field_offset;
+    if (session == NULL || program == NULL ||
+        form == NULL || mailbox == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (session->field_mark_shadows == NULL)
+        return VXML_OK;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL ||
+        !range_valid(
+            form->first_field, form->field_count,
+            program->field_count) ||
+        (form->field_count != 0u && program->fields == NULL))
+        return VXML_INVALID_STRUCTURE;
+
+    for (field_offset = 0u;
+         field_offset < form->field_count;
+         ++field_offset) {
+        const size_t field_index =
+            form->first_field + field_offset;
+        const vxml_cmeta_field_row *field =
+            &program->fields[field_index];
+        size_t slot;
+        bool completed = false;
+        if (field->root_field >= root_shape->field_count ||
+            session->committed_root.bound == NULL)
+            return VXML_INVALID_STRUCTURE;
+        for (slot = 0u; slot < mailbox->slot_count; ++slot)
+            if (mailbox->root_fields[slot] ==
+                field->root_field) {
+                completed = true;
+                break;
+            }
+        if (!completed ||
+            session->committed_root.bound[
+                field->root_field] == 0u)
+            continue;
+        {
+            const vxml_status status =
+                snapshot_field_mark_shadow(
+                    session, field_index,
+                    collect_generation);
+            if (status != VXML_OK)
+                return status;
+        }
+    }
+    return VXML_OK;
 }
 
 static void collect_quiesce_generation(
@@ -1436,6 +1571,9 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->field_mark_shadow_name_storage);
+    vxml_free(session->field_mark_shadows);
+    vxml_free(session->prompt_mark_result_name);
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
@@ -1561,6 +1699,7 @@ static void apply_retry_resets(
             if (session->retry_reset_pending[index] != 0u) {
                 reset_field_retry_counters(session, index);
                 field_recording_shadow_reset(session, index);
+                field_mark_shadow_reset(session, index);
             }
     if (session->initial_retry_reset_pending != NULL)
         for (index = 0u; index < program->initial_count; ++index)
@@ -1784,6 +1923,112 @@ static vxml_status evaluate_recording_shadow_expression(
     return VXML_OK;
 }
 
+static bool collect_pending_mark_for_field(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t field_index) {
+    const vxml_cmeta_field_row *field;
+    unsigned state;
+    size_t slot;
+    if (session == NULL || program == NULL ||
+        field_index >= program->field_count ||
+        program->fields == NULL ||
+        !session->prompt_mark_result.live ||
+        session->prompt_mark_result.generation !=
+            session->collect_generation ||
+        session->collect_mailbox.root_fields == NULL ||
+        session->collect_mailbox.slot_count == 0u)
+        return false;
+    field = &program->fields[field_index];
+    if (session->staged_root.bound == NULL ||
+        field->root_field >=
+            session_root_shape(program)->field_count ||
+        session->staged_root.bound[field->root_field] == 0u)
+        return false;
+    state = atomic_load_explicit(
+        &session->collect_mailbox.state, memory_order_acquire);
+    if (state != VXML_CMETA_COLLECT_MAILBOX_WRITING)
+        return false;
+    for (slot = 0u;
+         slot < session->collect_mailbox.slot_count;
+         ++slot)
+        if (session->collect_mailbox.root_fields[slot] ==
+            field->root_field)
+            return true;
+    return false;
+}
+
+static vxml_status evaluate_mark_shadow_expression(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    bool staged,
+    const vxml_cmeta_expression_row *row,
+    vxml_cmeta_value_view *out_value) {
+    const vxml_cmeta_mark_result_slot *result = NULL;
+    const vxml_cmeta_field_mark_shadow *shadow = NULL;
+    if (session == NULL || program == NULL ||
+        row == NULL || out_value == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_value = (vxml_cmeta_value_view){
+        .kind = VXML_CMETA_VALUE_UNDEFINED};
+
+    switch (row->source_kind) {
+    case VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME:
+    case VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME:
+        if (session->prompt_mark_result.live)
+            result = &session->prompt_mark_result;
+        break;
+    case VXML_CMETA_EXPRESSION_FIELD_MARK_NAME:
+    case VXML_CMETA_EXPRESSION_FIELD_MARK_TIME:
+        if (row->source_field >= program->field_count)
+            return VXML_INVALID_STRUCTURE;
+        if (session->field_mark_shadows == NULL ||
+            row->source_field >=
+                session->field_mark_shadow_count)
+            return VXML_OK;
+        if (staged &&
+            collect_pending_mark_for_field(
+                session, program, row->source_field))
+            result = &session->prompt_mark_result;
+        else {
+            shadow =
+                &session->field_mark_shadows[row->source_field];
+            if (!shadow->assigned || !shadow->has_mark)
+                return VXML_OK;
+        }
+        break;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (result != NULL && !result->live)
+        return VXML_OK;
+    if (result == NULL && shadow == NULL)
+        return VXML_OK;
+
+    if (row->source_kind ==
+            VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME ||
+        row->source_kind ==
+            VXML_CMETA_EXPRESSION_FIELD_MARK_NAME) {
+        const char *name =
+            result != NULL ? result->name : shadow->name;
+        const size_t name_size =
+            result != NULL ? result->name_size : shadow->name_size;
+        if (name == NULL || name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        out_value->kind = VXML_CMETA_VALUE_STRING;
+        out_value->data.string.data = name;
+        out_value->data.string.size = name_size;
+    } else {
+        out_value->kind = VXML_CMETA_VALUE_UINT;
+        out_value->data.uint_value =
+            result != NULL
+                ? result->marktime_ms
+                : shadow->marktime_ms;
+    }
+    return VXML_OK;
+}
+
 static vxml_status evaluate_expression(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1801,10 +2046,20 @@ static vxml_status evaluate_expression(
         (scope_count != 0u && scopes == NULL))
         return VXML_INVALID_STRUCTURE;
     if (program->expressions[expression].source_kind !=
-            VXML_CMETA_EXPRESSION_GENERIC)
+            VXML_CMETA_EXPRESSION_GENERIC) {
+        const vxml_cmeta_expression_source_kind kind =
+            program->expressions[expression].source_kind;
+        if (kind == VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME ||
+            kind == VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME ||
+            kind == VXML_CMETA_EXPRESSION_FIELD_MARK_NAME ||
+            kind == VXML_CMETA_EXPRESSION_FIELD_MARK_TIME)
+            return evaluate_mark_shadow_expression(
+                session, program, staged,
+                &program->expressions[expression], out_value);
         return evaluate_recording_shadow_expression(
             session, program, staged,
             &program->expressions[expression], out_value);
+    }
     for (index = 0u; index < scope_count; ++index) {
         const size_t scope = scopes[index];
         unsigned char *declared;
@@ -3451,6 +3706,10 @@ vxml_status vxml_cmeta_session_init_profile(
     atomic_init(
         &profile->prompt_media_mailbox.generation, UINT64_C(0));
     atomic_init(
+        &profile->prompt_media_last_mark_elapsed_valid, false);
+    atomic_init(
+        &profile->prompt_media_last_mark_elapsed_ms, UINT64_C(0));
+    atomic_init(
         &profile->record_mailbox.state,
         VXML_CMETA_RECORD_MAILBOX_DISARMED);
     atomic_init(
@@ -3525,6 +3784,62 @@ vxml_status vxml_cmeta_session_init_profile(
             dynamic_storage_bytes;
         profile->prompt_media_last_mark_name_capacity =
             program->max_dynamic_mark_name_bytes;
+    }
+
+    {
+        size_t max_mark_name_bytes = program->max_dynamic_mark_name_bytes;
+        size_t index;
+        size_t field_name_bytes = 0u;
+        for (index = 0u; index < program->prompt_segment_count; ++index) {
+            const vxml_cmeta_prompt_media_segment_v1 *segment =
+                &program->prompt_segments[index];
+            if (segment->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+                segment->payload.size > max_mark_name_bytes)
+                max_mark_name_bytes = segment->payload.size;
+        }
+        if (max_mark_name_bytes != 0u) {
+            profile->prompt_mark_result_name =
+                (char *)vxml_malloc(max_mark_name_bytes);
+            if (profile->prompt_mark_result_name == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->prompt_mark_result.name =
+                profile->prompt_mark_result_name;
+            profile->prompt_mark_result.name_capacity =
+                max_mark_name_bytes;
+            if (program->field_count != 0u) {
+                if (!checked_multiply(
+                        program->field_count,
+                        max_mark_name_bytes,
+                        &field_name_bytes)) {
+                    status = VXML_LIMIT_EXCEEDED;
+                    goto failure;
+                }
+                profile->field_mark_shadows =
+                    (vxml_cmeta_field_mark_shadow *)vxml_calloc(
+                        program->field_count,
+                        sizeof(*profile->field_mark_shadows));
+                profile->field_mark_shadow_name_storage =
+                    (char *)vxml_malloc(field_name_bytes);
+                if (profile->field_mark_shadows == NULL ||
+                    profile->field_mark_shadow_name_storage == NULL) {
+                    status = VXML_ALLOCATION_FAILED;
+                    goto failure;
+                }
+                profile->field_mark_shadow_count =
+                    program->field_count;
+                profile->field_mark_shadow_name_stride =
+                    max_mark_name_bytes;
+                for (index = 0u; index < program->field_count; ++index) {
+                    profile->field_mark_shadows[index].name =
+                        profile->field_mark_shadow_name_storage +
+                        index * max_mark_name_bytes;
+                    profile->field_mark_shadows[index].name_capacity =
+                        max_mark_name_bytes;
+                }
+            }
+        }
     }
 
     {
@@ -7539,6 +7854,181 @@ vxml_status vxml_session_cmeta_recording_shadow(
     return VXML_OK;
 }
 
+typedef enum vxml_cmeta_mark_shadow_path_kind {
+    VXML_CMETA_MARK_SHADOW_INVALID = 0,
+    VXML_CMETA_MARK_SHADOW_APP_NAME,
+    VXML_CMETA_MARK_SHADOW_APP_TIME,
+    VXML_CMETA_MARK_SHADOW_FIELD_NAME,
+    VXML_CMETA_MARK_SHADOW_FIELD_TIME
+} vxml_cmeta_mark_shadow_path_kind;
+
+typedef struct vxml_cmeta_mark_shadow_path {
+    vxml_cmeta_mark_shadow_path_kind kind;
+    size_t field;
+} vxml_cmeta_mark_shadow_path;
+
+static vxml_status resolve_mark_shadow_path(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_data *profile,
+    const char *path, size_t path_size,
+    vxml_cmeta_mark_shadow_path *out) {
+    static const char app_name[] =
+        "application.lastresult$.markname";
+    static const char app_time[] =
+        "application.lastresult$.marktime";
+    static const char field_name_suffix[] = "$.markname";
+    static const char field_time_suffix[] = "$.marktime";
+    size_t owner_size = 0u;
+    size_t offset;
+    vxml_cmeta_mark_shadow_path_kind field_kind =
+        VXML_CMETA_MARK_SHADOW_INVALID;
+
+    if (out != NULL)
+        *out = (vxml_cmeta_mark_shadow_path){
+            VXML_CMETA_MARK_SHADOW_INVALID,
+            VXML_CMETA_NO_INDEX};
+    if (program == NULL || profile == NULL ||
+        path == NULL || path_size == 0u || out == NULL ||
+        memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (path_size == sizeof(app_name) - 1u &&
+        memcmp(path, app_name, path_size) == 0) {
+        out->kind = VXML_CMETA_MARK_SHADOW_APP_NAME;
+        return VXML_OK;
+    }
+    if (path_size == sizeof(app_time) - 1u &&
+        memcmp(path, app_time, path_size) == 0) {
+        out->kind = VXML_CMETA_MARK_SHADOW_APP_TIME;
+        return VXML_OK;
+    }
+
+    if (recording_shadow_suffix(
+            path, path_size,
+            field_name_suffix,
+            sizeof(field_name_suffix) - 1u,
+            &owner_size))
+        field_kind = VXML_CMETA_MARK_SHADOW_FIELD_NAME;
+    else if (recording_shadow_suffix(
+                 path, path_size,
+                 field_time_suffix,
+                 sizeof(field_time_suffix) - 1u,
+                 &owner_size))
+        field_kind = VXML_CMETA_MARK_SHADOW_FIELD_TIME;
+    else
+        return VXML_INVALID_ARGUMENT;
+
+    if (owner_size == 0u ||
+        profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STATE;
+
+    {
+        const vxml_cmeta_form_row *form =
+            &program->forms[profile->active_form];
+        if (!range_valid(
+                form->first_field, form->field_count,
+                program->field_count) ||
+            (form->field_count != 0u &&
+             program->fields == NULL))
+            return VXML_INVALID_STRUCTURE;
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index =
+                form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &program->fields[field_index];
+            if (field->name != NULL &&
+                field->name_size == owner_size &&
+                memcmp(field->name, path, owner_size) == 0) {
+                out->kind = field_kind;
+                out->field = field_index;
+                return VXML_OK;
+            }
+        }
+    }
+    return VXML_INVALID_ARGUMENT;
+}
+
+vxml_status vxml_session_cmeta_mark_shadow_value(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_value_view *out_value) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    vxml_cmeta_mark_shadow_path resolved;
+    const vxml_cmeta_mark_result_slot *result = NULL;
+    const vxml_cmeta_field_mark_shadow *shadow = NULL;
+    vxml_status status;
+
+    if (out_value != NULL)
+        *out_value = (vxml_cmeta_value_view){
+            .kind = VXML_CMETA_VALUE_UNDEFINED};
+    if (session == NULL || path == NULL || path_size == 0u ||
+        out_value == NULL || memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    status = resolve_mark_shadow_path(
+        program, profile, path, path_size, &resolved);
+    if (status != VXML_OK) return status;
+
+    switch (resolved.kind) {
+    case VXML_CMETA_MARK_SHADOW_APP_NAME:
+    case VXML_CMETA_MARK_SHADOW_APP_TIME:
+        if (profile->prompt_mark_result.live)
+            result = &profile->prompt_mark_result;
+        break;
+    case VXML_CMETA_MARK_SHADOW_FIELD_NAME:
+    case VXML_CMETA_MARK_SHADOW_FIELD_TIME:
+        if (profile->field_mark_shadows != NULL &&
+            resolved.field <
+                profile->field_mark_shadow_count) {
+            shadow =
+                &profile->field_mark_shadows[resolved.field];
+            if (!shadow->assigned || !shadow->has_mark)
+                shadow = NULL;
+        }
+        break;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (result == NULL && shadow == NULL)
+        return VXML_OK;
+
+    if (resolved.kind == VXML_CMETA_MARK_SHADOW_APP_NAME ||
+        resolved.kind == VXML_CMETA_MARK_SHADOW_FIELD_NAME) {
+        const char *name =
+            result != NULL ? result->name : shadow->name;
+        const size_t name_size =
+            result != NULL ? result->name_size : shadow->name_size;
+        if (name == NULL || name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        out_value->kind = VXML_CMETA_VALUE_STRING;
+        out_value->data.string.data = name;
+        out_value->data.string.size = name_size;
+    } else {
+        out_value->kind = VXML_CMETA_VALUE_UINT;
+        out_value->data.uint_value =
+            result != NULL
+                ? result->marktime_ms
+                : shadow->marktime_ms;
+    }
+    return VXML_OK;
+}
+
 static bool root_field_list_contains(
     const size_t *root_fields, size_t root_field_count,
     size_t root_field) {
@@ -8342,6 +8832,32 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         }
 
         transaction_commit(profile, program);
+
+        /*
+         * A committed recognition replaces application.lastresult$ even when
+         * this collect generation had no prompt or only a legacy V1 terminal.
+         * Do not let timed mark metadata from an older generation leak forward.
+         */
+        if (profile->prompt_mark_result.live &&
+            profile->prompt_mark_result.generation != generation)
+            prompt_mark_result_reset(profile);
+
+        status = snapshot_committed_mark_shadows(
+            profile, program, form, mailbox, generation);
+        if (status != VXML_OK) {
+            profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
+            mailbox->data = NULL;
+            mailbox->slot_count = 0u;
+            mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, status);
+        }
 
         /*
          * Every committed recognition replaces application.lastresult$.
@@ -10328,6 +10844,12 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->prompt_media_last_mark_name_size = 0u;
     atomic_store_explicit(
+        &profile->prompt_media_last_mark_elapsed_valid,
+        false, memory_order_release);
+    atomic_store_explicit(
+        &profile->prompt_media_last_mark_elapsed_ms,
+        UINT64_C(0), memory_order_relaxed);
+    atomic_store_explicit(
         &profile->prompt_media_mailbox.generation,
         profile->prompt_media_generation,
         memory_order_relaxed);
@@ -10372,50 +10894,33 @@ vxml_status vxml_session_cmeta_prompt_media_discard(
     return VXML_OK;
 }
 
-vxml_cmeta_prompt_media_ingress_result
-vxml_session_cmeta_prompt_media_try_complete(
+static vxml_cmeta_prompt_media_ingress_result
+prompt_media_try_complete_impl(
     vxml_session *session,
-    const vxml_cmeta_prompt_media_completion_v1 *completion) {
+    uint64_t generation_value,
+    vxml_cmeta_prompt_media_outcome outcome,
+    vxml_cmeta_prompt_media_failure failure,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned state;
     unsigned expected;
     uint64_t generation;
-    vxml_cmeta_prompt_media_failure failure =
-        VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE;
-    const size_t completion_prefix =
-        offsetof(vxml_cmeta_prompt_media_completion_v1, outcome) +
-        sizeof(completion->outcome);
-    const size_t failure_tail =
-        offsetof(vxml_cmeta_prompt_media_completion_v1, failure) +
-        sizeof(completion->failure);
 
-    if (session == NULL || completion == NULL ||
-        completion->abi_version !=
-            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
-        completion->struct_size < completion_prefix ||
-        completion->generation == 0u ||
-        (completion->outcome !=
-             VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
-         completion->outcome !=
-             VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
+    if (session == NULL || generation_value == 0u ||
+        (outcome != VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+         outcome != VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED))
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
-
-    if (completion->outcome ==
-            VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) {
-        if (completion->struct_size >= failure_tail)
-            failure = completion->failure;
+    if (outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED) {
         if (failure == VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE)
             failure = VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE;
         if (failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_BADFETCH &&
-            failure !=
-                VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
+            failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT &&
             failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NORESOURCE)
             return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
-    } else if (completion->struct_size >= failure_tail &&
-               completion->failure !=
-                    VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) {
+    } else if (failure != VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE) {
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
     }
 
@@ -10448,9 +10953,18 @@ vxml_session_cmeta_prompt_media_try_complete(
     generation = atomic_load_explicit(
         &mailbox->generation, memory_order_relaxed);
     if (!profile->prompt_media_in_flight ||
-        completion->generation != generation ||
-        completion->generation != profile->prompt_media_generation)
+        generation_value != generation ||
+        generation_value != profile->prompt_media_generation)
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
+    if (timing_valid &&
+        atomic_load_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            memory_order_acquire) &&
+        playback_elapsed_ms <
+            atomic_load_explicit(
+                &profile->prompt_media_last_mark_elapsed_ms,
+                memory_order_relaxed))
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
 
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY;
     if (!atomic_compare_exchange_strong_explicit(
@@ -10466,9 +10980,9 @@ vxml_session_cmeta_prompt_media_try_complete(
 
     if (atomic_load_explicit(
             &mailbox->generation, memory_order_relaxed) !=
-            completion->generation ||
+            generation_value ||
         !profile->prompt_media_in_flight ||
-        profile->prompt_media_generation != completion->generation) {
+        profile->prompt_media_generation != generation_value) {
         expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
         (void)atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
@@ -10477,13 +10991,18 @@ vxml_session_cmeta_prompt_media_try_complete(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_STALE;
     }
 
-    mailbox->outcome = completion->outcome;
+    mailbox->outcome = outcome;
     mailbox->failure = failure;
+    mailbox->timing_valid = timing_valid;
+    mailbox->playback_elapsed_ms =
+        timing_valid ? playback_elapsed_ms : UINT64_C(0);
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_WRITING;
     if (!atomic_compare_exchange_strong_explicit(
             &mailbox->state, &expected,
             VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY,
             memory_order_acq_rel, memory_order_acquire)) {
+        mailbox->timing_valid = false;
+        mailbox->playback_elapsed_ms = UINT64_C(0);
         if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_CLOSED)
             return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
         if (expected == VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
@@ -10493,16 +11012,138 @@ vxml_session_cmeta_prompt_media_try_complete(
     return VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED;
 }
 
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v1 *completion) {
+    vxml_cmeta_prompt_media_failure failure =
+        VXML_CMETA_PROMPT_MEDIA_FAILURE_NONE;
+    const size_t completion_prefix =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, outcome) +
+        sizeof(completion->outcome);
+    const size_t failure_tail =
+        offsetof(vxml_cmeta_prompt_media_completion_v1, failure) +
+        sizeof(completion->failure);
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 ||
+        completion->struct_size < completion_prefix)
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    if (completion->struct_size >= failure_tail)
+        failure = completion->failure;
+    return prompt_media_try_complete_impl(
+        session, completion->generation,
+        completion->outcome, failure,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v2 *completion) {
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2 ||
+        completion->struct_size < sizeof(*completion))
+        return VXML_CMETA_PROMPT_MEDIA_INGRESS_INVALID_ARGUMENT;
+    return prompt_media_try_complete_impl(
+        session, completion->generation,
+        completion->outcome, completion->failure,
+        true, completion->playback_elapsed_ms);
+}
+
+static vxml_status prompt_media_last_mark_name_view(
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    vxml_cmeta_name_view *out_name) {
+    const vxml_cmeta_prompt_media_segment_v1 *segment;
+    if (out_name != NULL) *out_name = (vxml_cmeta_name_view){0};
+    if (profile == NULL || program == NULL || out_name == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (profile->prompt_media_last_mark_segment == SIZE_MAX)
+        return VXML_INVALID_STATE;
+    if (program->prompt_segments == NULL ||
+        profile->prompt_media_last_mark_segment >=
+            program->prompt_segment_count)
+        return VXML_INVALID_STRUCTURE;
+    segment = &program->prompt_segments[
+        profile->prompt_media_last_mark_segment];
+    if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK)
+        return VXML_INVALID_STRUCTURE;
+    if (profile->prompt_media_last_mark_name_size != 0u) {
+        if (profile->prompt_media_last_mark_name == NULL ||
+            profile->prompt_media_last_mark_name_size >
+                profile->prompt_media_last_mark_name_capacity)
+            return VXML_INVALID_STRUCTURE;
+        *out_name = (vxml_cmeta_name_view){
+            profile->prompt_media_last_mark_name,
+            profile->prompt_media_last_mark_name_size};
+        return VXML_OK;
+    }
+    if (segment->payload.data == NULL ||
+        segment->payload.size == 0u)
+        return VXML_INVALID_STRUCTURE;
+    *out_name = segment->payload;
+    return VXML_OK;
+}
+
+static vxml_status prompt_mark_result_publish(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    uint64_t generation,
+    uint64_t terminal_elapsed_ms) {
+    vxml_cmeta_name_view name = {0};
+    uint64_t mark_elapsed_ms;
+    vxml_status status;
+
+    if (profile == NULL || program == NULL || generation == UINT64_C(0))
+        return VXML_INVALID_ARGUMENT;
+    if (profile->prompt_media_last_mark_segment == SIZE_MAX ||
+        !atomic_load_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            memory_order_acquire)) {
+        prompt_mark_result_reset(profile);
+        return VXML_OK;
+    }
+
+    mark_elapsed_ms = atomic_load_explicit(
+        &profile->prompt_media_last_mark_elapsed_ms,
+        memory_order_relaxed);
+    if (terminal_elapsed_ms < mark_elapsed_ms)
+        return VXML_INVALID_ARGUMENT;
+    status = prompt_media_last_mark_name_view(
+        profile, program, &name);
+    if (status != VXML_OK)
+        return status;
+    if (profile->prompt_mark_result.name == NULL ||
+        name.size == 0u ||
+        name.size > profile->prompt_mark_result.name_capacity)
+        return VXML_INVALID_STRUCTURE;
+
+    prompt_mark_result_reset(profile);
+    memcpy(
+        profile->prompt_mark_result.name,
+        name.data, name.size);
+    profile->prompt_mark_result.name_size = name.size;
+    profile->prompt_mark_result.marktime_ms =
+        terminal_elapsed_ms - mark_elapsed_ms;
+    profile->prompt_mark_result.generation = generation;
+    profile->prompt_mark_result.live = true;
+    return VXML_OK;
+}
+
 vxml_status vxml_session_cmeta_prompt_media_run_ready(
     vxml_session *session,
     bool *out_progressed,
     vxml_cmeta_prompt_media_outcome *out_outcome) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned expected;
     uint64_t generation;
     vxml_cmeta_prompt_media_failure failure;
+    vxml_status mark_status = VXML_OK;
 
     if (out_progressed != NULL) *out_progressed = false;
     if (out_outcome != NULL) *out_outcome = 0;
@@ -10521,6 +11162,8 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
         return VXML_INVALID_STATE;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     mailbox = &profile->prompt_media_mailbox;
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY;
     if (!atomic_compare_exchange_strong_explicit(
@@ -10563,21 +11206,36 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     *out_progressed = true;
     *out_outcome = mailbox->outcome;
     failure = mailbox->failure;
+
+    if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+        mailbox->timing_valid)
+        mark_status = prompt_mark_result_publish(
+            profile, program, generation,
+            mailbox->playback_elapsed_ms);
+    else
+        prompt_mark_result_reset(profile);
+
+    mailbox->timing_valid = false;
+    mailbox->playback_elapsed_ms = UINT64_C(0);
     profile->prompt_media_in_flight = false;
     profile->prompt_media_generation = 0u;
     prompt_media_mailbox_disarm(profile);
+    if (mark_status != VXML_OK)
+        return mark_status;
     if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED)
         return prompt_media_raise_failure(session, failure);
     return VXML_OK;
 }
 
-vxml_cmeta_prompt_barge_result
-vxml_session_cmeta_prompt_media_barge_in(
+static vxml_cmeta_prompt_barge_result prompt_media_barge_impl(
     vxml_session *session,
     uint64_t collect_generation,
-    vxml_cmeta_prompt_bargein_type signal_type) {
+    vxml_cmeta_prompt_bargein_type signal_type,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     const vxml_cmeta_field_row *field = NULL;
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
@@ -10593,11 +11251,14 @@ vxml_session_cmeta_prompt_media_barge_in(
         return VXML_CMETA_PROMPT_BARGE_STALE;
     if (impl->program == NULL ||
         impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
         impl->profile_data == NULL ||
         impl->state != VXML_SESSION_RUNNING)
         return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     if (collect_generation != profile->collect_generation ||
         !profile->prompt_media_in_flight ||
         profile->prompt_media_generation != collect_generation)
@@ -10616,19 +11277,55 @@ vxml_session_cmeta_prompt_media_barge_in(
         prompt->bargein_type != signal_type)
         return VXML_CMETA_PROMPT_BARGE_TYPE_MISMATCH;
 
+    if (timing_valid) {
+        status = prompt_mark_result_publish(
+            profile, program, collect_generation,
+            playback_elapsed_ms);
+        if (status != VXML_OK)
+            return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+    } else {
+        prompt_mark_result_reset(profile);
+    }
+
     profile->prompt_media_barged_generation =
         collect_generation;
     settle_prompt_media(profile);
     return VXML_CMETA_PROMPT_BARGE_CANCELED;
 }
 
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in(
+    vxml_session *session,
+    uint64_t collect_generation,
+    vxml_cmeta_prompt_bargein_type signal_type) {
+    return prompt_media_barge_impl(
+        session, collect_generation, signal_type,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_barge_v2 *barge) {
+    if (barge == NULL ||
+        barge->abi_version != VXML_CMETA_PROMPT_BARGE_ABI_V2 ||
+        barge->struct_size < sizeof(*barge))
+        return VXML_CMETA_PROMPT_BARGE_INVALID_ARGUMENT;
+    return prompt_media_barge_impl(
+        session,
+        barge->collect_generation,
+        barge->signal_type,
+        true,
+        barge->playback_elapsed_ms);
+}
 
 
-vxml_cmeta_prompt_mark_result
-vxml_session_cmeta_prompt_media_mark(
+static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
     vxml_session *session,
     uint64_t generation,
-    size_t segment_index) {
+    size_t segment_index,
+    bool timing_valid,
+    uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
@@ -10653,7 +11350,11 @@ vxml_session_cmeta_prompt_media_mark(
     profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (!profile->prompt_media_in_flight ||
         profile->prompt_media_generation != generation ||
-        profile->prompt_media_mark_generation != generation)
+        profile->prompt_media_mark_generation != generation ||
+        atomic_load_explicit(
+            &profile->prompt_media_mailbox.state,
+            memory_order_acquire) !=
+                VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY)
         return VXML_CMETA_PROMPT_MARK_STALE;
 
     status = selected_prompt_row(
@@ -10679,6 +11380,15 @@ vxml_session_cmeta_prompt_media_mark(
 
     if (profile->prompt_media_last_mark_segment != SIZE_MAX &&
         absolute_index <= profile->prompt_media_last_mark_segment)
+        return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
+    if (timing_valid &&
+        atomic_load_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            memory_order_acquire) &&
+        playback_elapsed_ms <
+            atomic_load_explicit(
+                &profile->prompt_media_last_mark_elapsed_ms,
+                memory_order_relaxed))
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
 
     profile->prompt_media_last_mark_name_size = 0u;
@@ -10713,8 +11423,51 @@ vxml_session_cmeta_prompt_media_mark(
         profile->prompt_media_last_mark_name_size =
             projected->payload.size;
     }
+
     profile->prompt_media_last_mark_segment = absolute_index;
+    if (timing_valid) {
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_ms,
+            playback_elapsed_ms, memory_order_relaxed);
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            true, memory_order_release);
+    } else {
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_valid,
+            false, memory_order_release);
+        atomic_store_explicit(
+            &profile->prompt_media_last_mark_elapsed_ms,
+            UINT64_C(0), memory_order_relaxed);
+    }
     return VXML_CMETA_PROMPT_MARK_ACCEPTED;
+}
+
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark(
+    vxml_session *session,
+    uint64_t generation,
+    size_t segment_index) {
+    return prompt_media_mark_impl(
+        session, generation, segment_index,
+        false, UINT64_C(0));
+}
+
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_mark_progress_v2 *progress) {
+    if (progress == NULL ||
+        progress->abi_version !=
+            VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2 ||
+        progress->struct_size < sizeof(*progress))
+        return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+    return prompt_media_mark_impl(
+        session,
+        progress->generation,
+        progress->segment_index,
+        true,
+        progress->playback_elapsed_ms);
 }
 
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
