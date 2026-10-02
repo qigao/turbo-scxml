@@ -1272,13 +1272,16 @@ static vxml_status cmeta_measure_executable(
         static const char *const allowed[] = {"namelist"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
     } else if (cmeta_node_named(node, "goto")) {
-        static const char *const allowed[] = {"next", "nextexpr"};
+        static const char *const allowed[] = {
+            "next", "nextexpr", "fetchaudio"};
         const salts_xml_attribute next =
             cmeta_attribute(node, "next");
         const salts_xml_attribute nextexpr =
             cmeta_attribute(node, "nextexpr");
+        const salts_xml_attribute fetchaudio =
+            cmeta_attribute(node, "fetchaudio");
         size_t decoded_size = 0u;
-        status = cmeta_validate_attributes(node, allowed, 2u, diagnostic);
+        status = cmeta_validate_attributes(node, allowed, 3u, diagnostic);
         if (status == VXML_OK && nextexpr.impl != NULL)
             status = cmeta_program_fail(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
@@ -1300,6 +1303,19 @@ static vxml_status cmeta_measure_executable(
                     ? VXML_INVALID_STRUCTURE : VXML_XML_ERROR,
                 salts_xml_attribute_location(next),
                 "VoiceXML goto next is empty or contains an invalid XML reference");
+        if (status == VXML_OK && fetchaudio.impl != NULL) {
+            size_t fetchaudio_size = 0u;
+            if (!cmeta_decode_entities(
+                    salts_xml_attribute_value(fetchaudio),
+                    NULL, 0u, &fetchaudio_size) ||
+                fetchaudio_size == 0u)
+                status = cmeta_program_fail(
+                    diagnostic,
+                    fetchaudio_size == 0u
+                        ? VXML_INVALID_STRUCTURE : VXML_XML_ERROR,
+                    salts_xml_attribute_location(fetchaudio),
+                    "VoiceXML goto fetchaudio is empty or contains an invalid XML reference");
+        }
     } else if (cmeta_node_named(node, "if")) {
         static const char *const allowed[] = {"cond"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
@@ -1361,9 +1377,16 @@ static vxml_status cmeta_measure_executable(
         if (status != VXML_OK) return status;
     }
     if (cmeta_node_named(node, "goto")) {
+        const salts_xml_attribute fetchaudio =
+            cmeta_attribute(node, "fetchaudio");
         status = cmeta_measure_name(
             cmeta_attribute(node, "next"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
+        if (fetchaudio.impl != NULL) {
+            status = cmeta_measure_name(
+                fetchaudio, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+        }
     }
     if (!cmeta_node_named(node, "if") &&
         !cmeta_node_named(node, "var")) {
@@ -9130,6 +9153,8 @@ static vxml_status cmeta_lower_simple_action(
     } else if (cmeta_node_named(node, "goto")) {
             const salts_xml_attribute next =
                 cmeta_attribute(node, "next");
+            const salts_xml_attribute fetchaudio =
+                cmeta_attribute(node, "fetchaudio");
             action->kind = VXML_CMETA_ACTION_GOTO;
             if (next.impl == NULL)
                 return cmeta_program_fail(
@@ -9147,6 +9172,19 @@ static vxml_status cmeta_lower_simple_action(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_attribute_location(next),
                     "VoiceXML goto next disappeared between compiler passes");
+            if (fetchaudio.impl != NULL) {
+                status = cmeta_retain_decoded_view(
+                    builder, salts_xml_attribute_value(fetchaudio),
+                    salts_xml_attribute_location(fetchaudio),
+                    &action->navigation_fetchaudio_uri,
+                    &action->navigation_fetchaudio_uri_size);
+                if (status != VXML_OK) return status;
+                if (action->navigation_fetchaudio_uri_size == 0u)
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(fetchaudio),
+                        "VoiceXML goto fetchaudio disappeared between compiler passes");
+            }
     } else if (cmeta_node_named(node, "exit")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(node, "expr");
