@@ -8,6 +8,12 @@ static const char submit_urlencoded_type[] =
     "application/x-www-form-urlencoded";
 static const char submit_vxml_type[] =
     "application/voicexml+xml";
+static const char submit_multipart_type[] =
+    "multipart/form-data";
+static const char submit_boundary_prefix[] =
+    "----TurboSCXMLVoiceXML";
+static const char submit_default_filename[] =
+    "recording";
 
 static bool bytes_valid(
     const char *data, size_t size, bool allow_empty) {
@@ -23,7 +29,7 @@ static bool view_equal_literal(
         memcmp(data, literal, size) == 0;
 }
 
-static bool adapter_valid(
+static bool adapter_close_valid(
     const vxml_submit_resource_adapter_v1 *adapter) {
     const size_t prefix =
         offsetof(vxml_submit_resource_adapter_v1, close) +
@@ -31,8 +37,23 @@ static bool adapter_valid(
     return adapter != NULL &&
         adapter->abi_version == VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 &&
         adapter->struct_size >= prefix &&
-        adapter->execute != NULL &&
         adapter->close != NULL;
+}
+
+static bool adapter_valid(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    return adapter_close_valid(adapter) &&
+        adapter->execute != NULL;
+}
+
+static bool adapter_v2_valid(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t tail =
+        offsetof(vxml_submit_resource_adapter_v1, execute_v2) +
+        sizeof(adapter->execute_v2);
+    return adapter_close_valid(adapter) &&
+        adapter->struct_size >= tail &&
+        adapter->execute_v2 != NULL;
 }
 
 static void close_if_live(
@@ -356,11 +377,665 @@ vxml_submit_resource_status vxml_submit_resource_execute(
     return VXML_SUBMIT_RESOURCE_OK;
 }
 
+static bool checked_add_size(
+    size_t *value, size_t amount) {
+    if (value == NULL || amount > SIZE_MAX - *value)
+        return false;
+    *value += amount;
+    return true;
+}
+
+static bool multipart_header_bytes_valid(
+    const char *data, size_t size, bool allow_empty) {
+    size_t index;
+    if (!bytes_valid(data, size, allow_empty))
+        return false;
+    for (index = 0u; index < size; ++index)
+        if (data[index] == '\r' || data[index] == '\n')
+            return false;
+    return true;
+}
+
+static bool multipart_quoted_size(
+    const char *data, size_t size, size_t *out) {
+    size_t total = 0u;
+    size_t index;
+    if (out == NULL ||
+        !multipart_header_bytes_valid(data, size, false))
+        return false;
+    for (index = 0u; index < size; ++index) {
+        const size_t add =
+            data[index] == '"' || data[index] == '\\' ? 2u : 1u;
+        if (!checked_add_size(&total, add))
+            return false;
+    }
+    *out = total;
+    return true;
+}
+
+static void multipart_write_quoted(
+    char *out, size_t *cursor,
+    const char *data, size_t size) {
+    size_t index;
+    for (index = 0u; index < size; ++index) {
+        if (data[index] == '"' || data[index] == '\\')
+            out[(*cursor)++] = '\\';
+        out[(*cursor)++] = data[index];
+    }
+}
+
+static uint64_t multipart_hash_bytes(
+    uint64_t hash, const void *data, size_t size) {
+    const unsigned char *bytes =
+        (const unsigned char *)data;
+    size_t index;
+    for (index = 0u; index < size; ++index) {
+        hash ^= (uint64_t)bytes[index];
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static uint64_t multipart_hash_size(
+    uint64_t hash, size_t value) {
+    size_t index;
+    for (index = 0u; index < sizeof(value); ++index) {
+        const unsigned char byte =
+            (unsigned char)((value >> (index * 8u)) & 0xffu);
+        hash ^= (uint64_t)byte;
+        hash *= UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static size_t multipart_make_boundary(
+    char *out, uint64_t hash, unsigned attempt) {
+    static const char hex[] = "0123456789ABCDEF";
+    const size_t prefix_size =
+        sizeof(submit_boundary_prefix) - 1u;
+    size_t cursor = 0u;
+    unsigned index;
+    memcpy(out, submit_boundary_prefix, prefix_size);
+    cursor += prefix_size;
+    out[cursor++] = '-';
+    for (index = 0u; index < 16u; ++index) {
+        const unsigned shift = (15u - index) * 4u;
+        out[cursor++] = hex[
+            (unsigned)((hash >> shift) & UINT64_C(0x0f))];
+    }
+    out[cursor++] = '-';
+    out[cursor++] = hex[(attempt >> 4u) & 0x0fu];
+    out[cursor++] = hex[attempt & 0x0fu];
+    out[cursor] = '\0';
+    return cursor;
+}
+
+static bool multipart_contains(
+    const void *data, size_t size,
+    const char *needle, size_t needle_size) {
+    const unsigned char *bytes =
+        (const unsigned char *)data;
+    size_t index;
+    if (needle_size == 0u || size < needle_size ||
+        data == NULL || needle == NULL)
+        return false;
+    for (index = 0u; index <= size - needle_size; ++index)
+        if (memcmp(bytes + index, needle, needle_size) == 0)
+            return true;
+    return false;
+}
+
+static bool multipart_boundary_conflicts(
+    const vxml_submit_multipart_request_v1 *request,
+    const char *boundary, size_t boundary_size) {
+    size_t index;
+    for (index = 0u; index < request->field_count; ++index)
+        if (multipart_contains(
+                request->fields[index].value,
+                request->fields[index].value_size,
+                boundary, boundary_size))
+            return true;
+    for (index = 0u; index < request->recording_count; ++index)
+        if (multipart_contains(
+                request->recordings[index].data,
+                request->recordings[index].size,
+                boundary, boundary_size))
+            return true;
+    return false;
+}
+
+static bool multipart_name_duplicate(
+    const vxml_submit_multipart_request_v1 *request,
+    const char *name, size_t name_size,
+    size_t text_before, size_t recording_before) {
+    size_t index;
+    for (index = 0u; index < text_before; ++index) {
+        const vxml_submit_field_v1 *field =
+            &request->fields[index];
+        if (field->name_size == name_size &&
+            memcmp(field->name, name, name_size) == 0)
+            return true;
+    }
+    for (index = 0u; index < recording_before; ++index) {
+        const vxml_submit_recording_field_v1 *field =
+            &request->recordings[index];
+        if (field->name_size == name_size &&
+            memcmp(field->name, name, name_size) == 0)
+            return true;
+    }
+    return false;
+}
+
+static vxml_submit_resource_status multipart_validate(
+    const vxml_submit_multipart_request_v1 *request,
+    char *boundary, size_t *out_boundary_size,
+    size_t *out_metadata_size,
+    size_t *out_segment_capacity,
+    size_t *out_body_size) {
+    static const size_t text_fixed =
+        sizeof("--\r\nContent-Disposition: form-data; name=\"\"\r\n\r\n") -
+        1u;
+    static const size_t recording_fixed =
+        sizeof("--\r\nContent-Disposition: form-data; name=\"\"; filename=\"\"\r\nContent-Type: \r\n\r\n") -
+        1u;
+    static const size_t trailer_fixed =
+        sizeof("\r\n----\r\n") - 1u;
+    uint64_t hash = UINT64_C(1469598103934665603);
+    size_t parts;
+    size_t metadata = 0u;
+    size_t body = 0u;
+    size_t segments = 1u; /* final trailer */
+    size_t part_index = 0u;
+    size_t index;
+    unsigned attempt;
+    size_t boundary_size = 0u;
+
+    if (request == NULL || boundary == NULL ||
+        out_boundary_size == NULL || out_metadata_size == NULL ||
+        out_segment_capacity == NULL || out_body_size == NULL ||
+        request->abi_version != VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        !bytes_valid(request->target, request->target_size, false) ||
+        (request->base_document_uri_size != 0u &&
+         !bytes_valid(
+             request->base_document_uri,
+             request->base_document_uri_size, false)) ||
+        request->recording_count == 0u ||
+        request->recordings == NULL ||
+        (request->field_count != 0u && request->fields == NULL) ||
+        request->max_uri_bytes == 0u ||
+        request->max_uri_bytes == SIZE_MAX ||
+        request->max_body_bytes == 0u ||
+        request->max_body_bytes == SIZE_MAX ||
+        request->max_response_bytes == 0u ||
+        request->max_parts == 0u ||
+        request->max_boundary_bytes == 0u ||
+        request->max_header_bytes == 0u ||
+        request->max_segments == 0u)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+
+    if (request->field_count > SIZE_MAX - request->recording_count)
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+    parts = request->field_count + request->recording_count;
+    if (parts > request->max_parts)
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+
+    hash = multipart_hash_bytes(
+        hash, request->target, request->target_size);
+    hash = multipart_hash_size(hash, request->field_count);
+    hash = multipart_hash_size(hash, request->recording_count);
+
+    for (index = 0u; index < request->field_count; ++index) {
+        const vxml_submit_field_v1 *field =
+            &request->fields[index];
+        size_t quoted_name = 0u;
+        size_t header_size = text_fixed;
+        if (!multipart_quoted_size(
+                field->name, field->name_size, &quoted_name) ||
+            !bytes_valid(field->value, field->value_size, true) ||
+            field->value_size > request->max_body_bytes ||
+            multipart_name_duplicate(
+                request, field->name, field->name_size,
+                index, 0u))
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        if (part_index != 0u &&
+            !checked_add_size(&header_size, 2u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        ++part_index;
+        if (!checked_add_size(&header_size, quoted_name) ||
+            !checked_add_size(&metadata, header_size) ||
+            !checked_add_size(&body, header_size) ||
+            !checked_add_size(&body, field->value_size) ||
+            !checked_add_size(
+                &segments, field->value_size != 0u ? 2u : 1u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        hash = multipart_hash_bytes(
+            hash, field->name, field->name_size);
+        hash = multipart_hash_bytes(
+            hash, field->value, field->value_size);
+    }
+
+    for (index = 0u; index < request->recording_count; ++index) {
+        const vxml_submit_recording_field_v1 *field =
+            &request->recordings[index];
+        const char *filename =
+            field->filename_size != 0u
+                ? field->filename : submit_default_filename;
+        const size_t filename_size =
+            field->filename_size != 0u
+                ? field->filename_size
+                : sizeof(submit_default_filename) - 1u;
+        size_t quoted_name = 0u;
+        size_t quoted_filename = 0u;
+        size_t header_size = recording_fixed;
+        if (!multipart_quoted_size(
+                field->name, field->name_size, &quoted_name) ||
+            !multipart_quoted_size(
+                filename, filename_size, &quoted_filename) ||
+            !multipart_header_bytes_valid(
+                field->media_type,
+                field->media_type_size, false) ||
+            field->data == NULL || field->size == 0u ||
+            field->size > request->max_body_bytes ||
+            multipart_name_duplicate(
+                request, field->name, field->name_size,
+                request->field_count, index))
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        if (part_index != 0u &&
+            !checked_add_size(&header_size, 2u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        ++part_index;
+        if (!checked_add_size(&header_size, quoted_name) ||
+            !checked_add_size(&header_size, quoted_filename) ||
+            !checked_add_size(&header_size, field->media_type_size) ||
+            !checked_add_size(&metadata, header_size) ||
+            !checked_add_size(&body, header_size) ||
+            !checked_add_size(&body, field->size) ||
+            !checked_add_size(&segments, 2u))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        hash = multipart_hash_bytes(
+            hash, field->name, field->name_size);
+        hash = multipart_hash_bytes(
+            hash, filename, filename_size);
+        hash = multipart_hash_bytes(
+            hash, field->media_type, field->media_type_size);
+        hash = multipart_hash_bytes(
+            hash, field->data, field->size);
+    }
+
+    for (attempt = 0u; attempt < 16u; ++attempt) {
+        const uint64_t candidate_hash =
+            hash ^ ((uint64_t)(attempt + 1u) *
+                    UINT64_C(0x9E3779B97F4A7C15));
+        boundary_size = multipart_make_boundary(
+            boundary, candidate_hash, attempt);
+        if (boundary_size > request->max_boundary_bytes)
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+        if (!multipart_boundary_conflicts(
+                request, boundary, boundary_size))
+            break;
+    }
+    if (attempt == 16u)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+
+    /*
+     * Every part contributes "--" plus the complete boundary. The fixed
+     * constants above already contain the delimiter dashes, so only the
+     * boundary bytes themselves are added here.
+     */
+    if (parts != 0u && boundary_size > SIZE_MAX / parts)
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+    if (!checked_add_size(
+            &metadata, parts * boundary_size) ||
+        !checked_add_size(
+            &body, parts * boundary_size))
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+
+    {
+        size_t trailer = trailer_fixed;
+        if (!checked_add_size(&trailer, boundary_size) ||
+            !checked_add_size(&metadata, trailer) ||
+            !checked_add_size(&body, trailer))
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+    }
+
+    {
+        const size_t content_type_size =
+            sizeof(submit_multipart_type) - 1u +
+            sizeof("; boundary=") - 1u +
+            boundary_size;
+        size_t header_budget = metadata;
+        if (!checked_add_size(&header_budget, content_type_size) ||
+            header_budget > request->max_header_bytes ||
+            body > request->max_body_bytes ||
+            segments > request->max_segments)
+            return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+    }
+
+    *out_boundary_size = boundary_size;
+    *out_metadata_size = metadata;
+    *out_segment_capacity = segments;
+    *out_body_size = body;
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
+static void multipart_copy(
+    char *out, size_t *cursor,
+    const void *data, size_t size) {
+    if (size != 0u) {
+        memcpy(out + *cursor, data, size);
+        *cursor += size;
+    }
+}
+
+static void multipart_add_segment(
+    vxml_submit_body_segment_v1 *segments,
+    size_t *segment_count,
+    const void *data, size_t size) {
+    if (size == 0u) return;
+    segments[*segment_count] =
+        (vxml_submit_body_segment_v1){data, size};
+    ++*segment_count;
+}
+
+static vxml_submit_resource_status multipart_build(
+    const vxml_submit_multipart_request_v1 *request,
+    const char *boundary, size_t boundary_size,
+    char *metadata, size_t metadata_size,
+    vxml_submit_body_segment_v1 *segments,
+    size_t segment_capacity,
+    size_t *out_segment_count) {
+    static const char disposition[] =
+        "Content-Disposition: form-data; name=\"";
+    static const char filename_marker[] =
+        "\"; filename=\"";
+    static const char content_type_marker[] =
+        "\"\r\nContent-Type: ";
+    static const char text_header_end[] =
+        "\"\r\n\r\n";
+    static const char recording_header_end[] =
+        "\r\n\r\n";
+    size_t cursor = 0u;
+    size_t segment_count = 0u;
+    size_t index;
+
+    if (out_segment_count == NULL)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    *out_segment_count = 0u;
+
+    for (index = 0u; index < request->field_count; ++index) {
+        const vxml_submit_field_v1 *field =
+            &request->fields[index];
+        const size_t start = cursor;
+        if (index != 0u)
+            multipart_copy(
+                metadata, &cursor, "\r\n", 2u);
+        multipart_copy(metadata, &cursor, "--", 2u);
+        multipart_copy(
+            metadata, &cursor, boundary, boundary_size);
+        multipart_copy(metadata, &cursor, "\r\n", 2u);
+        multipart_copy(
+            metadata, &cursor,
+            disposition, sizeof(disposition) - 1u);
+        multipart_write_quoted(
+            metadata, &cursor, field->name, field->name_size);
+        multipart_copy(
+            metadata, &cursor,
+            text_header_end, sizeof(text_header_end) - 1u);
+        if (cursor > metadata_size ||
+            segment_count >= segment_capacity)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        multipart_add_segment(
+            segments, &segment_count,
+            metadata + start, cursor - start);
+        multipart_add_segment(
+            segments, &segment_count,
+            field->value, field->value_size);
+        if (segment_count > segment_capacity)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    }
+
+    for (index = 0u; index < request->recording_count; ++index) {
+        const vxml_submit_recording_field_v1 *field =
+            &request->recordings[index];
+        const char *filename =
+            field->filename_size != 0u
+                ? field->filename : submit_default_filename;
+        const size_t filename_size =
+            field->filename_size != 0u
+                ? field->filename_size
+                : sizeof(submit_default_filename) - 1u;
+        const size_t start = cursor;
+        if (request->field_count != 0u || index != 0u)
+            multipart_copy(
+                metadata, &cursor, "\r\n", 2u);
+        multipart_copy(metadata, &cursor, "--", 2u);
+        multipart_copy(
+            metadata, &cursor, boundary, boundary_size);
+        multipart_copy(metadata, &cursor, "\r\n", 2u);
+        multipart_copy(
+            metadata, &cursor,
+            disposition, sizeof(disposition) - 1u);
+        multipart_write_quoted(
+            metadata, &cursor, field->name, field->name_size);
+        multipart_copy(
+            metadata, &cursor,
+            filename_marker, sizeof(filename_marker) - 1u);
+        multipart_write_quoted(
+            metadata, &cursor, filename, filename_size);
+        multipart_copy(
+            metadata, &cursor,
+            content_type_marker,
+            sizeof(content_type_marker) - 1u);
+        multipart_copy(
+            metadata, &cursor,
+            field->media_type, field->media_type_size);
+        multipart_copy(
+            metadata, &cursor,
+            recording_header_end,
+            sizeof(recording_header_end) - 1u);
+        if (cursor > metadata_size ||
+            segment_count >= segment_capacity)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        multipart_add_segment(
+            segments, &segment_count,
+            metadata + start, cursor - start);
+        multipart_add_segment(
+            segments, &segment_count,
+            field->data, field->size);
+        if (segment_count > segment_capacity)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    }
+
+    {
+        const size_t start = cursor;
+        multipart_copy(metadata, &cursor, "\r\n--", 4u);
+        multipart_copy(
+            metadata, &cursor, boundary, boundary_size);
+        multipart_copy(metadata, &cursor, "--\r\n", 4u);
+        if (cursor != metadata_size ||
+            segment_count >= segment_capacity)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        multipart_add_segment(
+            segments, &segment_count,
+            metadata + start, cursor - start);
+    }
+
+    if (segment_count > segment_capacity)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    *out_segment_count = segment_count;
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
+vxml_submit_resource_status vxml_submit_resource_execute_multipart(
+    const vxml_document_store *resolver,
+    const vxml_submit_resource_adapter_v1 *adapter,
+    void *adapter_user,
+    const vxml_submit_multipart_request_v1 *request,
+    vxml_submit_response *out_response) {
+    char boundary[64];
+    char content_type[128];
+    char *resolved_uri = NULL;
+    char *fragment = NULL;
+    char *metadata = NULL;
+    vxml_submit_body_segment_v1 *segments = NULL;
+    size_t boundary_size = 0u;
+    size_t metadata_size = 0u;
+    size_t segment_capacity = 0u;
+    size_t segment_count = 0u;
+    size_t body_size = 0u;
+    size_t content_type_size = 0u;
+    vxml_resolved_uri_v1 resolved = VXML_RESOLVED_URI_V1_INIT;
+    vxml_submit_wire_request_v2 wire = {0};
+    vxml_submit_response response = {0};
+    vxml_submit_resource_status status;
+    vxml_document_store_status resolve_status;
+
+    if (out_response != NULL)
+        *out_response = (vxml_submit_response){0};
+    if (resolver == NULL || resolver->impl == NULL ||
+        !adapter_close_valid(adapter) ||
+        request == NULL || out_response == NULL)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    if (!adapter_v2_valid(adapter))
+        return VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING;
+
+    status = multipart_validate(
+        request, boundary, &boundary_size,
+        &metadata_size, &segment_capacity, &body_size);
+    if (status != VXML_SUBMIT_RESOURCE_OK)
+        return status;
+
+    content_type_size =
+        sizeof(submit_multipart_type) - 1u +
+        sizeof("; boundary=") - 1u +
+        boundary_size;
+    if (content_type_size >= sizeof(content_type))
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
+    memcpy(
+        content_type,
+        submit_multipart_type,
+        sizeof(submit_multipart_type) - 1u);
+    memcpy(
+        content_type + sizeof(submit_multipart_type) - 1u,
+        "; boundary=", sizeof("; boundary=") - 1u);
+    memcpy(
+        content_type +
+            sizeof(submit_multipart_type) - 1u +
+            sizeof("; boundary=") - 1u,
+        boundary, boundary_size);
+    content_type[content_type_size] = '\0';
+
+    resolved_uri = (char *)malloc(request->max_uri_bytes + 1u);
+    fragment = (char *)malloc(request->max_uri_bytes + 1u);
+    metadata = (char *)malloc(metadata_size);
+    segments = (vxml_submit_body_segment_v1 *)calloc(
+        segment_capacity, sizeof(*segments));
+    if (resolved_uri == NULL || fragment == NULL ||
+        metadata == NULL || segments == NULL) {
+        free(segments);
+        free(metadata);
+        free(fragment);
+        free(resolved_uri);
+        return VXML_SUBMIT_RESOURCE_ALLOCATION_FAILED;
+    }
+
+    resolved.document_uri = resolved_uri;
+    resolved.document_uri_capacity = request->max_uri_bytes + 1u;
+    resolved.fragment = fragment;
+    resolved.fragment_capacity = request->max_uri_bytes + 1u;
+    resolve_status = vxml_document_store_resolve(
+        resolver,
+        request->base_document_uri,
+        request->base_document_uri_size,
+        request->target,
+        request->target_size,
+        &resolved);
+    if (resolve_status != VXML_DOCUMENT_STORE_OK ||
+        resolved.document_uri_size == 0u) {
+        free(segments);
+        free(metadata);
+        free(fragment);
+        free(resolved_uri);
+        return resolve_status == VXML_DOCUMENT_STORE_LIMIT_EXCEEDED
+            ? VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED
+            : VXML_SUBMIT_RESOURCE_INVALID_URI;
+    }
+
+    status = multipart_build(
+        request, boundary, boundary_size,
+        metadata, metadata_size,
+        segments, segment_capacity, &segment_count);
+    if (status != VXML_SUBMIT_RESOURCE_OK) {
+        free(segments);
+        free(metadata);
+        free(fragment);
+        free(resolved_uri);
+        return status;
+    }
+
+    wire = (vxml_submit_wire_request_v2){
+        .abi_version = VXML_SUBMIT_WIRE_REQUEST_ABI_V2,
+        .struct_size = sizeof(vxml_submit_wire_request_v2),
+        .uri = resolved_uri,
+        .uri_size = resolved.document_uri_size,
+        .fragment =
+            resolved.fragment_size != 0u ? fragment : NULL,
+        .fragment_size = resolved.fragment_size,
+        .method = VXML_SUBMIT_METHOD_POST,
+        .content_type = content_type,
+        .content_type_size = content_type_size,
+        .segments = segments,
+        .segment_count = segment_count,
+        .body_size = body_size};
+
+    /*
+     * Exactly one provider attempt. There is no V1 buffering fallback and no
+     * retry after POSSIBLY_PROCESSED.
+     */
+    status = adapter->execute_v2(
+        adapter_user, &wire, &response);
+
+    free(segments);
+    free(metadata);
+    free(fragment);
+    free(resolved_uri);
+
+    if (status != VXML_SUBMIT_RESOURCE_OK) {
+        close_if_live(adapter, adapter_user, &response);
+        return status;
+    }
+    if (response.lease == NULL ||
+        (response.size != 0u && response.data == NULL) ||
+        response.size > request->max_response_bytes ||
+        !bytes_valid(
+            response.media_type,
+            response.media_type_size, false) ||
+        !view_equal_literal(
+            response.media_type,
+            response.media_type_size,
+            submit_vxml_type) ||
+        (response.effective_uri_size != 0u &&
+         !bytes_valid(
+             response.effective_uri,
+             response.effective_uri_size, false))) {
+        const vxml_submit_resource_status failure =
+            response.size > request->max_response_bytes
+                ? VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED
+                : VXML_SUBMIT_RESOURCE_INVALID_RESPONSE;
+        close_if_live(adapter, adapter_user, &response);
+        return failure;
+    }
+
+    *out_response = response;
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
 vxml_submit_resource_status vxml_submit_resource_close(
     const vxml_submit_resource_adapter_v1 *adapter,
     void *adapter_user,
     vxml_submit_response *response) {
-    if (!adapter_valid(adapter) || response == NULL)
+    if (!adapter_close_valid(adapter) || response == NULL)
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
     if (response->lease == NULL) {
         if (response->data != NULL || response->size != 0u ||
