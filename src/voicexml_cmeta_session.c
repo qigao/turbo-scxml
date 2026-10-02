@@ -1436,6 +1436,8 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->prompt_media_dynamic_mark_storage);
+    vxml_free(session->prompt_media_projected_segments);
     vxml_free(session->collect_mailbox.recording_media_type);
     vxml_free(session->collect_utterance_result_media_type);
     vxml_free(session->field_recording_shadows);
@@ -3477,6 +3479,47 @@ vxml_status vxml_cmeta_session_init_profile(
             profile->prompt_media_user = options->prompt_media_user;
         }
     }
+    if (program->prompt_mark_expr_count != 0u) {
+        size_t index;
+        size_t max_segments = 0u;
+        size_t max_dynamic_marks = 0u;
+        size_t dynamic_storage_bytes;
+        if (program->prompt_mark_exprs == NULL ||
+            program->max_dynamic_mark_name_bytes == 0u)
+            goto failure;
+        for (index = 0u; index < program->prompt_count; ++index) {
+            const vxml_cmeta_prompt_row *prompt =
+                &program->prompts[index];
+            if (prompt->segment_count > max_segments)
+                max_segments = prompt->segment_count;
+            if (prompt->dynamic_mark_count > max_dynamic_marks)
+                max_dynamic_marks = prompt->dynamic_mark_count;
+        }
+        if (max_segments == 0u || max_dynamic_marks == 0u ||
+            !checked_multiply(
+                max_dynamic_marks,
+                program->max_dynamic_mark_name_bytes,
+                &dynamic_storage_bytes)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->prompt_media_projected_segments =
+            (vxml_cmeta_prompt_media_segment_v1 *)vxml_calloc(
+                max_segments,
+                sizeof(*profile->prompt_media_projected_segments));
+        profile->prompt_media_dynamic_mark_storage =
+            (char *)vxml_malloc(dynamic_storage_bytes);
+        if (profile->prompt_media_projected_segments == NULL ||
+            profile->prompt_media_dynamic_mark_storage == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        profile->prompt_media_projected_segment_capacity =
+            max_segments;
+        profile->prompt_media_dynamic_mark_storage_capacity =
+            dynamic_storage_bytes;
+    }
+
     {
         const size_t subdialog_tail =
             offsetof(
