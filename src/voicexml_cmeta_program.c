@@ -3421,6 +3421,7 @@ static vxml_status cmeta_measure_form(
     size_t form_field_count = 0u;
     size_t form_initial_count = 0u;
     size_t form_subdialog_count = 0u;
+    size_t form_record_count = 0u;
     size_t grammar_count = 0u;
     bool saw_block = false;
     bool saw_directed = false;
@@ -3429,6 +3430,7 @@ static vxml_status cmeta_measure_form(
     const size_t first_field = measurement->field_count;
     const size_t first_initial = measurement->initial_count;
     const size_t first_subdialog = measurement->subdialog_count;
+    const size_t first_record = measurement->record_count;
 
     for (pre_index = 0u;
          pre_index < salts_xml_node_child_count(form);
@@ -3441,6 +3443,8 @@ static vxml_status cmeta_measure_form(
             ++form_initial_count;
         else if (cmeta_node_named(child, "subdialog"))
             ++form_subdialog_count;
+        else if (cmeta_node_named(child, "record"))
+            ++form_record_count;
         else if (cmeta_node_named(child, "grammar"))
             ++grammar_count;
     }
@@ -3573,6 +3577,23 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "record")) {
+            if (saw_block || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "record and block form items cannot mix in this profile");
+            saw_directed = true;
+            {
+                const vxml_status record_status =
+                    cmeta_measure_record(
+                        child, options, measurement, limits, diagnostic);
+                if (record_status != VXML_OK)
+                    return record_status;
+            }
+            continue;
+        }
+
         if (cmeta_node_named(child, "field")) {
             if (saw_block || saw_filled)
                 return cmeta_program_fail(
@@ -3600,11 +3621,18 @@ static vxml_status cmeta_measure_form(
                 measurement->initial_count - first_initial !=
                     form_initial_count ||
                 measurement->subdialog_count - first_subdialog !=
-                    form_subdialog_count)
+                    form_subdialog_count ||
+                measurement->record_count - first_record !=
+                    form_record_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form filled must follow all directed form items");
+            if (form_record_count != 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "form-level filled targeting record is deferred to the owned recording result slice");
             if (form_field_count > SIZE_MAX - form_subdialog_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
@@ -3649,7 +3677,8 @@ static vxml_status cmeta_measure_form(
     if (measurement->block_count == first_block &&
         measurement->field_count == first_field &&
         measurement->initial_count == first_initial &&
-        measurement->subdialog_count == first_subdialog)
+        measurement->subdialog_count == first_subdialog &&
+        measurement->record_count == first_record)
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(form),
