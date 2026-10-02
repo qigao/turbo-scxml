@@ -9948,6 +9948,9 @@ static vxml_status prompt_media_project_dynamic_marks(
         impl, &field, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
     (void)prompt_count;
+    profile->prompt_media_projected_generation = UINT64_C(0);
+    profile->prompt_media_projected_first_segment = SIZE_MAX;
+    profile->prompt_media_projected_segment_count = 0u;
     if (prompt == NULL || prompt->dynamic_mark_count == 0u)
         return VXML_OK;
 
@@ -10059,6 +10062,12 @@ static vxml_status prompt_media_project_dynamic_marks(
 
     batch->segments =
         profile->prompt_media_projected_segments;
+    profile->prompt_media_projected_generation =
+        batch->generation;
+    profile->prompt_media_projected_first_segment =
+        prompt->first_segment;
+    profile->prompt_media_projected_segment_count =
+        prompt->segment_count;
     return VXML_OK;
 }
 
@@ -10639,8 +10648,27 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
         profile->prompt_media_last_mark_segment >=
             program->prompt_segment_count)
         return VXML_INVALID_STRUCTURE;
-    segment = &program->prompt_segments[
-        profile->prompt_media_last_mark_segment];
+    if (profile->prompt_media_projected_generation ==
+            profile->prompt_media_mark_generation &&
+        profile->prompt_media_projected_first_segment != SIZE_MAX &&
+        profile->prompt_media_last_mark_segment >=
+            profile->prompt_media_projected_first_segment &&
+        profile->prompt_media_last_mark_segment -
+            profile->prompt_media_projected_first_segment <
+            profile->prompt_media_projected_segment_count) {
+        const size_t relative =
+            profile->prompt_media_last_mark_segment -
+            profile->prompt_media_projected_first_segment;
+        if (profile->prompt_media_projected_segments == NULL ||
+            relative >=
+                profile->prompt_media_projected_segment_capacity)
+            return VXML_INVALID_STRUCTURE;
+        segment =
+            &profile->prompt_media_projected_segments[relative];
+    } else {
+        segment = &program->prompt_segments[
+            profile->prompt_media_last_mark_segment];
+    }
     if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK ||
         segment->payload.data == NULL ||
         segment->payload.size == 0u)
