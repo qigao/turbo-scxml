@@ -344,6 +344,7 @@ typedef struct vxml_cmeta_location_row {
     const cmeta_data_desc *value;
     size_t first_candidate;
     size_t candidate_count;
+    bool collection;
     salts_xml_location location;
 } vxml_cmeta_location_row;
 
