@@ -268,12 +268,15 @@ spec("VoiceXML session") {
         it("exposes external goto fetchaudio through the versioned navigation request") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='first'><block>"
-                "<goto next='dialogs/next.vxml#target' "
-                "fetchaudio='media/wait.wav'/>"
-                "</block></form></vxml>";
+                "<property name='fetchaudio' value='media/default.wav'/>"
+                "<property name='fetchaudiodelay' value='250ms'/>"
+                "<form id='first'>"
+                "<property name='fetchaudio' value='media/form.wav'/>"
+                "<property name='fetchaudiominimum' value='1.5s'/>"
+                "<block><goto next='dialogs/next.vxml#target'/></block>"
+                "</form></vxml>";
             static const char expected[] = "dialogs/next.vxml#target";
-            static const char wait_audio[] = "media/wait.wav";
+            static const char wait_audio[] = "media/form.wav";
             vxml_program program = {0};
             vxml_session session = {0};
             vxml_navigation_target target = {0};
@@ -305,6 +308,14 @@ spec("VoiceXML session") {
             check_equal(
                 navigation.fetchaudio_uri,
                 wait_audio);
+            check_true(navigation.has_fetchaudio_delay);
+            check_equal(
+                navigation.fetchaudio_delay_us,
+                UINT64_C(250000));
+            check_true(navigation.has_fetchaudio_minimum);
+            check_equal(
+                navigation.fetchaudio_minimum_us,
+                UINT64_C(1500000));
             check_equal(
                 vxml_session_start(&session),
                 VXML_INVALID_STATE);
