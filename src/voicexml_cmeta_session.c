@@ -1436,6 +1436,9 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->field_mark_shadow_name_storage);
+    vxml_free(session->field_mark_shadows);
+    vxml_free(session->prompt_mark_result_name);
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
@@ -3451,6 +3454,10 @@ vxml_status vxml_cmeta_session_init_profile(
     atomic_init(
         &profile->prompt_media_mailbox.generation, UINT64_C(0));
     atomic_init(
+        &profile->prompt_media_last_mark_elapsed_valid, false);
+    atomic_init(
+        &profile->prompt_media_last_mark_elapsed_ms, UINT64_C(0));
+    atomic_init(
         &profile->record_mailbox.state,
         VXML_CMETA_RECORD_MAILBOX_DISARMED);
     atomic_init(
@@ -3525,6 +3532,62 @@ vxml_status vxml_cmeta_session_init_profile(
             dynamic_storage_bytes;
         profile->prompt_media_last_mark_name_capacity =
             program->max_dynamic_mark_name_bytes;
+    }
+
+    {
+        size_t max_mark_name_bytes = program->max_dynamic_mark_name_bytes;
+        size_t index;
+        size_t field_name_bytes = 0u;
+        for (index = 0u; index < program->prompt_segment_count; ++index) {
+            const vxml_cmeta_prompt_media_segment_v1 *segment =
+                &program->prompt_segments[index];
+            if (segment->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+                segment->payload.size > max_mark_name_bytes)
+                max_mark_name_bytes = segment->payload.size;
+        }
+        if (max_mark_name_bytes != 0u) {
+            profile->prompt_mark_result_name =
+                (char *)vxml_malloc(max_mark_name_bytes);
+            if (profile->prompt_mark_result_name == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->prompt_mark_result.name =
+                profile->prompt_mark_result_name;
+            profile->prompt_mark_result.name_capacity =
+                max_mark_name_bytes;
+            if (program->field_count != 0u) {
+                if (!checked_multiply(
+                        program->field_count,
+                        max_mark_name_bytes,
+                        &field_name_bytes)) {
+                    status = VXML_LIMIT_EXCEEDED;
+                    goto failure;
+                }
+                profile->field_mark_shadows =
+                    (vxml_cmeta_field_mark_shadow *)vxml_calloc(
+                        program->field_count,
+                        sizeof(*profile->field_mark_shadows));
+                profile->field_mark_shadow_name_storage =
+                    (char *)vxml_malloc(field_name_bytes);
+                if (profile->field_mark_shadows == NULL ||
+                    profile->field_mark_shadow_name_storage == NULL) {
+                    status = VXML_ALLOCATION_FAILED;
+                    goto failure;
+                }
+                profile->field_mark_shadow_count =
+                    program->field_count;
+                profile->field_mark_shadow_name_stride =
+                    max_mark_name_bytes;
+                for (index = 0u; index < program->field_count; ++index) {
+                    profile->field_mark_shadows[index].name =
+                        profile->field_mark_shadow_name_storage +
+                        index * max_mark_name_bytes;
+                    profile->field_mark_shadows[index].name_capacity =
+                        max_mark_name_bytes;
+                }
+            }
+        }
     }
 
     {
