@@ -280,6 +280,7 @@ typedef struct owner_fixture {
     vxml_document_store store;
     vxml_cmeta_subdialog_owner owner;
     vxml_document_ref root_ref;
+    bool root_ref_live;
     vxml_document_view root_view;
     vxml_session root_session;
 } owner_fixture;
@@ -348,6 +349,7 @@ static bool owner_fixture_init(
             &fixture->root_ref, &error) !=
         VXML_DOCUMENT_STORE_OK)
         return false;
+    fixture->root_ref_live = true;
     if (vxml_document_store_view(
             &fixture->store,
             fixture->root_ref,
@@ -393,9 +395,11 @@ static void owner_fixture_destroy(
     (void)vxml_cmeta_subdialog_owner_destroy(
         &fixture->owner);
     vxml_session_destroy(&fixture->root_session);
-    if (fixture->root_ref.slot != 0u)
+    if (fixture->root_ref_live) {
         (void)vxml_document_store_release(
             &fixture->store, &fixture->root_ref);
+        fixture->root_ref_live = false;
+    }
     (void)vxml_document_store_destroy(
         &fixture->store);
 }
@@ -440,12 +444,11 @@ spec("VoiceXML DocumentStore subdialog owner") {
                 "https://voice.example/root.vxml",
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
                 "<form id='parent'><subdialog name='child' src='#child'>"
-                "<param name='code' expr='value'/>"
-                "<filled><assign name='value' expr='child.code'/></filled>"
+                "<param name='value' expr='value'/>"
+                "<filled><assign name='value' expr='child.value'/></filled>"
                 "</subdialog></form>"
-                "<form id='child'><var name='code'/><block>"
-                "<assign name='value' expr='99'/>"
-                "<return namelist='code'/></block></form></vxml>"
+                "<form id='child'><var name='value'/><block>"
+                "<return namelist='value'/></block></form></vxml>"
             }
         };
         owner_fixture fixture;
@@ -541,7 +544,9 @@ spec("VoiceXML DocumentStore subdialog owner") {
                 "https://voice.example/root.vxml",
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
                 "<form><subdialog name='child' src='event.vxml#entry'>"
-                "<catch event='child.fail'><assign name='value' expr='value + 1'/></catch>"
+                "<catch event='child.fail'>"
+                "<assign name='value' expr='value + 1'/>"
+                "<exit expr='value'/></catch>"
                 "</subdialog></form></vxml>"
             },
             {
@@ -551,24 +556,36 @@ spec("VoiceXML DocumentStore subdialog owner") {
             }
         };
         owner_fixture fixture;
-        size_t turn;
+        vxml_cmeta_exit_kind exit_kind =
+            VXML_CMETA_EXIT_EMPTY;
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
 
         check_true(owner_fixture_init(
             &fixture, documents, 2u, 8u, 4u));
-        for (turn = 0u; turn < 16u; ++turn) {
-            size_t processed = 0u;
-            check_equal(
-                vxml_cmeta_subdialog_owner_run_ready(
-                    &fixture.owner, 1u, &processed),
-                VXML_OK);
-            if (read_root_int(
-                    &fixture.root_session, "value") == 8)
-                break;
-        }
-        check_true(turn < 16u);
+        check_equal(owner_drive(&fixture, 16u), VXML_OK);
         check_equal(
             vxml_session_get_state(&fixture.root_session),
-            VXML_SESSION_RUNNING);
+            VXML_SESSION_EXITED);
+        check_equal(
+            read_root_int(&fixture.root_session, "value"), 8);
+        check_equal(
+            vxml_session_cmeta_exit_kind(
+                &fixture.root_session, &exit_kind),
+            VXML_OK);
+        check_equal(exit_kind, VXML_CMETA_EXIT_EXPRESSION);
+        check_equal(
+            vxml_session_cmeta_exit_count(
+                &fixture.root_session),
+            (size_t)1u);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &fixture.root_session, 0u, &name, &value),
+            VXML_OK);
+        check_null(name.data);
+        check_equal(name.size, (size_t)0u);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(8));
 
         owner_fixture_destroy(&fixture);
     }
