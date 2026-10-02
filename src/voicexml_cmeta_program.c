@@ -5576,6 +5576,241 @@ done:
     return status;
 }
 
+static vxml_status cmeta_register_record_item(
+    cmeta_program_builder *builder,
+    salts_xml_node record,
+    size_t form_index,
+    size_t form_scope,
+    size_t record_index,
+    vxml_cmeta_record_row *out) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(record, "name");
+    cmeta_decoded_value decoded = {0};
+    char control_name[48];
+    bool conflict = false;
+    size_t prior;
+    int written;
+    vxml_status status;
+
+    if (builder == NULL || out == NULL ||
+        name_attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    memset(out, 0, sizeof(*out));
+    out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->condition = VXML_CMETA_NO_INDEX;
+    out->filled = VXML_CMETA_NO_INDEX;
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML record name must be a decoded XML NCName");
+        goto done;
+    }
+    if (cmeta_scope_find(
+            &builder->profile->scopes[form_scope].schema,
+            decoded.view.data, decoded.view.size, NULL) != NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML record name collides with a form lexical variable");
+        goto done;
+    }
+    for (prior = 0u; prior < builder->field_index; ++prior) {
+        const vxml_cmeta_field_row *field =
+            &builder->profile->fields[prior];
+        if (field->form == form_index &&
+            field->name != NULL &&
+            field->name_size == decoded.view.size &&
+            memcmp(
+                field->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML record name collides with a field");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < builder->subdialog_index; ++prior) {
+        const vxml_cmeta_subdialog_row *subdialog =
+            &builder->profile->subdialogs[prior];
+        if (subdialog->form == form_index &&
+            subdialog->name != NULL &&
+            subdialog->name_size == decoded.view.size &&
+            memcmp(
+                subdialog->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML record name collides with a subdialog");
+            goto done;
+        }
+    }
+    for (prior = 0u; prior < record_index; ++prior) {
+        const vxml_cmeta_record_row *previous =
+            &builder->profile->records[prior];
+        if (previous->form == form_index &&
+            previous->name != NULL &&
+            previous->name_size == decoded.view.size &&
+            memcmp(
+                previous->name, decoded.view.data,
+                decoded.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML record name");
+            goto done;
+        }
+    }
+
+    status = cmeta_retain_decoded_view(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute),
+        &out->name, &out->name_size);
+    if (status != VXML_OK) goto done;
+
+    written = snprintf(
+        control_name, sizeof(control_name),
+        "\x1f" "record:%zu", record_index);
+    if (written <= 0 || (size_t)written >= sizeof(control_name)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(record),
+            "VoiceXML record control identity overflow");
+        goto done;
+    }
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &cmeta_data_bool)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(record),
+            "VoiceXML record control slot exceeds form scope bounds");
+        goto done;
+    }
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            control_name, (size_t)written, &cmeta_data_bool,
+            &out->form_item_slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_node_location(record),
+            conflict ? "VoiceXML record control slot type conflict"
+                     : "VoiceXML record control slot allocation failed");
+        goto done;
+    }
+    out->form = form_index;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    if (status != VXML_OK)
+        memset(out, 0, sizeof(*out));
+    return status;
+}
+
+static vxml_status cmeta_compile_record_schema(
+    cmeta_program_builder *builder,
+    salts_xml_node record,
+    size_t form_index,
+    size_t form_scope,
+    size_t record_index,
+    vxml_cmeta_record_row *out) {
+    const salts_xml_attribute modal = cmeta_attribute(record, "modal");
+    const salts_xml_attribute beep = cmeta_attribute(record, "beep");
+    const salts_xml_attribute dtmfterm =
+        cmeta_attribute(record, "dtmfterm");
+    const salts_xml_attribute maxtime =
+        cmeta_attribute(record, "maxtime");
+    const salts_xml_attribute finalsilence =
+        cmeta_attribute(record, "finalsilence");
+    const salts_xml_attribute type = cmeta_attribute(record, "type");
+    bool modal_value = true;
+    vxml_status status = cmeta_register_record_item(
+        builder, record, form_index, form_scope,
+        record_index, out);
+
+    if (status != VXML_OK) return status;
+    status = cmeta_record_bool(
+        modal, true,
+        "VoiceXML record modal must be true or false",
+        &modal_value, builder->diagnostic);
+    if (status != VXML_OK || !modal_value)
+        return status != VXML_OK ? status :
+            cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(modal),
+                "VoiceXML record modal changed between compiler passes");
+    status = cmeta_record_bool(
+        beep, false,
+        "VoiceXML record beep must be true or false",
+        &out->beep, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_record_bool(
+        dtmfterm, true,
+        "VoiceXML record dtmfterm must be true or false",
+        &out->dtmf_term, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    out->modal = true;
+    out->max_duration_us =
+        builder->options->max_record_duration_us;
+    out->max_final_silence_us =
+        builder->options->max_record_final_silence_us;
+
+    status = cmeta_parse_prompt_timeout(
+        maxtime, &out->has_maxtime,
+        &out->maxtime_us, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_prompt_timeout(
+        finalsilence, &out->has_final_silence,
+        &out->final_silence_us, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    if ((out->has_maxtime &&
+         out->maxtime_us > out->max_duration_us) ||
+        (out->has_final_silence &&
+         out->final_silence_us > out->max_final_silence_us))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(record),
+            "VoiceXML record timing changed between compiler passes");
+
+    if (type.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(type),
+            salts_xml_attribute_location(type),
+            &out->media_type, &out->media_type_size);
+        if (status != VXML_OK) return status;
+        if (out->media_type_size == 0u ||
+            out->media_type_size >
+                builder->options->max_record_media_type_bytes)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(type),
+                "VoiceXML record type changed between compiler passes");
+    }
+
+    if (out->beep)
+        out->required_capabilities |= VXML_CMETA_RECORD_CAP_BEEP;
+    if (out->dtmf_term)
+        out->required_capabilities |= VXML_CMETA_RECORD_CAP_DTMF_TERM;
+    if (out->has_final_silence)
+        out->required_capabilities |=
+            VXML_CMETA_RECORD_CAP_FINAL_SILENCE;
+    if (out->media_type_size != 0u)
+        out->required_capabilities |=
+            VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_compile_subdialog_schema(
     cmeta_program_builder *builder,
     salts_xml_node node,
