@@ -392,6 +392,7 @@ typedef struct vxml_cmeta_action_row {
 static inline bool vxml_cmeta_event_token_valid(
     const char *data, size_t size) {
     size_t index;
+    bool component_start = true;
     if (data == NULL || size == 0u)
         return false;
     for (index = 0u; index < size; ++index) {
@@ -400,8 +401,25 @@ static inline bool vxml_cmeta_event_token_valid(
         if (value == 0u || value == ' ' || value == '\t' ||
             value == '\r' || value == '\n')
             return false;
+        if (value == '.') {
+            if (component_start)
+                return false;
+            component_start = true;
+            continue;
+        }
+        if (value < 0x80u) {
+            const bool alpha =
+                (value >= 'A' && value <= 'Z') ||
+                (value >= 'a' && value <= 'z');
+            const bool digit =
+                value >= '0' && value <= '9';
+            if (!(alpha || digit || value == '_' ||
+                  (!component_start && value == '-')))
+                return false;
+        }
+        component_start = false;
     }
-    return true;
+    return !component_start;
 }
 
 typedef struct vxml_cmeta_program_data {
