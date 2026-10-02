@@ -6007,6 +6007,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->initial_count;
+    if (capacity > SIZE_MAX - measurement->record_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->record_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -6090,6 +6096,8 @@ static vxml_status cmeta_build_schemas(
             form->initial_count = 0u;
             form->first_subdialog = builder->subdialog_index;
             form->subdialog_count = 0u;
+            form->first_record = builder->record_index;
+            form->record_count = 0u;
             form->first_item = builder->form_item_index;
             form->item_count = 0u;
             form->first_filled = VXML_CMETA_NO_INDEX;
@@ -6119,6 +6127,7 @@ static vxml_status cmeta_build_schemas(
             form->first_field = builder->field_index;
             form->first_initial = builder->initial_index;
             form->first_subdialog = builder->subdialog_index;
+            form->first_record = builder->record_index;
             form->first_item = builder->form_item_index;
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
@@ -6264,6 +6273,60 @@ static vxml_status cmeta_build_schemas(
                     order->index = builder->subdialog_index++;
                     continue;
                 }
+                if (cmeta_node_named(item, "record")) {
+                    vxml_cmeta_record_row *record;
+                    vxml_cmeta_form_item_row *order;
+                    if (builder->record_index >=
+                            builder->profile->record_count ||
+                        builder->form_item_index >=
+                            builder->profile->form_item_count ||
+                        builder->profile->records == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML record/form-item rows changed between compiler passes");
+                    record = &builder->profile->records[
+                        builder->record_index];
+                    status = cmeta_compile_record_schema(
+                        builder, item, form_index, form_scope,
+                        builder->record_index, record);
+                    if (status != VXML_OK) return status;
+                    {
+                        size_t nested_index;
+                        for (nested_index = 0u;
+                             nested_index <
+                                 salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, nested_index);
+                            if (!cmeta_node_named(nested, "filled"))
+                                continue;
+                            if (builder->filled_index >=
+                                    builder->profile->filled_count ||
+                                builder->profile->filled == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML record filled rows changed between compiler passes");
+                            record->filled = builder->filled_index;
+                            builder->profile->filled[
+                                builder->filled_index++] =
+                                (vxml_cmeta_filled_row){
+                                    .form = form_index,
+                                    .field = VXML_CMETA_NO_INDEX,
+                                    .mode = VXML_CMETA_FILLED_FIELD};
+                            break;
+                        }
+                    }
+                    order = &builder->profile->form_items[
+                        builder->form_item_index++];
+                    order->kind = VXML_CMETA_FORM_ITEM_RECORD;
+                    order->index = builder->record_index++;
+                    continue;
+                }
                 if (cmeta_node_named(item, "field")) {
                     vxml_cmeta_field_row *field;
                     if (builder->field_index >=
@@ -6399,6 +6462,8 @@ static vxml_status cmeta_build_schemas(
                 builder->initial_index - form->first_initial;
             form->subdialog_count =
                 builder->subdialog_index - form->first_subdialog;
+            form->record_count =
+                builder->record_index - form->first_record;
             form->item_count =
                 builder->form_item_index - form->first_item;
             form->block_count = builder->block_index - form->first_block;
