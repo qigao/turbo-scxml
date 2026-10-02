@@ -436,19 +436,11 @@ spec("VoiceXML CMeta program compiler") {
         const vxml_cmeta_program_data *profile;
         const vxml_cmeta_transfer_row *transfer;
 
-        {
-            vxml_diagnostic diagnostic = {0};
-            const vxml_status compile_status =
-                vxml_compile_cmeta(
-                    source, sizeof(source) - 1u, NULL,
-                    &options, &program, &diagnostic);
-            if (compile_status != VXML_OK)
-                fprintf(
-                    stderr,
-                    "transfer default compile: status=%d message=%s\n",
-                    (int)compile_status, diagnostic.message);
-            check_equal(compile_status, VXML_OK);
-        }
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
         profile = (const vxml_cmeta_program_data *)
             ((const vxml_program_impl *)program.impl)->profile_data;
         transfer = &profile->transfers[0];
