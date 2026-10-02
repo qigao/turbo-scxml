@@ -5250,6 +5250,157 @@ static const cmeta_data_field_desc *cmeta_root_field(
     return NULL;
 }
 
+static bool cmeta_scope_storage_limit_exceeded(
+    const cmeta_scope_schema *schema, const cmeta_data_desc *value);
+
+static vxml_status cmeta_append_collection_location(
+    cmeta_program_builder *builder, salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
+    size_t *out_location, const cmeta_data_desc **out_element);
+
+static vxml_status cmeta_prompt_form_scope(
+    cmeta_program_builder *builder,
+    vxml_cmeta_prompt_owner_kind owner_kind,
+    size_t owner_index,
+    size_t *out_scope) {
+    size_t form_index;
+    if (builder == NULL || out_scope == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_scope = VXML_CMETA_NO_INDEX;
+    if (owner_kind == VXML_CMETA_PROMPT_OWNER_FIELD) {
+        if (owner_index >= builder->profile->field_count ||
+            builder->profile->fields == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = builder->profile->fields[owner_index].form;
+    } else if (owner_kind == VXML_CMETA_PROMPT_OWNER_INITIAL) {
+        if (owner_index >= builder->profile->initial_count ||
+            builder->profile->initials == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = builder->profile->initials[owner_index].form;
+    } else {
+        return VXML_INVALID_STRUCTURE;
+    }
+    if (form_index >= builder->profile->form_count ||
+        builder->profile->forms == NULL)
+        return VXML_INVALID_STRUCTURE;
+    *out_scope = builder->profile->forms[form_index].scope;
+    if (*out_scope >= builder->profile->scope_count ||
+        builder->profile->scopes == NULL)
+        return VXML_INVALID_STRUCTURE;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_register_prompt_foreach(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    vxml_cmeta_prompt_owner_kind owner_kind,
+    size_t owner_index,
+    vxml_cmeta_prompt_foreach_row *row) {
+    const salts_xml_attribute array = cmeta_attribute(node, "array");
+    const salts_xml_attribute item = cmeta_attribute(node, "item");
+    vxml_cmeta_expr_compile_scope scopes[2];
+    cmeta_decoded_value decoded_item = {0};
+    const cmeta_data_desc *element = NULL;
+    const cmeta_scope_slot *existing;
+    cmeta_scope_schema *schema;
+    size_t form_scope = VXML_CMETA_NO_INDEX;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    bool conflict = false;
+    vxml_status status;
+
+    if (row == NULL || array.impl == NULL || item.impl == NULL)
+        return VXML_INVALID_STRUCTURE;
+    memset(row, 0, sizeof(*row));
+    row->prompt = builder->prompt_index;
+    row->collection_location = VXML_CMETA_NO_INDEX;
+    row->scope = VXML_CMETA_NO_INDEX;
+    row->item_slot = VXML_CMETA_NO_INDEX;
+    row->first_segment = builder->prompt_segment_index;
+    row->first_fallback = builder->prompt_fallback_index;
+
+    status = cmeta_prompt_form_scope(
+        builder, owner_kind, owner_index, &form_scope);
+    if (status != VXML_OK) return status;
+    scopes[0] = (vxml_cmeta_expr_compile_scope){
+        form_scope, &builder->profile->scopes[form_scope].schema};
+    scopes[1] = (vxml_cmeta_expr_compile_scope){
+        builder->profile->document_scope,
+        &builder->profile->scopes[
+            builder->profile->document_scope].schema};
+
+    status = cmeta_append_collection_location(
+        builder, array, scopes, 2u,
+        &row->collection_location, &element);
+    if (status != VXML_OK) return status;
+    if (element == NULL || element->storage_type == NULL ||
+        element->storage_type->size == 0u ||
+        element->storage_type->size >
+            builder->options->max_prompt_foreach_snapshot_bytes)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(array),
+            "VoiceXML foreach element exceeds snapshot byte bound");
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(item),
+        salts_xml_attribute_location(item), &decoded_item);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded_item.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(item),
+            "VoiceXML foreach item must be an XML NCName");
+        goto done;
+    }
+
+    schema = &builder->profile->scopes[form_scope].schema;
+    existing = cmeta_scope_find(
+        schema, decoded_item.view.data, decoded_item.view.size, &slot);
+    if (existing != NULL) {
+        if (!cmeta_data_desc_equal(existing->value, element)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(item),
+                "VoiceXML foreach item has incompatible declared type");
+            goto done;
+        }
+    } else {
+        if (schema->slot_count >= builder->options->max_scope_slots ||
+            cmeta_scope_storage_limit_exceeded(schema, element)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(item),
+                "VoiceXML foreach item exceeds lexical scope bounds");
+            goto done;
+        }
+        if (!cmeta_scope_register(
+                schema, decoded_item.view.data, decoded_item.view.size,
+                element, &slot, &conflict)) {
+            status = cmeta_program_fail(
+                builder->diagnostic,
+                conflict ? VXML_SEMANTIC_ERROR : VXML_ALLOCATION_FAILED,
+                salts_xml_attribute_location(item),
+                conflict
+                    ? "VoiceXML foreach item has conflicting type"
+                    : "VoiceXML foreach item schema allocation failed");
+            goto done;
+        }
+    }
+
+    row->scope = form_scope;
+    row->item_slot = slot;
+    row->element = element;
+    if (element->storage_type->align >
+        builder->profile->max_prompt_foreach_element_alignment)
+        builder->profile->max_prompt_foreach_element_alignment =
+            element->storage_type->align;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded_item);
+    return status;
+}
+
 static vxml_status cmeta_compile_prompt_schema(
     cmeta_program_builder *builder,
     salts_xml_node prompt,
