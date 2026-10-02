@@ -894,9 +894,11 @@ vxml_submit_resource_status vxml_submit_resource_execute_multipart(
     if (out_response != NULL)
         *out_response = (vxml_submit_response){0};
     if (resolver == NULL || resolver->impl == NULL ||
-        !adapter_v2_valid(adapter) ||
+        !adapter_close_valid(adapter) ||
         request == NULL || out_response == NULL)
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    if (!adapter_v2_valid(adapter))
+        return VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING;
 
     status = multipart_validate(
         request, boundary, &boundary_size,
