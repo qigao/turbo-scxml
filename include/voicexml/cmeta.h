@@ -32,6 +32,8 @@ extern "C" {
 #define VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_RECORD_COMPLETION_ABI_V1 1u
 #define VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1 1u
+#define VXML_CMETA_TRANSFER_REQUEST_ABI_V1 1u
+#define VXML_CMETA_TRANSFER_ADAPTER_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
@@ -50,6 +52,12 @@ extern "C" {
 #define VXML_CMETA_RECORD_CAP_DTMF_TERM UINT64_C(2)
 #define VXML_CMETA_RECORD_CAP_FINAL_SILENCE UINT64_C(4)
 #define VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE UINT64_C(8)
+
+#define VXML_CMETA_TRANSFER_CAP_BLIND UINT64_C(1)
+#define VXML_CMETA_TRANSFER_CAP_BRIDGE UINT64_C(2)
+#define VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT UINT64_C(4)
+#define VXML_CMETA_TRANSFER_CAP_MAXTIME UINT64_C(8)
+#define VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO UINT64_C(16)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -150,6 +158,15 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_record_media_type_bytes;
     uint64_t max_record_duration_us;
     uint64_t max_record_final_silence_us;
+
+    /*
+     * Optional append-only static transfer bounds. Zero max_transfers disables
+     * <transfer>. Platform defaults are not invented by CMeta.
+     */
+    size_t max_transfers;
+    size_t max_transfer_uri_bytes;
+    uint64_t max_transfer_connect_timeout_us;
+    uint64_t max_transfer_duration_us;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -196,6 +213,10 @@ typedef struct vxml_cmeta_session_options_v1 {
     const struct vxml_cmeta_record_adapter_v1 *record;
     void *record_user;
     size_t max_record_bytes;
+
+    /* Optional append-only transfer provider admission tail. */
+    const struct vxml_cmeta_transfer_adapter_v1 *transfer;
+    void *transfer_user;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -343,6 +364,50 @@ typedef struct vxml_cmeta_record_result_view_v1 {
     const void *data;
     size_t size;
 } vxml_cmeta_record_result_view_v1;
+
+
+typedef enum vxml_cmeta_transfer_mode {
+    VXML_CMETA_TRANSFER_BLIND = 1,
+    VXML_CMETA_TRANSFER_BRIDGE
+} vxml_cmeta_transfer_mode;
+
+typedef struct vxml_cmeta_transfer_ticket_v1 {
+    void (*commit)(void *user);
+    void (*discard)(void *user);
+    void *user;
+} vxml_cmeta_transfer_ticket_v1;
+
+typedef struct vxml_cmeta_transfer_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+    vxml_cmeta_name_view name;
+    vxml_cmeta_name_view destination;
+    vxml_cmeta_transfer_mode mode;
+    bool has_connect_timeout;
+    uint64_t connect_timeout_us;
+    uint64_t max_connect_timeout_us;
+    bool has_maxtime;
+    uint64_t maxtime_us;
+    uint64_t max_duration_us;
+    vxml_cmeta_name_view transfer_audio;
+} vxml_cmeta_transfer_request_v1;
+
+typedef struct vxml_cmeta_transfer_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t capabilities;
+    vxml_status (*prepare)(
+        void *user,
+        const vxml_cmeta_transfer_request_v1 *request,
+        vxml_cmeta_transfer_ticket_v1 *out_ticket,
+        const char **out_error);
+    /** No-fail/nonblocking request to cancel one committed generation. */
+    void (*cancel)(void *user, uint64_t generation);
+    /** Generation barrier; returns after callbacks for generation are stopped. */
+    void (*quiesce)(void *user, uint64_t generation);
+} vxml_cmeta_transfer_adapter_v1;
 
 
 typedef enum vxml_cmeta_subdialog_param_source {
@@ -923,6 +988,21 @@ vxml_status vxml_session_cmeta_record_result(
     const char *name,
     size_t name_size,
     vxml_cmeta_record_result_view_v1 *out_result);
+
+/** Borrow the active static transfer request. */
+vxml_status vxml_session_cmeta_transfer_request(
+    const vxml_session *session,
+    vxml_cmeta_transfer_request_v1 *out_request);
+
+/** Reserve the active transfer provider operation without committing work. */
+vxml_status vxml_session_cmeta_transfer_prepare(
+    vxml_session *session, const char **out_error);
+
+/** Commit the currently prepared transfer provider ticket. */
+vxml_status vxml_session_cmeta_transfer_commit(vxml_session *session);
+
+/** Discard the currently prepared transfer provider ticket. */
+vxml_status vxml_session_cmeta_transfer_discard(vxml_session *session);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(
