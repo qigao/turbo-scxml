@@ -12731,6 +12731,7 @@ spec("VoiceXML CMeta session execution") {
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_prompt_mark_view_v1 mark = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 immutable_batch = {0};
         vxml_cmeta_prompt_media_completion_v1 completion = {
             .abi_version =
                 VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
@@ -12761,6 +12762,10 @@ spec("VoiceXML CMeta session execution") {
                 &session, &program, &options),
             VXML_OK);
         check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_batch_request(
+                &session, &immutable_batch),
+            VXML_UNSUPPORTED_FEATURE);
         {
             const vxml_cmeta_program_data *compiled =
                 program_data(&program);
