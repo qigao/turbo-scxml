@@ -134,6 +134,9 @@ typedef struct vxml_cmeta_transfer_row {
 } vxml_cmeta_transfer_row;
 
 extern const cmeta_data_desc vxml_cmeta_transfer_result_data;
+bool vxml_cmeta_transfer_result_name(
+    vxml_cmeta_transfer_result result,
+    vxml_cmeta_name_view *out);
 
 typedef struct vxml_cmeta_form_row {
     size_t scope;
