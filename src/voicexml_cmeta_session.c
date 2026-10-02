@@ -7172,6 +7172,278 @@ vxml_status vxml_session_cmeta_collect_utterance_result(
     return VXML_OK;
 }
 
+typedef enum vxml_cmeta_recording_shadow_path_kind {
+    VXML_CMETA_RECORDING_SHADOW_INVALID = 0,
+    VXML_CMETA_RECORDING_SHADOW_APP_RECORDING,
+    VXML_CMETA_RECORDING_SHADOW_APP_SIZE,
+    VXML_CMETA_RECORDING_SHADOW_APP_DURATION,
+    VXML_CMETA_RECORDING_SHADOW_FIELD_RECORDING,
+    VXML_CMETA_RECORDING_SHADOW_FIELD_SIZE,
+    VXML_CMETA_RECORDING_SHADOW_FIELD_DURATION
+} vxml_cmeta_recording_shadow_path_kind;
+
+typedef struct vxml_cmeta_recording_shadow_path {
+    vxml_cmeta_recording_shadow_path_kind kind;
+    size_t field;
+} vxml_cmeta_recording_shadow_path;
+
+static bool recording_shadow_suffix(
+    const char *path, size_t path_size,
+    const char *suffix, size_t suffix_size,
+    size_t *out_owner_size) {
+    if (out_owner_size != NULL) *out_owner_size = 0u;
+    if (path == NULL || suffix == NULL ||
+        path_size <= suffix_size ||
+        memcmp(path + path_size - suffix_size,
+               suffix, suffix_size) != 0)
+        return false;
+    if (out_owner_size != NULL)
+        *out_owner_size = path_size - suffix_size;
+    return true;
+}
+
+static vxml_status resolve_recording_shadow_path(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_session_data *profile,
+    const char *path, size_t path_size,
+    vxml_cmeta_recording_shadow_path *out) {
+    static const char app_recording[] =
+        "application.lastresult$.recording";
+    static const char app_size[] =
+        "application.lastresult$.recordingsize";
+    static const char app_duration[] =
+        "application.lastresult$.recordingduration";
+    static const char field_recording_suffix[] = "$.recording";
+    static const char field_size_suffix[] = "$.recordingsize";
+    static const char field_duration_suffix[] = "$.recordingduration";
+    size_t owner_size = 0u;
+    size_t offset;
+    vxml_cmeta_recording_shadow_path_kind field_kind =
+        VXML_CMETA_RECORDING_SHADOW_INVALID;
+
+    if (out != NULL)
+        *out = (vxml_cmeta_recording_shadow_path){
+            VXML_CMETA_RECORDING_SHADOW_INVALID,
+            VXML_CMETA_NO_INDEX};
+    if (program == NULL || profile == NULL ||
+        path == NULL || path_size == 0u || out == NULL ||
+        memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (path_size == sizeof(app_recording) - 1u &&
+        memcmp(path, app_recording, path_size) == 0) {
+        out->kind = VXML_CMETA_RECORDING_SHADOW_APP_RECORDING;
+        return VXML_OK;
+    }
+    if (path_size == sizeof(app_size) - 1u &&
+        memcmp(path, app_size, path_size) == 0) {
+        out->kind = VXML_CMETA_RECORDING_SHADOW_APP_SIZE;
+        return VXML_OK;
+    }
+    if (path_size == sizeof(app_duration) - 1u &&
+        memcmp(path, app_duration, path_size) == 0) {
+        out->kind = VXML_CMETA_RECORDING_SHADOW_APP_DURATION;
+        return VXML_OK;
+    }
+
+    if (recording_shadow_suffix(
+            path, path_size,
+            field_recording_suffix,
+            sizeof(field_recording_suffix) - 1u,
+            &owner_size))
+        field_kind = VXML_CMETA_RECORDING_SHADOW_FIELD_RECORDING;
+    else if (recording_shadow_suffix(
+                 path, path_size,
+                 field_size_suffix,
+                 sizeof(field_size_suffix) - 1u,
+                 &owner_size))
+        field_kind = VXML_CMETA_RECORDING_SHADOW_FIELD_SIZE;
+    else if (recording_shadow_suffix(
+                 path, path_size,
+                 field_duration_suffix,
+                 sizeof(field_duration_suffix) - 1u,
+                 &owner_size))
+        field_kind = VXML_CMETA_RECORDING_SHADOW_FIELD_DURATION;
+    else
+        return VXML_INVALID_ARGUMENT;
+
+    if (owner_size == 0u ||
+        profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STATE;
+
+    {
+        const vxml_cmeta_form_row *form =
+            &program->forms[profile->active_form];
+        if (!range_valid(
+                form->first_field, form->field_count,
+                program->field_count) ||
+            (form->field_count != 0u && program->fields == NULL))
+            return VXML_INVALID_STRUCTURE;
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index = form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &program->fields[field_index];
+            if (field->name != NULL &&
+                field->name_size == owner_size &&
+                memcmp(field->name, path, owner_size) == 0) {
+                out->kind = field_kind;
+                out->field = field_index;
+                return VXML_OK;
+            }
+        }
+    }
+    return VXML_INVALID_ARGUMENT;
+}
+
+vxml_status vxml_session_cmeta_recording_shadow_value(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_value_view *out_value) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    vxml_cmeta_recording_shadow_path resolved;
+    const vxml_cmeta_field_recording_shadow *field_shadow = NULL;
+    bool defined = false;
+    uint64_t value = UINT64_C(0);
+    vxml_status status;
+
+    if (out_value != NULL)
+        *out_value = (vxml_cmeta_value_view){
+            .kind = VXML_CMETA_VALUE_UNDEFINED};
+    if (session == NULL || path == NULL || path_size == 0u ||
+        out_value == NULL || memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    status = resolve_recording_shadow_path(
+        program, profile, path, path_size, &resolved);
+    if (status != VXML_OK) return status;
+
+    switch (resolved.kind) {
+    case VXML_CMETA_RECORDING_SHADOW_APP_SIZE:
+        if (profile->collect_utterance_result.live) {
+            value = (uint64_t)
+                profile->collect_utterance_result.recording.size;
+            defined = true;
+        }
+        break;
+    case VXML_CMETA_RECORDING_SHADOW_APP_DURATION:
+        if (profile->collect_utterance_result.live) {
+            value =
+                profile->collect_utterance_result.duration_us /
+                UINT64_C(1000);
+            defined = true;
+        }
+        break;
+    case VXML_CMETA_RECORDING_SHADOW_FIELD_SIZE:
+    case VXML_CMETA_RECORDING_SHADOW_FIELD_DURATION:
+        if (profile->field_recording_shadows == NULL ||
+            resolved.field >= profile->field_recording_shadow_count)
+            return VXML_INVALID_STATE;
+        field_shadow =
+            &profile->field_recording_shadows[resolved.field];
+        if (field_shadow->assigned && field_shadow->has_recording) {
+            value = resolved.kind ==
+                    VXML_CMETA_RECORDING_SHADOW_FIELD_SIZE
+                ? (uint64_t)field_shadow->size
+                : field_shadow->duration_ms;
+            defined = true;
+        }
+        break;
+    case VXML_CMETA_RECORDING_SHADOW_APP_RECORDING:
+    case VXML_CMETA_RECORDING_SHADOW_FIELD_RECORDING:
+        return VXML_INVALID_ARGUMENT;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (defined) {
+        out_value->kind = VXML_CMETA_VALUE_UINT;
+        out_value->data.uint_value = value;
+    }
+    return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_recording_shadow(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_recording_ref_view_v1 *out_recording) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_collect_utterance_result_slot *result;
+    const vxml_cmeta_field_recording_shadow *field_shadow = NULL;
+    vxml_cmeta_recording_shadow_path resolved;
+    vxml_status status;
+
+    if (out_recording != NULL)
+        *out_recording = (vxml_cmeta_recording_ref_view_v1){0};
+    if (session == NULL || path == NULL || path_size == 0u ||
+        out_recording == NULL || memchr(path, '\0', path_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    status = resolve_recording_shadow_path(
+        program, profile, path, path_size, &resolved);
+    if (status != VXML_OK) return status;
+    if (resolved.kind != VXML_CMETA_RECORDING_SHADOW_APP_RECORDING &&
+        resolved.kind != VXML_CMETA_RECORDING_SHADOW_FIELD_RECORDING)
+        return VXML_INVALID_ARGUMENT;
+
+    result = &profile->collect_utterance_result;
+    if (!result->live || result->recording.data == NULL ||
+        result->recording.size == 0u || result->recording.lease == NULL ||
+        result->media_type == NULL || result->media_type_size == 0u)
+        return VXML_INVALID_STATE;
+
+    if (resolved.kind ==
+            VXML_CMETA_RECORDING_SHADOW_FIELD_RECORDING) {
+        if (profile->field_recording_shadows == NULL ||
+            resolved.field >= profile->field_recording_shadow_count)
+            return VXML_INVALID_STATE;
+        field_shadow =
+            &profile->field_recording_shadows[resolved.field];
+        if (!field_shadow->assigned ||
+            !field_shadow->has_recording ||
+            field_shadow->generation != result->generation)
+            return VXML_INVALID_STATE;
+    }
+
+    *out_recording = (vxml_cmeta_recording_ref_view_v1){
+        .abi_version = VXML_CMETA_RECORDING_REF_VIEW_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_recording_ref_view_v1),
+        .media_type = {
+            result->media_type, result->media_type_size},
+        .data = result->recording.data,
+        .size = result->recording.size,
+        .duration_ms = result->duration_us / UINT64_C(1000)
+    };
+    return VXML_OK;
+}
+
 static bool root_field_list_contains(
     const size_t *root_fields, size_t root_field_count,
     size_t root_field) {
