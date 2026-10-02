@@ -698,6 +698,9 @@ typedef struct vxml_cmeta_session_data {
     uint64_t prompt_media_barged_generation;
     uint64_t prompt_media_mark_generation;
     size_t prompt_media_last_mark_segment;
+    char *prompt_media_last_mark_name;
+    size_t prompt_media_last_mark_name_size;
+    size_t prompt_media_last_mark_name_capacity;
     bool prompt_media_prepared;
     bool prompt_media_in_flight;
     vxml_cmeta_prompt_media_mailbox prompt_media_mailbox;
