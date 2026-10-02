@@ -1034,6 +1034,8 @@ static void prompt_media_mailbox_disarm(
     vxml_cmeta_session_data *session) {
     unsigned state;
     if (session == NULL) return;
+    session->prompt_media_mailbox.timing_valid = false;
+    session->prompt_media_mailbox.playback_elapsed_ms = UINT64_C(0);
     atomic_store_explicit(
         &session->prompt_media_mailbox.generation,
         UINT64_C(0), memory_order_relaxed);
