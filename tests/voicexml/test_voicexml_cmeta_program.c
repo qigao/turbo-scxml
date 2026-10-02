@@ -2954,7 +2954,7 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 16u
+                    index == 10u || index == 16u
                         ? VXML_INVALID_CONTRACT
                         : index == 3u || index == 4u ||
                           index == 5u ||
