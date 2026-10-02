@@ -12184,6 +12184,8 @@ spec("VoiceXML CMeta session execution") {
         check_equal(probe.recording_release_calls, (size_t)0u);
 
         vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        check_equal(probe.quiesce_calls, (size_t)1u);
         check_equal(probe.recording_release_calls, (size_t)1u);
         vxml_program_destroy(&program);
     }
