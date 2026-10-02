@@ -5128,6 +5128,26 @@ static vxml_status cmeta_register_initial_item(
         }
     }
 
+    if (name_attribute.impl != NULL) {
+        size_t record_index;
+        const size_t form_index =
+            builder->profile->scopes[form_scope].owner;
+        for (record_index = 0u;
+             record_index < builder->record_index;
+             ++record_index) {
+            const vxml_cmeta_record_row *record =
+                &builder->profile->records[record_index];
+            if (record->form == form_index &&
+                record->name != NULL &&
+                record->name_size == name.size &&
+                memcmp(record->name, name.data, name.size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(name_attribute),
+                    "VoiceXML initial name collides with a record");
+        }
+    }
+
     if (builder->profile->scopes[form_scope].schema.slot_count >=
             builder->options->max_scope_slots ||
         cmeta_scope_storage_limit_exceeded(
