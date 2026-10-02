@@ -182,6 +182,10 @@ vxml_status vxml_session_init_profile(
     impl->navigation_uri_size = 0u;
     impl->navigation_fetchaudio_uri = NULL;
     impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_has_fetchaudio_delay = false;
+    impl->navigation_fetchaudio_delay_us = UINT64_C(0);
+    impl->navigation_has_fetchaudio_minimum = false;
+    impl->navigation_fetchaudio_minimum_us = UINT64_C(0);
     impl->submit_uri = NULL;
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
@@ -300,7 +304,15 @@ vxml_status vxml_session_navigation_request(
         .uri_size = impl->navigation_uri_size,
         .fetchaudio_uri = impl->navigation_fetchaudio_uri,
         .fetchaudio_uri_size =
-            impl->navigation_fetchaudio_uri_size};
+            impl->navigation_fetchaudio_uri_size,
+        .has_fetchaudio_delay =
+            impl->navigation_has_fetchaudio_delay,
+        .fetchaudio_delay_us =
+            impl->navigation_fetchaudio_delay_us,
+        .has_fetchaudio_minimum =
+            impl->navigation_has_fetchaudio_minimum,
+        .fetchaudio_minimum_us =
+            impl->navigation_fetchaudio_minimum_us};
     return VXML_OK;
 }
 
@@ -425,6 +437,10 @@ vxml_status vxml_session_close(vxml_session *session) {
         impl->navigation_uri_size = 0u;
         impl->navigation_fetchaudio_uri = NULL;
         impl->navigation_fetchaudio_uri_size = 0u;
+        impl->navigation_has_fetchaudio_delay = false;
+        impl->navigation_fetchaudio_delay_us = UINT64_C(0);
+        impl->navigation_has_fetchaudio_minimum = false;
+        impl->navigation_fetchaudio_minimum_us = UINT64_C(0);
         impl->submit_uri = NULL;
         impl->submit_uri_size = 0u;
         impl->submit_method = 0;
