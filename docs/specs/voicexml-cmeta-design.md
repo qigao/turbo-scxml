@@ -610,3 +610,47 @@ consultation generation.
 No telephony backend, second transfer runtime, or compatibility fallback is
 introduced.
 
+## Static fetch-audio property inheritance
+
+Issue #224 keeps VoiceXML fetch-audio defaults out of runtime lookup. CMeta
+compiles three static properties into immutable policy:
+
+- `fetchaudio`
+- `fetchaudiodelay`
+- `fetchaudiominimum`
+
+Inheritance is resolved during compilation:
+
+```text
+document policy
+    |
+    v
+form effective policy
+    |
+    v
+goto action policy
+    |
+    +-- optional goto@fetchaudio replaces URI only
+    |
+    v
+vxml_navigation_request_v1
+    |
+    v
+DialogManager -> vxml_document_fetch_policy_v1
+```
+
+Delay and minimum inherit independently and retain explicit presence bits.
+Their Time Designations are compiled to exact integer microseconds. The Session
+does not maintain a property map and performs no fallback lookup when a goto
+executes.
+
+A fragment-only goto clears the effective fetch-audio policy because no
+document acquisition occurs. External navigation keeps the Program-owned
+relative URI and inherited timing until DialogManager resolves the URI against
+the current document. The existing DocumentStore cache-hit and non-fatal
+fetch-audio failure contracts remain authoritative.
+
+The historical URI-only `vxml_session_navigation()` API is unchanged.
+`vxml_navigation_request_v1` carries the timing fields only as an append-only
+tail.
+
