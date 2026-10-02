@@ -524,6 +524,7 @@ typedef struct vxml_cmeta_collect_utterance_result_slot {
     uint64_t duration_us;
     char *media_type;
     size_t media_type_size;
+    size_t media_type_capacity;
     vxml_cmeta_recording_lease_v1 recording;
 } vxml_cmeta_collect_utterance_result_slot;
 
@@ -630,6 +631,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_collect_ticket_v1 collect_ticket;
     bool collect_prepared;
     bool collect_in_flight;
+    uint64_t collect_quiesced_generation;
     vxml_cmeta_collect_mailbox collect_mailbox;
     size_t max_collect_recording_bytes;
     vxml_cmeta_collect_utterance_result_slot collect_utterance_result;
