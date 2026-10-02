@@ -780,6 +780,15 @@ static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
 
+static vxml_cmeta_value_kind session_expression_value_kind(
+    const vxml_cmeta_expression_row *row) {
+    if (row == NULL)
+        return VXML_CMETA_VALUE_UNDEFINED;
+    if (row->source_kind != VXML_CMETA_EXPRESSION_GENERIC)
+        return row->value_kind;
+    return vxml_cmeta_expr_program_value_kind(&row->program);
+}
+
 static bool exit_action_capacity(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_action_row *action,
@@ -793,8 +802,8 @@ static bool exit_action_capacity(
             program->expressions == NULL)
             return false;
         entries = 1u;
-        if (vxml_cmeta_expr_program_value_kind(
-                &program->expressions[action->expression].program) ==
+        if (session_expression_value_kind(
+                &program->expressions[action->expression]) ==
             VXML_CMETA_VALUE_STRING)
             strings = program->max_string_bytes;
     } else if (action->exit_kind == VXML_CMETA_EXIT_NAMELIST) {
