@@ -544,16 +544,24 @@ static bool session_transfers_valid(
     for (index = 0u; index < program->transfer_count; ++index) {
         const vxml_cmeta_transfer_row *row = &program->transfers[index];
         const vxml_cmeta_form_row *form;
-        const uint64_t mode_cap =
-            row->mode == VXML_CMETA_TRANSFER_BRIDGE
-                ? VXML_CMETA_TRANSFER_CAP_BRIDGE
-                : VXML_CMETA_TRANSFER_CAP_BLIND;
+        uint64_t mode_cap = UINT64_C(0);
+        switch (row->mode) {
+        case VXML_CMETA_TRANSFER_BLIND:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_BLIND;
+            break;
+        case VXML_CMETA_TRANSFER_BRIDGE:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_BRIDGE;
+            break;
+        case VXML_CMETA_TRANSFER_CONSULTATION:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_CONSULTATION;
+            break;
+        default:
+            return false;
+        }
         if (row->form >= program->form_count ||
             program->forms == NULL ||
             row->name == NULL || row->name_size == 0u ||
             row->destination == NULL || row->destination_size == 0u ||
-            (row->mode != VXML_CMETA_TRANSFER_BLIND &&
-             row->mode != VXML_CMETA_TRANSFER_BRIDGE) ||
             row->max_connect_timeout_us == UINT64_C(0) ||
             row->max_duration_us == UINT64_C(0) ||
             (row->has_connect_timeout &&
@@ -5754,6 +5762,20 @@ vxml_status vxml_session_cmeta_transfer_discard(
     return VXML_OK;
 }
 
+static bool consultation_transfer_result_valid(
+    vxml_cmeta_transfer_result result) {
+    switch (result) {
+    case VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT:
+    case VXML_CMETA_TRANSFER_RESULT_BUSY:
+    case VXML_CMETA_TRANSFER_RESULT_NETWORK_BUSY:
+    case VXML_CMETA_TRANSFER_RESULT_NOANSWER:
+    case VXML_CMETA_TRANSFER_RESULT_UNKNOWN:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool transfer_completion_compatible(
     const vxml_cmeta_transfer_row *transfer,
     const vxml_cmeta_transfer_completion_v1 *completion) {
@@ -5763,15 +5785,23 @@ static bool transfer_completion_compatible(
 
     switch (completion->kind) {
     case VXML_CMETA_TRANSFER_COMPLETION_RESULT:
-        return transfer->mode == VXML_CMETA_TRANSFER_BRIDGE &&
-            completion->protocol_code == 0u &&
-            vxml_cmeta_transfer_result_name(
-                completion->result, &ignored);
+        if (completion->protocol_code != 0u ||
+            !vxml_cmeta_transfer_result_name(
+                completion->result, &ignored))
+            return false;
+        if (transfer->mode == VXML_CMETA_TRANSFER_BRIDGE)
+            return true;
+        return transfer->mode ==
+                VXML_CMETA_TRANSFER_CONSULTATION &&
+            consultation_transfer_result_valid(
+                completion->result);
     case VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_HANGUP:
         return completion->result == 0 &&
             completion->protocol_code == 0u;
     case VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_TRANSFER:
-        return transfer->mode == VXML_CMETA_TRANSFER_BLIND &&
+        return (transfer->mode == VXML_CMETA_TRANSFER_BLIND ||
+                transfer->mode ==
+                    VXML_CMETA_TRANSFER_CONSULTATION) &&
             completion->result == 0 &&
             completion->protocol_code == 0u;
     case VXML_CMETA_TRANSFER_COMPLETION_ERROR_NOAUTHORIZATION:
@@ -5793,8 +5823,10 @@ static bool transfer_completion_compatible(
             completion->result == 0 &&
             completion->protocol_code == 0u;
     case VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_CONSULTATION:
-        /* Consultation mode is not admitted until the VoiceXML 2.1 type slice. */
-        return false;
+        return transfer->mode ==
+                VXML_CMETA_TRANSFER_CONSULTATION &&
+            completion->result == 0 &&
+            completion->protocol_code == 0u;
     default:
         return false;
     }

@@ -340,6 +340,8 @@ int main(void) {
         transfer_ticket.commit != NULL ||
         VXML_CMETA_TRANSFER_CAP_BLIND == 0u ||
         VXML_CMETA_TRANSFER_CAP_BRIDGE == 0u ||
+        VXML_CMETA_TRANSFER_CAP_CONSULTATION == 0u ||
+        VXML_CMETA_TRANSFER_CONSULTATION == 0 ||
         prepare_subdialog == NULL || commit_subdialog == NULL ||
         discard_subdialog == NULL ||
         complete_subdialog == NULL || run_subdialog_completion == NULL ||

@@ -65,6 +65,7 @@ extern "C" {
 #define VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT UINT64_C(4)
 #define VXML_CMETA_TRANSFER_CAP_MAXTIME UINT64_C(8)
 #define VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO UINT64_C(16)
+#define VXML_CMETA_TRANSFER_CAP_CONSULTATION UINT64_C(32)
 
 typedef struct vxml_cmeta_name_view {
     const char *data;
@@ -394,7 +395,8 @@ typedef struct vxml_cmeta_record_result_view_v1 {
 
 typedef enum vxml_cmeta_transfer_mode {
     VXML_CMETA_TRANSFER_BLIND = 1,
-    VXML_CMETA_TRANSFER_BRIDGE
+    VXML_CMETA_TRANSFER_BRIDGE,
+    VXML_CMETA_TRANSFER_CONSULTATION
 } vxml_cmeta_transfer_mode;
 
 typedef struct vxml_cmeta_transfer_ticket_v1 {
