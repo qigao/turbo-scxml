@@ -8646,6 +8646,23 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
         transaction_commit(profile, program);
 
+        status = snapshot_committed_mark_shadows(
+            profile, program, form, mailbox, generation);
+        if (status != VXML_OK) {
+            profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
+            mailbox->data = NULL;
+            mailbox->slot_count = 0u;
+            mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, status);
+        }
+
         /*
          * Every committed recognition replaces application.lastresult$.
          * Advance a bounded generation even when no utterance recording was
