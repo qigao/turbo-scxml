@@ -13,6 +13,7 @@
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -5591,7 +5592,7 @@ static vxml_status transfer_request_from_impl(
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_transfer == VXML_CMETA_NO_INDEX ||
         profile->active_transfer >= program->transfer_count ||
         program->transfers == NULL ||
