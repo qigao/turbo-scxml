@@ -9226,7 +9226,7 @@ static vxml_status cmeta_lower_program(
             continue;
         }
         if (cmeta_node_named(child, "form")) {
-            const vxml_cmeta_form_row *form =
+            vxml_cmeta_form_row *form =
                 &builder->profile->forms[form_index];
             const vxml_cmeta_expr_compile_scope scopes[2] = {
                 {form->scope,
