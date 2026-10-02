@@ -6290,7 +6290,6 @@ static vxml_status cmeta_register_record_item(
         return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
     out->form_item_slot = VXML_CMETA_NO_INDEX;
-    out->result_slot = VXML_CMETA_NO_INDEX;
     out->condition = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
 
@@ -6544,6 +6543,7 @@ static vxml_status cmeta_register_transfer_item(
         return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
     out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->result_slot = VXML_CMETA_NO_INDEX;
     out->condition = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
 
