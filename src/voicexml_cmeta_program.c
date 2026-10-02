@@ -388,6 +388,7 @@ typedef struct cmeta_program_measurement {
     size_t initial_count;
     size_t subdialog_count;
     size_t subdialog_param_count;
+    size_t record_count;
     size_t form_item_count;
     size_t prompt_count;
     size_t prompt_segment_count;
@@ -555,6 +556,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "initial") ||
         cmeta_node_named(node, "subdialog") ||
         cmeta_node_named(node, "param") ||
+        cmeta_node_named(node, "record") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -641,6 +643,21 @@ static bool cmeta_subdialog_options_valid(
     return options != NULL && options->struct_size >= tail_size &&
         options->max_subdialogs != 0u &&
         options->max_subdialog_uri_bytes != 0u;
+}
+
+static bool cmeta_record_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_record_final_silence_us) +
+        sizeof(options->max_record_final_silence_us);
+    return options != NULL &&
+        options->struct_size >= tail_size &&
+        options->max_records != 0u &&
+        options->max_record_media_type_bytes != 0u &&
+        options->max_record_duration_us != UINT64_C(0) &&
+        options->max_record_final_silence_us != UINT64_C(0);
 }
 
 static bool cmeta_menu_target_options_valid(
@@ -3668,6 +3685,7 @@ typedef struct cmeta_program_builder {
     size_t initial_index;
     size_t subdialog_index;
     size_t subdialog_param_index;
+    size_t record_index;
     size_t form_item_index;
     size_t prompt_index;
     size_t prompt_segment_index;
@@ -3740,6 +3758,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
     vxml_free(profile->form_items);
+    vxml_free(profile->records);
     vxml_free(profile->subdialog_params);
     vxml_free(profile->subdialogs);
     vxml_free(profile->initials);
@@ -3794,6 +3813,7 @@ static bool cmeta_allocate_rows(
     profile->initial_count = measurement->initial_count;
     profile->subdialog_count = measurement->subdialog_count;
     profile->subdialog_param_count = measurement->subdialog_param_count;
+    profile->record_count = measurement->record_count;
     profile->form_item_count = measurement->form_item_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
@@ -3844,6 +3864,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(initials, measurement->initial_count);
     CMETA_ALLOC_ROWS(subdialogs, measurement->subdialog_count);
     CMETA_ALLOC_ROWS(subdialog_params, measurement->subdialog_param_count);
+    CMETA_ALLOC_ROWS(records, measurement->record_count);
     CMETA_ALLOC_ROWS(form_items, measurement->form_item_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
@@ -7511,6 +7532,7 @@ static vxml_status cmeta_write_program(
          builder.initial_index != measurement->initial_count ||
          builder.subdialog_index != measurement->subdialog_count ||
          builder.subdialog_param_index != measurement->subdialog_param_count ||
+         builder.record_index != measurement->record_count ||
          builder.form_item_index != measurement->form_item_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
