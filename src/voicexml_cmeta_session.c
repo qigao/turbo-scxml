@@ -1670,6 +1670,7 @@ static bool consume_step(vxml_cmeta_session_data *session) {
 
 static bool collect_pending_recording_metadata(
     const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
     size_t source_field,
     size_t *out_size,
     uint64_t *out_duration_ms) {
@@ -1683,9 +1684,22 @@ static bool collect_pending_recording_metadata(
         session->collect_mailbox.recording.data == NULL ||
         session->collect_mailbox.recording.size == 0u)
         return false;
-    if (source_field != VXML_CMETA_NO_INDEX &&
-        session->active_field != source_field)
-        return false;
+    if (source_field != VXML_CMETA_NO_INDEX) {
+        const cmeta_data_struct_shape *root_shape =
+            session_root_shape(program);
+        const vxml_cmeta_field_row *field;
+        if (program == NULL ||
+            source_field >= program->field_count ||
+            program->fields == NULL ||
+            session->active_field != source_field ||
+            root_shape == NULL)
+            return false;
+        field = &program->fields[source_field];
+        if (field->root_field >= root_shape->field_count ||
+            session->staged_root.bound == NULL ||
+            session->staged_root.bound[field->root_field] == 0u)
+            return false;
+    }
     state = atomic_load_explicit(
         &session->collect_mailbox.state, memory_order_acquire);
     if (state != VXML_CMETA_COLLECT_MAILBOX_WRITING)
@@ -1718,7 +1732,8 @@ static vxml_status evaluate_recording_shadow_expression(
     case VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_DURATION:
         if (staged)
             defined = collect_pending_recording_metadata(
-                session, VXML_CMETA_NO_INDEX, &size, &duration_ms);
+                session, program, VXML_CMETA_NO_INDEX,
+                &size, &duration_ms);
         if (!defined && session->collect_utterance_result.live) {
             size = session->collect_utterance_result.recording.size;
             duration_ms =
@@ -1735,7 +1750,8 @@ static vxml_status evaluate_recording_shadow_expression(
             return VXML_INVALID_STRUCTURE;
         if (staged)
             defined = collect_pending_recording_metadata(
-                session, row->source_field, &size, &duration_ms);
+                session, program, row->source_field,
+                &size, &duration_ms);
         if (!defined) {
             const vxml_cmeta_field_recording_shadow *shadow =
                 &session->field_recording_shadows[row->source_field];
