@@ -195,6 +195,19 @@ typedef struct vxml_cmeta_prompt_mark_expr_row {
     size_t expression;
 } vxml_cmeta_prompt_mark_expr_row;
 
+typedef struct vxml_cmeta_prompt_foreach_row {
+    size_t prompt;
+    size_t collection_location;
+    size_t scope;
+    size_t item_slot;
+    size_t first_segment;
+    size_t segment_count;
+    size_t first_fallback;
+    size_t fallback_count;
+    size_t dynamic_mark_count;
+    const cmeta_data_desc *element;
+} vxml_cmeta_prompt_foreach_row;
+
 typedef struct vxml_cmeta_prompt_row {
     vxml_cmeta_prompt_owner_kind owner_kind;
     size_t owner;
@@ -208,6 +221,8 @@ typedef struct vxml_cmeta_prompt_row {
     size_t first_fallback;
     size_t fallback_count;
     size_t dynamic_mark_count;
+    size_t first_foreach;
+    size_t foreach_count;
     uint64_t required_capabilities;
     bool bargein;
     vxml_cmeta_prompt_bargein_type bargein_type;
@@ -474,6 +489,12 @@ typedef struct vxml_cmeta_program_data {
     vxml_cmeta_prompt_mark_expr_row *prompt_mark_exprs;
     size_t prompt_mark_expr_count;
     size_t max_dynamic_mark_name_bytes;
+    vxml_cmeta_prompt_foreach_row *prompt_foreach;
+    size_t prompt_foreach_count;
+    size_t max_prompt_foreach_items;
+    size_t max_prompt_foreach_snapshot_bytes;
+    size_t max_prompt_expanded_segments;
+    size_t max_prompt_foreach_element_alignment;
     vxml_cmeta_prompt_media_fallback_v1 *prompt_fallbacks;
     size_t prompt_fallback_count;
     vxml_cmeta_filled_row *filled;
@@ -790,6 +811,12 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;
     vxml_cmeta_prompt_media_segment_v1 *prompt_media_projected_segments;
     size_t prompt_media_projected_segment_capacity;
+    vxml_cmeta_prompt_media_fallback_v1 *prompt_media_projected_fallbacks;
+    size_t prompt_media_projected_fallback_capacity;
+    unsigned char *prompt_foreach_snapshot_allocation;
+    unsigned char *prompt_foreach_snapshot;
+    size_t prompt_foreach_snapshot_capacity;
+    bool prompt_foreach_transaction;
     char *prompt_media_dynamic_mark_storage;
     size_t prompt_media_dynamic_mark_storage_capacity;
     uint64_t prompt_media_projected_generation;
