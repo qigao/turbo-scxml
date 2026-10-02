@@ -9960,7 +9960,8 @@ static vxml_status prompt_media_project_dynamic_marks(
     const vxml_cmeta_field_row *field = NULL;
     const vxml_cmeta_prompt_row *prompt = NULL;
     unsigned prompt_count = 0u;
-    size_t dynamic_offset;
+    size_t side_index = 0u;
+    size_t dynamic_offset = 0u;
     size_t storage_used = 0u;
     size_t scopes[2];
     vxml_status status;
@@ -9991,11 +9992,7 @@ static vxml_status prompt_media_project_dynamic_marks(
         profile->prompt_media_projected_segments == NULL ||
         profile->prompt_media_dynamic_mark_storage == NULL ||
         program->prompt_mark_exprs == NULL ||
-        program->max_dynamic_mark_name_bytes == 0u ||
-        !range_valid(
-            prompt->first_dynamic_mark,
-            prompt->dynamic_mark_count,
-            program->prompt_mark_expr_count))
+        program->max_dynamic_mark_name_bytes == 0u)
         return VXML_INVALID_STRUCTURE;
 
     memcpy(
@@ -10034,13 +10031,20 @@ static vxml_status prompt_media_project_dynamic_marks(
     }
     scopes[1] = program->document_scope;
 
+    while (side_index < program->prompt_mark_expr_count &&
+           program->prompt_mark_exprs[side_index].segment_index <
+               prompt->first_segment)
+        ++side_index;
+
     for (dynamic_offset = 0u;
          dynamic_offset < prompt->dynamic_mark_count;
          ++dynamic_offset) {
-        const vxml_cmeta_prompt_mark_expr_row *dynamic =
-            &program->prompt_mark_exprs[
-                prompt->first_dynamic_mark + dynamic_offset];
-        const size_t absolute_segment = dynamic->segment_index;
+        const vxml_cmeta_prompt_mark_expr_row *dynamic;
+        size_t absolute_segment;
+        if (side_index >= program->prompt_mark_expr_count)
+            return VXML_INVALID_STRUCTURE;
+        dynamic = &program->prompt_mark_exprs[side_index++];
+        absolute_segment = dynamic->segment_index;
         size_t relative_segment;
         vxml_cmeta_value_view value = {0};
         char *destination;
