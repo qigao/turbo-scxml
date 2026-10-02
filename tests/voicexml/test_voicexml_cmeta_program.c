@@ -472,7 +472,7 @@ spec("VoiceXML CMeta program compiler") {
             "aai='opaque'/></form></vxml>",
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
-            "type='consultation'/></form></vxml>",
+            "type='attended'/></form></vxml>",
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
             "connecttimeout='6s'/></form></vxml>",
@@ -490,7 +490,7 @@ spec("VoiceXML CMeta program compiler") {
             VXML_UNSUPPORTED_FEATURE,
             VXML_UNSUPPORTED_FEATURE,
             VXML_UNSUPPORTED_FEATURE,
-            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
             VXML_LIMIT_EXCEEDED,
             VXML_LIMIT_EXCEEDED,
             VXML_INVALID_STRUCTURE,
