@@ -11081,12 +11081,13 @@ static vxml_status prompt_mark_result_publish(
 
     if (profile == NULL || program == NULL || generation == UINT64_C(0))
         return VXML_INVALID_ARGUMENT;
-    prompt_mark_result_reset(profile);
     if (profile->prompt_media_last_mark_segment == SIZE_MAX ||
         !atomic_load_explicit(
             &profile->prompt_media_last_mark_elapsed_valid,
-            memory_order_acquire))
+            memory_order_acquire)) {
+        prompt_mark_result_reset(profile);
         return VXML_OK;
+    }
 
     mark_elapsed_ms = atomic_load_explicit(
         &profile->prompt_media_last_mark_elapsed_ms,
@@ -11102,6 +11103,7 @@ static vxml_status prompt_mark_result_publish(
         name.size > profile->prompt_mark_result.name_capacity)
         return VXML_INVALID_STRUCTURE;
 
+    prompt_mark_result_reset(profile);
     memcpy(
         profile->prompt_mark_result.name,
         name.data, name.size);
