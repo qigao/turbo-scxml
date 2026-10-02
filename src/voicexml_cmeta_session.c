@@ -544,16 +544,24 @@ static bool session_transfers_valid(
     for (index = 0u; index < program->transfer_count; ++index) {
         const vxml_cmeta_transfer_row *row = &program->transfers[index];
         const vxml_cmeta_form_row *form;
-        const uint64_t mode_cap =
-            row->mode == VXML_CMETA_TRANSFER_BRIDGE
-                ? VXML_CMETA_TRANSFER_CAP_BRIDGE
-                : VXML_CMETA_TRANSFER_CAP_BLIND;
+        uint64_t mode_cap = UINT64_C(0);
+        switch (row->mode) {
+        case VXML_CMETA_TRANSFER_BLIND:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_BLIND;
+            break;
+        case VXML_CMETA_TRANSFER_BRIDGE:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_BRIDGE;
+            break;
+        case VXML_CMETA_TRANSFER_CONSULTATION:
+            mode_cap = VXML_CMETA_TRANSFER_CAP_CONSULTATION;
+            break;
+        default:
+            return false;
+        }
         if (row->form >= program->form_count ||
             program->forms == NULL ||
             row->name == NULL || row->name_size == 0u ||
             row->destination == NULL || row->destination_size == 0u ||
-            (row->mode != VXML_CMETA_TRANSFER_BLIND &&
-             row->mode != VXML_CMETA_TRANSFER_BRIDGE) ||
             row->max_connect_timeout_us == UINT64_C(0) ||
             row->max_duration_us == UINT64_C(0) ||
             (row->has_connect_timeout &&
