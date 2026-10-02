@@ -1272,7 +1272,8 @@ static vxml_status cmeta_measure_executable(
         static const char *const allowed[] = {"namelist"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
     } else if (cmeta_node_named(node, "goto")) {
-        static const char *const allowed[] = {"next", "nextexpr"};
+        static const char *const allowed[] = {
+            "next", "nextexpr", "fetchaudio"};
         const salts_xml_attribute next =
             cmeta_attribute(node, "next");
         const salts_xml_attribute nextexpr =
@@ -1300,6 +1301,25 @@ static vxml_status cmeta_measure_executable(
                     ? VXML_INVALID_STRUCTURE : VXML_XML_ERROR,
                 salts_xml_attribute_location(next),
                 "VoiceXML goto next is empty or contains an invalid XML reference");
+        if (status == VXML_OK) {
+            const salts_xml_attribute fetchaudio =
+                cmeta_attribute(node, "fetchaudio");
+            if (fetchaudio.impl != NULL) {
+                decoded_size = 0u;
+                if (!cmeta_decode_entities(
+                        salts_xml_attribute_value(fetchaudio),
+                        NULL, 0u, &decoded_size))
+                    status = cmeta_program_fail(
+                        diagnostic, VXML_XML_ERROR,
+                        salts_xml_attribute_location(fetchaudio),
+                        "VoiceXML goto fetchaudio contains an invalid XML reference");
+                else if (decoded_size == 0u)
+                    status = cmeta_program_fail(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(fetchaudio),
+                        "VoiceXML goto fetchaudio must be non-empty");
+            }
+        }
     } else if (cmeta_node_named(node, "if")) {
         static const char *const allowed[] = {"cond"};
         status = cmeta_validate_attributes(node, allowed, 1u, diagnostic);
@@ -1361,9 +1381,16 @@ static vxml_status cmeta_measure_executable(
         if (status != VXML_OK) return status;
     }
     if (cmeta_node_named(node, "goto")) {
+        const salts_xml_attribute fetchaudio =
+            cmeta_attribute(node, "fetchaudio");
         status = cmeta_measure_name(
             cmeta_attribute(node, "next"), measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
+        if (fetchaudio.impl != NULL) {
+            status = cmeta_measure_name(
+                fetchaudio, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+        }
     }
     if (!cmeta_node_named(node, "if") &&
         !cmeta_node_named(node, "var")) {
@@ -4047,6 +4074,15 @@ static vxml_status cmeta_measure_record_utterance_property(
         return VXML_OK;
     }
 
+    {
+        bool fetch_recognized = false;
+        status = cmeta_measure_fetchaudio_property(
+            property, limits, measurement,
+            &fetch_recognized, diagnostic);
+        if (status != VXML_OK) return status;
+        if (fetch_recognized) return VXML_OK;
+    }
+
     if (cmeta_decoded_equal(
             salts_xml_attribute_value(name), "recordutterancetype")) {
         size_t decoded_size = 0u;
@@ -4529,6 +4565,28 @@ static vxml_status cmeta_measure_program(
     for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(root, index);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "property")) {
+            bool recognized = false;
+            if (saw_form) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "document property must precede forms");
+                break;
+            }
+            status = cmeta_measure_fetchaudio_property(
+                child, limits, measurement,
+                &recognized, diagnostic);
+            if (status != VXML_OK) break;
+            if (!recognized) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "unsupported VoiceXML document property in bounded CMeta profile");
+                break;
+            }
+            continue;
+        }
         if (cmeta_node_named(child, "data")) {
             if (!version_21) {
                 status = cmeta_program_fail(
