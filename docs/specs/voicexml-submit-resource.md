@@ -69,5 +69,38 @@ return. A successful lease remains caller-owned until
 The component has no CHTTP dependency. An optional transport bridge can be
 added separately without changing this one-attempt contract.
 
-Multipart/form-data is intentionally deferred to the recorded-audio/#49
-boundary.
+## Multipart recording submit
+
+`vxml_submit_resource_execute_multipart()` is the recorded-audio extension.
+It accepts text fields plus an explicit array of borrowed recording fields.
+Nothing in SubmitResource discovers a recording from Session/global state.
+
+The wire contract is segmented:
+
+```text
+multipart metadata segments
+  + caller text-value segments
+  + caller recording-payload segments
+  -> one execute_v2() provider call
+```
+
+Recording bytes are borrowed for the synchronous callback only and are never
+concatenated into a second unbounded buffer. The recording lease therefore
+remains owned by the caller/Session across both success and failure.
+
+A deterministic boundary is derived from the selected multipart inputs and is
+checked against every text value and recording payload before provider
+admission. Field names/filenames reject CR/LF injection and are quoted
+deterministically. The complete body size, metadata/header bytes, boundary
+bytes, part count, and segment count all have caller-supplied hard ceilings.
+
+There is no V1 buffering fallback. A provider that does not expose
+`execute_v2` cannot execute multipart. As with urlencoded POST,
+`VXML_SUBMIT_RESOURCE_POSSIBLY_PROCESSED` is returned unchanged after exactly
+one provider attempt.
+
+For CMeta record results, the caller first borrows the explicit
+`vxml_cmeta_record_result_view_v1` selected by `record@name`, then projects
+that view's `data`, `size`, and `media_type` into one
+`vxml_submit_recording_field_v1`. SubmitResource does not acquire, replace, or
+release that Session-owned recording result.
