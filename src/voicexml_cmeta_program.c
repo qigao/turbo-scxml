@@ -3841,6 +3841,7 @@ static vxml_status cmeta_measure_transfer(
         maxtime, &has_maxtime, &maxtime_us, diagnostic);
     if (status != VXML_OK) return status;
     if (has_maxtime &&
+        mode != VXML_CMETA_TRANSFER_CONSULTATION &&
         maxtime_us > options->max_transfer_duration_us)
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
