@@ -394,6 +394,7 @@ typedef struct cmeta_program_measurement {
     size_t prompt_count;
     size_t prompt_segment_count;
     size_t prompt_mark_expr_count;
+    size_t max_mark_name_bytes;
     size_t prompt_fallback_count;
     bool version_21;
     size_t filled_count;
@@ -2012,6 +2013,8 @@ static vxml_status cmeta_measure_prompt(
                         salts_xml_attribute_location(name),
                         "VoiceXML mark name exceeds max_prompt_bytes");
             }
+            if (mark_name_bytes > measurement->max_mark_name_bytes)
+                measurement->max_mark_name_bytes = mark_name_bytes;
             if (mark_name_bytes > SIZE_MAX - total_prompt_bytes)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
@@ -4457,6 +4460,8 @@ static bool cmeta_allocate_rows(
     profile->max_dynamic_mark_name_bytes =
         measurement->prompt_mark_expr_count != 0u
             ? options->max_dynamic_mark_name_bytes : 0u;
+    profile->max_mark_result_name_bytes =
+        measurement->max_mark_name_bytes;
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
