@@ -5,6 +5,8 @@
 int main(void) {
     static const char document[] =
         "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+        "<property name='fetchaudiodelay' value='250ms'/>"
+        "<property name='fetchaudiominimum' value='1.5s'/>"
         "<form id='main'><block>"
         "<goto next='next.vxml#target' fetchaudio='wait.wav'/>"
         "</block></form></vxml>";
@@ -50,7 +52,11 @@ int main(void) {
         navigation.fetchaudio_uri_size != sizeof(wait_audio) - 1u ||
         memcmp(
             navigation.fetchaudio_uri, wait_audio,
-            navigation.fetchaudio_uri_size) != 0)
+            navigation.fetchaudio_uri_size) != 0 ||
+        !navigation.has_fetchaudio_delay ||
+        navigation.fetchaudio_delay_us != UINT64_C(250000) ||
+        !navigation.has_fetchaudio_minimum ||
+        navigation.fetchaudio_minimum_us != UINT64_C(1500000))
         goto cleanup;
     result = 0;
 
