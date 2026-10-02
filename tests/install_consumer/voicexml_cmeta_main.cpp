@@ -371,6 +371,8 @@ int main() {
         transfer_ticket.commit != nullptr ||
         VXML_CMETA_TRANSFER_CAP_BLIND == 0u ||
         VXML_CMETA_TRANSFER_CAP_BRIDGE == 0u ||
+        VXML_CMETA_TRANSFER_CAP_CONSULTATION == 0u ||
+        VXML_CMETA_TRANSFER_CONSULTATION == 0 ||
         prepare_subdialog == nullptr || commit_subdialog == nullptr ||
         discard_subdialog == nullptr ||
         complete_subdialog == nullptr || run_subdialog_completion == nullptr ||
