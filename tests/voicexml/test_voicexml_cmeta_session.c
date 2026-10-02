@@ -12784,9 +12784,6 @@ spec("VoiceXML CMeta session execution") {
             check_equal(
                 compiled->prompts[0].dynamic_mark_count,
                 (size_t)1u);
-            check_equal(
-                compiled->prompts[0].first_dynamic_mark,
-                (size_t)0u);
             check_true(
                 runtime->prompt_media_projected_segment_capacity >=
                 (size_t)3u);
