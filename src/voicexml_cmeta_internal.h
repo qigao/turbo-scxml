@@ -105,6 +105,7 @@ typedef struct vxml_cmeta_record_row {
 
     const char *media_type;
     size_t media_type_size;
+    size_t max_media_type_bytes;
     uint64_t required_capabilities;
     size_t filled;
 } vxml_cmeta_record_row;
@@ -491,6 +492,38 @@ typedef struct vxml_cmeta_prompt_media_mailbox {
     vxml_cmeta_prompt_media_failure failure;
 } vxml_cmeta_prompt_media_mailbox;
 
+typedef enum vxml_cmeta_record_mailbox_state {
+    VXML_CMETA_RECORD_MAILBOX_DISARMED = 0,
+    VXML_CMETA_RECORD_MAILBOX_EMPTY,
+    VXML_CMETA_RECORD_MAILBOX_WRITING,
+    VXML_CMETA_RECORD_MAILBOX_READY,
+    VXML_CMETA_RECORD_MAILBOX_CLOSED
+} vxml_cmeta_record_mailbox_state;
+
+typedef struct vxml_cmeta_record_completion_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    vxml_cmeta_record_outcome outcome;
+    uint64_t duration_us;
+    bool has_termchar;
+    char termchar;
+    char *media_type;
+    size_t media_type_size;
+    size_t media_type_capacity;
+    vxml_cmeta_recording_lease_v1 recording;
+} vxml_cmeta_record_completion_mailbox;
+
+typedef struct vxml_cmeta_record_result_slot {
+    bool live;
+    vxml_cmeta_record_outcome outcome;
+    uint64_t duration_us;
+    bool has_termchar;
+    char termchar;
+    char *media_type;
+    size_t media_type_size;
+    vxml_cmeta_recording_lease_v1 recording;
+} vxml_cmeta_record_result_slot;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
@@ -523,6 +556,12 @@ typedef struct vxml_cmeta_session_data {
     bool record_prepared;
     bool record_in_flight;
     size_t max_record_bytes;
+    uint64_t record_quiesced_generation;
+    vxml_cmeta_record_completion_mailbox record_mailbox;
+    vxml_cmeta_record_result_slot *record_results;
+    char *record_result_media_storage;
+    size_t record_result_count;
+    size_t record_result_media_stride;
 
     size_t active_menu;
     size_t active_block;

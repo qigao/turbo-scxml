@@ -30,6 +30,8 @@ extern "C" {
 #define VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1 1u
 #define VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1 1u
+#define VXML_CMETA_RECORD_COMPLETION_ABI_V1 1u
+#define VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
@@ -275,7 +277,72 @@ typedef struct vxml_cmeta_record_adapter_v1 {
         const char **out_error);
     /** No-fail/nonblocking cancellation of one committed generation. */
     void (*cancel)(void *user, uint64_t generation);
+
+    /*
+     * Owner generation barrier. This may block and returns only after no
+     * provider callback for the generation can still enter TurboSCXML.
+     */
+    void (*quiesce)(void *user, uint64_t generation);
 } vxml_cmeta_record_adapter_v1;
+
+typedef enum vxml_cmeta_record_outcome {
+    VXML_CMETA_RECORD_OUTCOME_SUCCESS = 1,
+    VXML_CMETA_RECORD_OUTCOME_NOINPUT,
+    VXML_CMETA_RECORD_OUTCOME_TERMCHAR,
+    VXML_CMETA_RECORD_OUTCOME_ERROR
+} vxml_cmeta_record_outcome;
+
+/*
+ * Move-only provider recording lease. Before ACCEPTED it belongs to the
+ * producer. ACCEPTED SUCCESS transfers it to the Session; every other ingress
+ * result leaves ownership with the producer.
+ */
+typedef struct vxml_cmeta_recording_lease_v1 {
+    const void *data;
+    size_t size;
+    void *lease;
+    void (*release)(void *user, void *lease);
+    void *release_user;
+} vxml_cmeta_recording_lease_v1;
+
+typedef struct vxml_cmeta_record_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_record_outcome outcome;
+    uint64_t duration_us;
+    bool has_termchar;
+    char termchar;
+    vxml_cmeta_name_view media_type;
+    vxml_cmeta_recording_lease_v1 recording;
+} vxml_cmeta_record_completion_v1;
+
+typedef enum vxml_cmeta_record_ingress_result {
+    VXML_CMETA_RECORD_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_RECORD_INGRESS_FULL,
+    VXML_CMETA_RECORD_INGRESS_CLOSED,
+    VXML_CMETA_RECORD_INGRESS_STALE,
+    VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT,
+    VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT
+} vxml_cmeta_record_ingress_result;
+
+/*
+ * Borrowed view of the Session-owned result identified by record@name in the
+ * active form. data and media_type remain valid until that result is replaced,
+ * cleared, or the Session is closed/destroyed.
+ */
+typedef struct vxml_cmeta_record_result_view_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_cmeta_name_view name;
+    vxml_cmeta_record_outcome outcome;
+    uint64_t duration_us;
+    bool has_termchar;
+    char termchar;
+    vxml_cmeta_name_view media_type;
+    const void *data;
+    size_t size;
+} vxml_cmeta_record_result_view_v1;
 
 
 typedef enum vxml_cmeta_subdialog_param_source {
@@ -826,6 +893,36 @@ vxml_status vxml_session_cmeta_record_commit(vxml_session *session);
 
 /** Discard the currently prepared record provider ticket. */
 vxml_status vxml_session_cmeta_record_discard(vxml_session *session);
+
+/**
+ * MPSC admission of one terminal recording completion.
+ *
+ * SUCCESS transfers exactly one move-only recording lease only when ACCEPTED
+ * is returned. All other outcomes carry no lease. Metadata is bounded and
+ * copied; recording payload bytes are never copied by TurboSCXML.
+ */
+vxml_cmeta_record_ingress_result
+vxml_session_cmeta_record_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_record_completion_v1 *completion);
+
+/**
+ * Single-owner progress point. Settles at most one accepted record completion
+ * and returns to Directed FIA when the item remains non-terminal.
+ */
+vxml_status vxml_session_cmeta_record_run_ready(
+    vxml_session *session,
+    bool *out_progressed);
+
+/**
+ * Borrow the Session-owned result for record@name in the active form.
+ * Borrowed bytes remain valid until replacement, committed clear, or close.
+ */
+vxml_status vxml_session_cmeta_record_result(
+    const vxml_session *session,
+    const char *name,
+    size_t name_size,
+    vxml_cmeta_record_result_view_v1 *out_result);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(
