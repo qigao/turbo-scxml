@@ -10,6 +10,168 @@
 
 #define VXML_NAMESPACE "http://www.w3.org/2001/vxml"
 
+typedef uint8_t vxml_cmeta_transfer_result_storage;
+
+static const cmeta_type_traits transfer_result_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
+static const cmeta_type_identity transfer_result_identity =
+    CMETA_TYPE_ID_ATOM_INIT("qigao.turboscxml.voicexml.transfer.result");
+
+static const cmeta_type_desc transfer_result_type = {
+    .name = "vxml_cmeta_transfer_result_storage",
+    .size = sizeof(vxml_cmeta_transfer_result_storage),
+    .align = _Alignof(vxml_cmeta_transfer_result_storage),
+    .kind = CMETA_T_OBJECT,
+    .traits = &transfer_result_traits,
+    .identity = &transfer_result_identity
+};
+
+static const cmeta_data_buffer_shape transfer_result_shape = {
+    .ownership = CMETA_DATA_BUFFER_OWNED
+};
+
+bool vxml_cmeta_transfer_result_name(
+    vxml_cmeta_transfer_result result,
+    vxml_cmeta_name_view *out) {
+    const char *name = NULL;
+    size_t size = 0u;
+    if (out == NULL) return false;
+    *out = (vxml_cmeta_name_view){0};
+    switch (result) {
+    case VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT:
+        name = "near_end_disconnect";
+        size = sizeof("near_end_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_BUSY:
+        name = "busy";
+        size = sizeof("busy") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NETWORK_BUSY:
+        name = "network_busy";
+        size = sizeof("network_busy") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NOANSWER:
+        name = "noanswer";
+        size = sizeof("noanswer") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_MAXTIME_DISCONNECT:
+        name = "maxtime_disconnect";
+        size = sizeof("maxtime_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NETWORK_DISCONNECT:
+        name = "network_disconnect";
+        size = sizeof("network_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_FAR_END_DISCONNECT:
+        name = "far_end_disconnect";
+        size = sizeof("far_end_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_UNKNOWN:
+        name = "unknown";
+        size = sizeof("unknown") - 1u;
+        break;
+    default:
+        return false;
+    }
+    *out = (vxml_cmeta_name_view){name, size};
+    return true;
+}
+
+static bool transfer_result_is_zero(const void *object) {
+    return object != NULL &&
+        *(const vxml_cmeta_transfer_result_storage *)object == 0u;
+}
+
+static cmeta_status transfer_result_assign(
+    void *object, const unsigned char *data,
+    size_t size, size_t max_bytes) {
+    vxml_cmeta_transfer_result result;
+    if (object == NULL || (size != 0u && data == NULL))
+        return CMETA_INVALID_ARGUMENT;
+    if (size > max_bytes)
+        return CMETA_CAPACITY_EXCEEDED;
+    for (result = VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT;
+         result <= VXML_CMETA_TRANSFER_RESULT_UNKNOWN;
+         result = (vxml_cmeta_transfer_result)((unsigned)result + 1u)) {
+        vxml_cmeta_name_view name = {0};
+        if (vxml_cmeta_transfer_result_name(result, &name) &&
+            name.size == size &&
+            memcmp(name.data, data, size) == 0) {
+            *(vxml_cmeta_transfer_result_storage *)object =
+                (vxml_cmeta_transfer_result_storage)result;
+            return CMETA_OK;
+        }
+    }
+    return CMETA_INVALID_ARGUMENT;
+}
+
+static void transfer_result_restore_zero(void *object) {
+    if (object != NULL)
+        *(vxml_cmeta_transfer_result_storage *)object = 0u;
+}
+
+static cmeta_status transfer_result_read(
+    const void *object,
+    const unsigned char **out_data,
+    size_t *out_size) {
+    vxml_cmeta_name_view name = {0};
+    const vxml_cmeta_transfer_result_storage value =
+        object != NULL
+            ? *(const vxml_cmeta_transfer_result_storage *)object
+            : 0u;
+    if (object == NULL || out_data == NULL || out_size == NULL)
+        return CMETA_INVALID_ARGUMENT;
+    *out_data = NULL;
+    *out_size = 0u;
+    if (value == 0u)
+        return CMETA_OK;
+    if (!vxml_cmeta_transfer_result_name(
+            (vxml_cmeta_transfer_result)value, &name))
+        return CMETA_CALLBACK_ERROR;
+    *out_data = (const unsigned char *)name.data;
+    *out_size = name.size;
+    return CMETA_OK;
+}
+
+static cmeta_status transfer_result_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    transfer_result_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void transfer_result_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    *(vxml_cmeta_transfer_result_storage *)destination =
+        *(vxml_cmeta_transfer_result_storage *)source;
+    *(vxml_cmeta_transfer_result_storage *)source = 0u;
+}
+
+static const cmeta_data_buffer_ops transfer_result_buffer_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &transfer_result_type,
+    .ownership = CMETA_DATA_BUFFER_OWNED,
+    .is_zero = transfer_result_is_zero,
+    .assign = transfer_result_assign,
+    .restore_zero = transfer_result_restore_zero,
+    .read = transfer_result_read,
+    .init_zero = transfer_result_init_zero,
+    .move = transfer_result_move
+};
+
+const cmeta_data_desc vxml_cmeta_transfer_result_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "qigao.turboscxml.voicexml.transfer.result.data",
+    .display_name = "VoiceXML transfer result",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &transfer_result_type,
+    .shape = &transfer_result_shape,
+    .buffer_ops = &transfer_result_buffer_ops
+};
+
 static bool cmeta_root_supported(const cmeta_data_desc *root) {
     const cmeta_data_struct_shape *shape;
     const cmeta_type_traits *traits;
