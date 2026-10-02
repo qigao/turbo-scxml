@@ -4965,6 +4965,10 @@ static const char *cmeta_retain_view(
     return destination;
 }
 
+static vxml_status cmeta_retain_decoded_view(
+    cmeta_program_builder *builder, salts_xml_string_view raw,
+    salts_xml_location location, const char **out_data, size_t *out_size);
+
 typedef struct cmeta_fetch_property_seen {
     bool uri;
     bool delay;
