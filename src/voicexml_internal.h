@@ -27,6 +27,10 @@ typedef struct vxml_action_row {
     size_t target_uri_size;
     const char *fetchaudio_uri;
     size_t fetchaudio_uri_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
     vxml_submit_method submit_method;
     vxml_submit_enctype submit_enctype;
     const char *script_src;
