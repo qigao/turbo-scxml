@@ -39,7 +39,8 @@ typedef struct vxml_cmeta_scope_row {
 typedef enum vxml_cmeta_form_item_kind {
     VXML_CMETA_FORM_ITEM_FIELD = 1,
     VXML_CMETA_FORM_ITEM_INITIAL,
-    VXML_CMETA_FORM_ITEM_SUBDIALOG
+    VXML_CMETA_FORM_ITEM_SUBDIALOG,
+    VXML_CMETA_FORM_ITEM_RECORD
 } vxml_cmeta_form_item_kind;
 
 typedef struct vxml_cmeta_form_item_row {
@@ -83,6 +84,31 @@ typedef struct vxml_cmeta_subdialog_param_row {
     size_t literal_size;
 } vxml_cmeta_subdialog_param_row;
 
+typedef struct vxml_cmeta_record_row {
+    size_t form;
+    size_t form_item_slot;
+    const char *name;
+    size_t name_size;
+    size_t condition;
+
+    bool modal;
+    bool beep;
+    bool dtmf_term;
+
+    bool has_maxtime;
+    uint64_t maxtime_us;
+    uint64_t max_duration_us;
+
+    bool has_final_silence;
+    uint64_t final_silence_us;
+    uint64_t max_final_silence_us;
+
+    const char *media_type;
+    size_t media_type_size;
+    uint64_t required_capabilities;
+    size_t filled;
+} vxml_cmeta_record_row;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
@@ -93,6 +119,8 @@ typedef struct vxml_cmeta_form_row {
     size_t initial_count;
     size_t first_subdialog;
     size_t subdialog_count;
+    size_t first_record;
+    size_t record_count;
     size_t first_item;
     size_t item_count;
     size_t first_filled;
@@ -242,7 +270,8 @@ typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_FORM,
     VXML_CMETA_EVENT_FIELD,
     VXML_CMETA_EVENT_INITIAL,
-    VXML_CMETA_EVENT_SUBDIALOG
+    VXML_CMETA_EVENT_SUBDIALOG,
+    VXML_CMETA_EVENT_RECORD
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
@@ -322,6 +351,8 @@ typedef struct vxml_cmeta_program_data {
     size_t subdialog_count;
     vxml_cmeta_subdialog_param_row *subdialog_params;
     size_t subdialog_param_count;
+    vxml_cmeta_record_row *records;
+    size_t record_count;
     vxml_cmeta_form_item_row *form_items;
     size_t form_item_count;
     vxml_cmeta_prompt_row *prompts;
@@ -483,6 +514,16 @@ typedef struct vxml_cmeta_session_data {
     size_t subdialog_snapshot_storage_capacity;
     size_t max_subdialog_snapshot_bytes;
     vxml_cmeta_subdialog_completion_mailbox subdialog_mailbox;
+
+    size_t active_record;
+    uint64_t record_generation;
+    const vxml_cmeta_record_adapter_v1 *record_adapter;
+    void *record_user;
+    vxml_cmeta_record_ticket_v1 record_ticket;
+    bool record_prepared;
+    bool record_in_flight;
+    size_t max_record_bytes;
+
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;

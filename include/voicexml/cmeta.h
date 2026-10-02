@@ -44,6 +44,11 @@ extern "C" {
 #define VXML_CMETA_PROMPT_MEDIA_CAP_MARK UINT64_C(16)
 #define VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK UINT64_C(32)
 
+#define VXML_CMETA_RECORD_CAP_BEEP UINT64_C(1)
+#define VXML_CMETA_RECORD_CAP_DTMF_TERM UINT64_C(2)
+#define VXML_CMETA_RECORD_CAP_FINAL_SILENCE UINT64_C(4)
+#define VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE UINT64_C(8)
+
 typedef struct vxml_cmeta_name_view {
     const char *data;
     size_t size;
@@ -133,6 +138,16 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_subdialog_params;
     size_t max_subdialog_param_name_bytes;
     size_t max_subdialog_param_value_bytes;
+
+    /*
+     * Optional append-only static record bounds. Zero max_records disables
+     * <record>. Platform-specific maxtime/finalsilence defaults remain
+     * provider policy but may never exceed these hard owner ceilings.
+     */
+    size_t max_records;
+    size_t max_record_media_type_bytes;
+    uint64_t max_record_duration_us;
+    uint64_t max_record_final_silence_us;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -174,6 +189,11 @@ typedef struct vxml_cmeta_session_options_v1 {
     /* Optional append-only child completion mailbox bounds. */
     size_t max_subdialog_completion_entries;
     size_t max_subdialog_completion_bytes;
+
+    /* Optional append-only recording provider admission tail. */
+    const struct vxml_cmeta_record_adapter_v1 *record;
+    void *record_user;
+    size_t max_record_bytes;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -208,6 +228,54 @@ typedef struct vxml_cmeta_collect_ticket_v1 {
     void (*discard)(void *user);
     void *user;
 } vxml_cmeta_collect_ticket_v1;
+
+
+typedef struct vxml_cmeta_record_ticket_v1 {
+    void (*commit)(void *user);
+    void (*discard)(void *user);
+    void *user;
+} vxml_cmeta_record_ticket_v1;
+
+#define VXML_CMETA_RECORD_REQUEST_ABI_V1 1u
+
+typedef struct vxml_cmeta_record_request_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    uint64_t required_capabilities;
+
+    vxml_cmeta_name_view name;
+
+    bool modal;
+    bool beep;
+    bool dtmf_term;
+
+    bool has_maxtime;
+    uint64_t maxtime_us;
+    uint64_t max_duration_us;
+
+    bool has_final_silence;
+    uint64_t final_silence_us;
+    uint64_t max_final_silence_us;
+
+    vxml_cmeta_name_view media_type;
+    size_t max_bytes;
+} vxml_cmeta_record_request_v1;
+
+#define VXML_CMETA_RECORD_ADAPTER_ABI_V1 1u
+
+typedef struct vxml_cmeta_record_adapter_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t capabilities;
+    vxml_status (*prepare)(
+        void *user,
+        const vxml_cmeta_record_request_v1 *request,
+        vxml_cmeta_record_ticket_v1 *out_ticket,
+        const char **out_error);
+    /** No-fail/nonblocking cancellation of one committed generation. */
+    void (*cancel)(void *user, uint64_t generation);
+} vxml_cmeta_record_adapter_v1;
 
 
 typedef enum vxml_cmeta_subdialog_param_source {
@@ -743,6 +811,21 @@ vxml_session_cmeta_subdialog_try_complete(
 vxml_status vxml_session_cmeta_subdialog_run_ready(
     vxml_session *session,
     bool *out_progressed);
+
+/** Borrow the active static record request. */
+vxml_status vxml_session_cmeta_record_request(
+    const vxml_session *session,
+    vxml_cmeta_record_request_v1 *out_request);
+
+/** Reserve the active record provider operation without committing work. */
+vxml_status vxml_session_cmeta_record_prepare(
+    vxml_session *session, const char **out_error);
+
+/** Commit the currently prepared record provider ticket. */
+vxml_status vxml_session_cmeta_record_commit(vxml_session *session);
+
+/** Discard the currently prepared record provider ticket. */
+vxml_status vxml_session_cmeta_record_discard(vxml_session *session);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(

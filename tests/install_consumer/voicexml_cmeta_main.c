@@ -45,6 +45,13 @@ int main(void) {
     vxml_cmeta_collect_ticket_v1 collect_ticket = {0};
     vxml_cmeta_subdialog_param_v1 subdialog_param = {
         .source = VXML_CMETA_SUBDIALOG_PARAM_TYPED};
+    vxml_cmeta_record_request_v1 record_request = {
+        .abi_version = VXML_CMETA_RECORD_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_request_v1)};
+    vxml_cmeta_record_ticket_v1 record_ticket = {0};
+    vxml_cmeta_record_adapter_v1 record_adapter = {
+        .abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_adapter_v1)};
     vxml_cmeta_subdialog_request_v1 subdialog_request = {
         .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_subdialog_request_v1)};
@@ -152,6 +159,16 @@ int main(void) {
     vxml_status (*start_child)(
         vxml_session *, const vxml_cmeta_child_entry_v1 *) =
         vxml_session_cmeta_start_child;
+    vxml_status (*query_record)(
+        const vxml_session *, vxml_cmeta_record_request_v1 *) =
+        vxml_session_cmeta_record_request;
+    vxml_status (*prepare_record)(
+        vxml_session *, const char **) =
+        vxml_session_cmeta_record_prepare;
+    vxml_status (*commit_record)(vxml_session *) =
+        vxml_session_cmeta_record_commit;
+    vxml_status (*discard_record)(vxml_session *) =
+        vxml_session_cmeta_record_discard;
     vxml_status (*prepare_subdialog)(
         vxml_session *, const char **) =
         vxml_session_cmeta_subdialog_prepare;
@@ -185,6 +202,13 @@ int main(void) {
         query_terminal == NULL || query_terminal_event == NULL ||
         start_child == NULL ||
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
+        query_record == NULL || prepare_record == NULL ||
+        commit_record == NULL || discard_record == NULL ||
+        record_request.abi_version != VXML_CMETA_RECORD_REQUEST_ABI_V1 ||
+        record_adapter.abi_version != VXML_CMETA_RECORD_ADAPTER_ABI_V1 ||
+        record_ticket.commit != NULL ||
+        VXML_CMETA_RECORD_CAP_BEEP == 0u ||
+        VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
         prepare_subdialog == NULL || commit_subdialog == NULL ||
         discard_subdialog == NULL ||
         complete_subdialog == NULL || run_subdialog_completion == NULL ||

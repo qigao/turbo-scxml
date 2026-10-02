@@ -167,6 +167,17 @@ static vxml_cmeta_compile_options_v1 subdialog_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 record_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_event_handlers = 8u;
+    options.max_event_name_bytes = 64u;
+    options.max_records = 4u;
+    options.max_record_media_type_bytes = 64u;
+    options.max_record_duration_us = UINT64_C(10000000);
+    options.max_record_final_silence_us = UINT64_C(2000000);
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 subdialog_param_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = subdialog_compile_options();
     options.max_subdialog_params = 8u;
@@ -305,6 +316,164 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("compiles immutable bounded record descriptors in FIA order") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='message' cond='flag' beep='true' "
+            "maxtime='3.5s' finalsilence='750ms' "
+            "dtmfterm='false' type='audio/wav'>"
+            "<catch event='error.record'>"
+            "<assign name='value' expr='4'/></catch>"
+            "<filled><assign name='value' expr='5'/></filled>"
+            "</record></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            record_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_record_row *record;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = program.impl != NULL
+            ? (const vxml_cmeta_program_data *)
+                ((const vxml_program_impl *)program.impl)->profile_data
+            : NULL;
+        check_not_null(profile);
+        check_equal(profile->record_count, (size_t)1u);
+        check_equal(profile->form_item_count, (size_t)1u);
+        check_equal(profile->forms[0].first_record, (size_t)0u);
+        check_equal(profile->forms[0].record_count, (size_t)1u);
+        check_equal(
+            profile->form_items[0].kind,
+            VXML_CMETA_FORM_ITEM_RECORD);
+        check_equal(profile->form_items[0].index, (size_t)0u);
+
+        record = &profile->records[0];
+        check_equal(record->form, (size_t)0u);
+        check_true(record->form_item_slot != VXML_CMETA_NO_INDEX);
+        check_equal(record->name_size, sizeof("message") - 1u);
+        check_equal(
+            memcmp(record->name, "message", record->name_size), 0);
+        check_true(record->modal);
+        check_true(record->beep);
+        check_false(record->dtmf_term);
+        check_true(record->has_maxtime);
+        check_equal(record->maxtime_us, UINT64_C(3500000));
+        check_equal(record->max_duration_us, UINT64_C(10000000));
+        check_true(record->has_final_silence);
+        check_equal(record->final_silence_us, UINT64_C(750000));
+        check_equal(
+            record->max_final_silence_us, UINT64_C(2000000));
+        check_equal(record->media_type_size, sizeof("audio/wav") - 1u);
+        check_equal(
+            memcmp(
+                record->media_type, "audio/wav",
+                record->media_type_size),
+            0);
+        check_equal(
+            record->required_capabilities,
+            VXML_CMETA_RECORD_CAP_BEEP |
+            VXML_CMETA_RECORD_CAP_FINAL_SILENCE |
+            VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE);
+        check_true(record->condition != VXML_CMETA_NO_INDEX);
+        check_true(record->filled != VXML_CMETA_NO_INDEX);
+        check_equal(profile->event_handler_count, (size_t)1u);
+        check_equal(
+            profile->event_handlers[0].scope_kind,
+            VXML_CMETA_EVENT_RECORD);
+        check_equal(profile->event_handlers[0].owner, (size_t)0u);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            memcmp(record->name, "message", sizeof("message") - 1u), 0);
+        check_equal(
+            memcmp(record->media_type, "audio/wav", sizeof("audio/wav") - 1u),
+            0);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("preserves platform record defaults without inventing timing or type") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='message'/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            record_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_record_row *record;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        record = &profile->records[0];
+        check_true(record->modal);
+        check_false(record->beep);
+        check_true(record->dtmf_term);
+        check_false(record->has_maxtime);
+        check_equal(record->maxtime_us, UINT64_C(0));
+        check_false(record->has_final_silence);
+        check_equal(record->final_silence_us, UINT64_C(0));
+        check_null(record->media_type);
+        check_equal(record->media_type_size, (size_t)0u);
+        check_equal(
+            record->required_capabilities,
+            VXML_CMETA_RECORD_CAP_DTMF_TERM);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects dynamic unsupported and over-bound record contracts") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r' expr='value'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r' modal='false'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r' maxtime='11s'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r' finalsilence='3s'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r' beep='maybe'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><record name='r'><filled/><filled/>"
+            "</record></form></vxml>"
+        };
+        static const vxml_status expected[] = {
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_LIMIT_EXCEEDED,
+            VXML_LIMIT_EXCEEDED,
+            VXML_INVALID_STRUCTURE,
+            VXML_INVALID_STRUCTURE
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            record_compile_options();
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(sources) / sizeof(sources[0]);
+             ++index) {
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    sources[index], strlen(sources[index]), NULL,
+                    &options, &program, &diagnostic),
+                expected[index]);
+            check_null(program.impl);
+            check_equal(diagnostic.status, expected[index]);
+        }
+    }
+
     it("compiles an immutable anonymous static DTMF menu without a root field") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -2785,7 +2954,7 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 16u
+                    index == 10u || index == 16u
                         ? VXML_INVALID_CONTRACT
                         : index == 3u || index == 4u ||
                           index == 5u ||

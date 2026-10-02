@@ -37,6 +37,15 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_param_v1>::value,
     "subdialog param must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_record_request_v1>::value,
+    "record request must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_record_ticket_v1>::value,
+    "record ticket must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_record_adapter_v1>::value,
+    "record adapter must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_request_v1>::value,
     "subdialog request must remain C-compatible");
 static_assert(
@@ -119,6 +128,9 @@ int main() {
     vxml_cmeta_prompt_media_completion_v1 prompt_media_completion{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_subdialog_param_v1 subdialog_param{};
+    vxml_cmeta_record_request_v1 record_request{};
+    vxml_cmeta_record_ticket_v1 record_ticket{};
+    vxml_cmeta_record_adapter_v1 record_adapter{};
     vxml_cmeta_subdialog_request_v1 subdialog_request{};
     vxml_cmeta_child_entry_v1 child_entry{};
     vxml_cmeta_subdialog_result_entry_v1 subdialog_result{};
@@ -157,6 +169,10 @@ int main() {
     auto query_terminal = &vxml_session_cmeta_terminal_kind;
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
     auto start_child = &vxml_session_cmeta_start_child;
+    auto query_record = &vxml_session_cmeta_record_request;
+    auto prepare_record = &vxml_session_cmeta_record_prepare;
+    auto commit_record = &vxml_session_cmeta_record_commit;
+    auto discard_record = &vxml_session_cmeta_record_discard;
     auto prepare_subdialog = &vxml_session_cmeta_subdialog_prepare;
     auto commit_subdialog = &vxml_session_cmeta_subdialog_commit;
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
@@ -169,6 +185,10 @@ int main() {
     int result = 1;
 
     subdialog_param.source = VXML_CMETA_SUBDIALOG_PARAM_TYPED;
+    record_request.abi_version = VXML_CMETA_RECORD_REQUEST_ABI_V1;
+    record_request.struct_size = sizeof(record_request);
+    record_adapter.abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1;
+    record_adapter.struct_size = sizeof(record_adapter);
     subdialog_request.abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1;
     subdialog_request.struct_size = sizeof(subdialog_request);
     child_entry.abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1;
@@ -206,6 +226,13 @@ int main() {
         query_terminal == nullptr || query_terminal_event == nullptr ||
         start_child == nullptr ||
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
+        query_record == nullptr || prepare_record == nullptr ||
+        commit_record == nullptr || discard_record == nullptr ||
+        record_request.abi_version != VXML_CMETA_RECORD_REQUEST_ABI_V1 ||
+        record_adapter.abi_version != VXML_CMETA_RECORD_ADAPTER_ABI_V1 ||
+        record_ticket.commit != nullptr ||
+        VXML_CMETA_RECORD_CAP_BEEP == 0u ||
+        VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
         prepare_subdialog == nullptr || commit_subdialog == nullptr ||
         discard_subdialog == nullptr ||
         complete_subdialog == nullptr || run_subdialog_completion == nullptr ||
