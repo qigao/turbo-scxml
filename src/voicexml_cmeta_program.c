@@ -7545,6 +7545,7 @@ static vxml_status cmeta_lower_program(
     size_t field_index = 0u;
     size_t initial_index = 0u;
     size_t subdialog_index = 0u;
+    size_t record_index = 0u;
     size_t block_index = 0u;
     size_t root_child;
     vxml_status status;
@@ -7831,6 +7832,75 @@ static vxml_status cmeta_lower_program(
                             builder->diagnostic, VXML_INVALID_STRUCTURE,
                             salts_xml_node_location(item),
                             "VoiceXML subdialog parameter count changed during lowering");
+                } else if (cmeta_node_named(item, "record")) {
+                    vxml_cmeta_record_row *record;
+                    const size_t current_record_index = record_index;
+                    const salts_xml_attribute condition =
+                        cmeta_attribute(item, "cond");
+                    size_t nested_index;
+                    if (record_index >= builder->profile->record_count ||
+                        builder->profile->records == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML record rows changed during lowering");
+                    record = &builder->profile->records[record_index++];
+                    if (record->form != form_index ||
+                        record->form_item_slot == VXML_CMETA_NO_INDEX)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML record form ownership changed during lowering");
+                    if (condition.impl != NULL) {
+                        status = cmeta_append_expression(
+                            builder, condition, scopes, 2u, true,
+                            &record->condition);
+                        if (status != VXML_OK) return status;
+                    }
+                    for (nested_index = 0u;
+                         nested_index <
+                             salts_xml_node_child_count(item);
+                         ++nested_index) {
+                        const salts_xml_node nested =
+                            salts_xml_node_child_at(item, nested_index);
+                        if (cmeta_node_ignorable(nested)) continue;
+                        if (cmeta_node_named(nested, "catch") ||
+                            cmeta_node_named(nested, "help") ||
+                            cmeta_node_named(nested, "noinput") ||
+                            cmeta_node_named(nested, "nomatch")) {
+                            status = cmeta_lower_catch(
+                                builder, nested,
+                                VXML_CMETA_EVENT_RECORD,
+                                current_record_index,
+                                form->scope, scopes, 2u);
+                            if (status != VXML_OK) return status;
+                            continue;
+                        }
+                        if (cmeta_node_named(nested, "filled")) {
+                            if (record->filled == VXML_CMETA_NO_INDEX ||
+                                record->filled >=
+                                    builder->profile->filled_count ||
+                                builder->profile->filled == NULL)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_node_location(nested),
+                                    "VoiceXML record filled row changed between passes");
+                            status = cmeta_lower_filled_actions(
+                                builder, nested, form,
+                                &builder->profile->filled[
+                                    record->filled]);
+                            if (status != VXML_OK) return status;
+                            continue;
+                        }
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(nested),
+                            "VoiceXML record child changed during lowering");
+                    }
                 } else if (cmeta_node_named(item, "catch") ||
                            cmeta_node_named(item, "help") ||
                            cmeta_node_named(item, "noinput") ||
@@ -7991,7 +8061,8 @@ static vxml_status cmeta_lower_program(
     }
     if (field_index != builder->profile->field_count ||
         initial_index != builder->profile->initial_count ||
-        subdialog_index != builder->profile->subdialog_count)
+        subdialog_index != builder->profile->subdialog_count ||
+        record_index != builder->profile->record_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
