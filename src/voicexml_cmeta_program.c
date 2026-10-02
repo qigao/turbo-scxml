@@ -6622,6 +6622,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->record_count;
+    if (capacity > SIZE_MAX - measurement->transfer_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->transfer_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
