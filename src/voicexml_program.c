@@ -2009,7 +2009,8 @@ static void write_form(vxml_writer *writer, salts_xml_node node) {
     }
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT &&
+            view_equal(salts_xml_node_local_name(child), "block"))
             write_block(writer, child);
     }
     row->block_count = writer->block_index - row->first_block;
@@ -2019,7 +2020,8 @@ static void write_document(vxml_writer *writer, salts_xml_node root) {
     size_t index;
     for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(root, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT &&
+            view_equal(salts_xml_node_local_name(child), "form"))
             write_form(writer, child);
     }
 }
