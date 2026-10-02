@@ -10483,6 +10483,7 @@ prompt_media_try_complete_impl(
     uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned state;
     unsigned expected;
@@ -10516,6 +10517,8 @@ prompt_media_try_complete_impl(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     mailbox = &profile->prompt_media_mailbox;
     state = atomic_load_explicit(
         &mailbox->state, memory_order_acquire);
@@ -10719,6 +10722,7 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     unsigned expected;
     uint64_t generation;
     vxml_cmeta_prompt_media_failure failure;
+    vxml_status mark_status = VXML_OK;
 
     if (out_progressed != NULL) *out_progressed = false;
     if (out_outcome != NULL) *out_outcome = 0;
@@ -10779,9 +10783,22 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     *out_progressed = true;
     *out_outcome = mailbox->outcome;
     failure = mailbox->failure;
+
+    if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED &&
+        mailbox->timing_valid)
+        mark_status = prompt_mark_result_publish(
+            profile, program, generation,
+            mailbox->playback_elapsed_ms);
+    else
+        prompt_mark_result_reset(profile);
+
+    mailbox->timing_valid = false;
+    mailbox->playback_elapsed_ms = UINT64_C(0);
     profile->prompt_media_in_flight = false;
     profile->prompt_media_generation = 0u;
     prompt_media_mailbox_disarm(profile);
+    if (mark_status != VXML_OK)
+        return mark_status;
     if (*out_outcome == VXML_CMETA_PROMPT_MEDIA_OUTCOME_FAILED)
         return prompt_media_raise_failure(session, failure);
     return VXML_OK;
