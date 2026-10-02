@@ -1156,6 +1156,51 @@ static void field_recording_shadow_reset(
         (vxml_cmeta_field_recording_shadow){0};
 }
 
+static void mark_result_slot_reset(
+    vxml_cmeta_mark_result_slot *slot) {
+    char *name;
+    if (slot == NULL) return;
+    name = slot->name;
+    *slot = (vxml_cmeta_mark_result_slot){0};
+    slot->name = name;
+}
+
+static bool mark_result_slot_publish(
+    vxml_cmeta_mark_result_slot *slot,
+    size_t name_capacity,
+    uint64_t generation,
+    const char *name,
+    size_t name_size,
+    uint64_t marktime_ms,
+    bool has_mark) {
+    if (slot == NULL || generation == UINT64_C(0) ||
+        (has_mark &&
+         (slot->name == NULL || name == NULL || name_size == 0u ||
+          name_size > name_capacity)))
+        return false;
+    mark_result_slot_reset(slot);
+    slot->assigned = true;
+    slot->generation = generation;
+    slot->has_mark = has_mark;
+    if (has_mark) {
+        memcpy(slot->name, name, name_size);
+        slot->name_size = name_size;
+        slot->marktime_ms = marktime_ms;
+    }
+    return true;
+}
+
+static void field_mark_shadow_reset(
+    vxml_cmeta_session_data *session,
+    size_t field_index) {
+    if (session == NULL ||
+        session->field_mark_shadows == NULL ||
+        field_index >= session->field_mark_shadow_count)
+        return;
+    mark_result_slot_reset(
+        &session->field_mark_shadows[field_index]);
+}
+
 static void collect_quiesce_generation(
     vxml_cmeta_session_data *session,
     uint64_t generation) {
@@ -1565,6 +1610,7 @@ static void apply_retry_resets(
             if (session->retry_reset_pending[index] != 0u) {
                 reset_field_retry_counters(session, index);
                 field_recording_shadow_reset(session, index);
+                field_mark_shadow_reset(session, index);
             }
     if (session->initial_retry_reset_pending != NULL)
         for (index = 0u; index < program->initial_count; ++index)
