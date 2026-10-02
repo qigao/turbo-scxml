@@ -1819,6 +1819,111 @@ static vxml_status evaluate_recording_shadow_expression(
     return VXML_OK;
 }
 
+static bool collect_pending_mark_for_field(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t field_index) {
+    const vxml_cmeta_field_row *field;
+    unsigned state;
+    size_t slot;
+    if (session == NULL || program == NULL ||
+        field_index >= program->field_count ||
+        program->fields == NULL ||
+        !session->prompt_mark_result.live ||
+        session->prompt_mark_result.generation !=
+            session->collect_generation ||
+        session->collect_mailbox.root_fields == NULL ||
+        session->collect_mailbox.slot_count == 0u)
+        return false;
+    field = &program->fields[field_index];
+    if (session->staged_root.bound == NULL ||
+        field->root_field >=
+            session_root_shape(program)->field_count ||
+        session->staged_root.bound[field->root_field] == 0u)
+        return false;
+    state = atomic_load_explicit(
+        &session->collect_mailbox.state, memory_order_acquire);
+    if (state != VXML_CMETA_COLLECT_MAILBOX_WRITING)
+        return false;
+    for (slot = 0u;
+         slot < session->collect_mailbox.slot_count;
+         ++slot)
+        if (session->collect_mailbox.root_fields[slot] ==
+            field->root_field)
+            return true;
+    return false;
+}
+
+static vxml_status evaluate_mark_shadow_expression(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    bool staged,
+    const vxml_cmeta_expression_row *row,
+    vxml_cmeta_value_view *out_value) {
+    const vxml_cmeta_mark_result_slot *result = NULL;
+    const vxml_cmeta_field_mark_shadow *shadow = NULL;
+    if (session == NULL || program == NULL ||
+        row == NULL || out_value == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_value = (vxml_cmeta_value_view){
+        .kind = VXML_CMETA_VALUE_UNDEFINED};
+
+    switch (row->source_kind) {
+    case VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME:
+    case VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME:
+        if (session->prompt_mark_result.live)
+            result = &session->prompt_mark_result;
+        break;
+    case VXML_CMETA_EXPRESSION_FIELD_MARK_NAME:
+    case VXML_CMETA_EXPRESSION_FIELD_MARK_TIME:
+        if (row->source_field >= program->field_count ||
+            session->field_mark_shadows == NULL ||
+            row->source_field >=
+                session->field_mark_shadow_count)
+            return VXML_INVALID_STRUCTURE;
+        if (staged &&
+            collect_pending_mark_for_field(
+                session, program, row->source_field))
+            result = &session->prompt_mark_result;
+        else {
+            shadow =
+                &session->field_mark_shadows[row->source_field];
+            if (!shadow->assigned || !shadow->has_mark)
+                return VXML_OK;
+        }
+        break;
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (result != NULL && !result->live)
+        return VXML_OK;
+    if (result == NULL && shadow == NULL)
+        return VXML_OK;
+
+    if (row->source_kind ==
+            VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME ||
+        row->source_kind ==
+            VXML_CMETA_EXPRESSION_FIELD_MARK_NAME) {
+        const char *name =
+            result != NULL ? result->name : shadow->name;
+        const size_t name_size =
+            result != NULL ? result->name_size : shadow->name_size;
+        if (name == NULL || name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        out_value->kind = VXML_CMETA_VALUE_STRING;
+        out_value->data.string =
+            (vxml_cmeta_name_view){name, name_size};
+    } else {
+        out_value->kind = VXML_CMETA_VALUE_UINT;
+        out_value->data.uint_value =
+            result != NULL
+                ? result->marktime_ms
+                : shadow->marktime_ms;
+    }
+    return VXML_OK;
+}
+
 static vxml_status evaluate_expression(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1836,10 +1941,20 @@ static vxml_status evaluate_expression(
         (scope_count != 0u && scopes == NULL))
         return VXML_INVALID_STRUCTURE;
     if (program->expressions[expression].source_kind !=
-            VXML_CMETA_EXPRESSION_GENERIC)
+            VXML_CMETA_EXPRESSION_GENERIC) {
+        const vxml_cmeta_expression_source_kind kind =
+            program->expressions[expression].source_kind;
+        if (kind == VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME ||
+            kind == VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME ||
+            kind == VXML_CMETA_EXPRESSION_FIELD_MARK_NAME ||
+            kind == VXML_CMETA_EXPRESSION_FIELD_MARK_TIME)
+            return evaluate_mark_shadow_expression(
+                session, program, staged,
+                &program->expressions[expression], out_value);
         return evaluate_recording_shadow_expression(
             session, program, staged,
             &program->expressions[expression], out_value);
+    }
     for (index = 0u; index < scope_count; ++index) {
         const size_t scope = scopes[index];
         unsigned char *declared;
