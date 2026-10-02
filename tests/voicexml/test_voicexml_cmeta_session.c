@@ -12014,6 +12014,18 @@ spec("VoiceXML CMeta session execution") {
         check_equal(probe.recording_release_calls, (size_t)0u);
 
         completion.generation = request.generation;
+        completion.recording_media_type =
+            (vxml_cmeta_name_view){
+                "audio/basic", sizeof("audio/basic") - 1u};
+        check_equal(
+            vxml_session_cmeta_collect_try_complete_v3(
+                &session, &completion),
+            VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT);
+        check_equal(probe.recording_release_calls, (size_t)0u);
+
+        completion.recording_media_type =
+            (vxml_cmeta_name_view){
+                "audio/wav", sizeof("audio/wav") - 1u};
         check_equal(
             vxml_session_cmeta_collect_try_complete_v3(
                 &session, &completion),
