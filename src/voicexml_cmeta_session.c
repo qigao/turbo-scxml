@@ -576,8 +576,15 @@ static bool session_transfers_valid(
         form = &program->forms[row->form];
         if (form->scope >= program->scope_count ||
             row->form_item_slot == VXML_CMETA_NO_INDEX ||
+            row->result_slot == VXML_CMETA_NO_INDEX ||
             row->form_item_slot >=
                 program->scopes[form->scope].schema.slot_count ||
+            row->result_slot >=
+                program->scopes[form->scope].schema.slot_count ||
+            !cmeta_data_desc_equal(
+                program->scopes[form->scope].schema
+                    .slots[row->result_slot].value,
+                &vxml_cmeta_transfer_result_data) ||
             index < form->first_transfer ||
             index - form->first_transfer >= form->transfer_count)
             return false;
@@ -2628,6 +2635,8 @@ static vxml_status initialize_form(
             unsigned char *form_declared;
             if (transfer->form != form_index ||
                 transfer->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count ||
+                transfer->result_slot >=
                     program->scopes[form->scope].schema.slot_count)
                 return VXML_INVALID_STRUCTURE;
             form_declared = session_declared(
@@ -2635,6 +2644,7 @@ static vxml_status initialize_form(
             if (form_declared == NULL)
                 return VXML_INVALID_STRUCTURE;
             form_declared[transfer->form_item_slot] = 1u;
+            form_declared[transfer->result_slot] = 1u;
         }
     }
 
@@ -3714,6 +3724,11 @@ vxml_status vxml_cmeta_session_init_profile(
         VXML_CMETA_RECORD_MAILBOX_DISARMED);
     atomic_init(
         &profile->record_mailbox.generation, UINT64_C(0));
+    atomic_init(
+        &profile->transfer_mailbox.state,
+        VXML_CMETA_TRANSFER_MAILBOX_DISARMED);
+    atomic_init(
+        &profile->transfer_mailbox.generation, UINT64_C(0));
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
