@@ -300,7 +300,15 @@ vxml_status vxml_session_navigation_request(
         .uri_size = impl->navigation_uri_size,
         .fetchaudio_uri = impl->navigation_fetchaudio_uri,
         .fetchaudio_uri_size =
-            impl->navigation_fetchaudio_uri_size};
+            impl->navigation_fetchaudio_uri_size,
+        .has_fetchaudio_delay =
+            impl->navigation_has_fetchaudio_delay,
+        .fetchaudio_delay_us =
+            impl->navigation_fetchaudio_delay_us,
+        .has_fetchaudio_minimum =
+            impl->navigation_has_fetchaudio_minimum,
+        .fetchaudio_minimum_us =
+            impl->navigation_fetchaudio_minimum_us};
     return VXML_OK;
 }
 
