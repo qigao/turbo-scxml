@@ -3927,6 +3927,69 @@ static vxml_status cmeta_measure_transfer(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_fetchaudio_property(
+    salts_xml_node property,
+    const vxml_limits *limits,
+    cmeta_program_measurement *measurement,
+    bool *out_recognized,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "value"};
+    const salts_xml_attribute name = cmeta_attribute(property, "name");
+    const salts_xml_attribute value = cmeta_attribute(property, "value");
+    bool has_time = false;
+    uint64_t time_us = UINT64_C(0);
+    size_t decoded_size = 0u;
+    vxml_status status;
+
+    if (out_recognized == NULL) return VXML_INVALID_ARGUMENT;
+    *out_recognized = false;
+    status = cmeta_validate_attributes(property, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(property, diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL || value.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(property),
+            "VoiceXML property requires name and value");
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudio")) {
+        *out_recognized = true;
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(value),
+                NULL, 0u, &decoded_size))
+            return cmeta_program_fail(
+                diagnostic, VXML_XML_ERROR,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio contains an invalid XML reference");
+        if (decoded_size == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio must be non-empty");
+        return cmeta_measure_name(
+            value, measurement, limits, diagnostic);
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudiodelay") ||
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudiominimum")) {
+        *out_recognized = true;
+        status = cmeta_parse_prompt_timeout(
+            value, &has_time, &time_us, diagnostic);
+        if (status != VXML_OK) return status;
+        if (!has_time)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetch-audio timing property requires a time designation");
+        return VXML_OK;
+    }
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_record_utterance_property(
     salts_xml_node property,
     bool version_21,
