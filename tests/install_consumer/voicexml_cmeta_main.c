@@ -52,6 +52,14 @@ int main(void) {
     vxml_cmeta_record_adapter_v1 record_adapter = {
         .abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_record_adapter_v1)};
+    vxml_cmeta_recording_lease_v1 recording_lease = {0};
+    vxml_cmeta_record_completion_v1 record_completion = {
+        .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_completion_v1),
+        .outcome = VXML_CMETA_RECORD_OUTCOME_NOINPUT};
+    vxml_cmeta_record_result_view_v1 record_result = {
+        .abi_version = VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_result_view_v1)};
     vxml_cmeta_subdialog_request_v1 subdialog_request = {
         .abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_subdialog_request_v1)};
@@ -169,6 +177,16 @@ int main(void) {
         vxml_session_cmeta_record_commit;
     vxml_status (*discard_record)(vxml_session *) =
         vxml_session_cmeta_record_discard;
+    vxml_cmeta_record_ingress_result (*complete_record)(
+        vxml_session *, const vxml_cmeta_record_completion_v1 *) =
+        vxml_session_cmeta_record_try_complete;
+    vxml_status (*run_record_completion)(
+        vxml_session *, bool *) =
+        vxml_session_cmeta_record_run_ready;
+    vxml_status (*query_record_result)(
+        const vxml_session *, const char *, size_t,
+        vxml_cmeta_record_result_view_v1 *) =
+        vxml_session_cmeta_record_result;
     vxml_status (*prepare_subdialog)(
         vxml_session *, const char **) =
         vxml_session_cmeta_subdialog_prepare;
@@ -204,8 +222,17 @@ int main(void) {
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
         query_record == NULL || prepare_record == NULL ||
         commit_record == NULL || discard_record == NULL ||
+        complete_record == NULL || run_record_completion == NULL ||
+        query_record_result == NULL ||
         record_request.abi_version != VXML_CMETA_RECORD_REQUEST_ABI_V1 ||
         record_adapter.abi_version != VXML_CMETA_RECORD_ADAPTER_ABI_V1 ||
+        record_completion.abi_version !=
+            VXML_CMETA_RECORD_COMPLETION_ABI_V1 ||
+        record_completion.outcome != VXML_CMETA_RECORD_OUTCOME_NOINPUT ||
+        record_result.abi_version !=
+            VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1 ||
+        recording_lease.data != NULL ||
+        VXML_CMETA_RECORD_INGRESS_ACCEPTED != 0 ||
         record_ticket.commit != NULL ||
         VXML_CMETA_RECORD_CAP_BEEP == 0u ||
         VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
