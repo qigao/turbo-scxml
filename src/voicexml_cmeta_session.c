@@ -6981,6 +6981,47 @@ incompatible:
     return VXML_CMETA_COLLECT_INGRESS_INCOMPATIBLE_RESULT;
 }
 
+vxml_status vxml_session_cmeta_collect_utterance_result(
+    const vxml_session *session,
+    vxml_cmeta_collect_utterance_result_view_v1 *out_result) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_collect_utterance_result_slot *result;
+    if (out_result != NULL)
+        *out_result =
+            (vxml_cmeta_collect_utterance_result_view_v1){0};
+    if (session == NULL || out_result == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    result = &profile->collect_utterance_result;
+    if (!result->live ||
+        result->recording.data == NULL ||
+        result->recording.size == 0u ||
+        result->recording.lease == NULL ||
+        result->media_type == NULL ||
+        result->media_type_size == 0u)
+        return VXML_INVALID_STATE;
+    *out_result = (vxml_cmeta_collect_utterance_result_view_v1){
+        .abi_version =
+            VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1,
+        .struct_size =
+            sizeof(vxml_cmeta_collect_utterance_result_view_v1),
+        .duration_us = result->duration_us,
+        .media_type = {
+            result->media_type, result->media_type_size},
+        .data = result->recording.data,
+        .size = result->recording.size
+    };
+    return VXML_OK;
+}
+
 static bool root_field_list_contains(
     const size_t *root_fields, size_t root_field_count,
     size_t root_field) {
@@ -7520,8 +7561,14 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         &mailbox->generation, memory_order_relaxed);
     form = &program->forms[profile->active_form];
 
+    if (mailbox->record_utterance_expected)
+        collect_quiesce_generation(profile, generation);
+
     if (generation != profile->collect_generation) {
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->choice_index = SIZE_MAX;
@@ -7572,6 +7619,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         target = &program->menu_choice_targets[absolute_choice];
 
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->choice_index = SIZE_MAX;
@@ -7632,7 +7682,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
                 program->fields == NULL)
                 return session_fail(impl, VXML_INVALID_STRUCTURE);
             field = &program->fields[profile->active_field];
-            if (field->form != profile->active_form)
+            if (field->form != profile->active_form ||
+                mailbox->record_utterance_expected !=
+                    form->record_utterance)
                 return session_fail(impl, VXML_INVALID_STRUCTURE);
         }
 
@@ -7644,6 +7696,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             mailbox->storage == NULL ||
             mailbox->storage_stride == 0u) {
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7656,6 +7711,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
         if (!transaction_begin(profile, program)) {
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7743,6 +7801,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         if (status != VXML_OK) {
             transaction_reset(profile, program);
             profile->collect_in_flight = false;
+            collect_recording_payload_reset(mailbox, true);
+            mailbox->record_utterance_expected = false;
+            mailbox->max_recording_duration_us = UINT64_C(0);
             mailbox->data = NULL;
             mailbox->slot_count = 0u;
             mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7764,10 +7825,52 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         }
 
         transaction_commit(profile, program);
+
+        /*
+         * A committed recognition replaces the prior last-result recording.
+         * The scalar transaction is already durable; only now may the Session
+         * adopt the ACCEPTED media lease from the mailbox.
+         */
+        collect_utterance_result_reset(profile);
+        if (mailbox->record_utterance_expected &&
+            mailbox->recording.lease != NULL) {
+            vxml_cmeta_collect_utterance_result_slot *result =
+                &profile->collect_utterance_result;
+            if (mailbox->recording_media_type_size == 0u ||
+                result->media_type == NULL ||
+                mailbox->recording_media_type_size >
+                    result->media_type_capacity) {
+                collect_recording_payload_reset(mailbox, true);
+                mailbox->record_utterance_expected = false;
+                mailbox->max_recording_duration_us = UINT64_C(0);
+                profile->collect_in_flight = false;
+                atomic_store_explicit(
+                    &mailbox->state,
+                    VXML_CMETA_COLLECT_MAILBOX_DISARMED,
+                    memory_order_release);
+                return session_fail(impl, VXML_INVALID_STRUCTURE);
+            }
+            memcpy(
+                result->media_type,
+                mailbox->recording_media_type,
+                mailbox->recording_media_type_size);
+            result->media_type_size =
+                mailbox->recording_media_type_size;
+            result->duration_us =
+                mailbox->recording_duration_us;
+            result->recording = mailbox->recording;
+            result->live = true;
+            mailbox->recording =
+                (vxml_cmeta_recording_lease_v1){0};
+        }
+
         profile->reprompt_requested = false;
         profile->handler_reprompt_requested = false;
 
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7795,6 +7898,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
 invalid_ready:
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -7806,6 +7912,9 @@ invalid_ready:
 
 semantic_ready:
         profile->collect_in_flight = false;
+        collect_recording_payload_reset(mailbox, true);
+        mailbox->record_utterance_expected = false;
+        mailbox->max_recording_duration_us = UINT64_C(0);
         mailbox->data = NULL;
         mailbox->slot_count = 0u;
         mailbox->item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
