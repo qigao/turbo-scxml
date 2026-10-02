@@ -4190,19 +4190,21 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form filled must follow all directed form items");
-            if (form_record_count != 0u ||
-                form_transfer_count != 0u)
+            if (form_record_count != 0u)
                 return cmeta_program_fail(
                     diagnostic, VXML_UNSUPPORTED_FEATURE,
                     salts_xml_node_location(child),
-                    "form-level filled targeting record/transfer is deferred until owned result completion exists");
-            if (form_field_count > SIZE_MAX - form_subdialog_count)
+                    "form-level filled targeting record is deferred until record result variables join the form scope");
+            if (form_field_count > SIZE_MAX - form_subdialog_count ||
+                form_field_count + form_subdialog_count >
+                    SIZE_MAX - form_transfer_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
                     "VoiceXML filled default target count overflow");
             result_target_count =
-                form_field_count + form_subdialog_count;
+                form_field_count + form_subdialog_count +
+                form_transfer_count;
             saw_filled = true;
             {
                 const vxml_status filled_status =
