@@ -8824,6 +8824,15 @@ vxml_status vxml_session_cmeta_collect_run_ready(
 
         transaction_commit(profile, program);
 
+        /*
+         * A committed recognition replaces application.lastresult$ even when
+         * this collect generation had no prompt or only a legacy V1 terminal.
+         * Do not let timed mark metadata from an older generation leak forward.
+         */
+        if (profile->prompt_mark_result.live &&
+            profile->prompt_mark_result.generation != generation)
+            prompt_mark_result_reset(profile);
+
         status = snapshot_committed_mark_shadows(
             profile, program, form, mailbox, generation);
         if (status != VXML_OK) {
