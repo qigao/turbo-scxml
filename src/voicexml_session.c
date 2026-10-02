@@ -125,6 +125,14 @@ vxml_status vxml_session_start_literal_at(
                     action->fetchaudio_uri;
                 impl->navigation_fetchaudio_uri_size =
                     action->fetchaudio_uri_size;
+                impl->navigation_has_fetchaudio_delay =
+                    action->has_fetchaudio_delay;
+                impl->navigation_fetchaudio_delay_us =
+                    action->fetchaudio_delay_us;
+                impl->navigation_has_fetchaudio_minimum =
+                    action->has_fetchaudio_minimum;
+                impl->navigation_fetchaudio_minimum_us =
+                    action->fetchaudio_minimum_us;
                 impl->state = VXML_SESSION_NAVIGATING;
                 return VXML_OK;
             }
@@ -219,6 +227,10 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->navigation_uri_size = 0u;
     impl->navigation_fetchaudio_uri = NULL;
     impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_has_fetchaudio_delay = false;
+    impl->navigation_fetchaudio_delay_us = UINT64_C(0);
+    impl->navigation_has_fetchaudio_minimum = false;
+    impl->navigation_fetchaudio_minimum_us = UINT64_C(0);
     impl->submit_uri = NULL;
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
