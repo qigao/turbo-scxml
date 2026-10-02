@@ -12752,6 +12752,34 @@ spec("VoiceXML CMeta session execution") {
                 &session, &program, &options),
             VXML_OK);
         check_equal(vxml_session_start(&session), VXML_OK);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            const vxml_cmeta_session_data *runtime =
+                session_data(&session);
+            check_not_null(compiled);
+            check_not_null(runtime);
+            check_equal(compiled->prompt_mark_expr_count, (size_t)1u);
+            check_not_null(compiled->prompt_mark_exprs);
+            check_equal(
+                compiled->prompt_mark_exprs[0].segment_index,
+                (size_t)1u);
+            check_true(
+                compiled->prompt_mark_exprs[0].expression !=
+                VXML_CMETA_NO_INDEX);
+            check_equal(
+                compiled->prompts[0].dynamic_mark_count,
+                (size_t)1u);
+            check_equal(
+                compiled->prompts[0].first_dynamic_mark,
+                (size_t)0u);
+            check_true(
+                runtime->prompt_media_projected_segment_capacity >=
+                (size_t)3u);
+            check_true(
+                runtime->prompt_media_dynamic_mark_storage_capacity >=
+                sizeof("queued_mark") - 1u);
+        }
 
         check_equal(
             vxml_session_cmeta_prompt_media_prepare(
