@@ -559,6 +559,7 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "param") ||
         cmeta_node_named(node, "record") ||
         cmeta_node_named(node, "transfer") ||
+        cmeta_node_named(node, "property") ||
         cmeta_node_named(node, "filled") || cmeta_node_named(node, "grammar") ||
         cmeta_node_named(node, "catch") || cmeta_node_named(node, "help") ||
         cmeta_node_named(node, "noinput") || cmeta_node_named(node, "nomatch") ||
@@ -660,6 +661,19 @@ static bool cmeta_record_options_valid(
         options->max_record_media_type_bytes != 0u &&
         options->max_record_duration_us != UINT64_C(0) &&
         options->max_record_final_silence_us != UINT64_C(0);
+}
+
+static bool cmeta_collect_recording_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_collect_recording_duration_us) +
+        sizeof(options->max_collect_recording_duration_us);
+    return options != NULL &&
+        options->struct_size >= tail_size &&
+        options->max_collect_recording_media_type_bytes != 0u &&
+        options->max_collect_recording_duration_us != UINT64_C(0);
 }
 
 static bool cmeta_transfer_options_valid(
@@ -948,6 +962,22 @@ static vxml_status cmeta_measure_repeated_vars(
     size_t index;
     for (index = 0u; index < salts_xml_node_child_count(container); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(container, index);
+        if (cmeta_node_named(child, "property")) {
+            vxml_status property_status;
+            if (saw_block || saw_directed || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form property must precede form items");
+            property_status = cmeta_measure_record_utterance_property(
+                child, version_21, options, measurement, limits,
+                &saw_record_utterance,
+                &saw_record_utterance_type,
+                diagnostic);
+            if (property_status != VXML_OK) return property_status;
+            continue;
+        }
+
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute name_attribute = cmeta_attribute(child, "name");
             bool reached_target = false;
@@ -3618,8 +3648,106 @@ static vxml_status cmeta_measure_transfer(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_record_utterance_property(
+    salts_xml_node property,
+    bool version_21,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    bool *saw_record_utterance,
+    bool *saw_record_utterance_type,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "value"};
+    const salts_xml_attribute name = cmeta_attribute(property, "name");
+    const salts_xml_attribute value = cmeta_attribute(property, "value");
+    vxml_status status;
+
+    if (!version_21)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(property),
+            "VoiceXML recordutterance properties require version 2.1");
+    status = cmeta_validate_attributes(property, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(property, diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL || value.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(property),
+            "VoiceXML property requires name and value");
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "recordutterance")) {
+        if (*saw_record_utterance)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML recordutterance property");
+        *saw_record_utterance = true;
+        if (!cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "true") &&
+            !cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "false"))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML recordutterance must be true or false");
+        if (cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "true") &&
+            !cmeta_collect_recording_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_attribute_location(value),
+                "VoiceXML recorded utterance requires enabled compile bounds");
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "recordutterancetype")) {
+        size_t decoded_size = 0u;
+        if (*saw_record_utterance_type)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML recordutterancetype property");
+        *saw_record_utterance_type = true;
+        if (!cmeta_collect_recording_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_attribute_location(value),
+                "VoiceXML recordutterancetype requires enabled compile bounds");
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(value),
+                NULL, 0u, &decoded_size))
+            return cmeta_program_fail(
+                diagnostic, VXML_XML_ERROR,
+                salts_xml_attribute_location(value),
+                "VoiceXML recordutterancetype contains an invalid XML reference");
+        if (decoded_size == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML recordutterancetype must be non-empty");
+        if (decoded_size >
+                options->max_collect_recording_media_type_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(value),
+                "VoiceXML recordutterancetype exceeds configured media-type bytes");
+        return cmeta_measure_name(
+            value, measurement, limits, diagnostic);
+    }
+
+    return cmeta_program_fail(
+        diagnostic, VXML_UNSUPPORTED_FEATURE,
+        salts_xml_attribute_location(name),
+        "unsupported VoiceXML property in bounded CMeta profile");
+}
+
 static vxml_status cmeta_measure_form(
     salts_xml_node form,
+    bool version_21,
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
@@ -3634,6 +3762,8 @@ static vxml_status cmeta_measure_form(
     bool saw_block = false;
     bool saw_directed = false;
     bool saw_filled = false;
+    bool saw_record_utterance = false;
+    bool saw_record_utterance_type = false;
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
     const size_t first_initial = measurement->initial_count;
@@ -4105,7 +4235,7 @@ static vxml_status cmeta_measure_program(
             ? cmeta_measure_menu(
                 child, options, measurement, limits, diagnostic)
             : cmeta_measure_form(
-                child, options, measurement, limits, diagnostic);
+                child, version_21, options, measurement, limits, diagnostic);
         if (status != VXML_OK) break;
     }
     if (status == VXML_OK && measurement->form_count == 0u)
@@ -6761,6 +6891,49 @@ static vxml_status cmeta_build_schemas(
                 const salts_xml_node item =
                     salts_xml_node_child_at(child, form_child);
                 if (cmeta_node_ignorable(item)) continue;
+                if (cmeta_node_named(item, "property")) {
+                    const salts_xml_attribute name_attribute =
+                        cmeta_attribute(item, "name");
+                    const salts_xml_attribute value_attribute =
+                        cmeta_attribute(item, "value");
+                    if (cmeta_decoded_equal(
+                            salts_xml_attribute_value(name_attribute),
+                            "recordutterance")) {
+                        form->record_utterance =
+                            cmeta_decoded_equal(
+                                salts_xml_attribute_value(value_attribute),
+                                "true");
+                        if (form->record_utterance) {
+                            form->max_recording_media_type_bytes =
+                                builder->options->
+                                    max_collect_recording_media_type_bytes;
+                            form->max_recording_duration_us =
+                                builder->options->
+                                    max_collect_recording_duration_us;
+                        }
+                    } else if (cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "recordutterancetype")) {
+                        status = cmeta_retain_decoded_view(
+                            builder,
+                            salts_xml_attribute_value(value_attribute),
+                            salts_xml_attribute_location(value_attribute),
+                            &form->recording_media_type,
+                            &form->recording_media_type_size);
+                        if (status != VXML_OK) return status;
+                        form->max_recording_media_type_bytes =
+                            builder->options->
+                                max_collect_recording_media_type_bytes;
+                    } else {
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_attribute_location(name_attribute),
+                            "VoiceXML property changed between compiler passes");
+                    }
+                    continue;
+                }
+
                 if (cmeta_node_named(item, "var")) {
                     const salts_xml_attribute name_attribute =
                         cmeta_attribute(item, "name");
