@@ -7489,6 +7489,97 @@ static size_t cmeta_expression_form_from_scopes(
     return VXML_CMETA_NO_INDEX;
 }
 
+static vxml_status cmeta_lower_mark_shadow_expression(
+    cmeta_program_builder *builder,
+    salts_xml_string_view source,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    vxml_cmeta_expression_row *row,
+    bool *out_lowered) {
+    static const char app_owner[] = "application.lastresult";
+    salts_xml_string_view owner = {0};
+    vxml_cmeta_expression_source_kind app_kind;
+    vxml_cmeta_expression_source_kind field_kind;
+    vxml_cmeta_value_kind value_kind;
+    size_t form_index;
+    size_t offset;
+
+    if (builder == NULL || row == NULL || out_lowered == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_lowered = false;
+    source = cmeta_trim_expression_view(source);
+
+    if (cmeta_shadow_property(source, "markname", &owner)) {
+        app_kind = VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME;
+        field_kind = VXML_CMETA_EXPRESSION_FIELD_MARK_NAME;
+        value_kind = VXML_CMETA_VALUE_STRING;
+    } else if (cmeta_shadow_property(source, "marktime", &owner)) {
+        app_kind = VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME;
+        field_kind = VXML_CMETA_EXPRESSION_FIELD_MARK_TIME;
+        value_kind = VXML_CMETA_VALUE_UINT;
+    } else {
+        return VXML_OK;
+    }
+
+    if (owner.size == sizeof(app_owner) - 1u &&
+        memcmp(owner.data, app_owner, sizeof(app_owner) - 1u) == 0) {
+        row->source_kind = app_kind;
+        row->value_kind = value_kind;
+        row->source_field = VXML_CMETA_NO_INDEX;
+        *out_lowered = true;
+        return VXML_OK;
+    }
+
+    if (!cmeta_ascii_ncname(owner))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            row->location,
+            "VoiceXML mark shadow owner must be application.lastresult or a field NCName");
+
+    form_index = cmeta_expression_form_from_scopes(
+        builder->profile, scopes, scope_count);
+    if (form_index == VXML_CMETA_NO_INDEX ||
+        form_index >= builder->profile->form_count ||
+        builder->profile->forms == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            row->location,
+            "VoiceXML input-item mark shadow requires form scope");
+
+    {
+        const vxml_cmeta_form_row *form =
+            &builder->profile->forms[form_index];
+        if (!range_valid(
+                form->first_field, form->field_count,
+                builder->profile->field_count) ||
+            (form->field_count != 0u &&
+             builder->profile->fields == NULL))
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                row->location,
+                "VoiceXML field rows are invalid for mark shadow lowering");
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index = form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &builder->profile->fields[field_index];
+            if (field->name != NULL &&
+                field->name_size == owner.size &&
+                memcmp(field->name, owner.data, owner.size) == 0) {
+                row->source_kind = field_kind;
+                row->value_kind = value_kind;
+                row->source_field = field_index;
+                *out_lowered = true;
+                return VXML_OK;
+            }
+        }
+    }
+
+    return cmeta_program_fail(
+        builder->diagnostic, VXML_SEMANTIC_ERROR,
+        row->location,
+        "VoiceXML mark shadow field name does not exist in the active form");
+}
+
 static vxml_status cmeta_lower_recording_scalar_expression(
     cmeta_program_builder *builder,
     salts_xml_string_view source,
@@ -7618,6 +7709,18 @@ static vxml_status cmeta_append_expression(
     row->source_field = VXML_CMETA_NO_INDEX;
     if (!condition) {
         bool lowered = false;
+        status = cmeta_lower_mark_shadow_expression(
+            builder, source.view, scopes, scope_count,
+            row, &lowered);
+        if (status != VXML_OK) {
+            cmeta_decoded_value_destroy(&source);
+            return status;
+        }
+        if (lowered) {
+            cmeta_decoded_value_destroy(&source);
+            *out_expression = builder->expression_index++;
+            return VXML_OK;
+        }
         status = cmeta_lower_recording_scalar_expression(
             builder, source.view, scopes, scope_count,
             row, &lowered);
