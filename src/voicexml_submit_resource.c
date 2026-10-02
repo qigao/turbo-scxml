@@ -668,20 +668,21 @@ static vxml_submit_resource_status multipart_validate(
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
 
     /*
-     * text_fixed/recording_fixed each account for one placeholder "--".
-     * Replace it with the actual boundary bytes for every part.
+     * Every part contributes "--" plus the complete boundary. The fixed
+     * constants above already contain the delimiter dashes, so only the
+     * boundary bytes themselves are added here.
      */
-    if (boundary_size < 2u)
-        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    if (parts != 0u && boundary_size > SIZE_MAX / parts)
+        return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
     if (!checked_add_size(
-            &metadata, parts * (boundary_size - 2u)) ||
+            &metadata, parts * boundary_size) ||
         !checked_add_size(
-            &body, parts * (boundary_size - 2u)))
+            &body, parts * boundary_size))
         return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
 
     {
         size_t trailer = trailer_fixed;
-        if (!checked_add_size(&trailer, boundary_size - 2u) ||
+        if (!checked_add_size(&trailer, boundary_size) ||
             !checked_add_size(&metadata, trailer) ||
             !checked_add_size(&body, trailer))
             return VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED;
