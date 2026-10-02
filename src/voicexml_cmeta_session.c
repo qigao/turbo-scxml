@@ -4156,6 +4156,8 @@ static vxml_status cmeta_session_start_profile_at_entry(
                      program->subdialog_count) ||
         !range_valid(form->first_record, form->record_count,
                      program->record_count) ||
+        !range_valid(form->first_transfer, form->transfer_count,
+                     program->transfer_count) ||
         !range_valid(form->first_item, form->item_count,
                      program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
@@ -4166,15 +4168,21 @@ static vxml_status cmeta_session_start_profile_at_entry(
         form->field_count + form->initial_count +
             form->subdialog_count >
             SIZE_MAX - form->record_count ||
+        form->field_count + form->initial_count +
+            form->subdialog_count + form->record_count >
+            SIZE_MAX - form->transfer_count ||
         (form->item_count !=
              form->field_count + form->initial_count +
-             form->subdialog_count + form->record_count) ||
+             form->subdialog_count + form->record_count +
+             form->transfer_count) ||
         ((form->field_count != 0u || form->initial_count != 0u ||
-          form->subdialog_count != 0u || form->record_count != 0u) &&
+          form->subdialog_count != 0u || form->record_count != 0u ||
+          form->transfer_count != 0u) &&
          ((form->field_count != 0u && program->fields == NULL) ||
           (form->initial_count != 0u && program->initials == NULL) ||
           (form->subdialog_count != 0u && program->subdialogs == NULL) ||
           (form->record_count != 0u && program->records == NULL) ||
+          (form->transfer_count != 0u && program->transfers == NULL) ||
           program->form_items == NULL ||
           form->block_count != 0u ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
@@ -4184,11 +4192,13 @@ static vxml_status cmeta_session_start_profile_at_entry(
         (form->menu != VXML_CMETA_NO_INDEX &&
          (form->field_count != 0u || form->initial_count != 0u ||
           form->subdialog_count != 0u || form->record_count != 0u ||
+          form->transfer_count != 0u ||
           form->item_count != 0u || form->block_count != 0u ||
           form->menu >= program->menu_count ||
           program->menus == NULL)) ||
         (form->field_count == 0u && form->initial_count == 0u &&
          form->subdialog_count == 0u && form->record_count == 0u &&
+         form->transfer_count == 0u &&
          form->block_count == 0u &&
          form->menu == VXML_CMETA_NO_INDEX))
         return session_fail(session, VXML_INVALID_STRUCTURE);
