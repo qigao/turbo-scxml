@@ -178,6 +178,17 @@ static vxml_cmeta_compile_options_v1 record_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 transfer_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_event_handlers = 8u;
+    options.max_event_name_bytes = 64u;
+    options.max_transfers = 4u;
+    options.max_transfer_uri_bytes = 128u;
+    options.max_transfer_connect_timeout_us = UINT64_C(5000000);
+    options.max_transfer_duration_us = UINT64_C(10000000);
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 subdialog_param_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = subdialog_compile_options();
     options.max_subdialog_params = 8u;
@@ -316,6 +327,194 @@ static void check_program_rejected(
 }
 
 spec("VoiceXML CMeta program compiler") {
+    it("compiles immutable bounded transfer descriptors in FIA order") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' cond='flag' dest='tel:+15551212' "
+            "bridge='true' connecttimeout='3s' maxtime='9s' "
+            "transferaudio='hold.wav'>"
+            "<catch event='error.connection.busy'>"
+            "<assign name='value' expr='4'/></catch>"
+            "<filled><assign name='value' expr='5'/></filled>"
+            "</transfer></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            transfer_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_transfer_row *transfer;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = program.impl != NULL
+            ? (const vxml_cmeta_program_data *)
+                ((const vxml_program_impl *)program.impl)->profile_data
+            : NULL;
+        check_not_null(profile);
+        check_equal(profile->transfer_count, (size_t)1u);
+        check_equal(profile->form_item_count, (size_t)1u);
+        check_equal(profile->forms[0].first_transfer, (size_t)0u);
+        check_equal(profile->forms[0].transfer_count, (size_t)1u);
+        check_equal(
+            profile->form_items[0].kind,
+            VXML_CMETA_FORM_ITEM_TRANSFER);
+        check_equal(profile->form_items[0].index, (size_t)0u);
+
+        transfer = &profile->transfers[0];
+        check_equal(transfer->form, (size_t)0u);
+        check_true(transfer->form_item_slot != VXML_CMETA_NO_INDEX);
+        check_equal(transfer->name_size, sizeof("call") - 1u);
+        check_equal(
+            memcmp(transfer->name, "call", transfer->name_size), 0);
+        check_equal(
+            transfer->destination_size,
+            sizeof("tel:+15551212") - 1u);
+        check_equal(
+            memcmp(
+                transfer->destination, "tel:+15551212",
+                transfer->destination_size),
+            0);
+        check_equal(transfer->mode, VXML_CMETA_TRANSFER_BRIDGE);
+        check_true(transfer->has_connect_timeout);
+        check_equal(
+            transfer->connect_timeout_us, UINT64_C(3000000));
+        check_equal(
+            transfer->max_connect_timeout_us, UINT64_C(5000000));
+        check_true(transfer->has_maxtime);
+        check_equal(transfer->maxtime_us, UINT64_C(9000000));
+        check_equal(
+            transfer->max_duration_us, UINT64_C(10000000));
+        check_equal(
+            transfer->transfer_audio_size, sizeof("hold.wav") - 1u);
+        check_equal(
+            memcmp(
+                transfer->transfer_audio, "hold.wav",
+                transfer->transfer_audio_size),
+            0);
+        check_equal(
+            transfer->required_capabilities,
+            VXML_CMETA_TRANSFER_CAP_BRIDGE |
+            VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT |
+            VXML_CMETA_TRANSFER_CAP_MAXTIME |
+            VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO);
+        check_true(transfer->condition != VXML_CMETA_NO_INDEX);
+        check_true(transfer->filled != VXML_CMETA_NO_INDEX);
+        check_equal(profile->event_handler_count, (size_t)1u);
+        check_equal(
+            profile->event_handlers[0].scope_kind,
+            VXML_CMETA_EVENT_TRANSFER);
+        check_equal(profile->event_handlers[0].owner, (size_t)0u);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            memcmp(transfer->name, "call", sizeof("call") - 1u), 0);
+        check_equal(
+            memcmp(
+                transfer->destination, "tel:+15551212",
+                sizeof("tel:+15551212") - 1u),
+            0);
+        check_equal(
+            memcmp(
+                transfer->transfer_audio, "hold.wav",
+                sizeof("hold.wav") - 1u),
+            0);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("preserves blind transfer defaults without inventing timing or audio") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            transfer_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_transfer_row *transfer;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &options, &program, NULL),
+            VXML_OK);
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        transfer = &profile->transfers[0];
+        check_equal(transfer->mode, VXML_CMETA_TRANSFER_BLIND);
+        check_false(transfer->has_connect_timeout);
+        check_equal(
+            transfer->connect_timeout_us, UINT64_C(0));
+        check_false(transfer->has_maxtime);
+        check_equal(transfer->maxtime_us, UINT64_C(0));
+        check_null(transfer->transfer_audio);
+        check_equal(transfer->transfer_audio_size, (size_t)0u);
+        check_equal(
+            transfer->required_capabilities,
+            VXML_CMETA_TRANSFER_CAP_BLIND);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects dynamic unsupported and over-bound transfer contracts") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "expr='value'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "destexpr='value'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "aai='opaque'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "type='consultation'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "connecttimeout='6s'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "maxtime='11s'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1' "
+            "bridge='maybe'/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><transfer name='t' dest='tel:1'>"
+            "<filled/><filled/></transfer></form></vxml>"
+        };
+        static const vxml_status expected[] = {
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_LIMIT_EXCEEDED,
+            VXML_LIMIT_EXCEEDED,
+            VXML_INVALID_STRUCTURE,
+            VXML_INVALID_STRUCTURE
+        };
+        const vxml_cmeta_compile_options_v1 options =
+            transfer_compile_options();
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(sources) / sizeof(sources[0]);
+             ++index) {
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    sources[index], strlen(sources[index]), NULL,
+                    &options, &program, &diagnostic),
+                expected[index]);
+            check_null(program.impl);
+            check_equal(diagnostic.status, expected[index]);
+        }
+    }
+
     it("compiles immutable bounded record descriptors in FIA order") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
