@@ -1595,6 +1595,7 @@ static vxml_status measure_exit(
 
 static vxml_status measure_goto(
     salts_xml_node node, vxml_measurement *measurement,
+    const vxml_literal_fetch_audio_policy *fetch_audio,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     salts_xml_attribute next;
     salts_xml_attribute fetchaudio;
@@ -1624,11 +1625,13 @@ static vxml_status measure_goto(
             salts_xml_node_location(node),
             "VoiceXML action count exceeds max_actions");
     return append_goto(
-        measurement, next, fetchaudio, limits, diagnostic);
+        measurement, next, fetchaudio, fetch_audio,
+        limits, diagnostic);
 }
 
 static vxml_status measure_block(
     salts_xml_node node, vxml_measurement *measurement,
+    const vxml_literal_fetch_audio_policy *fetch_audio,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
     size_t actions = 0u;
@@ -1664,7 +1667,9 @@ static vxml_status measure_block(
                 "VoiceXML literal block accepts at most one transfer action");
         ++actions;
         status = view_equal(local_name, "goto")
-            ? measure_goto(child, measurement, limits, diagnostic)
+            ? measure_goto(
+                child, measurement, fetch_audio,
+                limits, diagnostic)
             : view_equal(local_name, "submit")
                 ? measure_submit(
                     child, measurement, limits, diagnostic)
