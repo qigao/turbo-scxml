@@ -189,7 +189,6 @@ typedef struct vxml_cmeta_prompt_row {
     size_t segment_count;
     size_t first_fallback;
     size_t fallback_count;
-    size_t first_dynamic_mark;
     size_t dynamic_mark_count;
     uint64_t required_capabilities;
     bool bargein;
