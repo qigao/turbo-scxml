@@ -562,6 +562,17 @@ static vxml_cmeta_compile_options_v1 subdialog_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 record_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_event_handlers = 8u;
+    options.max_event_name_bytes = 64u;
+    options.max_records = 4u;
+    options.max_record_media_type_bytes = 64u;
+    options.max_record_duration_us = UINT64_C(10000000);
+    options.max_record_final_silence_us = UINT64_C(2000000);
+    return options;
+}
+
 static vxml_cmeta_session_options_v1 subdialog_session_options(
     const vxml_cmeta_subdialog_test_root *root,
     const vxml_cmeta_name_view *undefined,
@@ -586,6 +597,111 @@ static vxml_cmeta_compile_options_v1 subdialog_param_compile_options(void) {
     options.max_subdialog_param_value_bytes = 64u;
     return options;
 }
+
+typedef struct cmeta_record_probe {
+    vxml_status prepare_status;
+    uint64_t capabilities;
+    size_t prepare_calls;
+    size_t commit_calls;
+    size_t discard_calls;
+    size_t cancel_calls;
+    uint64_t generation;
+    uint64_t cancel_generation;
+    bool active;
+    vxml_cmeta_record_request_v1 request;
+    char name[64];
+    char media_type[64];
+} cmeta_record_probe;
+
+static void cmeta_record_commit(void *user) {
+    cmeta_record_probe *probe = (cmeta_record_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commit_calls;
+    probe->active = true;
+}
+
+static void cmeta_record_discard(void *user) {
+    cmeta_record_probe *probe = (cmeta_record_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discard_calls;
+}
+
+static vxml_status cmeta_record_prepare(
+    void *user,
+    const vxml_cmeta_record_request_v1 *request,
+    vxml_cmeta_record_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_record_probe *probe = (cmeta_record_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_RECORD_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->generation == UINT64_C(0) ||
+        request->name.data == NULL || request->name.size == 0u ||
+        request->name.size >= sizeof(probe->name) ||
+        request->media_type.size >= sizeof(probe->media_type))
+        return VXML_INVALID_ARGUMENT;
+    ++probe->prepare_calls;
+    probe->generation = request->generation;
+    probe->request = *request;
+    memcpy(probe->name, request->name.data, request->name.size);
+    probe->name[request->name.size] = '\0';
+    probe->request.name.data = probe->name;
+    if (request->media_type.size != 0u) {
+        if (request->media_type.data == NULL)
+            return VXML_INVALID_ARGUMENT;
+        memcpy(
+            probe->media_type,
+            request->media_type.data,
+            request->media_type.size);
+        probe->media_type[request->media_type.size] = '\0';
+        probe->request.media_type.data = probe->media_type;
+    } else {
+        probe->request.media_type.data = NULL;
+    }
+    *out_ticket = (vxml_cmeta_record_ticket_v1){
+        .commit = cmeta_record_commit,
+        .discard = cmeta_record_discard,
+        .user = probe};
+    return probe->prepare_status;
+}
+
+static void cmeta_record_cancel(
+    void *user, uint64_t generation) {
+    cmeta_record_probe *probe = (cmeta_record_probe *)user;
+    if (probe == NULL) return;
+    ++probe->cancel_calls;
+    probe->cancel_generation = generation;
+    probe->active = false;
+}
+
+static vxml_cmeta_session_options_v1 record_session_options(
+    const vxml_cmeta_session_root *root,
+    cmeta_record_probe *probe,
+    uint64_t capabilities) {
+    static vxml_cmeta_record_adapter_v1 adapter;
+    vxml_cmeta_session_options_v1 options = {
+        .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_session_options_v1),
+        .initial_root = root,
+        .max_transaction_bytes = 4096u,
+        .max_execution_steps = 64u,
+        .max_event_counters = 8u,
+        .max_event_name_bytes = 64u,
+        .max_event_dispatch_depth = 8u,
+        .max_record_bytes = 1024u
+    };
+    adapter = (vxml_cmeta_record_adapter_v1){
+        .abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_record_adapter_v1),
+        .capabilities = capabilities,
+        .prepare = cmeta_record_prepare,
+        .cancel = cmeta_record_cancel};
+    options.record = &adapter;
+    options.record_user = probe;
+    return options;
+}
+
 
 typedef struct cmeta_subdialog_probe {
     vxml_status prepare_status;
@@ -1582,6 +1698,210 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects and transactionally owns a bounded record provider request") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='voice' cond='flag' beep='true' "
+            "maxtime='3s' finalsilence='500ms' "
+            "dtmfterm='true' type='audio/wav'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            record_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        const uint64_t caps =
+            VXML_CMETA_RECORD_CAP_BEEP |
+            VXML_CMETA_RECORD_CAP_DTMF_TERM |
+            VXML_CMETA_RECORD_CAP_FINAL_SILENCE |
+            VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE;
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(&root, &probe, caps);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_record_request_v1 request = {0};
+        uint64_t generation;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_RUNNING);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        check_equal(runtime->active_record, (size_t)0u);
+        check_true(runtime->record_generation != UINT64_C(0));
+        generation = runtime->record_generation;
+
+        check_equal(
+            vxml_session_cmeta_record_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(request.generation, generation);
+        check_equal(request.name.size, sizeof("voice") - 1u);
+        check_equal(
+            memcmp(request.name.data, "voice", request.name.size), 0);
+        check_true(request.modal);
+        check_true(request.beep);
+        check_true(request.dtmf_term);
+        check_true(request.has_maxtime);
+        check_equal(request.maxtime_us, UINT64_C(3000000));
+        check_equal(request.max_duration_us, UINT64_C(10000000));
+        check_true(request.has_final_silence);
+        check_equal(request.final_silence_us, UINT64_C(500000));
+        check_equal(
+            request.max_final_silence_us, UINT64_C(2000000));
+        check_equal(request.media_type.size, sizeof("audio/wav") - 1u);
+        check_equal(request.max_bytes, (size_t)1024u);
+        check_equal(request.required_capabilities, caps);
+
+        check_equal(
+            vxml_session_cmeta_record_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(probe.generation, generation);
+        check_equal(
+            memcmp(probe.name, "voice", sizeof("voice") - 1u), 0);
+        check_equal(
+            memcmp(
+                probe.media_type, "audio/wav",
+                sizeof("audio/wav") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_record_discard(&session),
+            VXML_OK);
+        check_equal(probe.discard_calls, (size_t)1u);
+        check_equal(probe.commit_calls, (size_t)0u);
+
+        check_equal(
+            vxml_session_cmeta_record_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(
+            vxml_session_cmeta_record_commit(&session),
+            VXML_OK);
+        check_equal(probe.commit_calls, (size_t)1u);
+        check_true(probe.active);
+        check_true(runtime->record_in_flight);
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(probe.cancel_calls, (size_t)1u);
+        check_equal(probe.cancel_generation, generation);
+        check_false(probe.active);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects missing record capabilities before provider prepare") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='voice' beep='true'/></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            record_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(
+                &root, &probe,
+                VXML_CMETA_RECORD_CAP_DTMF_TERM);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(probe.prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("dispatches record-local Event scope before form and document") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='record.fail'><exit expr='value + 100'/></catch>"
+            "<form><catch event='record.fail'>"
+            "<exit expr='value + 10'/></catch>"
+            "<record name='voice'>"
+            "<catch event='record.fail'><exit expr='value + 1'/></catch>"
+            "</record></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            record_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(
+                &root, &probe,
+                VXML_CMETA_RECORD_CAP_DTMF_TERM);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_exit_kind kind = VXML_CMETA_EXIT_EMPTY;
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session,
+                "record.fail", sizeof("record.fail") - 1u),
+            VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_exit_kind(&session, &kind),
+            VXML_OK);
+        check_equal(kind, VXML_CMETA_EXIT_EXPRESSION);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &name, &value),
+            VXML_OK);
+        check_null(name.data);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(8));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("selects a static subdialog without starting any provider") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
