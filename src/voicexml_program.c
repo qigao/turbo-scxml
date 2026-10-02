@@ -1685,8 +1685,17 @@ static vxml_status measure_block(
 
 static vxml_status measure_form(
     salts_xml_node node, vxml_measurement *measurement,
+    const vxml_literal_fetch_audio_policy *document_fetch_audio,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const size_t first_block = measurement->block_count;
+    vxml_literal_fetch_audio_policy fetch_audio =
+        document_fetch_audio != NULL
+            ? *document_fetch_audio
+            : (vxml_literal_fetch_audio_policy){0};
+    bool saw_fetchaudio = false;
+    bool saw_delay = false;
+    bool saw_minimum = false;
+    bool saw_block = false;
     salts_xml_attribute id_attribute;
     size_t index;
     vxml_status status = validate_attributes(node, "id", diagnostic);
@@ -1708,12 +1717,33 @@ static vxml_status measure_form(
         if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
             return reject_non_element(child, diagnostic);
         if (!normalized_view_equal(
-                salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "block")) {
+                salts_xml_node_namespace_uri(child), VXML_NAMESPACE))
             return reject_unexpected_element(
-                child, diagnostic, "unsupported VoiceXML form child element");
+                child, diagnostic,
+                "unsupported VoiceXML form child element");
+        if (view_equal(
+                salts_xml_node_local_name(child), "property")) {
+            if (saw_block)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML form property must precede blocks");
+            status = apply_fetch_audio_property(
+                child, &fetch_audio,
+                &saw_fetchaudio, &saw_delay, &saw_minimum,
+                diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
         }
-        status = measure_block(child, measurement, limits, diagnostic);
+        if (!view_equal(
+                salts_xml_node_local_name(child), "block"))
+            return reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML form child element");
+        saw_block = true;
+        status = measure_block(
+            child, measurement, &fetch_audio,
+            limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     if (measurement->block_count == first_block) {
@@ -1729,6 +1759,11 @@ static vxml_status measure_document(
     salts_xml_node root, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const salts_xml_attribute version = unqualified_attribute(root, "version");
+    vxml_literal_fetch_audio_policy fetch_audio = {0};
+    bool saw_fetchaudio = false;
+    bool saw_delay = false;
+    bool saw_minimum = false;
+    bool saw_form = false;
     size_t index;
     vxml_status status;
     if (salts_xml_node_type(root) != SALTS_XML_ELEMENT ||
@@ -1760,12 +1795,33 @@ static vxml_status measure_document(
         if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
             return reject_non_element(child, diagnostic);
         if (!normalized_view_equal(
-                salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "form")) {
+                salts_xml_node_namespace_uri(child), VXML_NAMESPACE))
             return reject_unexpected_element(
-                child, diagnostic, "unsupported VoiceXML root child element");
+                child, diagnostic,
+                "unsupported VoiceXML root child element");
+        if (view_equal(
+                salts_xml_node_local_name(child), "property")) {
+            if (saw_form)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document property must precede forms");
+            status = apply_fetch_audio_property(
+                child, &fetch_audio,
+                &saw_fetchaudio, &saw_delay, &saw_minimum,
+                diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
         }
-        status = measure_form(child, measurement, limits, diagnostic);
+        if (!view_equal(
+                salts_xml_node_local_name(child), "form"))
+            return reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML root child element");
+        saw_form = true;
+        status = measure_form(
+            child, measurement, &fetch_audio,
+            limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     if (measurement->form_count == 0u) {
