@@ -86,6 +86,7 @@ typedef struct vxml_cmeta_subdialog_param_row {
 
 typedef struct vxml_cmeta_record_row {
     size_t form;
+    size_t form_item_slot;
     const char *name;
     size_t name_size;
     size_t condition;
@@ -269,7 +270,8 @@ typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_FORM,
     VXML_CMETA_EVENT_FIELD,
     VXML_CMETA_EVENT_INITIAL,
-    VXML_CMETA_EVENT_SUBDIALOG
+    VXML_CMETA_EVENT_SUBDIALOG,
+    VXML_CMETA_EVENT_RECORD
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
