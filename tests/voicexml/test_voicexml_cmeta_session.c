@@ -573,6 +573,17 @@ static vxml_cmeta_compile_options_v1 record_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 transfer_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_event_handlers = 8u;
+    options.max_event_name_bytes = 64u;
+    options.max_transfers = 4u;
+    options.max_transfer_uri_bytes = 128u;
+    options.max_transfer_connect_timeout_us = UINT64_C(5000000);
+    options.max_transfer_duration_us = UINT64_C(10000000);
+    return options;
+}
+
 static vxml_cmeta_session_options_v1 subdialog_session_options(
     const vxml_cmeta_subdialog_test_root *root,
     const vxml_cmeta_name_view *undefined,
@@ -719,6 +730,131 @@ static vxml_cmeta_session_options_v1 record_session_options(
         .quiesce = cmeta_record_quiesce};
     options.record = &adapter;
     options.record_user = probe;
+    return options;
+}
+
+
+typedef struct cmeta_transfer_probe {
+    vxml_status prepare_status;
+    uint64_t capabilities;
+    size_t prepare_calls;
+    size_t commit_calls;
+    size_t discard_calls;
+    size_t cancel_calls;
+    size_t quiesce_calls;
+    uint64_t generation;
+    uint64_t cancel_generation;
+    uint64_t quiesce_generation;
+    bool active;
+    vxml_cmeta_transfer_request_v1 request;
+    char name[64];
+    char destination[128];
+    char transfer_audio[128];
+} cmeta_transfer_probe;
+
+static void cmeta_transfer_commit(void *user) {
+    cmeta_transfer_probe *probe = (cmeta_transfer_probe *)user;
+    if (probe == NULL) return;
+    ++probe->commit_calls;
+    probe->active = true;
+}
+
+static void cmeta_transfer_discard(void *user) {
+    cmeta_transfer_probe *probe = (cmeta_transfer_probe *)user;
+    if (probe == NULL) return;
+    ++probe->discard_calls;
+}
+
+static vxml_status cmeta_transfer_prepare(
+    void *user,
+    const vxml_cmeta_transfer_request_v1 *request,
+    vxml_cmeta_transfer_ticket_v1 *out_ticket,
+    const char **out_error) {
+    cmeta_transfer_probe *probe = (cmeta_transfer_probe *)user;
+    if (out_error != NULL) *out_error = NULL;
+    if (probe == NULL || request == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_CMETA_TRANSFER_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->generation == UINT64_C(0) ||
+        request->name.data == NULL || request->name.size == 0u ||
+        request->destination.data == NULL ||
+        request->destination.size == 0u ||
+        request->name.size >= sizeof(probe->name) ||
+        request->destination.size >= sizeof(probe->destination) ||
+        request->transfer_audio.size >= sizeof(probe->transfer_audio))
+        return VXML_INVALID_ARGUMENT;
+    ++probe->prepare_calls;
+    probe->generation = request->generation;
+    probe->request = *request;
+    memcpy(probe->name, request->name.data, request->name.size);
+    probe->name[request->name.size] = '\0';
+    probe->request.name.data = probe->name;
+    memcpy(
+        probe->destination,
+        request->destination.data, request->destination.size);
+    probe->destination[request->destination.size] = '\0';
+    probe->request.destination.data = probe->destination;
+    if (request->transfer_audio.size != 0u) {
+        if (request->transfer_audio.data == NULL)
+            return VXML_INVALID_ARGUMENT;
+        memcpy(
+            probe->transfer_audio,
+            request->transfer_audio.data,
+            request->transfer_audio.size);
+        probe->transfer_audio[request->transfer_audio.size] = '\0';
+        probe->request.transfer_audio.data = probe->transfer_audio;
+    } else {
+        probe->request.transfer_audio.data = NULL;
+    }
+    *out_ticket = (vxml_cmeta_transfer_ticket_v1){
+        .commit = cmeta_transfer_commit,
+        .discard = cmeta_transfer_discard,
+        .user = probe};
+    return probe->prepare_status;
+}
+
+static void cmeta_transfer_cancel(
+    void *user, uint64_t generation) {
+    cmeta_transfer_probe *probe = (cmeta_transfer_probe *)user;
+    if (probe == NULL) return;
+    ++probe->cancel_calls;
+    probe->cancel_generation = generation;
+    probe->active = false;
+}
+
+static void cmeta_transfer_quiesce(
+    void *user, uint64_t generation) {
+    cmeta_transfer_probe *probe = (cmeta_transfer_probe *)user;
+    if (probe == NULL) return;
+    ++probe->quiesce_calls;
+    probe->quiesce_generation = generation;
+    probe->active = false;
+}
+
+static vxml_cmeta_session_options_v1 transfer_session_options(
+    const vxml_cmeta_session_root *root,
+    cmeta_transfer_probe *probe,
+    uint64_t capabilities) {
+    static vxml_cmeta_transfer_adapter_v1 adapter;
+    vxml_cmeta_session_options_v1 options = {
+        .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_session_options_v1),
+        .initial_root = root,
+        .max_transaction_bytes = 4096u,
+        .max_execution_steps = 64u,
+        .max_event_counters = 8u,
+        .max_event_name_bytes = 64u,
+        .max_event_dispatch_depth = 8u
+    };
+    adapter = (vxml_cmeta_transfer_adapter_v1){
+        .abi_version = VXML_CMETA_TRANSFER_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_transfer_adapter_v1),
+        .capabilities = capabilities,
+        .prepare = cmeta_transfer_prepare,
+        .cancel = cmeta_transfer_cancel,
+        .quiesce = cmeta_transfer_quiesce};
+    options.transfer = &adapter;
+    options.transfer_user = probe;
     return options;
 }
 
@@ -1718,6 +1854,221 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("selects and transactionally owns a bounded transfer provider request") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' cond='flag' dest='tel:+15551212' "
+            "bridge='true' connecttimeout='3s' maxtime='9s' "
+            "transferaudio='hold.wav'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_transfer_probe probe = {
+            .prepare_status = VXML_OK};
+        const uint64_t caps =
+            VXML_CMETA_TRANSFER_CAP_BRIDGE |
+            VXML_CMETA_TRANSFER_CAP_CONNECT_TIMEOUT |
+            VXML_CMETA_TRANSFER_CAP_MAXTIME |
+            VXML_CMETA_TRANSFER_CAP_TRANSFER_AUDIO;
+        vxml_cmeta_session_options_v1 options =
+            transfer_session_options(&root, &probe, caps);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_transfer_request_v1 request = {0};
+        uint64_t generation;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_RUNNING);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        check_equal(runtime->active_transfer, (size_t)0u);
+        check_true(runtime->transfer_generation != UINT64_C(0));
+        generation = runtime->transfer_generation;
+
+        check_equal(
+            vxml_session_cmeta_transfer_request(
+                &session, &request),
+            VXML_OK);
+        check_equal(request.generation, generation);
+        check_equal(request.name.size, sizeof("call") - 1u);
+        check_equal(
+            memcmp(request.name.data, "call", request.name.size), 0);
+        check_equal(
+            request.destination.size, sizeof("tel:+15551212") - 1u);
+        check_equal(
+            memcmp(
+                request.destination.data, "tel:+15551212",
+                request.destination.size),
+            0);
+        check_equal(request.mode, VXML_CMETA_TRANSFER_BRIDGE);
+        check_true(request.has_connect_timeout);
+        check_equal(
+            request.connect_timeout_us, UINT64_C(3000000));
+        check_equal(
+            request.max_connect_timeout_us, UINT64_C(5000000));
+        check_true(request.has_maxtime);
+        check_equal(request.maxtime_us, UINT64_C(9000000));
+        check_equal(request.max_duration_us, UINT64_C(10000000));
+        check_equal(
+            request.transfer_audio.size, sizeof("hold.wav") - 1u);
+        check_equal(request.required_capabilities, caps);
+
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)1u);
+        check_equal(probe.generation, generation);
+        check_equal(
+            memcmp(probe.name, "call", sizeof("call") - 1u), 0);
+        check_equal(
+            memcmp(
+                probe.destination, "tel:+15551212",
+                sizeof("tel:+15551212") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_transfer_discard(&session),
+            VXML_OK);
+        check_equal(probe.discard_calls, (size_t)1u);
+        check_equal(probe.commit_calls, (size_t)0u);
+
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(
+            vxml_session_cmeta_transfer_commit(&session),
+            VXML_OK);
+        check_equal(probe.commit_calls, (size_t)1u);
+        check_true(probe.active);
+        check_true(runtime->transfer_in_flight);
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(probe.cancel_calls, (size_t)1u);
+        check_equal(probe.cancel_generation, generation);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        check_equal(probe.quiesce_generation, generation);
+        check_false(probe.active);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.cancel_calls, (size_t)1u);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects missing transfer capabilities before provider prepare") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<transfer name='call' dest='tel:+15551212' bridge='true'/>"
+            "</form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_transfer_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            transfer_session_options(
+                &root, &probe,
+                VXML_CMETA_TRANSFER_CAP_BLIND);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_prepare(&session, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(probe.prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("dispatches transfer-local Event scope before form and document") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<catch event='transfer.fail'><exit expr='value + 100'/></catch>"
+            "<form><catch event='transfer.fail'>"
+            "<exit expr='value + 10'/></catch>"
+            "<transfer name='call' dest='tel:+15551212'>"
+            "<catch event='transfer.fail'><exit expr='value + 1'/></catch>"
+            "</transfer></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            transfer_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_transfer_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            transfer_session_options(
+                &root, &probe,
+                VXML_CMETA_TRANSFER_CAP_BLIND);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_exit_kind kind = VXML_CMETA_EXIT_EMPTY;
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session,
+                "transfer.fail", sizeof("transfer.fail") - 1u),
+            VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(
+            vxml_session_cmeta_exit_kind(&session, &kind),
+            VXML_OK);
+        check_equal(kind, VXML_CMETA_EXIT_EXPRESSION);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &name, &value),
+            VXML_OK);
+        check_null(name.data);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(8));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("selects and transactionally owns a bounded record provider request") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
