@@ -389,6 +389,21 @@ typedef struct vxml_cmeta_action_row {
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
 
+static inline bool vxml_cmeta_event_token_valid(
+    const char *data, size_t size) {
+    size_t index;
+    if (data == NULL || size == 0u)
+        return false;
+    for (index = 0u; index < size; ++index) {
+        const unsigned char value =
+            (unsigned char)data[index];
+        if (value == 0u || value == ' ' || value == '\t' ||
+            value == '\r' || value == '\n')
+            return false;
+    }
+    return true;
+}
+
 typedef struct vxml_cmeta_program_data {
     const cmeta_data_desc *root;
     const cmeta_data_desc **semantic_data;
