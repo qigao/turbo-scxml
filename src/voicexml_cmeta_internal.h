@@ -114,6 +114,7 @@ typedef struct vxml_cmeta_record_row {
 typedef struct vxml_cmeta_transfer_row {
     size_t form;
     size_t form_item_slot;
+    size_t result_slot;
     const char *name;
     size_t name_size;
     const char *destination;
@@ -131,6 +132,8 @@ typedef struct vxml_cmeta_transfer_row {
     uint64_t required_capabilities;
     size_t filled;
 } vxml_cmeta_transfer_row;
+
+extern const cmeta_data_desc vxml_cmeta_transfer_result_data;
 
 typedef struct vxml_cmeta_form_row {
     size_t scope;
@@ -250,6 +253,8 @@ typedef struct vxml_cmeta_filled_row {
     vxml_cmeta_filled_mode mode;
     size_t first_target;
     size_t target_count;
+    size_t first_transfer_target;
+    size_t transfer_target_count;
     size_t first_action;
     size_t action_end;
 } vxml_cmeta_filled_row;
@@ -424,6 +429,8 @@ typedef struct vxml_cmeta_program_data {
     size_t filled_count;
     size_t *filled_root_fields;
     size_t filled_root_field_count;
+    size_t *filled_transfer_targets;
+    size_t filled_transfer_target_count;
     vxml_cmeta_event_handler_row *event_handlers;
     size_t event_handler_count;
     vxml_cmeta_block_row *blocks;
@@ -628,6 +635,22 @@ typedef struct vxml_cmeta_record_result_slot {
     vxml_cmeta_recording_lease_v1 recording;
 } vxml_cmeta_record_result_slot;
 
+typedef enum vxml_cmeta_transfer_mailbox_state {
+    VXML_CMETA_TRANSFER_MAILBOX_DISARMED = 0,
+    VXML_CMETA_TRANSFER_MAILBOX_EMPTY,
+    VXML_CMETA_TRANSFER_MAILBOX_WRITING,
+    VXML_CMETA_TRANSFER_MAILBOX_READY,
+    VXML_CMETA_TRANSFER_MAILBOX_CLOSED
+} vxml_cmeta_transfer_mailbox_state;
+
+typedef struct vxml_cmeta_transfer_completion_mailbox {
+    atomic_uint state;
+    atomic_uint_fast64_t generation;
+    vxml_cmeta_transfer_completion_kind kind;
+    vxml_cmeta_transfer_result result;
+    unsigned protocol_code;
+} vxml_cmeta_transfer_completion_mailbox;
+
 typedef struct vxml_cmeta_session_data {
     size_t max_transaction_bytes;
     size_t max_execution_steps;
@@ -675,6 +698,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_transfer_ticket_v1 transfer_ticket;
     bool transfer_prepared;
     bool transfer_in_flight;
+    vxml_cmeta_transfer_completion_mailbox transfer_mailbox;
 
     size_t active_menu;
     size_t active_block;
