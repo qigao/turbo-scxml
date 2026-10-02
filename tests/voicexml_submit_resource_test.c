@@ -18,7 +18,7 @@ typedef struct submit_probe {
     char uri[512];
     char fragment[128];
     char content_type[96];
-    unsigned char body[2048];
+    char body[2048];
     size_t body_size;
     const void *expected_borrowed;
     bool saw_borrowed;
@@ -563,7 +563,7 @@ spec("VoiceXML one-attempt submit resource") {
         vxml_submit_multipart_request_v1 request =
             base_multipart_request();
         vxml_submit_response response = {0};
-        unsigned char first_body[2048];
+        char first_body[2048];
         char first_content_type[96];
         size_t first_body_size;
 
