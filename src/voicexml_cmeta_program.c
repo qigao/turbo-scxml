@@ -5801,6 +5801,8 @@ static vxml_status cmeta_compile_record_schema(
         builder->options->max_record_duration_us;
     out->max_final_silence_us =
         builder->options->max_record_final_silence_us;
+    out->max_media_type_bytes =
+        builder->options->max_record_media_type_bytes;
 
     status = cmeta_parse_prompt_timeout(
         maxtime, &out->has_maxtime,
