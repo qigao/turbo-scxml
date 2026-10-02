@@ -3921,27 +3921,79 @@ vxml_status vxml_cmeta_session_init_profile(
             profile->prompt_media_user = options->prompt_media_user;
         }
     }
-    if (program->prompt_mark_expr_count != 0u) {
+    if (program->prompt_mark_expr_count != 0u ||
+        program->prompt_foreach_count != 0u) {
+        const bool has_foreach =
+            program->prompt_foreach_count != 0u;
         size_t index;
         size_t max_segments = 0u;
         size_t max_dynamic_marks = 0u;
-        size_t dynamic_storage_bytes;
-        if (program->prompt_mark_exprs == NULL ||
-            program->max_dynamic_mark_name_bytes == 0u)
+        size_t dynamic_storage_bytes = 0u;
+
+        if (program->prompt_mark_expr_count != 0u &&
+            (program->prompt_mark_exprs == NULL ||
+             program->max_dynamic_mark_name_bytes == 0u))
             goto failure;
-        for (index = 0u; index < program->prompt_count; ++index) {
-            const vxml_cmeta_prompt_row *prompt =
-                &program->prompts[index];
-            if (prompt->segment_count > max_segments)
-                max_segments = prompt->segment_count;
-            if (prompt->dynamic_mark_count > max_dynamic_marks)
-                max_dynamic_marks = prompt->dynamic_mark_count;
+        if (has_foreach) {
+            size_t snapshot_allocation_bytes;
+            if (program->prompt_foreach == NULL ||
+                program->max_prompt_foreach_items == 0u ||
+                program->max_prompt_foreach_snapshot_bytes == 0u ||
+                program->max_prompt_expanded_segments == 0u ||
+                !valid_alignment(
+                    program->max_prompt_foreach_element_alignment)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            max_segments = program->max_prompt_expanded_segments;
+            profile->prompt_media_projected_source_segments =
+                (size_t *)vxml_malloc(
+                    max_segments *
+                    sizeof(*profile->prompt_media_projected_source_segments));
+            profile->prompt_media_projected_fallbacks =
+                (vxml_cmeta_prompt_media_fallback_v1 *)vxml_calloc(
+                    max_segments,
+                    sizeof(*profile->prompt_media_projected_fallbacks));
+            if (program->max_prompt_foreach_snapshot_bytes >
+                    SIZE_MAX -
+                    (program->max_prompt_foreach_element_alignment - 1u)) {
+                status = VXML_LIMIT_EXCEEDED;
+                goto failure;
+            }
+            snapshot_allocation_bytes =
+                program->max_prompt_foreach_snapshot_bytes +
+                program->max_prompt_foreach_element_alignment - 1u;
+            profile->prompt_foreach_snapshot_allocation =
+                (unsigned char *)vxml_malloc(
+                    snapshot_allocation_bytes);
+            if (profile->prompt_media_projected_source_segments == NULL ||
+                profile->prompt_media_projected_fallbacks == NULL ||
+                profile->prompt_foreach_snapshot_allocation == NULL ||
+                !align_buffer(
+                    profile->prompt_foreach_snapshot_allocation,
+                    snapshot_allocation_bytes,
+                    program->max_prompt_foreach_element_alignment,
+                    program->max_prompt_foreach_snapshot_bytes,
+                    &profile->prompt_foreach_snapshot)) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->prompt_media_projected_fallback_capacity =
+                max_segments;
+            profile->prompt_foreach_snapshot_capacity =
+                program->max_prompt_foreach_snapshot_bytes;
+        } else {
+            for (index = 0u; index < program->prompt_count; ++index) {
+                const vxml_cmeta_prompt_row *prompt =
+                    &program->prompts[index];
+                if (prompt->segment_count > max_segments)
+                    max_segments = prompt->segment_count;
+                if (prompt->dynamic_mark_count > max_dynamic_marks)
+                    max_dynamic_marks = prompt->dynamic_mark_count;
+            }
         }
-        if (max_segments == 0u || max_dynamic_marks == 0u ||
-            !checked_multiply(
-                max_dynamic_marks,
-                program->max_dynamic_mark_name_bytes,
-                &dynamic_storage_bytes)) {
+
+        if (max_segments == 0u) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
         }
@@ -3949,23 +4001,45 @@ vxml_status vxml_cmeta_session_init_profile(
             (vxml_cmeta_prompt_media_segment_v1 *)vxml_calloc(
                 max_segments,
                 sizeof(*profile->prompt_media_projected_segments));
-        profile->prompt_media_dynamic_mark_storage =
-            (char *)vxml_malloc(dynamic_storage_bytes);
-        profile->prompt_media_last_mark_name =
-            (char *)vxml_malloc(
-                program->max_dynamic_mark_name_bytes);
-        if (profile->prompt_media_projected_segments == NULL ||
-            profile->prompt_media_dynamic_mark_storage == NULL ||
-            profile->prompt_media_last_mark_name == NULL) {
+        if (profile->prompt_media_projected_segments == NULL) {
             status = VXML_ALLOCATION_FAILED;
             goto failure;
         }
         profile->prompt_media_projected_segment_capacity =
             max_segments;
-        profile->prompt_media_dynamic_mark_storage_capacity =
-            dynamic_storage_bytes;
-        profile->prompt_media_last_mark_name_capacity =
-            program->max_dynamic_mark_name_bytes;
+
+        if (program->prompt_mark_expr_count != 0u) {
+            if (has_foreach) {
+                if (!checked_multiply(
+                        max_segments,
+                        program->max_dynamic_mark_name_bytes,
+                        &dynamic_storage_bytes)) {
+                    status = VXML_LIMIT_EXCEEDED;
+                    goto failure;
+                }
+            } else if (max_dynamic_marks == 0u ||
+                       !checked_multiply(
+                           max_dynamic_marks,
+                           program->max_dynamic_mark_name_bytes,
+                           &dynamic_storage_bytes)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->prompt_media_dynamic_mark_storage =
+                (char *)vxml_malloc(dynamic_storage_bytes);
+            profile->prompt_media_last_mark_name =
+                (char *)vxml_malloc(
+                    program->max_dynamic_mark_name_bytes);
+            if (profile->prompt_media_dynamic_mark_storage == NULL ||
+                profile->prompt_media_last_mark_name == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->prompt_media_dynamic_mark_storage_capacity =
+                dynamic_storage_bytes;
+            profile->prompt_media_last_mark_name_capacity =
+                program->max_dynamic_mark_name_bytes;
+        }
     }
 
     {
