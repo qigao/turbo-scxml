@@ -8264,6 +8264,10 @@ vxml_status vxml_session_cmeta_collect_run_ready(
          * the recognition transaction is durable.
          */
         if (mailbox->record_utterance_expected &&
+            field != NULL &&
+            field->root_field < root_shape->field_count &&
+            profile->committed_root.bound != NULL &&
+            profile->committed_root.bound[field->root_field] != 0u &&
             profile->active_field < program->field_count &&
             profile->field_recording_shadows != NULL &&
             profile->active_field <
