@@ -12731,6 +12731,15 @@ spec("VoiceXML CMeta session execution") {
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_prompt_mark_view_v1 mark = {0};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome =
+                VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        bool progressed = false;
 
         memcpy(root.text.bytes, "queued_mark", sizeof("queued_mark") - 1u);
         root.text.size = sizeof("queued_mark") - 1u;
@@ -12822,6 +12831,55 @@ spec("VoiceXML CMeta session execution") {
             0);
 
         media_probe.active = false;
+        completion.generation = media_probe.generation;
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete(
+                &session, &completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_run_ready(
+                &session, &progressed, &outcome),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            outcome,
+            VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED);
+
+        /*
+         * A later queue-time projection may reuse its generation storage, but
+         * it must not overwrite the already-published last-mark name snapshot.
+         */
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.batch_prepare_calls, (size_t)2u);
+        mark = (vxml_cmeta_prompt_mark_view_v1){0};
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.name.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                mark.name.data, "queued_mark",
+                sizeof("queued_mark") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_prompt_media_discard(&session),
+            VXML_OK);
+        mark = (vxml_cmeta_prompt_mark_view_v1){0};
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.name.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                mark.name.data, "queued_mark",
+                sizeof("queued_mark") - 1u),
+            0);
+
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
         session_text_destroy(&root.text);
