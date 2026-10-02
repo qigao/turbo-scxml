@@ -8385,6 +8385,57 @@ static const vxml_cmeta_subdialog_row *cmeta_form_subdialog_by_name(
     return NULL;
 }
 
+static const vxml_cmeta_transfer_row *cmeta_form_transfer_by_name(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    salts_xml_string_view name,
+    size_t *out_transfer_index) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        !range_valid(
+            form->first_transfer, form->transfer_count,
+            program->transfer_count) ||
+        (form->transfer_count != 0u && program->transfers == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->transfer_count; ++offset) {
+        const size_t index = form->first_transfer + offset;
+        const vxml_cmeta_transfer_row *transfer =
+            &program->transfers[index];
+        if (transfer->name != NULL &&
+            transfer->name_size == name.size &&
+            memcmp(transfer->name, name.data, name.size) == 0) {
+            if (out_transfer_index != NULL)
+                *out_transfer_index = index;
+            return transfer;
+        }
+    }
+    return NULL;
+}
+
+static vxml_status cmeta_append_filled_transfer_target(
+    cmeta_program_builder *builder,
+    vxml_cmeta_filled_row *row,
+    size_t transfer_index,
+    salts_xml_location location) {
+    size_t index;
+    if (builder->filled_transfer_target_index >=
+        builder->profile->filled_transfer_target_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML filled transfer target rows changed between passes");
+    for (index = 0u; index < row->transfer_target_count; ++index) {
+        if (builder->profile->filled_transfer_targets[
+                row->first_transfer_target + index] == transfer_index)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE, location,
+                "VoiceXML filled namelist contains a duplicate transfer");
+    }
+    builder->profile->filled_transfer_targets[
+        builder->filled_transfer_target_index++] = transfer_index;
+    ++row->transfer_target_count;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_append_filled_target(
     cmeta_program_builder *builder,
     vxml_cmeta_filled_row *row,
@@ -8419,6 +8470,9 @@ static vxml_status cmeta_lower_filled_targets(
     vxml_status status = VXML_OK;
     row->first_target = builder->filled_target_index;
     row->target_count = 0u;
+    row->first_transfer_target =
+        builder->filled_transfer_target_index;
+    row->transfer_target_count = 0u;
     if (namelist.impl == NULL) {
         size_t offset;
         for (offset = 0u; offset < form->field_count; ++offset) {
@@ -8439,7 +8493,14 @@ static vxml_status cmeta_lower_filled_targets(
                 salts_xml_node_location(node));
             if (status != VXML_OK) return status;
         }
-        return row->target_count != 0u
+        for (offset = 0u; offset < form->transfer_count; ++offset) {
+            status = cmeta_append_filled_transfer_target(
+                builder, row, form->first_transfer + offset,
+                salts_xml_node_location(node));
+            if (status != VXML_OK) return status;
+        }
+        return row->target_count != 0u ||
+                row->transfer_target_count != 0u
             ? VXML_OK
             : cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -8460,6 +8521,8 @@ static vxml_status cmeta_lower_filled_targets(
         while (cmeta_namelist_next(list, &cursor, &name)) {
             const vxml_cmeta_field_row *field;
             const vxml_cmeta_subdialog_row *subdialog;
+            const vxml_cmeta_transfer_row *transfer;
+            size_t transfer_index = VXML_CMETA_NO_INDEX;
             size_t root_field;
             if (!cmeta_is_ncname(name)) {
                 status = cmeta_program_fail(
@@ -8474,23 +8537,36 @@ static vxml_status cmeta_lower_filled_targets(
                 ? cmeta_form_subdialog_by_name(
                     builder->profile, form, name, NULL)
                 : NULL;
-            if (field == NULL && subdialog == NULL) {
+            transfer = field == NULL && subdialog == NULL
+                ? cmeta_form_transfer_by_name(
+                    builder->profile, form, name, &transfer_index)
+                : NULL;
+            if (field == NULL && subdialog == NULL &&
+                transfer == NULL) {
                 status = cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(namelist),
                     "VoiceXML filled namelist references an unknown result-bearing form item");
                 break;
             }
-            root_field = field != NULL
-                ? field->root_field : subdialog->root_field;
-            status = cmeta_append_filled_target(
-                builder, row, root_field,
-                salts_xml_attribute_location(namelist));
+            if (transfer != NULL)
+                status = cmeta_append_filled_transfer_target(
+                    builder, row, transfer_index,
+                    salts_xml_attribute_location(namelist));
+            else {
+                root_field = field != NULL
+                    ? field->root_field : subdialog->root_field;
+                status = cmeta_append_filled_target(
+                    builder, row, root_field,
+                    salts_xml_attribute_location(namelist));
+            }
             if (status != VXML_OK) break;
         }
         cmeta_decoded_value_destroy(&decoded);
     }
-    if (status == VXML_OK && row->target_count == 0u)
+    if (status == VXML_OK &&
+        row->target_count == 0u &&
+        row->transfer_target_count == 0u)
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(namelist),
