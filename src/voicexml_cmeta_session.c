@@ -1055,6 +1055,10 @@ static void terminal_publish(vxml_cmeta_session_data *session) {
     session->pending_terminal_event_size = 0u;
 }
 
+static void transaction_reset(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program);
+
 static void prompt_media_mailbox_disarm(
     vxml_cmeta_session_data *session) {
     unsigned state;
@@ -1074,7 +1078,8 @@ static void prompt_media_mailbox_disarm(
 }
 
 static void settle_prompt_media(
-    vxml_cmeta_session_data *session) {
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program) {
     if (session == NULL) return;
     prompt_media_mailbox_disarm(session);
     if (session->prompt_media_prepared) {
@@ -1093,6 +1098,11 @@ static void settle_prompt_media(
         session->prompt_media_adapter->cancel(
             session->prompt_media_user, generation);
     }
+    if (session->prompt_foreach_transaction && program != NULL) {
+        transaction_reset(session, program);
+        session->prompt_foreach_transaction = false;
+    }
+    session->prompt_media_noop_prepared = false;
     session->prompt_media_generation = 0u;
 }
 
@@ -1520,7 +1530,7 @@ static void session_data_destroy(
     atomic_store_explicit(
         &session->prompt_media_mailbox.generation,
         UINT64_C(0), memory_order_relaxed);
-    settle_prompt_media(session);
+    settle_prompt_media(session, program);
     {
         const unsigned previous_subdialog_state =
             atomic_exchange_explicit(
@@ -4630,7 +4640,7 @@ static vxml_status select_directed_item(
     size_t item_offset;
     vxml_status status;
 
-    settle_prompt_media(profile);
+    settle_prompt_media(profile, program);
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
@@ -4863,7 +4873,7 @@ static vxml_status select_menu(
         program->menu_choices == NULL ||
         program->menu_choice_targets == NULL)
         return session_fail(session, VXML_INVALID_STRUCTURE);
-    settle_prompt_media(profile);
+    settle_prompt_media(profile, program);
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
@@ -11066,7 +11076,9 @@ vxml_status vxml_session_cmeta_noinput(vxml_session *session) {
             impl->program->profile_kind == VXML_PROFILE_CMETA &&
             impl->profile_data != NULL)
             settle_prompt_media(
-                (vxml_cmeta_session_data *)impl->profile_data);
+                (vxml_cmeta_session_data *)impl->profile_data,
+                (const vxml_cmeta_program_data *)
+                    impl->program->profile_data);
     }
     return vxml_session_cmeta_raise(
         session, "noinput", sizeof("noinput") - 1u);
@@ -11080,7 +11092,9 @@ vxml_status vxml_session_cmeta_nomatch(vxml_session *session) {
             impl->program->profile_kind == VXML_PROFILE_CMETA &&
             impl->profile_data != NULL)
             settle_prompt_media(
-                (vxml_cmeta_session_data *)impl->profile_data);
+                (vxml_cmeta_session_data *)impl->profile_data,
+                (const vxml_cmeta_program_data *)
+                    impl->program->profile_data);
     }
     return vxml_session_cmeta_raise(
         session, "nomatch", sizeof("nomatch") - 1u);
@@ -12308,7 +12322,7 @@ static vxml_cmeta_prompt_barge_result prompt_media_barge_impl(
 
     profile->prompt_media_barged_generation =
         collect_generation;
-    settle_prompt_media(profile);
+    settle_prompt_media(profile, program);
     return VXML_CMETA_PROMPT_BARGE_CANCELED;
 }
 
