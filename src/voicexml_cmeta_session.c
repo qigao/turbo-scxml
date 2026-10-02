@@ -7977,11 +7977,51 @@ vxml_status vxml_session_cmeta_collect_run_ready(
         transaction_commit(profile, program);
 
         /*
-         * A committed recognition replaces the prior last-result recording.
-         * The scalar transaction is already durable; only now may the Session
-         * adopt the ACCEPTED media lease from the mailbox.
+         * Every committed recognition replaces application.lastresult$.
+         * Advance a bounded generation even when no utterance recording was
+         * collected so old field recording aliases can never expose freed
+         * media after a later recognition.
+         */
+        ++profile->collect_lastresult_generation;
+        if (profile->collect_lastresult_generation == UINT64_C(0))
+            profile->collect_lastresult_generation = UINT64_C(1);
+
+        /*
+         * transaction_commit() cleared the prior field shadow through the
+         * retry-reset path. Publish this field's scalar snapshot only after
+         * the recognition transaction is durable.
+         */
+        if (mailbox->record_utterance_expected &&
+            profile->active_field < program->field_count &&
+            profile->field_recording_shadows != NULL &&
+            profile->active_field <
+                profile->field_recording_shadow_count) {
+            vxml_cmeta_field_recording_shadow *shadow =
+                &profile->field_recording_shadows[
+                    profile->active_field];
+            *shadow = (vxml_cmeta_field_recording_shadow){
+                .assigned = true,
+                .has_recording =
+                    mailbox->recording.lease != NULL &&
+                    mailbox->recording.data != NULL &&
+                    mailbox->recording.size != 0u,
+                .generation =
+                    profile->collect_lastresult_generation,
+                .size = mailbox->recording.size,
+                .duration_ms =
+                    mailbox->recording_duration_us /
+                    UINT64_C(1000)
+            };
+        }
+
+        /*
+         * A committed recognition replaces the prior application last-result
+         * recording. The scalar transaction is already durable; only now may
+         * the Session adopt the ACCEPTED media lease from the mailbox.
          */
         collect_utterance_result_reset(profile);
+        profile->collect_utterance_result.generation =
+            profile->collect_lastresult_generation;
         if (mailbox->record_utterance_expected &&
             mailbox->recording.lease != NULL) {
             vxml_cmeta_collect_utterance_result_slot *result =
