@@ -147,7 +147,8 @@ static bool session_record_options_valid(
         adapter->abi_version == VXML_CMETA_RECORD_ADAPTER_ABI_V1 &&
         adapter->struct_size >= sizeof(*adapter) &&
         adapter->prepare != NULL &&
-        adapter->cancel != NULL;
+        adapter->cancel != NULL &&
+        adapter->quiesce != NULL;
 }
 
 static bool collect_adapter_has_menu(
@@ -474,6 +475,8 @@ static bool session_records_valid(
             row->name == NULL || row->name_size == 0u ||
             row->max_duration_us == UINT64_C(0) ||
             row->max_final_silence_us == UINT64_C(0) ||
+            row->max_media_type_bytes == 0u ||
+            row->media_type_size > row->max_media_type_bytes ||
             (row->has_maxtime &&
              row->maxtime_us > row->max_duration_us) ||
             (row->has_final_silence &&
@@ -1019,9 +1022,102 @@ static void settle_subdialog(
     subdialog_snapshot_destroy(session);
 }
 
+static void record_release_lease(
+    vxml_cmeta_recording_lease_v1 *recording) {
+    if (recording == NULL) return;
+    if (recording->lease != NULL && recording->release != NULL)
+        recording->release(recording->release_user, recording->lease);
+    *recording = (vxml_cmeta_recording_lease_v1){0};
+}
+
+static void record_mailbox_payload_reset(
+    vxml_cmeta_record_completion_mailbox *mailbox,
+    bool release_recording) {
+    if (mailbox == NULL) return;
+    if (release_recording)
+        record_release_lease(&mailbox->recording);
+    else
+        mailbox->recording = (vxml_cmeta_recording_lease_v1){0};
+    mailbox->outcome = 0;
+    mailbox->duration_us = UINT64_C(0);
+    mailbox->has_termchar = false;
+    mailbox->termchar = '\0';
+    mailbox->media_type_size = 0u;
+}
+
+static void record_result_slot_reset(
+    vxml_cmeta_record_result_slot *slot) {
+    char *media_type;
+    if (slot == NULL) return;
+    media_type = slot->media_type;
+    if (slot->live)
+        record_release_lease(&slot->recording);
+    *slot = (vxml_cmeta_record_result_slot){0};
+    slot->media_type = media_type;
+}
+
+static void record_quiesce_generation(
+    vxml_cmeta_session_data *session,
+    uint64_t generation) {
+    if (session == NULL || generation == UINT64_C(0) ||
+        session->record_adapter == NULL ||
+        session->record_adapter->quiesce == NULL ||
+        session->record_quiesced_generation == generation)
+        return;
+    session->record_adapter->quiesce(
+        session->record_user, generation);
+    session->record_quiesced_generation = generation;
+}
+
+static void record_results_reconcile(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program) {
+    size_t index;
+    if (session == NULL || program == NULL ||
+        session->record_results == NULL ||
+        session->committed_scopes == NULL)
+        return;
+    for (index = 0u;
+         index < session->record_result_count &&
+         index < program->record_count;
+         ++index) {
+        vxml_cmeta_record_result_slot *result =
+            &session->record_results[index];
+        const vxml_cmeta_record_row *record =
+            &program->records[index];
+        const vxml_cmeta_form_row *form;
+        if (!result->live) continue;
+        if (record->form >= program->form_count ||
+            program->forms == NULL) {
+            record_result_slot_reset(result);
+            continue;
+        }
+        form = &program->forms[record->form];
+        if (form->scope >= program->scope_count ||
+            record->form_item_slot >=
+                program->scopes[form->scope].schema.slot_count ||
+            session->committed_scopes[form->scope].view.bound == NULL ||
+            session->committed_scopes[form->scope].view.bound[
+                record->form_item_slot] == 0u)
+            record_result_slot_reset(result);
+    }
+}
+
 static void settle_record(
     vxml_cmeta_session_data *session) {
+    unsigned previous_state;
+    uint64_t generation;
+    size_t index;
     if (session == NULL) return;
+
+    previous_state = atomic_exchange_explicit(
+        &session->record_mailbox.state,
+        VXML_CMETA_RECORD_MAILBOX_CLOSED,
+        memory_order_acq_rel);
+    generation = atomic_load_explicit(
+        &session->record_mailbox.generation,
+        memory_order_relaxed);
+
     if (session->record_prepared) {
         vxml_cmeta_record_ticket_v1 ticket =
             session->record_ticket;
@@ -1030,13 +1126,34 @@ static void settle_record(
             (vxml_cmeta_record_ticket_v1){0};
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-    } else if (session->record_in_flight &&
-               session->record_adapter != NULL) {
-        const uint64_t generation = session->record_generation;
-        session->record_in_flight = false;
-        session->record_adapter->cancel(
-            session->record_user, generation);
     }
+
+    if (session->record_in_flight &&
+        session->record_adapter != NULL) {
+        if (previous_state == VXML_CMETA_RECORD_MAILBOX_EMPTY ||
+            previous_state == VXML_CMETA_RECORD_MAILBOX_DISARMED)
+            session->record_adapter->cancel(
+                session->record_user, generation);
+        record_quiesce_generation(session, generation);
+        session->record_in_flight = false;
+    }
+
+    /*
+     * READY means ACCEPTED already transferred the lease to the Session.
+     * WRITING never transfers ownership: close waits for the producer but
+     * leaves that lease with the producer when ingress returns CLOSED.
+     */
+    record_mailbox_payload_reset(
+        &session->record_mailbox,
+        previous_state == VXML_CMETA_RECORD_MAILBOX_READY);
+    atomic_store_explicit(
+        &session->record_mailbox.generation,
+        UINT64_C(0), memory_order_relaxed);
+
+    for (index = 0u;
+         index < session->record_result_count;
+         ++index)
+        record_result_slot_reset(&session->record_results[index]);
 }
 
 static void session_data_destroy(
@@ -1096,6 +1213,9 @@ static void session_data_destroy(
             cmeta_scope_storage_destroy(&session->committed_scopes[index]);
     vxml_free(session->subdialog_mailbox.storage);
     vxml_free(session->subdialog_mailbox.entries);
+    vxml_free(session->record_mailbox.media_type);
+    vxml_free(session->record_result_media_storage);
+    vxml_free(session->record_results);
     vxml_free(session->initial_retry_reset_pending);
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
@@ -1283,6 +1403,7 @@ static void transaction_commit(
     session->committed_declared = session->staged_declared;
     session->staged_declared = declared_swap;
     apply_retry_resets(session, program);
+    record_results_reconcile(session, program);
     transaction_reset(session, program);
 }
 
@@ -2947,6 +3068,11 @@ vxml_status vxml_cmeta_session_init_profile(
         VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED);
     atomic_init(
         &profile->prompt_media_mailbox.generation, UINT64_C(0));
+    atomic_init(
+        &profile->record_mailbox.state,
+        VXML_CMETA_RECORD_MAILBOX_DISARMED);
+    atomic_init(
+        &profile->record_mailbox.generation, UINT64_C(0));
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->active_form = VXML_CMETA_NO_INDEX;
     profile->active_field = VXML_CMETA_NO_INDEX;
@@ -2990,13 +3116,52 @@ vxml_status vxml_cmeta_session_init_profile(
         }
     }
     if (program->record_count != 0u) {
+        size_t index;
+        size_t max_media_type_bytes = 0u;
+        size_t result_media_bytes;
         if (!session_record_options_valid(options)) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
         }
+        for (index = 0u; index < program->record_count; ++index)
+            if (program->records[index].max_media_type_bytes >
+                    max_media_type_bytes)
+                max_media_type_bytes =
+                    program->records[index].max_media_type_bytes;
+        if (max_media_type_bytes == 0u ||
+            !checked_multiply(
+                program->record_count,
+                max_media_type_bytes,
+                &result_media_bytes)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+
         profile->record_adapter = options->record;
         profile->record_user = options->record_user;
         profile->max_record_bytes = options->max_record_bytes;
+        profile->record_result_count = program->record_count;
+        profile->record_result_media_stride = max_media_type_bytes;
+        profile->record_mailbox.media_type_capacity =
+            max_media_type_bytes;
+        profile->record_mailbox.media_type =
+            (char *)vxml_malloc(max_media_type_bytes);
+        profile->record_results =
+            (vxml_cmeta_record_result_slot *)vxml_calloc(
+                program->record_count,
+                sizeof(*profile->record_results));
+        profile->record_result_media_storage =
+            (char *)vxml_malloc(result_media_bytes);
+        if (profile->record_mailbox.media_type == NULL ||
+            profile->record_results == NULL ||
+            profile->record_result_media_storage == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        for (index = 0u; index < program->record_count; ++index)
+            profile->record_results[index].media_type =
+                profile->record_result_media_storage +
+                index * max_media_type_bytes;
     }
     if (session_subdialog_completion_options_present(options)) {
         if (options->max_subdialog_completion_bytes == 0u) {
@@ -3521,6 +3686,7 @@ static vxml_status select_directed_item(
             ++profile->record_generation;
             if (profile->record_generation == 0u)
                 profile->record_generation = 1u;
+            profile->record_quiesced_generation = UINT64_C(0);
             return VXML_OK;
         } else {
             return session_fail(session, VXML_INVALID_STRUCTURE);
@@ -4375,10 +4541,27 @@ vxml_status vxml_session_cmeta_record_commit(
         profile->record_generation == UINT64_C(0))
         return VXML_INVALID_STATE;
 
+    if (atomic_load_explicit(
+            &profile->record_mailbox.state,
+            memory_order_acquire) !=
+            VXML_CMETA_RECORD_MAILBOX_DISARMED)
+        return VXML_INVALID_STATE;
+
     ticket = profile->record_ticket;
     profile->record_ticket = (vxml_cmeta_record_ticket_v1){0};
     profile->record_prepared = false;
     profile->record_in_flight = true;
+    profile->record_quiesced_generation = UINT64_C(0);
+    record_mailbox_payload_reset(
+        &profile->record_mailbox, false);
+    atomic_store_explicit(
+        &profile->record_mailbox.generation,
+        profile->record_generation,
+        memory_order_relaxed);
+    atomic_store_explicit(
+        &profile->record_mailbox.state,
+        VXML_CMETA_RECORD_MAILBOX_EMPTY,
+        memory_order_release);
     ticket.commit(ticket.user);
     return VXML_OK;
 }
@@ -4409,6 +4592,269 @@ vxml_status vxml_session_cmeta_record_discard(
     profile->record_prepared = false;
     ticket.discard(ticket.user);
     return VXML_OK;
+}
+
+static bool record_termchar_valid(char value) {
+    return (value >= '0' && value <= '9') ||
+        value == '*' || value == '#' ||
+        (value >= 'A' && value <= 'D');
+}
+
+static bool record_completion_empty_recording(
+    const vxml_cmeta_record_completion_v1 *completion) {
+    return completion != NULL &&
+        completion->recording.data == NULL &&
+        completion->recording.size == 0u &&
+        completion->recording.lease == NULL &&
+        completion->recording.release == NULL &&
+        completion->recording.release_user == NULL;
+}
+
+vxml_cmeta_record_ingress_result
+vxml_session_cmeta_record_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_record_completion_v1 *completion) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_record_row *record;
+    vxml_cmeta_record_completion_mailbox *mailbox;
+    uint64_t generation;
+    unsigned state;
+    unsigned expected;
+
+    if (session == NULL || completion == NULL ||
+        completion->abi_version !=
+            VXML_CMETA_RECORD_COMPLETION_ABI_V1 ||
+        completion->struct_size < sizeof(*completion) ||
+        completion->generation == UINT64_C(0))
+        return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CMETA_RECORD_INGRESS_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return impl->state == VXML_SESSION_CLOSED
+            ? VXML_CMETA_RECORD_INGRESS_CLOSED
+            : VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CMETA_RECORD_INGRESS_CLOSED;
+
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    mailbox = &profile->record_mailbox;
+
+    state = atomic_load_explicit(
+        &mailbox->state, memory_order_acquire);
+    if (state == VXML_CMETA_RECORD_MAILBOX_CLOSED)
+        return VXML_CMETA_RECORD_INGRESS_CLOSED;
+    if (state == VXML_CMETA_RECORD_MAILBOX_DISARMED)
+        return VXML_CMETA_RECORD_INGRESS_STALE;
+    if (state == VXML_CMETA_RECORD_MAILBOX_WRITING ||
+        state == VXML_CMETA_RECORD_MAILBOX_READY)
+        return VXML_CMETA_RECORD_INGRESS_FULL;
+    if (state != VXML_CMETA_RECORD_MAILBOX_EMPTY)
+        return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (completion->generation != generation ||
+        completion->generation != profile->record_generation ||
+        !profile->record_in_flight ||
+        profile->active_record == VXML_CMETA_NO_INDEX ||
+        profile->active_record >= program->record_count ||
+        program->records == NULL)
+        return VXML_CMETA_RECORD_INGRESS_STALE;
+    record = &program->records[profile->active_record];
+
+    if (completion->duration_us > record->max_duration_us ||
+        (record->has_maxtime &&
+         completion->duration_us > record->maxtime_us))
+        return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
+    if (completion->has_termchar) {
+        if (!record_termchar_valid(completion->termchar))
+            return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+    } else if (completion->termchar != '\0') {
+        return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+    }
+
+    switch (completion->outcome) {
+    case VXML_CMETA_RECORD_OUTCOME_SUCCESS:
+        if (completion->recording.data == NULL ||
+            completion->recording.size == 0u ||
+            completion->recording.lease == NULL ||
+            completion->recording.release == NULL ||
+            completion->media_type.data == NULL ||
+            completion->media_type.size == 0u ||
+            memchr(
+                completion->media_type.data, '\0',
+                completion->media_type.size) != NULL)
+            return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+        if (completion->recording.size > profile->max_record_bytes ||
+            completion->media_type.size >
+                record->max_media_type_bytes)
+            return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
+        if (record->media_type_size != 0u &&
+            (record->media_type == NULL ||
+             completion->media_type.size != record->media_type_size ||
+             memcmp(
+                 completion->media_type.data,
+                 record->media_type,
+                 record->media_type_size) != 0))
+            return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
+        break;
+    case VXML_CMETA_RECORD_OUTCOME_TERMCHAR:
+        if (!completion->has_termchar ||
+            !record_completion_empty_recording(completion) ||
+            completion->media_type.data != NULL ||
+            completion->media_type.size != 0u)
+            return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+        break;
+    case VXML_CMETA_RECORD_OUTCOME_NOINPUT:
+    case VXML_CMETA_RECORD_OUTCOME_ERROR:
+        if (completion->has_termchar ||
+            !record_completion_empty_recording(completion) ||
+            completion->media_type.data != NULL ||
+            completion->media_type.size != 0u)
+            return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+        break;
+    default:
+        return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+    }
+
+    expected = VXML_CMETA_RECORD_MAILBOX_EMPTY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_RECORD_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_RECORD_MAILBOX_CLOSED)
+            return VXML_CMETA_RECORD_INGRESS_CLOSED;
+        if (expected == VXML_CMETA_RECORD_MAILBOX_DISARMED)
+            return VXML_CMETA_RECORD_INGRESS_STALE;
+        return VXML_CMETA_RECORD_INGRESS_FULL;
+    }
+
+    if (atomic_load_explicit(
+            &mailbox->generation, memory_order_relaxed) !=
+            completion->generation ||
+        !profile->record_in_flight ||
+        profile->record_generation != completion->generation) {
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_EMPTY,
+            memory_order_release);
+        return VXML_CMETA_RECORD_INGRESS_STALE;
+    }
+
+    record_mailbox_payload_reset(mailbox, false);
+    mailbox->outcome = completion->outcome;
+    mailbox->duration_us = completion->duration_us;
+    mailbox->has_termchar = completion->has_termchar;
+    mailbox->termchar = completion->termchar;
+    if (completion->media_type.size != 0u) {
+        if (mailbox->media_type == NULL ||
+            completion->media_type.size >
+                mailbox->media_type_capacity) {
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_RECORD_MAILBOX_EMPTY,
+                memory_order_release);
+            return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
+        }
+        memcpy(
+            mailbox->media_type,
+            completion->media_type.data,
+            completion->media_type.size);
+        mailbox->media_type_size = completion->media_type.size;
+    }
+    mailbox->recording = completion->recording;
+
+    expected = VXML_CMETA_RECORD_MAILBOX_WRITING;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_RECORD_MAILBOX_READY,
+            memory_order_acq_rel, memory_order_acquire))
+        return expected == VXML_CMETA_RECORD_MAILBOX_CLOSED
+            ? VXML_CMETA_RECORD_INGRESS_CLOSED
+            : VXML_CMETA_RECORD_INGRESS_FULL;
+
+    return VXML_CMETA_RECORD_INGRESS_ACCEPTED;
+}
+
+vxml_status vxml_session_cmeta_record_result(
+    const vxml_session *session,
+    const char *name,
+    size_t name_size,
+    vxml_cmeta_record_result_view_v1 *out_result) {
+    const vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_session_data *profile;
+    const vxml_cmeta_form_row *form;
+    size_t offset;
+
+    if (session == NULL || name == NULL || name_size == 0u ||
+        out_result == NULL ||
+        memchr(name, '\0', name_size) != NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CLOSED;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL ||
+        profile->record_results == NULL)
+        return VXML_INVALID_STATE;
+    form = &program->forms[profile->active_form];
+    if (!range_valid(
+            form->first_record, form->record_count,
+            program->record_count) ||
+        (form->record_count != 0u && program->records == NULL))
+        return VXML_INVALID_STRUCTURE;
+
+    for (offset = 0u; offset < form->record_count; ++offset) {
+        const size_t index = form->first_record + offset;
+        const vxml_cmeta_record_row *record =
+            &program->records[index];
+        const vxml_cmeta_record_result_slot *result;
+        if (record->name_size != name_size ||
+            memcmp(record->name, name, name_size) != 0)
+            continue;
+        if (index >= profile->record_result_count)
+            return VXML_INVALID_STRUCTURE;
+        result = &profile->record_results[index];
+        if (!result->live)
+            return VXML_INVALID_STATE;
+        *out_result = (vxml_cmeta_record_result_view_v1){
+            .abi_version = VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_record_result_view_v1),
+            .name = {record->name, record->name_size},
+            .outcome = result->outcome,
+            .duration_us = result->duration_us,
+            .has_termchar = result->has_termchar,
+            .termchar = result->termchar,
+            .media_type = {
+                result->media_type, result->media_type_size},
+            .data = result->recording.data,
+            .size = result->recording.size
+        };
+        return VXML_OK;
+    }
+    return VXML_INVALID_ARGUMENT;
 }
 
 
@@ -5822,6 +6268,31 @@ static vxml_status execute_filled_process(
 }
 
 
+static vxml_status execute_record_filled_process(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_record_row *record) {
+    const vxml_cmeta_filled_row *filled;
+    if (profile == NULL || program == NULL || form == NULL ||
+        record == NULL ||
+        record->form != profile->active_form)
+        return VXML_INVALID_STRUCTURE;
+    if (record->filled == VXML_CMETA_NO_INDEX)
+        return VXML_OK;
+    if (record->filled >= program->filled_count ||
+        program->filled == NULL)
+        return VXML_INVALID_STRUCTURE;
+    filled = &program->filled[record->filled];
+    if (filled->form != profile->active_form ||
+        filled->mode != VXML_CMETA_FILLED_FIELD ||
+        filled->field != VXML_CMETA_NO_INDEX)
+        return VXML_INVALID_STRUCTURE;
+    return execute_filled_handler(
+        profile, program, form, filled);
+}
+
+
 static vxml_status execute_subdialog_filled_process(
     vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program,
@@ -7031,6 +7502,249 @@ static vxml_status subdialog_stage_return_data(
             return status;
     }
     return VXML_OK;
+}
+
+
+vxml_status vxml_session_cmeta_record_run_ready(
+    vxml_session *session,
+    bool *out_progressed) {
+    vxml_session_impl *impl;
+    const vxml_cmeta_program_data *program;
+    vxml_cmeta_session_data *profile;
+    vxml_cmeta_record_completion_mailbox *mailbox;
+    const vxml_cmeta_record_row *record;
+    const vxml_cmeta_form_row *form;
+    uint64_t generation;
+    unsigned expected;
+    vxml_status status;
+
+    if (out_progressed != NULL) *out_progressed = false;
+    if (session == NULL || out_progressed == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_CLOSED;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    if (impl->state == VXML_SESSION_CLOSED)
+        return VXML_CLOSED;
+    if (impl->state != VXML_SESSION_RUNNING)
+        return VXML_INVALID_STATE;
+
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    mailbox = &profile->record_mailbox;
+    if (!profile->record_in_flight ||
+        profile->active_record == VXML_CMETA_NO_INDEX ||
+        profile->active_record >= program->record_count ||
+        program->records == NULL ||
+        profile->active_form == VXML_CMETA_NO_INDEX ||
+        profile->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_STATE;
+
+    expected = VXML_CMETA_RECORD_MAILBOX_READY;
+    if (!atomic_compare_exchange_strong_explicit(
+            &mailbox->state, &expected,
+            VXML_CMETA_RECORD_MAILBOX_WRITING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        if (expected == VXML_CMETA_RECORD_MAILBOX_EMPTY ||
+            expected == VXML_CMETA_RECORD_MAILBOX_WRITING)
+            return VXML_OK;
+        if (expected == VXML_CMETA_RECORD_MAILBOX_CLOSED)
+            return VXML_CLOSED;
+        if (expected == VXML_CMETA_RECORD_MAILBOX_DISARMED)
+            return VXML_INVALID_STATE;
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    *out_progressed = true;
+    generation = atomic_load_explicit(
+        &mailbox->generation, memory_order_relaxed);
+    if (generation == UINT64_C(0) ||
+        generation != profile->record_generation) {
+        record_quiesce_generation(
+            profile, profile->record_generation);
+        profile->record_in_flight = false;
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->generation, UINT64_C(0),
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+    }
+
+    record = &program->records[profile->active_record];
+    form = &program->forms[profile->active_form];
+    if (record->form != profile->active_form ||
+        form->scope >= program->scope_count ||
+        record->form_item_slot >=
+            program->scopes[form->scope].schema.slot_count ||
+        profile->record_results == NULL ||
+        profile->active_record >= profile->record_result_count) {
+        record_quiesce_generation(profile, generation);
+        profile->record_in_flight = false;
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->generation, UINT64_C(0),
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+    }
+
+    /*
+     * READY is a terminal provider generation. Wait for the callback to leave
+     * the provider before the Session adopts or releases its accepted lease.
+     */
+    record_quiesce_generation(profile, generation);
+    profile->record_in_flight = false;
+    atomic_store_explicit(
+        &mailbox->generation, UINT64_C(0),
+        memory_order_relaxed);
+
+    if (mailbox->outcome == VXML_CMETA_RECORD_OUTCOME_NOINPUT ||
+        mailbox->outcome == VXML_CMETA_RECORD_OUTCOME_ERROR) {
+        const char *event_name =
+            mailbox->outcome == VXML_CMETA_RECORD_OUTCOME_NOINPUT
+                ? "noinput" : "error.record";
+        const size_t event_size =
+            mailbox->outcome == VXML_CMETA_RECORD_OUTCOME_NOINPUT
+                ? sizeof("noinput") - 1u
+                : sizeof("error.record") - 1u;
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        status = cmeta_raise_event_impl(
+            session, event_name, event_size, false);
+        if (status != VXML_OK)
+            return status;
+        if (impl->state != VXML_SESSION_RUNNING)
+            return VXML_OK;
+        return select_directed_item(
+            impl, program, profile, form, profile->active_form);
+    }
+
+    if (mailbox->outcome != VXML_CMETA_RECORD_OUTCOME_SUCCESS &&
+        mailbox->outcome != VXML_CMETA_RECORD_OUTCOME_TERMCHAR) {
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+    }
+
+    if (!transaction_begin(profile, program)) {
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, VXML_ALLOCATION_FAILED);
+    }
+    {
+        const bool completed = true;
+        if (!cmeta_scope_view_assign(
+                &profile->staged_scopes[form->scope].view,
+                record->form_item_slot, &completed)) {
+            transaction_reset(profile, program);
+            record_mailbox_payload_reset(mailbox, true);
+            atomic_store_explicit(
+                &mailbox->state,
+                VXML_CMETA_RECORD_MAILBOX_DISARMED,
+                memory_order_release);
+            return session_fail(impl, VXML_ALLOCATION_FAILED);
+        }
+    }
+    status = execute_record_filled_process(
+        profile, program, form, record);
+    if (status != VXML_OK) {
+        transaction_reset(profile, program);
+        record_mailbox_payload_reset(mailbox, true);
+        atomic_store_explicit(
+            &mailbox->state,
+            VXML_CMETA_RECORD_MAILBOX_DISARMED,
+            memory_order_release);
+        return session_fail(impl, status);
+    }
+
+    transaction_commit(profile, program);
+    {
+        const bool retained =
+            profile->committed_scopes[form->scope].view.bound != NULL &&
+            profile->committed_scopes[form->scope].view.bound[
+                record->form_item_slot] != 0u;
+        vxml_cmeta_record_result_slot *result =
+            &profile->record_results[profile->active_record];
+        if (retained) {
+            record_result_slot_reset(result);
+            result->live = true;
+            result->outcome = mailbox->outcome;
+            result->duration_us = mailbox->duration_us;
+            result->has_termchar = mailbox->has_termchar;
+            result->termchar = mailbox->termchar;
+            if (mailbox->media_type_size != 0u) {
+                if (result->media_type == NULL ||
+                    mailbox->media_type_size >
+                        profile->record_result_media_stride) {
+                    record_mailbox_payload_reset(mailbox, true);
+                    atomic_store_explicit(
+                        &mailbox->state,
+                        VXML_CMETA_RECORD_MAILBOX_DISARMED,
+                        memory_order_release);
+                    return session_fail(
+                        impl, VXML_INVALID_STRUCTURE);
+                }
+                memcpy(
+                    result->media_type,
+                    mailbox->media_type,
+                    mailbox->media_type_size);
+                result->media_type_size =
+                    mailbox->media_type_size;
+            }
+            if (mailbox->outcome ==
+                    VXML_CMETA_RECORD_OUTCOME_SUCCESS) {
+                result->recording = mailbox->recording;
+                mailbox->recording =
+                    (vxml_cmeta_recording_lease_v1){0};
+            }
+        }
+    }
+
+    record_mailbox_payload_reset(mailbox, true);
+    atomic_store_explicit(
+        &mailbox->state,
+        VXML_CMETA_RECORD_MAILBOX_DISARMED,
+        memory_order_release);
+    profile->active_record = VXML_CMETA_NO_INDEX;
+
+    if (profile->pending_navigation_uri != NULL) {
+        status = publish_pending_navigation(
+            impl, profile);
+        if (status != VXML_OK)
+            return session_fail(impl, status);
+        return VXML_OK;
+    }
+    if (profile->exit_requested) {
+        terminal_publish(profile);
+        impl->state = VXML_SESSION_EXITED;
+        impl->error = VXML_OK;
+        return VXML_OK;
+    }
+    return select_directed_item(
+        impl, program, profile, form, profile->active_form);
 }
 
 
