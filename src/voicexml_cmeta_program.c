@@ -7283,6 +7283,72 @@ done:
     return status;
 }
 
+static vxml_status cmeta_compile_fetch_audio_property(
+    cmeta_program_builder *builder,
+    salts_xml_node property,
+    vxml_cmeta_fetch_audio_policy *policy) {
+    const salts_xml_attribute name =
+        cmeta_attribute(property, "name");
+    const salts_xml_attribute value =
+        cmeta_attribute(property, "value");
+    if (builder == NULL || policy == NULL ||
+        name.impl == NULL || value.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudio")) {
+        const char *uri = NULL;
+        size_t uri_size = 0u;
+        vxml_status status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(value),
+            salts_xml_attribute_location(value),
+            &uri, &uri_size);
+        if (status != VXML_OK) return status;
+        if (uri_size == 0u)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio disappeared between passes");
+        policy->uri = uri;
+        policy->uri_size = uri_size;
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name),
+            "fetchaudiodelay")) {
+        bool has_value = false;
+        uint64_t value_us = UINT64_C(0);
+        vxml_status status = cmeta_parse_prompt_timeout(
+            value, &has_value, &value_us,
+            builder->diagnostic);
+        if (status != VXML_OK) return status;
+        if (!has_value)
+            return VXML_INVALID_STRUCTURE;
+        policy->has_delay = true;
+        policy->delay_us = value_us;
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name),
+            "fetchaudiominimum")) {
+        bool has_value = false;
+        uint64_t value_us = UINT64_C(0);
+        vxml_status status = cmeta_parse_prompt_timeout(
+            value, &has_value, &value_us,
+            builder->diagnostic);
+        if (status != VXML_OK) return status;
+        if (!has_value)
+            return VXML_INVALID_STRUCTURE;
+        policy->has_minimum = true;
+        policy->minimum_us = value_us;
+        return VXML_OK;
+    }
+
+    return VXML_UNSUPPORTED_FEATURE;
+}
+
 static vxml_status cmeta_build_schemas(
     cmeta_program_builder *builder, salts_xml_node root,
     const cmeta_program_measurement *measurement) {
@@ -7346,6 +7412,13 @@ static vxml_status cmeta_build_schemas(
         const salts_xml_node child =
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "property")) {
+            status = cmeta_compile_fetch_audio_property(
+                builder, child,
+                &builder->profile->document_fetch_audio);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "data")) {
             if (builder->external_data_index >=
                 builder->profile->external_data_count)
@@ -7416,6 +7489,8 @@ static vxml_status cmeta_build_schemas(
             form->block_count = 0u;
             form->menu = menu_index;
             form->grammar_expression = VXML_CMETA_NO_INDEX;
+            form->fetch_audio =
+                builder->profile->document_fetch_audio;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             base_form->block_count = 0u;
@@ -7445,6 +7520,8 @@ static vxml_status cmeta_build_schemas(
             form->first_block = builder->block_index;
             form->menu = VXML_CMETA_NO_INDEX;
             form->grammar_expression = VXML_CMETA_NO_INDEX;
+            form->fetch_audio =
+                builder->profile->document_fetch_audio;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             status = cmeta_retain_dialog_id(
@@ -7462,6 +7539,18 @@ static vxml_status cmeta_build_schemas(
                     const salts_xml_attribute value_attribute =
                         cmeta_attribute(item, "value");
                     if (cmeta_decoded_equal(
+                            salts_xml_attribute_value(name_attribute),
+                            "fetchaudio") ||
+                        cmeta_decoded_equal(
+                            salts_xml_attribute_value(name_attribute),
+                            "fetchaudiodelay") ||
+                        cmeta_decoded_equal(
+                            salts_xml_attribute_value(name_attribute),
+                            "fetchaudiominimum")) {
+                        status = cmeta_compile_fetch_audio_property(
+                            builder, item, &form->fetch_audio);
+                        if (status != VXML_OK) return status;
+                    } else if (cmeta_decoded_equal(
                             salts_xml_attribute_value(name_attribute),
                             "recordutterance")) {
                         form->record_utterance =
