@@ -128,6 +128,15 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_collect_adapter_v1>::value,
     "collect adapter must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_mark_progress_v2>::value,
+    "prompt mark progress V2 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_media_completion_v2>::value,
+    "prompt media completion V2 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_prompt_barge_v2>::value,
+    "prompt barge V2 must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_data_resource_v1>::value,
     "external data resource must remain C-compatible");
 static_assert(
@@ -156,7 +165,10 @@ int main() {
     vxml_cmeta_prompt_media_batch_request_v1 prompt_media_batch{};
     vxml_cmeta_prompt_media_adapter_v1 prompt_media_adapter{};
     vxml_cmeta_prompt_mark_view_v1 prompt_mark{};
+    vxml_cmeta_prompt_mark_progress_v2 prompt_mark_v2{};
+    vxml_cmeta_prompt_barge_v2 prompt_barge_v2{};
     vxml_cmeta_prompt_media_completion_v1 prompt_media_completion{};
+    vxml_cmeta_prompt_media_completion_v2 prompt_media_completion_v2{};
     vxml_cmeta_collect_request_v1 collect_request{};
     vxml_cmeta_collect_request_v2 collect_request_v2{};
     vxml_cmeta_subdialog_param_v1 subdialog_param{};
@@ -206,6 +218,13 @@ int main() {
     auto take_reprompt = &vxml_session_cmeta_take_reprompt;
     auto query_prompt = &vxml_session_cmeta_prompt;
     auto report_mark = &vxml_session_cmeta_prompt_media_mark;
+    auto report_mark_v2 = &vxml_session_cmeta_prompt_media_mark_v2;
+    auto complete_prompt_v2 =
+        &vxml_session_cmeta_prompt_media_try_complete_v2;
+    auto barge_prompt_v2 =
+        &vxml_session_cmeta_prompt_media_barge_in_v2;
+    auto query_mark_shadow =
+        &vxml_session_cmeta_mark_shadow_value;
     auto query_mark = &vxml_session_cmeta_prompt_media_last_mark;
     auto query_terminal = &vxml_session_cmeta_terminal_kind;
     auto query_terminal_event = &vxml_session_cmeta_terminal_event;
@@ -281,6 +300,17 @@ int main() {
     prompt_mark.abi_version = VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1;
     prompt_mark.struct_size = sizeof(prompt_mark);
     prompt_mark.segment_index = SIZE_MAX;
+    prompt_mark_v2.abi_version =
+        VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2;
+    prompt_mark_v2.struct_size = sizeof(prompt_mark_v2);
+    prompt_barge_v2.abi_version = VXML_CMETA_PROMPT_BARGE_ABI_V2;
+    prompt_barge_v2.struct_size = sizeof(prompt_barge_v2);
+    prompt_media_completion_v2.abi_version =
+        VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2;
+    prompt_media_completion_v2.struct_size =
+        sizeof(prompt_media_completion_v2);
+    prompt_media_completion_v2.outcome =
+        VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED;
     prompt_media_completion.abi_version =
         VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1;
     prompt_media_completion.struct_size = sizeof(prompt_media_completion);
@@ -288,7 +318,9 @@ int main() {
     prompt_media_completion.failure =
         VXML_CMETA_PROMPT_MEDIA_FAILURE_UNSUPPORTED_FORMAT;
     if (raise_event == nullptr || query_prompt == nullptr ||
-        report_mark == nullptr || query_mark == nullptr ||
+        report_mark == nullptr || report_mark_v2 == nullptr ||
+        complete_prompt_v2 == nullptr || barge_prompt_v2 == nullptr ||
+        query_mark_shadow == nullptr || query_mark == nullptr ||
         query_terminal == nullptr || query_terminal_event == nullptr ||
         start_child == nullptr ||
         child_entry.abi_version != VXML_CMETA_CHILD_ENTRY_ABI_V1 ||
@@ -346,6 +378,11 @@ int main() {
         VXML_CMETA_PROMPT_MEDIA_MARK == 0 ||
         prompt_mark.abi_version != VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 ||
         prompt_mark.segment_index != SIZE_MAX ||
+        prompt_mark_v2.abi_version !=
+            VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2 ||
+        prompt_barge_v2.abi_version != VXML_CMETA_PROMPT_BARGE_ABI_V2 ||
+        prompt_media_completion_v2.abi_version !=
+            VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2 ||
         prompt_view.abi_version != VXML_CMETA_PROMPT_VIEW_ABI_V1 ||
         prompt_media_request.abi_version !=
             VXML_CMETA_PROMPT_MEDIA_REQUEST_ABI_V1 ||
