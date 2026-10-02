@@ -13650,7 +13650,7 @@ spec("VoiceXML CMeta session execution") {
             "<field name='value'>"
             "<grammar type='application/srgs+xml' srcexpr='text'/>"
             "<filled>"
-            "<assign name='text' expr=\"'two.grxml'\"/>"
+            "<assign name='text' expr='&quot;two.grxml&quot;'/>"
             "<clear namelist='value'/>"
             "</filled>"
             "</field></form></vxml>";
@@ -13759,7 +13759,7 @@ spec("VoiceXML CMeta session execution") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form>"
-            "<var name='text' expr=\"'form.grxml'\"/>"
+            "<var name='text' expr='&quot;form.grxml&quot;'/>"
             "<grammar type='application/srgs+xml' srcexpr='text'/>"
             "<initial/>"
             "<field name='value'>"
@@ -13827,13 +13827,13 @@ spec("VoiceXML CMeta session execution") {
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
             "datamodel='cmeta'><form><field name='value'>"
             "<grammar type='application/srgs+xml' "
-            "srcexpr=\"'a.grxml'\"/>"
+            "srcexpr='&quot;a.grxml&quot;'/>"
             "</field></form></vxml>";
         static const char both[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><field name='value'>"
             "<grammar type='application/srgs+xml' src='a.grxml' "
-            "srcexpr=\"'b.grxml'\"/>"
+            "srcexpr='&quot;b.grxml&quot;'/>"
             "</field></form></vxml>";
         static const char missing[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
@@ -13888,14 +13888,14 @@ spec("VoiceXML CMeta session execution") {
         static const char empty_source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><field name='value'>"
-            "<grammar type='application/srgs+xml' srcexpr=\"''\"/>"
+            "<grammar type='application/srgs+xml' srcexpr='&quot;&quot;'/>"
             "<catch event='error.semantic'><exit/></catch>"
             "</field></form></vxml>";
         static const char large_source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form><field name='value'>"
             "<grammar type='application/srgs+xml' "
-            "srcexpr=\"'0123456789012345678901234567890123456789'\"/>"
+            "srcexpr='&quot;0123456789012345678901234567890123456789&quot;'/>"
             "<catch event='error.semantic'><exit/></catch>"
             "</field></form></vxml>";
         const char *cases[] = {
