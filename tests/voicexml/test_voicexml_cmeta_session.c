@@ -1970,6 +1970,132 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("releases an ACCEPTED READY recording on close without cancel") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='voice' dtmfterm='false' type='audio/wav'/>"
+            "</form></vxml>";
+        static const unsigned char recording_bytes[] = {
+            0x61u, 0x62u};
+        const vxml_cmeta_compile_options_v1 compile =
+            record_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(
+                &root, &probe,
+                VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_record_completion_v1 completion = {
+            .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_record_completion_v1),
+            .outcome = VXML_CMETA_RECORD_OUTCOME_SUCCESS,
+            .duration_us = UINT64_C(100000),
+            .media_type = {
+                "audio/wav", sizeof("audio/wav") - 1u},
+            .recording = {
+                .data = recording_bytes,
+                .size = sizeof(recording_bytes),
+                .lease = &probe,
+                .release = cmeta_recording_release,
+                .release_user = &probe}
+        };
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_commit(&session),
+            VXML_OK);
+        completion.generation = probe.generation;
+        check_equal(
+            vxml_session_cmeta_record_try_complete(
+                &session, &completion),
+            VXML_CMETA_RECORD_INGRESS_ACCEPTED);
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        check_equal(probe.release_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.release_calls, (size_t)1u);
+        vxml_program_destroy(&program);
+    }
+
+    it("does not release a producer-owned WRITING record lease on close") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='voice' dtmfterm='false'/>"
+            "</form></vxml>";
+        static const unsigned char recording_bytes[] = {0x71u};
+        const vxml_cmeta_compile_options_v1 compile =
+            record_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(&root, &probe, UINT64_C(0));
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_prepare(&session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_commit(&session),
+            VXML_OK);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        runtime->record_mailbox.recording =
+            (vxml_cmeta_recording_lease_v1){
+                .data = recording_bytes,
+                .size = sizeof(recording_bytes),
+                .lease = &probe,
+                .release = cmeta_recording_release,
+                .release_user = &probe};
+        atomic_store_explicit(
+            &runtime->record_mailbox.state,
+            VXML_CMETA_RECORD_MAILBOX_WRITING,
+            memory_order_release);
+
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(probe.cancel_calls, (size_t)0u);
+        check_equal(probe.quiesce_calls, (size_t)1u);
+        check_equal(probe.release_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        check_equal(probe.release_calls, (size_t)0u);
+        vxml_program_destroy(&program);
+    }
+
     it("settles record noinput through record-local Event scope without a lease") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
