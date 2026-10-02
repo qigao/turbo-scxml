@@ -1044,6 +1044,8 @@ static void prompt_media_mailbox_disarm(
             &session->prompt_media_mailbox.state,
             VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED,
             memory_order_release);
+    session->prompt_media_mailbox.has_terminal_timing = false;
+    session->prompt_media_mailbox.terminal_elapsed_ms = UINT64_C(0);
 }
 
 static void settle_prompt_media(
@@ -10424,6 +10426,8 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
         profile->prompt_media_generation;
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->prompt_media_last_mark_name_size = 0u;
+    profile->prompt_media_last_mark_has_elapsed = false;
+    profile->prompt_media_last_mark_elapsed_ms = UINT64_C(0);
     atomic_store_explicit(
         &profile->prompt_media_mailbox.generation,
         profile->prompt_media_generation,
