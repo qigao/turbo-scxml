@@ -1436,6 +1436,7 @@ static void session_data_destroy(
     vxml_free(session->retry_reset_pending);
     vxml_free(session->event_counter_names);
     vxml_free(session->event_counters);
+    vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
     vxml_free(session->collect_mailbox.recording_media_type);
@@ -3509,8 +3510,12 @@ vxml_status vxml_cmeta_session_init_profile(
                 sizeof(*profile->prompt_media_projected_segments));
         profile->prompt_media_dynamic_mark_storage =
             (char *)vxml_malloc(dynamic_storage_bytes);
+        profile->prompt_media_last_mark_name =
+            (char *)vxml_malloc(
+                program->max_dynamic_mark_name_bytes);
         if (profile->prompt_media_projected_segments == NULL ||
-            profile->prompt_media_dynamic_mark_storage == NULL) {
+            profile->prompt_media_dynamic_mark_storage == NULL ||
+            profile->prompt_media_last_mark_name == NULL) {
             status = VXML_ALLOCATION_FAILED;
             goto failure;
         }
@@ -3518,6 +3523,8 @@ vxml_status vxml_cmeta_session_init_profile(
             max_segments;
         profile->prompt_media_dynamic_mark_storage_capacity =
             dynamic_storage_bytes;
+        profile->prompt_media_last_mark_name_capacity =
+            program->max_dynamic_mark_name_bytes;
     }
 
     {
@@ -10256,6 +10263,7 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
     profile->prompt_media_mark_generation =
         profile->prompt_media_generation;
     profile->prompt_media_last_mark_segment = SIZE_MAX;
+    profile->prompt_media_last_mark_name_size = 0u;
     atomic_store_explicit(
         &profile->prompt_media_mailbox.generation,
         profile->prompt_media_generation,
@@ -10609,6 +10617,39 @@ vxml_session_cmeta_prompt_media_mark(
     if (profile->prompt_media_last_mark_segment != SIZE_MAX &&
         absolute_index <= profile->prompt_media_last_mark_segment)
         return VXML_CMETA_PROMPT_MARK_OUT_OF_ORDER;
+
+    profile->prompt_media_last_mark_name_size = 0u;
+    if (profile->prompt_media_projected_generation == generation &&
+        profile->prompt_media_projected_first_segment != SIZE_MAX &&
+        absolute_index >=
+            profile->prompt_media_projected_first_segment &&
+        absolute_index -
+            profile->prompt_media_projected_first_segment <
+            profile->prompt_media_projected_segment_count) {
+        const size_t relative =
+            absolute_index -
+            profile->prompt_media_projected_first_segment;
+        const vxml_cmeta_prompt_media_segment_v1 *projected;
+        if (profile->prompt_media_projected_segments == NULL ||
+            relative >=
+                profile->prompt_media_projected_segment_capacity)
+            return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+        projected =
+            &profile->prompt_media_projected_segments[relative];
+        if (projected->kind != VXML_CMETA_PROMPT_MEDIA_MARK ||
+            projected->payload.data == NULL ||
+            projected->payload.size == 0u ||
+            profile->prompt_media_last_mark_name == NULL ||
+            projected->payload.size >
+                profile->prompt_media_last_mark_name_capacity)
+            return VXML_CMETA_PROMPT_MARK_INVALID_ARGUMENT;
+        memcpy(
+            profile->prompt_media_last_mark_name,
+            projected->payload.data,
+            projected->payload.size);
+        profile->prompt_media_last_mark_name_size =
+            projected->payload.size;
+    }
     profile->prompt_media_last_mark_segment = absolute_index;
     return VXML_CMETA_PROMPT_MARK_ACCEPTED;
 }
@@ -10648,31 +10689,19 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
         profile->prompt_media_last_mark_segment >=
             program->prompt_segment_count)
         return VXML_INVALID_STRUCTURE;
-    if (profile->prompt_media_projected_generation ==
-            profile->prompt_media_mark_generation &&
-        profile->prompt_media_projected_first_segment != SIZE_MAX &&
-        profile->prompt_media_last_mark_segment >=
-            profile->prompt_media_projected_first_segment &&
-        profile->prompt_media_last_mark_segment -
-            profile->prompt_media_projected_first_segment <
-            profile->prompt_media_projected_segment_count) {
-        const size_t relative =
-            profile->prompt_media_last_mark_segment -
-            profile->prompt_media_projected_first_segment;
-        if (profile->prompt_media_projected_segments == NULL ||
-            relative >=
-                profile->prompt_media_projected_segment_capacity)
-            return VXML_INVALID_STRUCTURE;
-        segment =
-            &profile->prompt_media_projected_segments[relative];
-    } else {
-        segment = &program->prompt_segments[
-            profile->prompt_media_last_mark_segment];
-    }
-    if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK ||
-        segment->payload.data == NULL ||
-        segment->payload.size == 0u)
+    segment = &program->prompt_segments[
+        profile->prompt_media_last_mark_segment];
+    if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK)
         return VXML_INVALID_STRUCTURE;
+    if (profile->prompt_media_last_mark_name_size != 0u) {
+        if (profile->prompt_media_last_mark_name == NULL ||
+            profile->prompt_media_last_mark_name_size >
+                profile->prompt_media_last_mark_name_capacity)
+            return VXML_INVALID_STRUCTURE;
+    } else if (segment->payload.data == NULL ||
+               segment->payload.size == 0u) {
+        return VXML_INVALID_STRUCTURE;
+    }
 
     {
         size_t prompt_index;
@@ -10699,7 +10728,12 @@ vxml_status vxml_session_cmeta_prompt_media_last_mark(
         }
         if (!found) return VXML_INVALID_STRUCTURE;
     }
-    out_mark->name = segment->payload;
+    out_mark->name =
+        profile->prompt_media_last_mark_name_size != 0u
+            ? (vxml_cmeta_name_view){
+                profile->prompt_media_last_mark_name,
+                profile->prompt_media_last_mark_name_size}
+            : segment->payload;
     return VXML_OK;
 }
 
