@@ -1145,6 +1145,17 @@ static void collect_utterance_result_reset(
         record_release_lease(&recording);
 }
 
+static void field_recording_shadow_reset(
+    vxml_cmeta_session_data *session,
+    size_t field_index) {
+    if (session == NULL ||
+        session->field_recording_shadows == NULL ||
+        field_index >= session->field_recording_shadow_count)
+        return;
+    session->field_recording_shadows[field_index] =
+        (vxml_cmeta_field_recording_shadow){0};
+}
+
 static void collect_quiesce_generation(
     vxml_cmeta_session_data *session,
     uint64_t generation) {
@@ -1427,6 +1438,7 @@ static void session_data_destroy(
     vxml_free(session->event_counters);
     vxml_free(session->collect_mailbox.recording_media_type);
     vxml_free(session->collect_utterance_result_media_type);
+    vxml_free(session->field_recording_shadows);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
     vxml_free(session->data_value_allocation);
@@ -1543,8 +1555,10 @@ static void apply_retry_resets(
         return;
     if (session->retry_reset_pending != NULL)
         for (index = 0u; index < program->field_count; ++index)
-            if (session->retry_reset_pending[index] != 0u)
+            if (session->retry_reset_pending[index] != 0u) {
                 reset_field_retry_counters(session, index);
+                field_recording_shadow_reset(session, index);
+            }
     if (session->initial_retry_reset_pending != NULL)
         for (index = 0u; index < program->initial_count; ++index)
             if (session->initial_retry_reset_pending[index] != 0u)
