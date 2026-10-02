@@ -10895,7 +10895,6 @@ prompt_media_try_complete_impl(
     uint64_t playback_elapsed_ms) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
-    const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned state;
     unsigned expected;
@@ -10929,8 +10928,6 @@ prompt_media_try_complete_impl(
         return VXML_CMETA_PROMPT_MEDIA_INGRESS_CLOSED;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
-    program = (const vxml_cmeta_program_data *)
-        impl->program->profile_data;
     mailbox = &profile->prompt_media_mailbox;
     state = atomic_load_explicit(
         &mailbox->state, memory_order_acquire);
@@ -11132,6 +11129,7 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
     vxml_cmeta_prompt_media_outcome *out_outcome) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_mailbox *mailbox;
     unsigned expected;
     uint64_t generation;
@@ -11155,6 +11153,8 @@ vxml_status vxml_session_cmeta_prompt_media_run_ready(
         return VXML_INVALID_STATE;
 
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
     mailbox = &profile->prompt_media_mailbox;
     expected = VXML_CMETA_PROMPT_MEDIA_MAILBOX_READY;
     if (!atomic_compare_exchange_strong_explicit(
