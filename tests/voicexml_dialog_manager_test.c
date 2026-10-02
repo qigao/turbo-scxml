@@ -303,6 +303,10 @@ typedef struct navigation_document_probe {
     size_t fetch_audio_finish_calls;
     char fetch_audio_uri[256];
     size_t fetch_audio_uri_size;
+    bool fetch_audio_has_delay;
+    uint64_t fetch_audio_delay_us;
+    bool fetch_audio_has_minimum;
+    uint64_t fetch_audio_minimum_us;
 } navigation_document_probe;
 
 static vxml_dialog_manager_status navigation_document_open(
@@ -373,8 +377,7 @@ static vxml_fetch_audio_begin_result navigation_fetch_audio_begin(
         request->abi_version != VXML_FETCH_AUDIO_REQUEST_ABI_V1 ||
         request->struct_size < sizeof(*request) ||
         request->uri == NULL || request->uri_size == 0u ||
-        request->uri_size >= sizeof(probe->fetch_audio_uri) ||
-        request->has_delay || request->has_minimum)
+        request->uri_size >= sizeof(probe->fetch_audio_uri))
         return (vxml_fetch_audio_begin_result)99;
     ++probe->fetch_audio_begin_calls;
     memcpy(
@@ -383,6 +386,10 @@ static vxml_fetch_audio_begin_result navigation_fetch_audio_begin(
         request->uri_size);
     probe->fetch_audio_uri[request->uri_size] = '\0';
     probe->fetch_audio_uri_size = request->uri_size;
+    probe->fetch_audio_has_delay = request->has_delay;
+    probe->fetch_audio_delay_us = request->delay_us;
+    probe->fetch_audio_has_minimum = request->has_minimum;
+    probe->fetch_audio_minimum_us = request->minimum_us;
     *out_ticket = (vxml_fetch_audio_ticket_v1){
         .finish = navigation_fetch_audio_finish,
         .user = probe};
@@ -1416,10 +1423,14 @@ spec("VoiceXML dialog manager") {
             "https://voice.example/app/media/wait.wav";
         static const char a_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-            "<form id='main'><block>"
-            "<goto next='b.vxml#target' "
-            "fetchaudio='../media/wait.wav'/>"
-            "</block></form></vxml>";
+            "<property name='fetchaudio' value='../media/default.wav'/>"
+            "<property name='fetchaudiodelay' value='250ms'/>"
+            "<property name='fetchaudiominimum' value='1.5s'/>"
+            "<form id='main'>"
+            "<property name='fetchaudio' value='../media/form.wav'/>"
+            "<block><goto next='b.vxml#target' "
+            "fetchaudio='../media/wait.wav'/></block>"
+            "</form></vxml>";
         static const char b_body[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form id='entry'><block>"
@@ -1484,6 +1495,14 @@ spec("VoiceXML dialog manager") {
         check_equal(
             documents.fetch_audio_uri,
             wait_audio_uri);
+        check_true(documents.fetch_audio_has_delay);
+        check_equal(
+            documents.fetch_audio_delay_us,
+            UINT64_C(250000));
+        check_true(documents.fetch_audio_has_minimum);
+        check_equal(
+            documents.fetch_audio_minimum_us,
+            UINT64_C(1500000));
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
         check_equal(events.rows[1].name, "dialog.exit");
