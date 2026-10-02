@@ -5250,6 +5250,8 @@ static const cmeta_data_field_desc *cmeta_root_field(
     return NULL;
 }
 
+static bool cmeta_ascii_ncname(salts_xml_string_view name);
+
 static bool cmeta_scope_storage_limit_exceeded(
     const cmeta_scope_schema *schema, const cmeta_data_desc *value);
 
