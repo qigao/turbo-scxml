@@ -4625,6 +4625,22 @@ static vxml_status cmeta_compile_field_schema(
             goto done;
         }
     }
+    for (prior = 0u; prior < builder->record_index; ++prior) {
+        const vxml_cmeta_record_row *record =
+            &builder->profile->records[prior];
+        if (record->form == form_index &&
+            record->name != NULL &&
+            record->name_size == decoded_name.view.size &&
+            memcmp(
+                record->name, decoded_name.view.data,
+                decoded_name.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML field name collides with a record");
+            goto done;
+        }
+    }
     root_field = cmeta_root_field(
         builder->profile->root, decoded_name.view, &root_field_index);
     if (root_field == NULL) {
@@ -5853,6 +5869,22 @@ static vxml_status cmeta_compile_subdialog_schema(
         goto done;
     }
 
+    for (prior = 0u; prior < builder->record_index; ++prior) {
+        const vxml_cmeta_record_row *record =
+            &builder->profile->records[prior];
+        if (record->form == form_index &&
+            record->name != NULL &&
+            record->name_size == decoded_name.view.size &&
+            memcmp(
+                record->name, decoded_name.view.data,
+                decoded_name.view.size) == 0) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML subdialog name collides with a record");
+            goto done;
+        }
+    }
     root_field = cmeta_root_field(
         builder->profile->root, decoded_name.view, &root_field_index);
     if (root_field == NULL) {
