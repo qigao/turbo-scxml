@@ -9665,9 +9665,15 @@ spec("VoiceXML CMeta session execution") {
     it("publishes literal CMeta goto only after the enclosing transaction commits") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
-            "datamodel='cmeta'><form><block>"
-            "<assign name='value' expr='5'/>"
-            "<goto next='dialogs/child.vxml#entry'/>"
+            "datamodel='cmeta'>"
+            "<property name='fetchaudio' value='media/default.wav'/>"
+            "<property name='fetchaudiodelay' value='250ms'/>"
+            "<form>"
+            "<property name='fetchaudio' value='media/form.wav'/>"
+            "<property name='fetchaudiominimum' value='1.5s'/>"
+            "<block><assign name='value' expr='5'/>"
+            "<goto next='dialogs/child.vxml#entry' "
+            "fetchaudio='media/explicit.wav'/>"
             "<assign name='other' expr='99'/>"
             "</block></form></vxml>";
         const vxml_cmeta_compile_options_v1 compile =
@@ -9707,6 +9713,23 @@ spec("VoiceXML CMeta session execution") {
                 "dialogs/child.vxml#entry",
                 navigation.uri_size),
             0);
+        check_equal(
+            navigation.fetchaudio_uri_size,
+            sizeof("media/explicit.wav") - 1u);
+        check_equal(
+            memcmp(
+                navigation.fetchaudio_uri,
+                "media/explicit.wav",
+                navigation.fetchaudio_uri_size),
+            0);
+        check_true(navigation.has_fetchaudio_delay);
+        check_equal(
+            navigation.fetchaudio_delay_us,
+            UINT64_C(250000));
+        check_true(navigation.has_fetchaudio_minimum);
+        check_equal(
+            navigation.fetchaudio_minimum_us,
+            UINT64_C(1500000));
         {
             const vxml_cmeta_session_root *committed =
                 (const vxml_cmeta_session_root *)
