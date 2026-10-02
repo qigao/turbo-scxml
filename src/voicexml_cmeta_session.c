@@ -2931,6 +2931,35 @@ static void mark_form_initial_retry_reset_by_slot(
     }
 }
 
+static void reset_transfer_control_by_result_slot(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    size_t scope,
+    size_t slot) {
+    size_t offset;
+    if (session == NULL || program == NULL || form == NULL ||
+        scope != form->scope ||
+        !range_valid(
+            form->first_transfer, form->transfer_count,
+            program->transfer_count) ||
+        (form->transfer_count != 0u && program->transfers == NULL))
+        return;
+    for (offset = 0u; offset < form->transfer_count; ++offset) {
+        const vxml_cmeta_transfer_row *transfer =
+            &program->transfers[form->first_transfer + offset];
+        if (transfer->form == session->active_form &&
+            transfer->result_slot == slot &&
+            transfer->form_item_slot <
+                program->scopes[form->scope].schema.slot_count) {
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                transfer->form_item_slot);
+            return;
+        }
+    }
+}
+
 static vxml_status execute_clear(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -3012,8 +3041,13 @@ static vxml_status execute_clear(
                 &program->transfers[form->first_transfer + index];
             if (transfer->form != session->active_form ||
                 transfer->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count ||
+                transfer->result_slot >=
                     program->scopes[form->scope].schema.slot_count)
                 return VXML_INVALID_STRUCTURE;
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                transfer->result_slot);
             cmeta_scope_view_clear_slot(
                 &session->staged_scopes[form->scope].view,
                 transfer->form_item_slot);
@@ -3033,6 +3067,10 @@ static vxml_status execute_clear(
             cmeta_scope_view_clear_slot(
                 resolved.scope, resolved.candidate->location.slot);
             mark_form_initial_retry_reset_by_slot(
+                session, program, form,
+                resolved.candidate->scope,
+                resolved.candidate->location.slot);
+            reset_transfer_control_by_result_slot(
                 session, program, form,
                 resolved.candidate->scope,
                 resolved.candidate->location.slot);
