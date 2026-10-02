@@ -2045,43 +2045,11 @@ spec("VoiceXML CMeta session execution") {
                 &session, &program, &options),
             VXML_OK);
         check_equal(vxml_session_start(&session), VXML_OK);
-        {
-            const vxml_status raise_status =
-                vxml_session_cmeta_raise(
-                    &session,
-                    "transfer.fail", sizeof("transfer.fail") - 1u);
-            if (raise_status != VXML_OK) {
-                const vxml_program_impl *impl =
-                    (const vxml_program_impl *)program.impl;
-                const vxml_cmeta_program_data *profile =
-                    impl != NULL
-                        ? (const vxml_cmeta_program_data *)impl->profile_data
-                        : NULL;
-                const vxml_cmeta_event_handler_row *handler =
-                    profile != NULL && profile->event_handler_count >= 3u
-                        ? &profile->event_handlers[2] : NULL;
-                const vxml_cmeta_action_row *action =
-                    handler != NULL &&
-                    handler->first_action < profile->action_count
-                        ? &profile->actions[handler->first_action] : NULL;
-                fprintf(
-                    stderr,
-                    "transfer local raise: status=%d active=%zu handlers=%zu "
-                    "first=%zu end=%zu actions=%zu kind=%d next=%zu "
-                    "exit_kind=%d expr=%zu\n",
-                    (int)raise_status,
-                    session_data(&session)->active_transfer,
-                    profile != NULL ? profile->event_handler_count : 0u,
-                    handler != NULL ? handler->first_action : SIZE_MAX,
-                    handler != NULL ? handler->action_end : SIZE_MAX,
-                    profile != NULL ? profile->action_count : 0u,
-                    action != NULL ? (int)action->kind : -1,
-                    action != NULL ? action->next_action : SIZE_MAX,
-                    action != NULL ? (int)action->exit_kind : -1,
-                    action != NULL ? action->expression : SIZE_MAX);
-            }
-            check_equal(raise_status, VXML_OK);
-        }
+        check_equal(
+            vxml_session_cmeta_raise(
+                &session,
+                "transfer.fail", sizeof("transfer.fail") - 1u),
+            VXML_OK);
         check_equal(
             vxml_session_get_state(&session),
             VXML_SESSION_EXITED);
