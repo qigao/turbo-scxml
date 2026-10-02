@@ -307,20 +307,20 @@ Struct(w3c_cmeta_state,
     (int, result)
 );
 
+static const cmeta_data_desc w3c_cmeta_state_desc;
+
 static bool w3c_cmeta_state_copy(void *destination, const void *source) {
-    if (destination == NULL || source == NULL) return false;
-    memcpy(destination, source, sizeof(w3c_cmeta_state));
-    return true;
+    return cmeta_data_trait_copy_construct(
+        &w3c_cmeta_state_desc, destination, source);
 }
 
 static void w3c_cmeta_state_move(void *destination, void *source) {
-    if (destination == NULL || source == NULL) return;
-    memcpy(destination, source, sizeof(w3c_cmeta_state));
-    memset(source, 0, sizeof(w3c_cmeta_state));
+    cmeta_data_trait_move_construct(
+        &w3c_cmeta_state_desc, destination, source);
 }
 
 static void w3c_cmeta_state_destroy(void *value) {
-    (void)value;
+    cmeta_data_trait_destroy(&w3c_cmeta_state_desc, value);
 }
 
 static const cmeta_type_identity w3c_cmeta_state_identity =
