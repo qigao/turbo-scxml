@@ -172,6 +172,11 @@ typedef enum vxml_cmeta_prompt_owner_kind {
     VXML_CMETA_PROMPT_OWNER_INITIAL
 } vxml_cmeta_prompt_owner_kind;
 
+typedef struct vxml_cmeta_prompt_mark_expr_row {
+    size_t segment_index;
+    size_t expression;
+} vxml_cmeta_prompt_mark_expr_row;
+
 typedef struct vxml_cmeta_prompt_row {
     vxml_cmeta_prompt_owner_kind owner_kind;
     size_t owner;
@@ -184,6 +189,8 @@ typedef struct vxml_cmeta_prompt_row {
     size_t segment_count;
     size_t first_fallback;
     size_t fallback_count;
+    size_t first_dynamic_mark;
+    size_t dynamic_mark_count;
     uint64_t required_capabilities;
     bool bargein;
     vxml_cmeta_prompt_bargein_type bargein_type;
@@ -405,6 +412,9 @@ typedef struct vxml_cmeta_program_data {
     size_t prompt_count;
     vxml_cmeta_prompt_media_segment_v1 *prompt_segments;
     size_t prompt_segment_count;
+    vxml_cmeta_prompt_mark_expr_row *prompt_mark_exprs;
+    size_t prompt_mark_expr_count;
+    size_t max_dynamic_mark_name_bytes;
     vxml_cmeta_prompt_media_fallback_v1 *prompt_fallbacks;
     size_t prompt_fallback_count;
     vxml_cmeta_filled_row *filled;
@@ -677,6 +687,10 @@ typedef struct vxml_cmeta_session_data {
     const vxml_cmeta_prompt_media_adapter_v1 *prompt_media_adapter;
     void *prompt_media_user;
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;
+    vxml_cmeta_prompt_media_segment_v1 *prompt_media_projected_segments;
+    size_t prompt_media_projected_segment_capacity;
+    char *prompt_media_dynamic_mark_storage;
+    size_t prompt_media_dynamic_mark_storage_capacity;
     uint64_t prompt_media_generation;
     uint64_t prompt_media_barged_generation;
     uint64_t prompt_media_mark_generation;
