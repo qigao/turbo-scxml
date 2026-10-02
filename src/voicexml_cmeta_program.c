@@ -393,7 +393,9 @@ typedef struct cmeta_program_measurement {
     size_t form_item_count;
     size_t prompt_count;
     size_t prompt_segment_count;
+    size_t prompt_mark_expr_count;
     size_t prompt_fallback_count;
+    bool version_21;
     size_t filled_count;
     size_t filled_target_count;
     size_t event_handler_count;
@@ -4154,9 +4156,11 @@ static vxml_status cmeta_measure_program(
                     ? salts_xml_attribute_location(version)
                     : salts_xml_node_location(root),
                 "VoiceXML version must be 2.0 or 2.1");
-        if (status == VXML_OK)
+        if (status == VXML_OK) {
             version_21 = cmeta_decoded_equal(
                 salts_xml_attribute_value(version), "2.1");
+            measurement->version_21 = version_21;
+        }
     }
     if (status != VXML_OK) {
         salts_xml_document_destroy(&document);
@@ -4285,6 +4289,7 @@ typedef struct cmeta_program_builder {
     size_t form_item_index;
     size_t prompt_index;
     size_t prompt_segment_index;
+    size_t prompt_mark_expr_index;
     size_t prompt_fallback_index;
     size_t filled_index;
     size_t filled_target_index;
@@ -4351,6 +4356,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->prompt_fallbacks);
+    vxml_free(profile->prompt_mark_exprs);
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
     vxml_free(profile->form_items);
@@ -4415,6 +4421,10 @@ static bool cmeta_allocate_rows(
     profile->form_item_count = measurement->form_item_count;
     profile->prompt_count = measurement->prompt_count;
     profile->prompt_segment_count = measurement->prompt_segment_count;
+    profile->prompt_mark_expr_count = measurement->prompt_mark_expr_count;
+    profile->max_dynamic_mark_name_bytes =
+        measurement->prompt_mark_expr_count != 0u
+            ? options->max_dynamic_mark_name_bytes : 0u;
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
@@ -4467,6 +4477,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(form_items, measurement->form_item_count);
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
+    CMETA_ALLOC_ROWS(prompt_mark_exprs, measurement->prompt_mark_expr_count);
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
