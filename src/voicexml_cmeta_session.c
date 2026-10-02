@@ -10336,7 +10336,6 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
     const vxml_cmeta_transfer_row *transfer;
     const vxml_cmeta_form_row *form;
     vxml_cmeta_transfer_completion_mailbox *mailbox;
-    const size_t *active_transfer_ptr;
     size_t transfer_index;
     uint64_t generation;
     unsigned expected;
@@ -10389,7 +10388,6 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
     generation = atomic_load_explicit(
         &mailbox->generation, memory_order_relaxed);
     transfer_index = profile->active_transfer;
-    active_transfer_ptr = &transfer_index;
     transfer = &program->transfers[transfer_index];
     form = &program->forms[profile->active_form];
 
@@ -10531,7 +10529,6 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
     if (impl->state != VXML_SESSION_RUNNING)
         return VXML_OK;
 
-    (void)active_transfer_ptr;
     return select_directed_item(
         impl, program, profile, form,
         profile->active_form);
