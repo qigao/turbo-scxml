@@ -59,6 +59,11 @@ int main(void) {
     vxml_cmeta_transfer_adapter_v1 transfer_adapter = {
         .abi_version = VXML_CMETA_TRANSFER_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_transfer_adapter_v1)};
+    vxml_cmeta_transfer_completion_v1 transfer_completion = {
+        .abi_version = VXML_CMETA_TRANSFER_COMPLETION_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_transfer_completion_v1),
+        .kind = VXML_CMETA_TRANSFER_COMPLETION_RESULT,
+        .result = VXML_CMETA_TRANSFER_RESULT_UNKNOWN};
     vxml_cmeta_recording_lease_v1 recording_lease = {0};
     vxml_cmeta_record_completion_v1 record_completion = {
         .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1,
@@ -243,6 +248,12 @@ int main(void) {
         vxml_session_cmeta_transfer_commit;
     vxml_status (*discard_transfer)(vxml_session *) =
         vxml_session_cmeta_transfer_discard;
+    vxml_cmeta_transfer_ingress_result (*complete_transfer)(
+        vxml_session *, const vxml_cmeta_transfer_completion_v1 *) =
+        vxml_session_cmeta_transfer_try_complete;
+    vxml_status (*run_transfer_completion)(
+        vxml_session *, bool *) =
+        vxml_session_cmeta_transfer_run_ready;
     vxml_status (*prepare_subdialog)(
         vxml_session *, const char **) =
         vxml_session_cmeta_subdialog_prepare;
@@ -314,10 +325,18 @@ int main(void) {
         VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
         query_transfer == NULL || prepare_transfer == NULL ||
         commit_transfer == NULL || discard_transfer == NULL ||
+        complete_transfer == NULL || run_transfer_completion == NULL ||
         transfer_request.abi_version !=
             VXML_CMETA_TRANSFER_REQUEST_ABI_V1 ||
         transfer_adapter.abi_version !=
             VXML_CMETA_TRANSFER_ADAPTER_ABI_V1 ||
+        transfer_completion.abi_version !=
+            VXML_CMETA_TRANSFER_COMPLETION_ABI_V1 ||
+        transfer_completion.kind !=
+            VXML_CMETA_TRANSFER_COMPLETION_RESULT ||
+        transfer_completion.result !=
+            VXML_CMETA_TRANSFER_RESULT_UNKNOWN ||
+        VXML_CMETA_TRANSFER_INGRESS_ACCEPTED != 0 ||
         transfer_ticket.commit != NULL ||
         VXML_CMETA_TRANSFER_CAP_BLIND == 0u ||
         VXML_CMETA_TRANSFER_CAP_BRIDGE == 0u ||
