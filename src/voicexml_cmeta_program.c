@@ -7005,6 +7005,7 @@ static vxml_status cmeta_build_schemas(
             form->first_block = builder->block_index;
             form->block_count = 0u;
             form->menu = menu_index;
+            form->grammar_expression = VXML_CMETA_NO_INDEX;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             base_form->block_count = 0u;
@@ -7033,6 +7034,7 @@ static vxml_status cmeta_build_schemas(
             form->first_filled = VXML_CMETA_NO_INDEX;
             form->first_block = builder->block_index;
             form->menu = VXML_CMETA_NO_INDEX;
+            form->grammar_expression = VXML_CMETA_NO_INDEX;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             status = cmeta_retain_dialog_id(
