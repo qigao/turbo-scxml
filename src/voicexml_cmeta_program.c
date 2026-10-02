@@ -8631,6 +8631,30 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
     return VXML_OK;
 }
 
+static const vxml_cmeta_fetchaudio_policy *
+cmeta_fetchaudio_policy_for_scopes(
+    const cmeta_program_builder *builder,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    size_t index;
+    if (builder == NULL || builder->profile == NULL)
+        return NULL;
+    for (index = 0u; index < scope_count; ++index) {
+        const size_t scope = scopes[index].scope_id;
+        if (scope < builder->profile->scope_count &&
+            builder->profile->scopes[scope].kind ==
+                VXML_CMETA_SCOPE_FORM) {
+            const size_t form =
+                builder->profile->scopes[scope].owner;
+            if (form < builder->profile->form_count &&
+                builder->profile->forms != NULL)
+                return &builder->profile->forms[form].fetchaudio;
+            return NULL;
+        }
+    }
+    return &builder->profile->document_fetchaudio;
+}
+
 static void cmeta_action_init(vxml_cmeta_action_row *action) {
     memset(action, 0, sizeof(*action));
     action->scope = VXML_CMETA_NO_INDEX;
@@ -9120,12 +9144,17 @@ static vxml_status cmeta_lower_simple_action(
     } else if (cmeta_node_named(node, "goto")) {
             const salts_xml_attribute next =
                 cmeta_attribute(node, "next");
+            const salts_xml_attribute fetchaudio =
+                cmeta_attribute(node, "fetchaudio");
+            const vxml_cmeta_fetchaudio_policy *inherited =
+                cmeta_fetchaudio_policy_for_scopes(
+                    builder, scopes, scope_count);
             action->kind = VXML_CMETA_ACTION_GOTO;
-            if (next.impl == NULL)
+            if (next.impl == NULL || inherited == NULL)
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(node),
-                    "VoiceXML goto target changed between compiler passes");
+                    "VoiceXML goto target/policy changed between compiler passes");
             status = cmeta_retain_decoded_view(
                 builder, salts_xml_attribute_value(next),
                 salts_xml_attribute_location(next),
@@ -9137,6 +9166,25 @@ static vxml_status cmeta_lower_simple_action(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_attribute_location(next),
                     "VoiceXML goto next disappeared between compiler passes");
+            action->fetchaudio = *inherited;
+            if (action->navigation_uri[0] == '#') {
+                action->fetchaudio =
+                    (vxml_cmeta_fetchaudio_policy){0};
+            } else if (fetchaudio.impl != NULL) {
+                status = cmeta_retain_decoded_view(
+                    builder,
+                    salts_xml_attribute_value(fetchaudio),
+                    salts_xml_attribute_location(fetchaudio),
+                    &action->fetchaudio.uri,
+                    &action->fetchaudio.uri_size);
+                if (status != VXML_OK) return status;
+                if (action->fetchaudio.uri_size == 0u)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(fetchaudio),
+                        "VoiceXML goto fetchaudio disappeared between compiler passes");
+            }
     } else if (cmeta_node_named(node, "exit")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(node, "expr");
@@ -9479,6 +9527,8 @@ static vxml_status cmeta_lower_program(
         const salts_xml_node child =
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "property"))
+            continue;
         if (cmeta_node_named(child, "catch") ||
             cmeta_node_named(child, "help") ||
             cmeta_node_named(child, "noinput") ||
@@ -9528,6 +9578,8 @@ static vxml_status cmeta_lower_program(
                 const salts_xml_node item =
                     salts_xml_node_child_at(child, form_child);
                 if (cmeta_node_ignorable(item)) continue;
+                if (cmeta_node_named(item, "property"))
+                    continue;
                 if (cmeta_node_named(item, "var")) {
                     status = cmeta_compile_declaration_expression(
                         builder, item,
