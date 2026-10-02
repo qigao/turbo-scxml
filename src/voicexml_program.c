@@ -1932,6 +1932,10 @@ static void write_goto(vxml_writer *writer) {
     action->target_uri_size = 0u;
     action->fetchaudio_uri = NULL;
     action->fetchaudio_uri_size = 0u;
+    action->has_fetchaudio_delay = false;
+    action->fetchaudio_delay_us = UINT64_C(0);
+    action->has_fetchaudio_minimum = false;
+    action->fetchaudio_minimum_us = UINT64_C(0);
     if (target.external) {
         action->kind = VXML_ACTION_GOTO_EXTERNAL;
         action->target_form = SIZE_MAX;
@@ -1953,6 +1957,14 @@ static void write_goto(vxml_writer *writer) {
                 target.fetchaudio, target.fetchaudio_size + 1u);
             writer->storage_index +=
                 target.fetchaudio_size + 1u;
+            action->has_fetchaudio_delay =
+                target.has_fetchaudio_delay;
+            action->fetchaudio_delay_us =
+                target.fetchaudio_delay_us;
+            action->has_fetchaudio_minimum =
+                target.has_fetchaudio_minimum;
+            action->fetchaudio_minimum_us =
+                target.fetchaudio_minimum_us;
         }
     } else {
         action->kind = VXML_ACTION_GOTO;
