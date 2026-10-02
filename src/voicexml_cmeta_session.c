@@ -10473,6 +10473,84 @@ vxml_status vxml_session_cmeta_prompt_media_discard(
     return VXML_OK;
 }
 
+static vxml_status prompt_mark_last_name_view(
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    vxml_cmeta_name_view *out_name) {
+    const vxml_cmeta_prompt_media_segment_v1 *segment;
+    if (out_name != NULL) *out_name = (vxml_cmeta_name_view){0};
+    if (profile == NULL || program == NULL || out_name == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (profile->prompt_media_last_mark_segment == SIZE_MAX)
+        return VXML_OK;
+    if (program->prompt_segments == NULL ||
+        profile->prompt_media_last_mark_segment >=
+            program->prompt_segment_count)
+        return VXML_INVALID_STRUCTURE;
+    segment = &program->prompt_segments[
+        profile->prompt_media_last_mark_segment];
+    if (segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK)
+        return VXML_INVALID_STRUCTURE;
+    if (profile->prompt_media_last_mark_name_size != 0u) {
+        if (profile->prompt_media_last_mark_name == NULL ||
+            profile->prompt_media_last_mark_name_size >
+                profile->prompt_media_last_mark_name_capacity)
+            return VXML_INVALID_STRUCTURE;
+        *out_name = (vxml_cmeta_name_view){
+            profile->prompt_media_last_mark_name,
+            profile->prompt_media_last_mark_name_size};
+        return VXML_OK;
+    }
+    if (segment->payload.data == NULL ||
+        segment->payload.size == 0u)
+        return VXML_INVALID_STRUCTURE;
+    *out_name = segment->payload;
+    return VXML_OK;
+}
+
+static vxml_status prompt_mark_capture_terminal(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    uint64_t generation,
+    bool has_terminal_timing,
+    uint64_t terminal_elapsed_ms) {
+    vxml_cmeta_name_view name = {0};
+    bool has_mark = false;
+    uint64_t marktime_ms = UINT64_C(0);
+    vxml_status status;
+
+    if (profile == NULL || program == NULL ||
+        generation == UINT64_C(0))
+        return VXML_INVALID_ARGUMENT;
+
+    if (profile->prompt_media_mark_generation == generation &&
+        profile->prompt_media_last_mark_segment != SIZE_MAX &&
+        has_terminal_timing &&
+        profile->prompt_media_last_mark_has_elapsed) {
+        if (terminal_elapsed_ms <
+            profile->prompt_media_last_mark_elapsed_ms)
+            return VXML_INVALID_STRUCTURE;
+        status = prompt_mark_last_name_view(
+            profile, program, &name);
+        if (status != VXML_OK) return status;
+        if (name.data == NULL || name.size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        marktime_ms =
+            terminal_elapsed_ms -
+            profile->prompt_media_last_mark_elapsed_ms;
+        has_mark = true;
+    }
+
+    if (!mark_result_slot_publish(
+            &profile->pending_mark_result,
+            profile->mark_result_name_stride,
+            generation,
+            name.data, name.size,
+            marktime_ms, has_mark))
+        return VXML_INVALID_STRUCTURE;
+    return VXML_OK;
+}
+
 vxml_cmeta_prompt_media_ingress_result
 vxml_session_cmeta_prompt_media_try_complete(
     vxml_session *session,
