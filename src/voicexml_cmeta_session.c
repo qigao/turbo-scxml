@@ -462,6 +462,8 @@ static bool session_records_valid(
     const vxml_cmeta_program_data *program) {
     size_t index;
     if (program == NULL ||
+        (program->form_count != 0u && program->forms == NULL) ||
+        (program->scope_count != 0u && program->scopes == NULL) ||
         (program->record_count != 0u && program->records == NULL))
         return false;
     for (index = 0u; index < program->record_count; ++index) {
