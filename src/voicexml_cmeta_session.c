@@ -6330,7 +6330,7 @@ static vxml_status collect_request_from_impl(
         impl->profile_data == NULL)
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_initial != VXML_CMETA_NO_INDEX ||
         profile->active_menu != VXML_CMETA_NO_INDEX)
         return VXML_INVALID_STATE;
