@@ -275,6 +275,10 @@ vxml_status vxml_session_start_at_form(
     impl->navigation_uri_size = 0u;
     impl->navigation_fetchaudio_uri = NULL;
     impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_has_fetchaudio_delay = false;
+    impl->navigation_fetchaudio_delay_us = UINT64_C(0);
+    impl->navigation_has_fetchaudio_minimum = false;
+    impl->navigation_fetchaudio_minimum_us = UINT64_C(0);
     impl->submit_uri = NULL;
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
