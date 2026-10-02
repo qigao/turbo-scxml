@@ -4685,6 +4685,8 @@ vxml_session_cmeta_record_try_complete(
     if (completion->has_termchar) {
         if (!record_termchar_valid(completion->termchar))
             return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
+        if (!record->dtmf_term)
+            return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
     } else if (completion->termchar != '\0') {
         return VXML_CMETA_RECORD_INGRESS_INVALID_ARGUMENT;
     }
@@ -4715,6 +4717,8 @@ vxml_session_cmeta_record_try_complete(
             return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
         break;
     case VXML_CMETA_RECORD_OUTCOME_TERMCHAR:
+        if (!record->dtmf_term)
+            return VXML_CMETA_RECORD_INGRESS_INCOMPATIBLE_RESULT;
         if (!completion->has_termchar ||
             !record_completion_empty_recording(completion) ||
             completion->media_type.data != NULL ||
@@ -7690,6 +7694,9 @@ vxml_status vxml_session_cmeta_record_run_ready(
     }
 
     transaction_commit(profile, program);
+    reset_owner_retry_counters(
+        profile, VXML_CMETA_EVENT_RECORD,
+        profile->active_record);
     {
         const bool retained =
             profile->committed_scopes[form->scope].view.bound != NULL &&
