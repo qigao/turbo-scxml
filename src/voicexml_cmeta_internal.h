@@ -280,7 +280,11 @@ typedef enum vxml_cmeta_expression_source_kind {
     VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_SIZE,
     VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_DURATION,
     VXML_CMETA_EXPRESSION_FIELD_RECORDING_SIZE,
-    VXML_CMETA_EXPRESSION_FIELD_RECORDING_DURATION
+    VXML_CMETA_EXPRESSION_FIELD_RECORDING_DURATION,
+    VXML_CMETA_EXPRESSION_LASTRESULT_MARK_NAME,
+    VXML_CMETA_EXPRESSION_LASTRESULT_MARK_TIME,
+    VXML_CMETA_EXPRESSION_FIELD_MARK_NAME,
+    VXML_CMETA_EXPRESSION_FIELD_MARK_TIME
 } vxml_cmeta_expression_source_kind;
 
 typedef struct vxml_cmeta_expression_row {
@@ -414,6 +418,7 @@ typedef struct vxml_cmeta_program_data {
     vxml_cmeta_prompt_mark_expr_row *prompt_mark_exprs;
     size_t prompt_mark_expr_count;
     size_t max_dynamic_mark_name_bytes;
+    size_t max_mark_result_name_bytes;
     vxml_cmeta_prompt_media_fallback_v1 *prompt_fallbacks;
     size_t prompt_fallback_count;
     vxml_cmeta_filled_row *filled;
@@ -557,6 +562,15 @@ typedef struct vxml_cmeta_field_recording_shadow {
     uint64_t duration_ms;
 } vxml_cmeta_field_recording_shadow;
 
+typedef struct vxml_cmeta_mark_result_slot {
+    bool assigned;
+    bool has_mark;
+    uint64_t generation;
+    char *name;
+    size_t name_size;
+    uint64_t marktime_ms;
+} vxml_cmeta_mark_result_slot;
+
 typedef enum vxml_cmeta_prompt_media_mailbox_state {
     VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED = 0,
     VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY,
@@ -570,6 +584,8 @@ typedef struct vxml_cmeta_prompt_media_mailbox {
     atomic_uint_fast64_t generation;
     vxml_cmeta_prompt_media_outcome outcome;
     vxml_cmeta_prompt_media_failure failure;
+    bool has_terminal_timing;
+    uint64_t terminal_elapsed_ms;
 } vxml_cmeta_prompt_media_mailbox;
 
 typedef enum vxml_cmeta_record_mailbox_state {
@@ -668,6 +684,14 @@ typedef struct vxml_cmeta_session_data {
     char *collect_utterance_result_media_type;
     vxml_cmeta_field_recording_shadow *field_recording_shadows;
     size_t field_recording_shadow_count;
+    vxml_cmeta_mark_result_slot pending_mark_result;
+    vxml_cmeta_mark_result_slot collect_mark_result;
+    vxml_cmeta_mark_result_slot *field_mark_shadows;
+    char *pending_mark_result_name;
+    char *collect_mark_result_name;
+    char *field_mark_name_storage;
+    size_t field_mark_shadow_count;
+    size_t mark_result_name_stride;
     vxml_cmeta_event_counter *event_counters;
     size_t event_counter_count;
     unsigned char *retry_reset_pending;
@@ -697,6 +721,8 @@ typedef struct vxml_cmeta_session_data {
     uint64_t prompt_media_barged_generation;
     uint64_t prompt_media_mark_generation;
     size_t prompt_media_last_mark_segment;
+    bool prompt_media_last_mark_has_elapsed;
+    uint64_t prompt_media_last_mark_elapsed_ms;
     char *prompt_media_last_mark_name;
     size_t prompt_media_last_mark_name_size;
     size_t prompt_media_last_mark_name_capacity;
