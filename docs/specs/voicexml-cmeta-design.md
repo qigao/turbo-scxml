@@ -569,3 +569,44 @@ Session buffer. There is one grammar activation scratch owner per Session; no
 network fetcher, SRGS parser, worker, queue, or second provider lifecycle is
 introduced.
 
+## VoiceXML 2.1 transfer type and consultation
+
+Issue #222 extends the existing transfer provider contract without changing the
+public request layout or completion mailbox.
+
+The compiler maps the standard VoiceXML 2.1 `type` values directly onto the
+existing transfer mode field:
+
+```text
+absent type + absent bridge -> BLIND
+bridge=false                -> BLIND
+bridge=true                 -> BRIDGE
+type=blind                  -> BLIND
+type=bridge                 -> BRIDGE
+type=consultation           -> CONSULTATION
+```
+
+`bridge` and `type` are mutually exclusive. VoiceXML 2.0 continues to reject
+`type`. The request ABI remains V1; consultation is an appended enum value plus
+one new capability bit.
+
+Consultation admission is fail-closed:
+
+- the provider must advertise `VXML_CMETA_TRANSFER_CAP_CONSULTATION`;
+- `connecttimeout` is projected through the existing timeout fields and
+  capability;
+- `maxtime` is parsed but not projected for consultation;
+- `transferaudio` remains independently capability-gated;
+- no fallback to blind or bridge is permitted.
+
+The existing generation-safe completion mailbox is reused. Consultation accepts
+the pre-connection result domain `near_end_disconnect`, `busy`,
+`network_busy`, `noanswer`, and `unknown`. A successful established
+consultation uses the existing `connection.disconnect.transfer` event path and
+does not synthesize a transfer result. The exact
+`error.unsupported.transfer.consultation` completion event is valid only for a
+consultation generation.
+
+No telephony backend, second transfer runtime, or compatibility fallback is
+introduced.
+
