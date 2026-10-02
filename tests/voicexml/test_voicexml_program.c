@@ -230,9 +230,11 @@ spec("VoiceXML program compiler") {
         it("lowers a local form fragment to an immutable form index") {
             static const char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='first'><block>"
-                "<goto next='#second' fetchaudio='wait.wav'/>"
-                "</block></form>"
+                "<property name='fetchaudio' value='default.wav'/>"
+                "<property name='fetchaudiodelay' value='250ms'/>"
+                "<form id='first'>"
+                "<property name='fetchaudiominimum' value='1.5s'/>"
+                "<block><goto next='#second'/></block></form>"
                 "<form id='second'><block><exit/></block></form>"
                 "</vxml>";
             vxml_program program = {0};
@@ -252,6 +254,16 @@ spec("VoiceXML program compiler") {
                 check_null(impl->actions[0].fetchaudio_uri);
                 check_equal(
                     impl->actions[0].fetchaudio_uri_size, (size_t)0u);
+                check_false(
+                    impl->actions[0].has_fetchaudio_delay);
+                check_equal(
+                    impl->actions[0].fetchaudio_delay_us,
+                    UINT64_C(0));
+                check_false(
+                    impl->actions[0].has_fetchaudio_minimum);
+                check_equal(
+                    impl->actions[0].fetchaudio_minimum_us,
+                    UINT64_C(0));
                 check_equal(impl->actions[1].kind, VXML_ACTION_EXIT);
             }
             vxml_program_destroy(&program);
@@ -280,12 +292,15 @@ spec("VoiceXML program compiler") {
         it("retains an external goto target in immutable Program storage") {
             char source[] =
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-                "<form id='a'><block>"
-                "<goto next='dialogs/next.vxml#target' "
-                "fetchaudio='media/wait.wav'/>"
-                "</block></form></vxml>";
+                "<property name='fetchaudio' value='media/default.wav'/>"
+                "<property name='fetchaudiodelay' value='250ms'/>"
+                "<form id='a'>"
+                "<property name='fetchaudio' value='media/form.wav'/>"
+                "<property name='fetchaudiominimum' value='1.5s'/>"
+                "<block><goto next='dialogs/next.vxml#target'/></block>"
+                "</form></vxml>";
             static const char target[] = "dialogs/next.vxml#target";
-            static const char fetchaudio[] = "media/wait.wav";
+            static const char fetchaudio[] = "media/form.wav";
             vxml_program program = {0};
             vxml_program_impl *impl;
 
@@ -308,6 +323,16 @@ spec("VoiceXML program compiler") {
                 check_equal(
                     impl->actions[0].fetchaudio_uri,
                     fetchaudio);
+                check_true(
+                    impl->actions[0].has_fetchaudio_delay);
+                check_equal(
+                    impl->actions[0].fetchaudio_delay_us,
+                    UINT64_C(250000));
+                check_true(
+                    impl->actions[0].has_fetchaudio_minimum);
+                check_equal(
+                    impl->actions[0].fetchaudio_minimum_us,
+                    UINT64_C(1500000));
                 check_true(
                     impl->actions[0].target_uri >= impl->storage);
                 check_true(
