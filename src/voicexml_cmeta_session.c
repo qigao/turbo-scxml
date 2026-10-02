@@ -10423,6 +10423,12 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
     profile->prompt_media_last_mark_segment = SIZE_MAX;
     profile->prompt_media_last_mark_name_size = 0u;
     atomic_store_explicit(
+        &profile->prompt_media_last_mark_elapsed_valid,
+        false, memory_order_release);
+    atomic_store_explicit(
+        &profile->prompt_media_last_mark_elapsed_ms,
+        UINT64_C(0), memory_order_relaxed);
+    atomic_store_explicit(
         &profile->prompt_media_mailbox.generation,
         profile->prompt_media_generation,
         memory_order_relaxed);
