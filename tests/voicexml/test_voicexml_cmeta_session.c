@@ -13369,6 +13369,7 @@ spec("VoiceXML CMeta session execution") {
         vxml_cmeta_session_options_v1 options =
             event_session_options(
                 &root, &collect_adapter, &collect_probe);
+        options.max_execution_steps = 32u;
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_cmeta_prompt_mark_progress_v2 progress = {
