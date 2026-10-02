@@ -5092,6 +5092,7 @@ static vxml_status cmeta_compile_field_schema(
 
     memset(out, 0, sizeof(*out));
     out->condition = VXML_CMETA_NO_INDEX;
+    out->grammar_expression = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
@@ -5211,12 +5212,18 @@ static vxml_status cmeta_compile_field_schema(
         salts_xml_attribute_location(cmeta_attribute(grammar, "type")),
         &out->grammar_type, &out->grammar_type_size);
     if (status != VXML_OK) goto done;
-    status = cmeta_retain_decoded_view(
-        builder,
-        salts_xml_attribute_value(cmeta_attribute(grammar, "src")),
-        salts_xml_attribute_location(cmeta_attribute(grammar, "src")),
-        &out->grammar_src, &out->grammar_src_size);
-    if (status != VXML_OK) goto done;
+    {
+        const salts_xml_attribute src =
+            cmeta_attribute(grammar, "src");
+        if (src.impl != NULL) {
+            status = cmeta_retain_decoded_view(
+                builder,
+                salts_xml_attribute_value(src),
+                salts_xml_attribute_location(src),
+                &out->grammar_src, &out->grammar_src_size);
+            if (status != VXML_OK) goto done;
+        }
+    }
 
     out->form = form_index;
     out->root_field = root_field_index;
@@ -5716,19 +5723,29 @@ static vxml_status cmeta_compile_form_grammar(
     vxml_cmeta_form_row *form) {
     const salts_xml_attribute type = cmeta_attribute(grammar, "type");
     const salts_xml_attribute src = cmeta_attribute(grammar, "src");
+    const salts_xml_attribute srcexpr =
+        cmeta_attribute(grammar, "srcexpr");
     vxml_status status;
+    form->grammar_expression = VXML_CMETA_NO_INDEX;
     status = cmeta_retain_decoded_view(
         builder, salts_xml_attribute_value(type),
         salts_xml_attribute_location(type),
         &form->grammar_type, &form->grammar_type_size);
     if (status != VXML_OK) return status;
-    status = cmeta_retain_decoded_view(
-        builder, salts_xml_attribute_value(src),
-        salts_xml_attribute_location(src),
-        &form->grammar_src, &form->grammar_src_size);
-    if (status != VXML_OK) return status;
+    if (src.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(src),
+            salts_xml_attribute_location(src),
+            &form->grammar_src, &form->grammar_src_size);
+        if (status != VXML_OK) return status;
+    } else if (srcexpr.impl == NULL) {
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(grammar),
+            "form-level grammar source changed between compiler passes");
+    }
     if (form->grammar_type_size == 0u ||
-        form->grammar_src_size == 0u ||
+        (src.impl != NULL && form->grammar_src_size == 0u) ||
         !cmeta_decoded_equal(
             (salts_xml_string_view){
                 form->grammar_type, form->grammar_type_size},
@@ -8952,6 +8969,30 @@ static vxml_status cmeta_lower_program(
                         scopes, 2u);
                     if (status != VXML_OK) return status;
                 } else if (cmeta_node_named(item, "grammar")) {
+                    const salts_xml_attribute srcexpr =
+                        cmeta_attribute(item, "srcexpr");
+                    if (srcexpr.impl != NULL) {
+                        if (form->grammar_expression !=
+                                VXML_CMETA_NO_INDEX)
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_INVALID_STRUCTURE,
+                                salts_xml_attribute_location(srcexpr),
+                                "form grammar srcexpr changed between passes");
+                        status = cmeta_append_expression(
+                            builder, srcexpr, scopes, 2u, false,
+                            &form->grammar_expression);
+                        if (status != VXML_OK) return status;
+                        if (cmeta_expression_value_kind(
+                                &builder->profile->expressions[
+                                    form->grammar_expression]) !=
+                                VXML_CMETA_VALUE_STRING)
+                            return cmeta_program_fail(
+                                builder->diagnostic,
+                                VXML_SEMANTIC_ERROR,
+                                salts_xml_attribute_location(srcexpr),
+                                "VoiceXML grammar srcexpr must produce STRING");
+                    }
                     continue;
                 } else if (cmeta_node_named(item, "initial")) {
                     vxml_cmeta_initial_row *initial;
@@ -9348,6 +9389,47 @@ static vxml_status cmeta_lower_program(
                             builder, cond, scopes, 2u, true,
                             &field->condition);
                         if (status != VXML_OK) return status;
+                    }
+                    {
+                        size_t nested_index;
+                        for (nested_index = 0u;
+                             nested_index <
+                                 salts_xml_node_child_count(item);
+                             ++nested_index) {
+                            const salts_xml_node nested =
+                                salts_xml_node_child_at(
+                                    item, nested_index);
+                            const salts_xml_attribute srcexpr =
+                                cmeta_attribute(nested, "srcexpr");
+                            if (!cmeta_node_named(
+                                    nested, "grammar") ||
+                                srcexpr.impl == NULL)
+                                continue;
+                            if (field->grammar_expression !=
+                                    VXML_CMETA_NO_INDEX)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_INVALID_STRUCTURE,
+                                    salts_xml_attribute_location(
+                                        srcexpr),
+                                    "field grammar srcexpr changed between passes");
+                            status = cmeta_append_expression(
+                                builder, srcexpr, scopes, 2u,
+                                false,
+                                &field->grammar_expression);
+                            if (status != VXML_OK) return status;
+                            if (cmeta_expression_value_kind(
+                                    &builder->profile->expressions[
+                                        field->grammar_expression]) !=
+                                    VXML_CMETA_VALUE_STRING)
+                                return cmeta_program_fail(
+                                    builder->diagnostic,
+                                    VXML_SEMANTIC_ERROR,
+                                    salts_xml_attribute_location(
+                                        srcexpr),
+                                    "VoiceXML grammar srcexpr must produce STRING");
+                            break;
+                        }
                     }
                     {
                         size_t nested_index;
