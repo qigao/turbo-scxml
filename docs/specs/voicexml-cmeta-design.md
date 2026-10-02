@@ -474,3 +474,59 @@ does not get a shadow re-created after commit. Session close releases the
 current owner lease exactly once and invalidates every borrowed recording
 reference.
 
+## VoiceXML 2.1 timed mark result metadata
+
+Issue #216 completes the result half of the mark extension without adding a
+runtime clock. The media provider owns the playback timeline and reports
+monotonic elapsed milliseconds through append-only V2 observation records:
+
+```text
+mark V2       { generation, segment_index, playback_elapsed_ms }
+terminal V2   { generation, outcome, playback_elapsed_ms }
+barge V2      { generation, signal_type, playback_elapsed_ms }
+```
+
+TurboSCXML computes:
+
+```text
+marktime = terminal_or_barge_elapsed_ms - last_mark_elapsed_ms
+```
+
+only after the generation and mailbox state have been validated. A terminal
+observation earlier than the last accepted mark is rejected with no state
+mutation. Once terminal ingress has claimed the mailbox, later mark progress is
+stale and cannot change the result.
+
+V1 mark/completion/barge APIs remain source and ABI compatible. Because V1 does
+not carry a playback timeline, a V1 terminal observation deliberately publishes
+`markname` and `marktime` as undefined rather than guessing a duration.
+
+A valid V2 completion or barge publishes one bounded Session-owned application
+result. Literal and dynamic mark names are copied into that result snapshot;
+the queue-time dynamic-name storage can therefore be reused by a later prompt
+without changing an already published result.
+
+The exact VoiceXML paths
+
+```text
+application.lastresult$.markname
+application.lastresult$.marktime
+<field-name>$.markname
+<field-name>$.marktime
+```
+
+are lowered before the generic CMeta lexer, exactly like recorded-utterance
+shadows. `markname` is STRING, `marktime` is an unsigned millisecond value,
+and absent mark metadata is typed undefined. Compound expressions containing
+`$` are still outside the generic CMeta grammar.
+
+When a collect generation commits, matching filled input fields snapshot that
+generation's application mark result. A later prompt may replace application
+metadata without rewriting an already-filled field shadow. Transactional
+`clear` removes the field snapshot, and a new recognition with no matching
+timed prompt result clears stale application mark metadata rather than carrying
+it across collect generations.
+
+No timing thread, wall-clock read, sleep, or timer is introduced in the
+VoiceXML runtime.
+
