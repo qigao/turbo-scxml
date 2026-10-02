@@ -40,7 +40,8 @@ typedef enum vxml_cmeta_form_item_kind {
     VXML_CMETA_FORM_ITEM_FIELD = 1,
     VXML_CMETA_FORM_ITEM_INITIAL,
     VXML_CMETA_FORM_ITEM_SUBDIALOG,
-    VXML_CMETA_FORM_ITEM_RECORD
+    VXML_CMETA_FORM_ITEM_RECORD,
+    VXML_CMETA_FORM_ITEM_TRANSFER
 } vxml_cmeta_form_item_kind;
 
 typedef struct vxml_cmeta_form_item_row {
@@ -110,6 +111,27 @@ typedef struct vxml_cmeta_record_row {
     size_t filled;
 } vxml_cmeta_record_row;
 
+typedef struct vxml_cmeta_transfer_row {
+    size_t form;
+    size_t form_item_slot;
+    const char *name;
+    size_t name_size;
+    const char *destination;
+    size_t destination_size;
+    size_t condition;
+    vxml_cmeta_transfer_mode mode;
+    bool has_connect_timeout;
+    uint64_t connect_timeout_us;
+    uint64_t max_connect_timeout_us;
+    bool has_maxtime;
+    uint64_t maxtime_us;
+    uint64_t max_duration_us;
+    const char *transfer_audio;
+    size_t transfer_audio_size;
+    uint64_t required_capabilities;
+    size_t filled;
+} vxml_cmeta_transfer_row;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
@@ -122,6 +144,8 @@ typedef struct vxml_cmeta_form_row {
     size_t subdialog_count;
     size_t first_record;
     size_t record_count;
+    size_t first_transfer;
+    size_t transfer_count;
     size_t first_item;
     size_t item_count;
     size_t first_filled;
@@ -272,7 +296,8 @@ typedef enum vxml_cmeta_event_scope_kind {
     VXML_CMETA_EVENT_FIELD,
     VXML_CMETA_EVENT_INITIAL,
     VXML_CMETA_EVENT_SUBDIALOG,
-    VXML_CMETA_EVENT_RECORD
+    VXML_CMETA_EVENT_RECORD,
+    VXML_CMETA_EVENT_TRANSFER
 } vxml_cmeta_event_scope_kind;
 
 typedef struct vxml_cmeta_event_handler_row {
@@ -354,6 +379,8 @@ typedef struct vxml_cmeta_program_data {
     size_t subdialog_param_count;
     vxml_cmeta_record_row *records;
     size_t record_count;
+    vxml_cmeta_transfer_row *transfers;
+    size_t transfer_count;
     vxml_cmeta_form_item_row *form_items;
     size_t form_item_count;
     vxml_cmeta_prompt_row *prompts;
@@ -562,6 +589,15 @@ typedef struct vxml_cmeta_session_data {
     char *record_result_media_storage;
     size_t record_result_count;
     size_t record_result_media_stride;
+
+    size_t active_transfer;
+    uint64_t transfer_generation;
+    uint64_t transfer_quiesced_generation;
+    const vxml_cmeta_transfer_adapter_v1 *transfer_adapter;
+    void *transfer_user;
+    vxml_cmeta_transfer_ticket_v1 transfer_ticket;
+    bool transfer_prepared;
+    bool transfer_in_flight;
 
     size_t active_menu;
     size_t active_block;
