@@ -279,9 +279,8 @@ typedef struct vxml_cmeta_record_adapter_v1 {
     void (*cancel)(void *user, uint64_t generation);
 
     /*
-     * Owner teardown barrier for one committed generation. This may block and
-     * returns only after no provider callback for the generation can still
-     * enter TurboSCXML.
+     * Owner generation barrier. This may block and returns only after no
+     * provider callback for the generation can still enter TurboSCXML.
      */
     void (*quiesce)(void *user, uint64_t generation);
 } vxml_cmeta_record_adapter_v1;
