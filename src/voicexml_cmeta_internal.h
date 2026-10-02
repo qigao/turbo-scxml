@@ -269,9 +269,20 @@ typedef struct vxml_cmeta_declaration_row {
     salts_xml_location location;
 } vxml_cmeta_declaration_row;
 
+typedef enum vxml_cmeta_expression_source_kind {
+    VXML_CMETA_EXPRESSION_GENERIC = 0,
+    VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_SIZE,
+    VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_DURATION,
+    VXML_CMETA_EXPRESSION_FIELD_RECORDING_SIZE,
+    VXML_CMETA_EXPRESSION_FIELD_RECORDING_DURATION
+} vxml_cmeta_expression_source_kind;
+
 typedef struct vxml_cmeta_expression_row {
     vxml_cmeta_expr_program program;
     salts_xml_location location;
+    vxml_cmeta_expression_source_kind source_kind;
+    vxml_cmeta_value_kind value_kind;
+    size_t source_field;
 } vxml_cmeta_expression_row;
 
 typedef struct vxml_cmeta_location_candidate_row {
@@ -521,12 +532,21 @@ typedef struct vxml_cmeta_collect_mailbox {
 
 typedef struct vxml_cmeta_collect_utterance_result_slot {
     bool live;
+    uint64_t generation;
     uint64_t duration_us;
     char *media_type;
     size_t media_type_size;
     size_t media_type_capacity;
     vxml_cmeta_recording_lease_v1 recording;
 } vxml_cmeta_collect_utterance_result_slot;
+
+typedef struct vxml_cmeta_field_recording_shadow {
+    bool assigned;
+    bool has_recording;
+    uint64_t generation;
+    size_t size;
+    uint64_t duration_ms;
+} vxml_cmeta_field_recording_shadow;
 
 typedef enum vxml_cmeta_prompt_media_mailbox_state {
     VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED = 0,
@@ -634,8 +654,11 @@ typedef struct vxml_cmeta_session_data {
     uint64_t collect_quiesced_generation;
     vxml_cmeta_collect_mailbox collect_mailbox;
     size_t max_collect_recording_bytes;
+    uint64_t collect_lastresult_generation;
     vxml_cmeta_collect_utterance_result_slot collect_utterance_result;
     char *collect_utterance_result_media_type;
+    vxml_cmeta_field_recording_shadow *field_recording_shadows;
+    size_t field_recording_shadow_count;
     vxml_cmeta_event_counter *event_counters;
     size_t event_counter_count;
     unsigned char *retry_reset_pending;
