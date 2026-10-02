@@ -120,6 +120,9 @@ int main(void) {
         .abi_version = VXML_CMETA_COLLECT_UTTERANCE_RESULT_VIEW_ABI_V1,
         .struct_size =
             sizeof(vxml_cmeta_collect_utterance_result_view_v1)};
+    vxml_cmeta_recording_ref_view_v1 recording_shadow = {
+        .abi_version = VXML_CMETA_RECORDING_REF_VIEW_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_recording_ref_view_v1)};
     vxml_cmeta_collect_adapter_v1 collect_adapter = {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
@@ -240,6 +243,14 @@ int main(void) {
         const vxml_session *,
         vxml_cmeta_collect_utterance_result_view_v1 *) =
         vxml_session_cmeta_collect_utterance_result;
+    vxml_status (*query_recording_shadow_value)(
+        const vxml_session *, const char *, size_t,
+        vxml_cmeta_value_view *) =
+        vxml_session_cmeta_recording_shadow_value;
+    vxml_status (*query_recording_shadow)(
+        const vxml_session *, const char *, size_t,
+        vxml_cmeta_recording_ref_view_v1 *) =
+        vxml_session_cmeta_recording_shadow;
     vxml_status (*query_menu)(
         const vxml_session *, vxml_cmeta_menu_collect_request_v1 *) =
         vxml_session_cmeta_menu_collect_request;
@@ -303,6 +314,10 @@ int main(void) {
         subdialog_ticket.commit != NULL ||
         query_collect_v2 == NULL || complete_collect_v3 == NULL ||
         query_collect_utterance == NULL ||
+        query_recording_shadow_value == NULL ||
+        query_recording_shadow == NULL ||
+        recording_shadow.abi_version !=
+            VXML_CMETA_RECORDING_REF_VIEW_ABI_V1 ||
         query_menu == NULL || query_menu_v2 == NULL ||
         query_initial == NULL || complete_menu == NULL ||
         VXML_CMETA_PROMPT_MEDIA_CAP_MARK == 0u ||
