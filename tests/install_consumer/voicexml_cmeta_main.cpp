@@ -64,6 +64,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_transfer_adapter_v1>::value,
     "transfer adapter must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_cmeta_transfer_completion_v1>::value,
+    "transfer completion must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_request_v1>::value,
     "subdialog request must remain C-compatible");
 static_assert(
@@ -181,6 +184,7 @@ int main() {
     vxml_cmeta_transfer_request_v1 transfer_request{};
     vxml_cmeta_transfer_ticket_v1 transfer_ticket{};
     vxml_cmeta_transfer_adapter_v1 transfer_adapter{};
+    vxml_cmeta_transfer_completion_v1 transfer_completion{};
     vxml_cmeta_subdialog_request_v1 subdialog_request{};
     vxml_cmeta_child_entry_v1 child_entry{};
     vxml_cmeta_subdialog_result_entry_v1 subdialog_result{};
@@ -240,6 +244,8 @@ int main() {
     auto prepare_transfer = &vxml_session_cmeta_transfer_prepare;
     auto commit_transfer = &vxml_session_cmeta_transfer_commit;
     auto discard_transfer = &vxml_session_cmeta_transfer_discard;
+    auto complete_transfer = &vxml_session_cmeta_transfer_try_complete;
+    auto run_transfer_completion = &vxml_session_cmeta_transfer_run_ready;
     auto prepare_subdialog = &vxml_session_cmeta_subdialog_prepare;
     auto commit_subdialog = &vxml_session_cmeta_subdialog_commit;
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
@@ -274,6 +280,13 @@ int main() {
     transfer_request.struct_size = sizeof(transfer_request);
     transfer_adapter.abi_version = VXML_CMETA_TRANSFER_ADAPTER_ABI_V1;
     transfer_adapter.struct_size = sizeof(transfer_adapter);
+    transfer_completion.abi_version =
+        VXML_CMETA_TRANSFER_COMPLETION_ABI_V1;
+    transfer_completion.struct_size = sizeof(transfer_completion);
+    transfer_completion.kind =
+        VXML_CMETA_TRANSFER_COMPLETION_RESULT;
+    transfer_completion.result =
+        VXML_CMETA_TRANSFER_RESULT_UNKNOWN;
     subdialog_request.abi_version = VXML_CMETA_SUBDIALOG_REQUEST_ABI_V1;
     subdialog_request.struct_size = sizeof(subdialog_request);
     child_entry.abi_version = VXML_CMETA_CHILD_ENTRY_ABI_V1;
@@ -342,10 +355,19 @@ int main() {
         VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
         query_transfer == nullptr || prepare_transfer == nullptr ||
         commit_transfer == nullptr || discard_transfer == nullptr ||
+        complete_transfer == nullptr ||
+        run_transfer_completion == nullptr ||
         transfer_request.abi_version !=
             VXML_CMETA_TRANSFER_REQUEST_ABI_V1 ||
         transfer_adapter.abi_version !=
             VXML_CMETA_TRANSFER_ADAPTER_ABI_V1 ||
+        transfer_completion.abi_version !=
+            VXML_CMETA_TRANSFER_COMPLETION_ABI_V1 ||
+        transfer_completion.kind !=
+            VXML_CMETA_TRANSFER_COMPLETION_RESULT ||
+        transfer_completion.result !=
+            VXML_CMETA_TRANSFER_RESULT_UNKNOWN ||
+        VXML_CMETA_TRANSFER_INGRESS_ACCEPTED != 0 ||
         transfer_ticket.commit != nullptr ||
         VXML_CMETA_TRANSFER_CAP_BLIND == 0u ||
         VXML_CMETA_TRANSFER_CAP_BRIDGE == 0u ||

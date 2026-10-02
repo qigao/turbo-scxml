@@ -38,6 +38,7 @@ extern "C" {
 #define VXML_CMETA_RECORD_RESULT_VIEW_ABI_V1 1u
 #define VXML_CMETA_TRANSFER_REQUEST_ABI_V1 1u
 #define VXML_CMETA_TRANSFER_ADAPTER_ABI_V1 1u
+#define VXML_CMETA_TRANSFER_COMPLETION_ABI_V1 1u
 
 #define VXML_CMETA_COLLECT_CAP_SRGS_XML UINT64_C(1)
 #define VXML_CMETA_COLLECT_CAP_MENU_CHOICE UINT64_C(2)
@@ -433,6 +434,54 @@ typedef struct vxml_cmeta_transfer_adapter_v1 {
     /** Generation barrier; returns after callbacks for generation are stopped. */
     void (*quiesce)(void *user, uint64_t generation);
 } vxml_cmeta_transfer_adapter_v1;
+
+typedef enum vxml_cmeta_transfer_result {
+    VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT = 1,
+    VXML_CMETA_TRANSFER_RESULT_BUSY,
+    VXML_CMETA_TRANSFER_RESULT_NETWORK_BUSY,
+    VXML_CMETA_TRANSFER_RESULT_NOANSWER,
+    VXML_CMETA_TRANSFER_RESULT_MAXTIME_DISCONNECT,
+    VXML_CMETA_TRANSFER_RESULT_NETWORK_DISCONNECT,
+    VXML_CMETA_TRANSFER_RESULT_FAR_END_DISCONNECT,
+    VXML_CMETA_TRANSFER_RESULT_UNKNOWN
+} vxml_cmeta_transfer_result;
+
+typedef enum vxml_cmeta_transfer_completion_kind {
+    VXML_CMETA_TRANSFER_COMPLETION_RESULT = 1,
+    VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_HANGUP,
+    VXML_CMETA_TRANSFER_COMPLETION_DISCONNECT_TRANSFER,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_NOAUTHORIZATION,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_BADDESTINATION,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_NOROUTE,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_NORESOURCE,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_PROTOCOL,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_BLIND,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_BRIDGE,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_CONSULTATION,
+    VXML_CMETA_TRANSFER_COMPLETION_ERROR_UNSUPPORTED_URI
+} vxml_cmeta_transfer_completion_kind;
+
+/*
+ * Provider completion contains no borrowed data. protocol_code is meaningful
+ * only for ERROR_PROTOCOL and is rendered as error.connection.protocol.NNN.
+ */
+typedef struct vxml_cmeta_transfer_completion_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_transfer_completion_kind kind;
+    vxml_cmeta_transfer_result result;
+    unsigned protocol_code;
+} vxml_cmeta_transfer_completion_v1;
+
+typedef enum vxml_cmeta_transfer_ingress_result {
+    VXML_CMETA_TRANSFER_INGRESS_ACCEPTED = 0,
+    VXML_CMETA_TRANSFER_INGRESS_FULL,
+    VXML_CMETA_TRANSFER_INGRESS_CLOSED,
+    VXML_CMETA_TRANSFER_INGRESS_STALE,
+    VXML_CMETA_TRANSFER_INGRESS_INCOMPATIBLE_RESULT,
+    VXML_CMETA_TRANSFER_INGRESS_INVALID_ARGUMENT
+} vxml_cmeta_transfer_ingress_result;
 
 
 typedef enum vxml_cmeta_subdialog_param_source {
@@ -1141,6 +1190,23 @@ vxml_status vxml_session_cmeta_transfer_commit(vxml_session *session);
 
 /** Discard the currently prepared transfer provider ticket. */
 vxml_status vxml_session_cmeta_transfer_discard(vxml_session *session);
+
+/**
+ * MPSC admission of one generation-scoped transfer completion.
+ * ACCEPTED publishes exactly one owner-visible completion; every other return
+ * leaves the active generation unchanged.
+ */
+vxml_cmeta_transfer_ingress_result
+vxml_session_cmeta_transfer_try_complete(
+    vxml_session *session,
+    const vxml_cmeta_transfer_completion_v1 *completion);
+
+/**
+ * Single-owner settlement of one accepted transfer completion.
+ */
+vxml_status vxml_session_cmeta_transfer_run_ready(
+    vxml_session *session,
+    bool *out_progressed);
 
 /** Borrow the currently selected directed-field collect request. */
 vxml_status vxml_session_cmeta_collect_request(

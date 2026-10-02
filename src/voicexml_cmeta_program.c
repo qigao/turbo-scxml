@@ -10,6 +10,168 @@
 
 #define VXML_NAMESPACE "http://www.w3.org/2001/vxml"
 
+typedef uint8_t vxml_cmeta_transfer_result_storage;
+
+static const cmeta_type_traits transfer_result_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+
+static const cmeta_type_identity transfer_result_identity =
+    CMETA_TYPE_ID_ATOM_INIT("qigao.turboscxml.voicexml.transfer.result");
+
+static const cmeta_type_desc transfer_result_type = {
+    .name = "vxml_cmeta_transfer_result_storage",
+    .size = sizeof(vxml_cmeta_transfer_result_storage),
+    .align = _Alignof(vxml_cmeta_transfer_result_storage),
+    .kind = CMETA_T_OBJECT,
+    .traits = &transfer_result_traits,
+    .identity = &transfer_result_identity
+};
+
+static const cmeta_data_buffer_shape transfer_result_shape = {
+    .ownership = CMETA_DATA_BUFFER_OWNED
+};
+
+bool vxml_cmeta_transfer_result_name(
+    vxml_cmeta_transfer_result result,
+    vxml_cmeta_name_view *out) {
+    const char *name = NULL;
+    size_t size = 0u;
+    if (out == NULL) return false;
+    *out = (vxml_cmeta_name_view){0};
+    switch (result) {
+    case VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT:
+        name = "near_end_disconnect";
+        size = sizeof("near_end_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_BUSY:
+        name = "busy";
+        size = sizeof("busy") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NETWORK_BUSY:
+        name = "network_busy";
+        size = sizeof("network_busy") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NOANSWER:
+        name = "noanswer";
+        size = sizeof("noanswer") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_MAXTIME_DISCONNECT:
+        name = "maxtime_disconnect";
+        size = sizeof("maxtime_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_NETWORK_DISCONNECT:
+        name = "network_disconnect";
+        size = sizeof("network_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_FAR_END_DISCONNECT:
+        name = "far_end_disconnect";
+        size = sizeof("far_end_disconnect") - 1u;
+        break;
+    case VXML_CMETA_TRANSFER_RESULT_UNKNOWN:
+        name = "unknown";
+        size = sizeof("unknown") - 1u;
+        break;
+    default:
+        return false;
+    }
+    *out = (vxml_cmeta_name_view){name, size};
+    return true;
+}
+
+static bool transfer_result_is_zero(const void *object) {
+    return object != NULL &&
+        *(const vxml_cmeta_transfer_result_storage *)object == 0u;
+}
+
+static cmeta_status transfer_result_assign(
+    void *object, const unsigned char *data,
+    size_t size, size_t max_bytes) {
+    vxml_cmeta_transfer_result result;
+    if (object == NULL || (size != 0u && data == NULL))
+        return CMETA_INVALID_ARGUMENT;
+    if (size > max_bytes)
+        return CMETA_CAPACITY_EXCEEDED;
+    for (result = VXML_CMETA_TRANSFER_RESULT_NEAR_END_DISCONNECT;
+         result <= VXML_CMETA_TRANSFER_RESULT_UNKNOWN;
+         result = (vxml_cmeta_transfer_result)((unsigned)result + 1u)) {
+        vxml_cmeta_name_view name = {0};
+        if (vxml_cmeta_transfer_result_name(result, &name) &&
+            name.size == size &&
+            memcmp(name.data, data, size) == 0) {
+            *(vxml_cmeta_transfer_result_storage *)object =
+                (vxml_cmeta_transfer_result_storage)result;
+            return CMETA_OK;
+        }
+    }
+    return CMETA_INVALID_ARGUMENT;
+}
+
+static void transfer_result_restore_zero(void *object) {
+    if (object != NULL)
+        *(vxml_cmeta_transfer_result_storage *)object = 0u;
+}
+
+static cmeta_status transfer_result_read(
+    const void *object,
+    const unsigned char **out_data,
+    size_t *out_size) {
+    vxml_cmeta_name_view name = {0};
+    const vxml_cmeta_transfer_result_storage value =
+        object != NULL
+            ? *(const vxml_cmeta_transfer_result_storage *)object
+            : 0u;
+    if (object == NULL || out_data == NULL || out_size == NULL)
+        return CMETA_INVALID_ARGUMENT;
+    *out_data = NULL;
+    *out_size = 0u;
+    if (value == 0u)
+        return CMETA_OK;
+    if (!vxml_cmeta_transfer_result_name(
+            (vxml_cmeta_transfer_result)value, &name))
+        return CMETA_CALLBACK_ERROR;
+    *out_data = (const unsigned char *)name.data;
+    *out_size = name.size;
+    return CMETA_OK;
+}
+
+static cmeta_status transfer_result_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    transfer_result_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void transfer_result_move(void *destination, void *source) {
+    if (destination == NULL || source == NULL) return;
+    *(vxml_cmeta_transfer_result_storage *)destination =
+        *(vxml_cmeta_transfer_result_storage *)source;
+    *(vxml_cmeta_transfer_result_storage *)source = 0u;
+}
+
+static const cmeta_data_buffer_ops transfer_result_buffer_ops = {
+    .struct_size = sizeof(cmeta_data_buffer_ops),
+    .abi_version = CMETA_DATA_BUFFER_OPS_ABI_VERSION,
+    .storage_type = &transfer_result_type,
+    .ownership = CMETA_DATA_BUFFER_OWNED,
+    .is_zero = transfer_result_is_zero,
+    .assign = transfer_result_assign,
+    .restore_zero = transfer_result_restore_zero,
+    .read = transfer_result_read,
+    .init_zero = transfer_result_init_zero,
+    .move = transfer_result_move
+};
+
+const cmeta_data_desc vxml_cmeta_transfer_result_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "qigao.turboscxml.voicexml.transfer.result.data",
+    .display_name = "VoiceXML transfer result",
+    .kind = CMETA_DATA_STRING,
+    .storage_type = &transfer_result_type,
+    .shape = &transfer_result_shape,
+    .buffer_ops = &transfer_result_buffer_ops
+};
+
 static bool cmeta_root_supported(const cmeta_data_desc *root) {
     const cmeta_data_struct_shape *shape;
     const cmeta_type_traits *traits;
@@ -690,7 +852,9 @@ static bool cmeta_transfer_options_valid(
         options->max_transfers != 0u &&
         options->max_transfer_uri_bytes != 0u &&
         options->max_transfer_connect_timeout_us != UINT64_C(0) &&
-        options->max_transfer_duration_us != UINT64_C(0);
+        options->max_transfer_duration_us != UINT64_C(0) &&
+        options->max_string_bytes >=
+            sizeof("near_end_disconnect") - 1u;
 }
 
 static bool cmeta_menu_target_options_valid(
@@ -769,12 +933,13 @@ static vxml_status cmeta_measure_event_name(
             "VoiceXML Event name decoding changed between passes");
     }
     decoded[decoded_size] = '\0';
-    if (!cmeta_location_path_valid(decoded, decoded_size, SIZE_MAX)) {
+    if (!vxml_cmeta_event_token_valid(
+            decoded, decoded_size)) {
         vxml_free(decoded);
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(attribute),
-            "VoiceXML Event name must be a dotted NCName path");
+            "VoiceXML Event must be one non-empty token without whitespace");
     }
     vxml_free(decoded);
     status = cmeta_measure_name(
@@ -4078,19 +4243,21 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form filled must follow all directed form items");
-            if (form_record_count != 0u ||
-                form_transfer_count != 0u)
+            if (form_record_count != 0u)
                 return cmeta_program_fail(
                     diagnostic, VXML_UNSUPPORTED_FEATURE,
                     salts_xml_node_location(child),
-                    "form-level filled targeting record/transfer is deferred until owned result completion exists");
-            if (form_field_count > SIZE_MAX - form_subdialog_count)
+                    "form-level filled targeting record is deferred until record result variables join the form scope");
+            if (form_field_count > SIZE_MAX - form_subdialog_count ||
+                form_field_count + form_subdialog_count >
+                    SIZE_MAX - form_transfer_count)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
                     "VoiceXML filled default target count overflow");
             result_target_count =
-                form_field_count + form_subdialog_count;
+                form_field_count + form_subdialog_count +
+                form_transfer_count;
             saw_filled = true;
             {
                 const vxml_status filled_status =
@@ -4377,6 +4544,7 @@ typedef struct cmeta_program_builder {
     size_t prompt_fallback_index;
     size_t filled_index;
     size_t filled_target_index;
+    size_t filled_transfer_target_index;
     size_t event_handler_index;
     size_t block_index;
     size_t declaration_index;
@@ -4437,6 +4605,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->actions);
     vxml_free(profile->declarations);
     vxml_free(profile->event_handlers);
+    vxml_free(profile->filled_transfer_targets);
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->prompt_fallbacks);
@@ -4512,6 +4681,8 @@ static bool cmeta_allocate_rows(
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
+    profile->filled_transfer_target_count =
+        measurement->filled_target_count;
     profile->event_handler_count = measurement->event_handler_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
@@ -4566,6 +4737,8 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
+    CMETA_ALLOC_ROWS(
+        filled_transfer_targets, measurement->filled_target_count);
     CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
@@ -6441,6 +6614,7 @@ static vxml_status cmeta_register_transfer_item(
         return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
     out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->result_slot = VXML_CMETA_NO_INDEX;
     out->condition = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
 
@@ -6534,6 +6708,32 @@ static vxml_status cmeta_register_transfer_item(
         salts_xml_attribute_location(name_attribute),
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
+
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &vxml_cmeta_transfer_result_data)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer result slot exceeds form scope bounds");
+        goto done;
+    }
+    conflict = false;
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            out->name, out->name_size,
+            &vxml_cmeta_transfer_result_data,
+            &out->result_slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(name_attribute),
+            conflict ? "VoiceXML transfer result slot type conflict"
+                     : "VoiceXML transfer result slot allocation failed");
+        goto done;
+    }
 
     written = snprintf(
         control_name, sizeof(control_name),
@@ -6905,12 +7105,13 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->record_count;
-    if (capacity > SIZE_MAX - measurement->transfer_count)
+    if (measurement->transfer_count >
+            (SIZE_MAX - capacity) / 2u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
-    capacity += measurement->transfer_count;
+    capacity += measurement->transfer_count * 2u;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -8258,6 +8459,57 @@ static const vxml_cmeta_subdialog_row *cmeta_form_subdialog_by_name(
     return NULL;
 }
 
+static const vxml_cmeta_transfer_row *cmeta_form_transfer_by_name(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    salts_xml_string_view name,
+    size_t *out_transfer_index) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        !range_valid(
+            form->first_transfer, form->transfer_count,
+            program->transfer_count) ||
+        (form->transfer_count != 0u && program->transfers == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->transfer_count; ++offset) {
+        const size_t index = form->first_transfer + offset;
+        const vxml_cmeta_transfer_row *transfer =
+            &program->transfers[index];
+        if (transfer->name != NULL &&
+            transfer->name_size == name.size &&
+            memcmp(transfer->name, name.data, name.size) == 0) {
+            if (out_transfer_index != NULL)
+                *out_transfer_index = index;
+            return transfer;
+        }
+    }
+    return NULL;
+}
+
+static vxml_status cmeta_append_filled_transfer_target(
+    cmeta_program_builder *builder,
+    vxml_cmeta_filled_row *row,
+    size_t transfer_index,
+    salts_xml_location location) {
+    size_t index;
+    if (builder->filled_transfer_target_index >=
+        builder->profile->filled_transfer_target_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML filled transfer target rows changed between passes");
+    for (index = 0u; index < row->transfer_target_count; ++index) {
+        if (builder->profile->filled_transfer_targets[
+                row->first_transfer_target + index] == transfer_index)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE, location,
+                "VoiceXML filled namelist contains a duplicate transfer");
+    }
+    builder->profile->filled_transfer_targets[
+        builder->filled_transfer_target_index++] = transfer_index;
+    ++row->transfer_target_count;
+    return VXML_OK;
+}
+
 static vxml_status cmeta_append_filled_target(
     cmeta_program_builder *builder,
     vxml_cmeta_filled_row *row,
@@ -8292,6 +8544,9 @@ static vxml_status cmeta_lower_filled_targets(
     vxml_status status = VXML_OK;
     row->first_target = builder->filled_target_index;
     row->target_count = 0u;
+    row->first_transfer_target =
+        builder->filled_transfer_target_index;
+    row->transfer_target_count = 0u;
     if (namelist.impl == NULL) {
         size_t offset;
         for (offset = 0u; offset < form->field_count; ++offset) {
@@ -8312,7 +8567,14 @@ static vxml_status cmeta_lower_filled_targets(
                 salts_xml_node_location(node));
             if (status != VXML_OK) return status;
         }
-        return row->target_count != 0u
+        for (offset = 0u; offset < form->transfer_count; ++offset) {
+            status = cmeta_append_filled_transfer_target(
+                builder, row, form->first_transfer + offset,
+                salts_xml_node_location(node));
+            if (status != VXML_OK) return status;
+        }
+        return row->target_count != 0u ||
+                row->transfer_target_count != 0u
             ? VXML_OK
             : cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -8333,6 +8595,8 @@ static vxml_status cmeta_lower_filled_targets(
         while (cmeta_namelist_next(list, &cursor, &name)) {
             const vxml_cmeta_field_row *field;
             const vxml_cmeta_subdialog_row *subdialog;
+            const vxml_cmeta_transfer_row *transfer;
+            size_t transfer_index = VXML_CMETA_NO_INDEX;
             size_t root_field;
             if (!cmeta_is_ncname(name)) {
                 status = cmeta_program_fail(
@@ -8347,23 +8611,36 @@ static vxml_status cmeta_lower_filled_targets(
                 ? cmeta_form_subdialog_by_name(
                     builder->profile, form, name, NULL)
                 : NULL;
-            if (field == NULL && subdialog == NULL) {
+            transfer = field == NULL && subdialog == NULL
+                ? cmeta_form_transfer_by_name(
+                    builder->profile, form, name, &transfer_index)
+                : NULL;
+            if (field == NULL && subdialog == NULL &&
+                transfer == NULL) {
                 status = cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(namelist),
                     "VoiceXML filled namelist references an unknown result-bearing form item");
                 break;
             }
-            root_field = field != NULL
-                ? field->root_field : subdialog->root_field;
-            status = cmeta_append_filled_target(
-                builder, row, root_field,
-                salts_xml_attribute_location(namelist));
+            if (transfer != NULL)
+                status = cmeta_append_filled_transfer_target(
+                    builder, row, transfer_index,
+                    salts_xml_attribute_location(namelist));
+            else {
+                root_field = field != NULL
+                    ? field->root_field : subdialog->root_field;
+                status = cmeta_append_filled_target(
+                    builder, row, root_field,
+                    salts_xml_attribute_location(namelist));
+            }
             if (status != VXML_OK) break;
         }
         cmeta_decoded_value_destroy(&decoded);
     }
-    if (status == VXML_OK && row->target_count == 0u)
+    if (status == VXML_OK &&
+        row->target_count == 0u &&
+        row->transfer_target_count == 0u)
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(namelist),
@@ -8424,8 +8701,8 @@ static vxml_status cmeta_retain_event_attribute(
     if (status != VXML_OK) return status;
     if (decoded.view.size == 0u ||
         decoded.view.size > builder->options->max_event_name_bytes ||
-        !cmeta_location_path_valid(
-            decoded.view.data, decoded.view.size, SIZE_MAX)) {
+        !vxml_cmeta_event_token_valid(
+            decoded.view.data, decoded.view.size)) {
         cmeta_decoded_value_destroy(&decoded);
         return cmeta_program_fail(
             builder->diagnostic,
@@ -8949,7 +9226,7 @@ static vxml_status cmeta_lower_program(
             continue;
         }
         if (cmeta_node_named(child, "form")) {
-            const vxml_cmeta_form_row *form =
+            vxml_cmeta_form_row *form =
                 &builder->profile->forms[form_index];
             const vxml_cmeta_expr_compile_scope scopes[2] = {
                 {form->scope,
@@ -9641,7 +9918,16 @@ static vxml_status cmeta_write_program(
              measurement->prompt_mark_expr_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
          builder.filled_index != measurement->filled_count ||
-         builder.filled_target_index != measurement->filled_target_count ||
+         builder.filled_target_index >
+             measurement->filled_target_count ||
+         builder.filled_transfer_target_index >
+             measurement->filled_target_count ||
+         builder.filled_target_index >
+             measurement->filled_target_count -
+                 builder.filled_transfer_target_index ||
+         builder.filled_target_index +
+                 builder.filled_transfer_target_index !=
+             measurement->filled_target_count ||
          builder.event_handler_index != measurement->event_handler_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
@@ -9656,6 +9942,10 @@ static vxml_status cmeta_write_program(
             "VoiceXML CMeta document changed between compiler passes");
     if (status == VXML_OK) {
         profile->location_candidate_count = builder.candidate_index;
+        profile->filled_root_field_count =
+            builder.filled_target_index;
+        profile->filled_transfer_target_count =
+            builder.filled_transfer_target_index;
         profile->string_size = builder.string_index;
         impl->storage = profile->strings;
         impl->storage_size = profile->string_size;
