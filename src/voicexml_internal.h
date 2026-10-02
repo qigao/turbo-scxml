@@ -76,6 +76,10 @@ struct vxml_session_impl {
     size_t navigation_uri_size;
     const char *navigation_fetchaudio_uri;
     size_t navigation_fetchaudio_uri_size;
+    bool navigation_has_fetchaudio_delay;
+    uint64_t navigation_fetchaudio_delay_us;
+    bool navigation_has_fetchaudio_minimum;
+    uint64_t navigation_fetchaudio_minimum_us;
     const char *submit_uri;
     size_t submit_uri_size;
     vxml_submit_method submit_method;
