@@ -2736,16 +2736,22 @@ typedef struct resolved_location {
     vxml_cmeta_root_storage *root;
 } resolved_location;
 
-static vxml_status resolve_staged_location(
+static vxml_status resolve_location(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_location_row *location,
+    bool staged,
     resolved_location *out) {
+    const cmeta_data_struct_shape *root_shape;
     size_t index;
+    if (out == NULL) return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
-    if (location == NULL ||
+    if (session == NULL || program == NULL || location == NULL ||
         !range_valid(location->first_candidate, location->candidate_count,
                      program->location_candidate_count))
+        return VXML_INVALID_STRUCTURE;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL)
         return VXML_INVALID_STRUCTURE;
     for (index = 0u; index < location->candidate_count; ++index) {
         const vxml_cmeta_location_candidate_row *candidate =
@@ -2754,28 +2760,92 @@ static vxml_status resolve_staged_location(
         if (candidate->scope != VXML_CMETA_NO_INDEX) {
             unsigned char *declared;
             const cmeta_scope_schema *schema;
+            cmeta_scope_storage *storage;
             if (candidate->scope >= program->scope_count)
                 return VXML_INVALID_STRUCTURE;
             schema = &program->scopes[candidate->scope].schema;
             declared = session_declared(
-                session, program, true, candidate->scope);
+                session, program, staged, candidate->scope);
+            storage = staged
+                ? &session->staged_scopes[candidate->scope]
+                : &session->committed_scopes[candidate->scope];
             if (candidate->schema != schema ||
                 candidate->location.slot >= schema->slot_count ||
-                declared == NULL)
+                declared == NULL ||
+                !cmeta_scope_view_valid(&storage->view))
                 return VXML_INVALID_STRUCTURE;
             if (declared[candidate->location.slot] == 0u) continue;
             out->candidate = candidate;
-            out->scope = &session->staged_scopes[candidate->scope].view;
+            out->scope = &storage->view;
             return VXML_OK;
         }
-        if (candidate->root_field >=
-            session_root_shape(program)->field_count)
+        if (candidate->root_field >= root_shape->field_count)
             return VXML_INVALID_STRUCTURE;
         out->candidate = candidate;
-        out->root = &session->staged_root;
+        out->root = staged
+            ? &session->staged_root : &session->committed_root;
         return VXML_OK;
     }
     return VXML_SEMANTIC_ERROR;
+}
+
+static vxml_status read_location_object(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_location_row *location,
+    bool staged,
+    const cmeta_data_desc **out_value,
+    const void **out_object) {
+    const cmeta_data_struct_shape *root_shape;
+    resolved_location resolved;
+    bool bound;
+    vxml_status status;
+    if (out_value != NULL) *out_value = NULL;
+    if (out_object != NULL) *out_object = NULL;
+    if (session == NULL || program == NULL || location == NULL ||
+        out_value == NULL || out_object == NULL ||
+        location->value == NULL ||
+        location->value->storage_type == NULL)
+        return VXML_INVALID_ARGUMENT;
+    root_shape = session_root_shape(program);
+    if (root_shape == NULL)
+        return VXML_INVALID_STRUCTURE;
+    status = resolve_location(
+        session, program, location, staged, &resolved);
+    if (status != VXML_OK) return status;
+    if (resolved.candidate == NULL ||
+        resolved.candidate->location.value != location->value)
+        return VXML_INVALID_STRUCTURE;
+    if (resolved.scope != NULL) {
+        const cmeta_scope_slot *slot =
+            &resolved.scope->schema->slots[
+                resolved.candidate->location.slot];
+        const size_t offset = resolved.candidate->location.offset;
+        bound = resolved.scope->bound[
+            resolved.candidate->location.slot] != 0u;
+        if (slot->value == NULL ||
+            slot->value->storage_type == NULL ||
+            offset > slot->value->storage_type->size ||
+            location->value->storage_type->size >
+                slot->value->storage_type->size - offset)
+            return VXML_INVALID_STRUCTURE;
+        if (bound)
+            *out_object =
+                resolved.scope->storage + slot->offset + offset;
+    } else {
+        const size_t root_field = resolved.candidate->root_field;
+        const size_t offset = resolved.candidate->location.offset;
+        if (root_field >= root_shape->field_count ||
+            offset > program->root->storage_type->size ||
+            location->value->storage_type->size >
+                program->root->storage_type->size - offset)
+            return VXML_INVALID_STRUCTURE;
+        bound = resolved.root->bound[root_field] != 0u;
+        if (bound)
+            *out_object = resolved.root->storage + offset;
+    }
+    *out_value = location->value;
+    return VXML_OK;
 }
 
 static vxml_status read_staged_location_value(
@@ -2790,7 +2860,7 @@ static vxml_status read_staged_location_value(
     bool bound;
     vxml_status status;
     *out_value = (vxml_cmeta_value_view){0};
-    status = resolve_staged_location(session, program, location, &resolved);
+    status = resolve_location(session, program, location, true, &resolved);
     if (status != VXML_OK) return status;
     if (resolved.candidate->location.value != location->value)
         return VXML_INVALID_STRUCTURE;
@@ -2860,8 +2930,8 @@ static vxml_status assign_resolved_location(
     unsigned char *object;
     unsigned char *bound;
     bool direct;
-    vxml_status status = resolve_staged_location(
-        session, program, location, &resolved);
+    vxml_status status = resolve_location(
+        session, program, location, true, &resolved);
     if (status != VXML_OK) return status;
     target = resolved.candidate->location.value;
     if (target == NULL || target != location->value ||
@@ -3083,9 +3153,10 @@ static vxml_status execute_clear(
         return VXML_INVALID_STRUCTURE;
     for (index = 0u; index < action->location_count; ++index) {
         resolved_location resolved;
-        vxml_status status = resolve_staged_location(
+        vxml_status status = resolve_location(
             session, program,
-            &program->locations[action->first_location + index], &resolved);
+            &program->locations[action->first_location + index], true,
+            &resolved);
         if (status != VXML_OK) return status;
         if (resolved.scope != NULL) {
             cmeta_scope_view_clear_slot(
