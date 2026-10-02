@@ -1697,7 +1697,7 @@ static vxml_status cmeta_measure_prompt(
     static const char *const allowed[] = {
         "count", "cond", "bargein", "bargeintype", "timeout"};
     static const char *const audio_allowed[] = {"src"};
-    static const char *const mark_allowed[] = {"name"};
+    static const char *const mark_allowed[] = {"name", "nameexpr"};
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
     const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
     const salts_xml_attribute bargein =
@@ -1946,6 +1946,8 @@ static vxml_status cmeta_measure_prompt(
         if (cmeta_node_named(child, "mark")) {
             const salts_xml_attribute name =
                 cmeta_attribute(child, "name");
+            const salts_xml_attribute nameexpr =
+                cmeta_attribute(child, "nameexpr");
             size_t mark_name_bytes = 0u;
             if (!cmeta_measure_increment(&mark_count))
                 return cmeta_program_fail(
@@ -1953,37 +1955,67 @@ static vxml_status cmeta_measure_prompt(
                     salts_xml_node_location(child),
                     "VoiceXML prompt mark segment count overflow");
             status = cmeta_validate_attributes(
-                child, mark_allowed, 1u, diagnostic);
+                child, mark_allowed, 2u, diagnostic);
             if (status == VXML_OK)
                 status = cmeta_validate_empty_element(
                     child, diagnostic);
             if (status != VXML_OK) return status;
-            if (name.impl == NULL)
+            if ((name.impl == NULL) == (nameexpr.impl == NULL))
                 return cmeta_program_fail(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
-                    "VoiceXML mark requires literal name in this profile");
-            if (!cmeta_decode_entities(
-                    salts_xml_attribute_value(name),
-                    NULL, 0u, &mark_name_bytes))
-                return cmeta_program_fail(
-                    diagnostic, VXML_XML_ERROR,
-                    salts_xml_attribute_location(name),
-                    "VoiceXML mark name has an invalid XML reference");
-            if (mark_name_bytes == 0u)
-                return cmeta_program_fail(
-                    diagnostic, VXML_INVALID_STRUCTURE,
-                    salts_xml_attribute_location(name),
-                    "VoiceXML mark name must not be empty");
-            if (mark_name_bytes > options->max_prompt_bytes)
-                return cmeta_program_fail(
-                    diagnostic, VXML_LIMIT_EXCEEDED,
-                    salts_xml_attribute_location(name),
-                    "VoiceXML mark name exceeds max_prompt_bytes");
+                    "VoiceXML mark requires exactly one of name or nameexpr");
+
+            if (nameexpr.impl != NULL) {
+                const size_t tail_size =
+                    offsetof(
+                        vxml_cmeta_compile_options_v1,
+                        max_dynamic_mark_name_bytes) +
+                    sizeof(options->max_dynamic_mark_name_bytes);
+                if (!measurement->version_21)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_UNSUPPORTED_FEATURE,
+                        salts_xml_attribute_location(nameexpr),
+                        "VoiceXML mark nameexpr requires version 2.1");
+                if (options->struct_size < tail_size ||
+                    options->max_dynamic_mark_name_bytes == 0u)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_INVALID_CONTRACT,
+                        salts_xml_attribute_location(nameexpr),
+                        "VoiceXML mark nameexpr requires dynamic mark name bound");
+                if (!cmeta_measure_increment(
+                        &measurement->expression_count) ||
+                    !cmeta_measure_increment(
+                        &measurement->prompt_mark_expr_count))
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_attribute_location(nameexpr),
+                        "VoiceXML dynamic mark expression count overflow");
+                mark_name_bytes =
+                    options->max_dynamic_mark_name_bytes;
+            } else {
+                if (!cmeta_decode_entities(
+                        salts_xml_attribute_value(name),
+                        NULL, 0u, &mark_name_bytes))
+                    return cmeta_program_fail(
+                        diagnostic, VXML_XML_ERROR,
+                        salts_xml_attribute_location(name),
+                        "VoiceXML mark name has an invalid XML reference");
+                if (mark_name_bytes == 0u)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(name),
+                        "VoiceXML mark name must not be empty");
+                if (mark_name_bytes > options->max_prompt_bytes)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_attribute_location(name),
+                        "VoiceXML mark name exceeds max_prompt_bytes");
+            }
             if (mark_name_bytes > SIZE_MAX - total_prompt_bytes)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
-                    salts_xml_attribute_location(name),
+                    salts_xml_node_location(child),
                     "VoiceXML prompt total bytes overflow");
             total_prompt_bytes += mark_name_bytes;
             continue;
