@@ -4965,6 +4965,76 @@ static const char *cmeta_retain_view(
     return destination;
 }
 
+typedef struct cmeta_fetch_property_seen {
+    bool uri;
+    bool delay;
+    bool minimum;
+} cmeta_fetch_property_seen;
+
+static vxml_status cmeta_apply_fetchaudio_property(
+    cmeta_program_builder *builder,
+    salts_xml_node property,
+    vxml_cmeta_fetchaudio_policy *policy,
+    cmeta_fetch_property_seen *seen) {
+    const salts_xml_attribute name =
+        cmeta_attribute(property, "name");
+    const salts_xml_attribute value =
+        cmeta_attribute(property, "value");
+    vxml_status status;
+    if (builder == NULL || policy == NULL ||
+        seen == NULL || name.impl == NULL || value.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudio")) {
+        if (seen->uri)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudio property");
+        seen->uri = true;
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(value),
+            salts_xml_attribute_location(value),
+            &policy->uri, &policy->uri_size);
+        if (status != VXML_OK) return status;
+        return policy->uri_size != 0u
+            ? VXML_OK
+            : cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio must be non-empty");
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudiodelay")) {
+        if (seen->delay)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiodelay property");
+        seen->delay = true;
+        return cmeta_parse_prompt_timeout(
+            value, &policy->has_delay,
+            &policy->delay_us, builder->diagnostic);
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchaudiominimum")) {
+        if (seen->minimum)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiominimum property");
+        seen->minimum = true;
+        return cmeta_parse_prompt_timeout(
+            value, &policy->has_minimum,
+            &policy->minimum_us, builder->diagnostic);
+    }
+
+    return VXML_UNSUPPORTED_FEATURE;
+}
+
 typedef struct cmeta_decoded_value {
     salts_xml_string_view view;
     char *owned;
