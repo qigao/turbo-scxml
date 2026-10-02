@@ -4462,8 +4462,10 @@ static vxml_status select_directed_item(
             if (!eligible) continue;
             if (form->grammar_type == NULL ||
                 form->grammar_type_size == 0u ||
-                form->grammar_src == NULL ||
-                form->grammar_src_size == 0u ||
+                ((form->grammar_src == NULL ||
+                  form->grammar_src_size == 0u) ==
+                 (form->grammar_expression ==
+                  VXML_CMETA_NO_INDEX)) ||
                 form->grammar_required_capabilities == 0u)
                 return session_fail(session, VXML_INVALID_STRUCTURE);
             profile->active_initial = item->index;
