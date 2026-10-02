@@ -3217,6 +3217,200 @@ static vxml_status cmeta_measure_subdialog(
     return VXML_OK;
 }
 
+static vxml_status cmeta_record_bool(
+    salts_xml_attribute attribute, bool default_value,
+    const char *label, bool *out,
+    vxml_diagnostic *diagnostic) {
+    if (out == NULL) return VXML_INVALID_ARGUMENT;
+    *out = default_value;
+    if (attribute.impl == NULL) return VXML_OK;
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(attribute), "true")) {
+        *out = true;
+        return VXML_OK;
+    }
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(attribute), "false")) {
+        *out = false;
+        return VXML_OK;
+    }
+    return cmeta_program_fail(
+        diagnostic, VXML_INVALID_STRUCTURE,
+        salts_xml_attribute_location(attribute),
+        label);
+}
+
+static vxml_status cmeta_measure_record(
+    salts_xml_node record,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {
+        "name", "expr", "cond", "modal", "beep",
+        "maxtime", "finalsilence", "dtmfterm", "type"};
+    const salts_xml_attribute name = cmeta_attribute(record, "name");
+    const salts_xml_attribute expr = cmeta_attribute(record, "expr");
+    const salts_xml_attribute cond = cmeta_attribute(record, "cond");
+    const salts_xml_attribute modal = cmeta_attribute(record, "modal");
+    const salts_xml_attribute beep = cmeta_attribute(record, "beep");
+    const salts_xml_attribute maxtime = cmeta_attribute(record, "maxtime");
+    const salts_xml_attribute finalsilence =
+        cmeta_attribute(record, "finalsilence");
+    const salts_xml_attribute dtmfterm =
+        cmeta_attribute(record, "dtmfterm");
+    const salts_xml_attribute type = cmeta_attribute(record, "type");
+    bool modal_value = true;
+    bool ignored_bool = false;
+    bool has_maxtime = false;
+    bool has_finalsilence = false;
+    uint64_t maxtime_us = UINT64_C(0);
+    uint64_t finalsilence_us = UINT64_C(0);
+    size_t type_size = 0u;
+    size_t child_index;
+    size_t filled_count = 0u;
+    vxml_status status;
+
+    if (!cmeta_record_options_valid(options))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_CONTRACT,
+            salts_xml_node_location(record),
+            "VoiceXML record requires enabled record bounds");
+
+    status = cmeta_validate_attributes(
+        record, allowed, sizeof(allowed) / sizeof(allowed[0]),
+        diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(record),
+            "VoiceXML record requires name");
+    if (expr.impl != NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(expr),
+            "VoiceXML record expr is deferred in the bounded CMeta profile");
+
+    status = cmeta_record_bool(
+        modal, true,
+        "VoiceXML record modal must be true or false",
+        &modal_value, diagnostic);
+    if (status != VXML_OK) return status;
+    if (!modal_value)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(modal),
+            "VoiceXML record modal=false is deferred until non-local grammar activation exists");
+    status = cmeta_record_bool(
+        beep, false,
+        "VoiceXML record beep must be true or false",
+        &ignored_bool, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_record_bool(
+        dtmfterm, true,
+        "VoiceXML record dtmfterm must be true or false",
+        &ignored_bool, diagnostic);
+    if (status != VXML_OK) return status;
+
+    status = cmeta_parse_prompt_timeout(
+        maxtime, &has_maxtime, &maxtime_us, diagnostic);
+    if (status != VXML_OK) return status;
+    if (has_maxtime &&
+        maxtime_us > options->max_record_duration_us)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(maxtime),
+            "VoiceXML record maxtime exceeds max_record_duration_us");
+
+    status = cmeta_parse_prompt_timeout(
+        finalsilence, &has_finalsilence,
+        &finalsilence_us, diagnostic);
+    if (status != VXML_OK) return status;
+    if (has_finalsilence &&
+        finalsilence_us > options->max_record_final_silence_us)
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(finalsilence),
+            "VoiceXML record finalsilence exceeds max_record_final_silence_us");
+
+    status = cmeta_measure_name(
+        name, measurement, limits, diagnostic);
+    if (status != VXML_OK) return status;
+    if (type.impl != NULL) {
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(type), NULL, 0u,
+                &type_size))
+            return cmeta_program_fail(
+                diagnostic, VXML_XML_ERROR,
+                salts_xml_attribute_location(type),
+                "VoiceXML record type contains an invalid XML reference");
+        if (type_size == 0u ||
+            type_size > options->max_record_media_type_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(type),
+                "VoiceXML record type exceeds max_record_media_type_bytes");
+        status = cmeta_measure_name(
+            type, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+    }
+
+    if (cond.impl != NULL &&
+        !cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(cond),
+            "VoiceXML record cond count overflow");
+
+    for (child_index = 0u;
+         child_index < salts_xml_node_child_count(record);
+         ++child_index) {
+        const salts_xml_node child =
+            salts_xml_node_child_at(record, child_index);
+        if (cmeta_node_ignorable(child)) continue;
+        if (cmeta_node_named(child, "catch") ||
+            cmeta_node_named(child, "help") ||
+            cmeta_node_named(child, "noinput") ||
+            cmeta_node_named(child, "nomatch")) {
+            status = cmeta_measure_catch(
+                child, options, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
+        }
+        if (cmeta_node_named(child, "filled")) {
+            if (filled_count != 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML record accepts at most one filled handler");
+            ++filled_count;
+            status = cmeta_measure_filled_content(
+                child, false, 0u,
+                measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+            continue;
+        }
+        return cmeta_program_fail(
+            diagnostic,
+            cmeta_known_profile_element(child)
+                ? VXML_INVALID_STRUCTURE : VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(child),
+            cmeta_known_profile_element(child)
+                ? "VoiceXML element has invalid record placement"
+                : "unsupported VoiceXML record child element");
+    }
+
+    if (measurement->record_count >= options->max_records ||
+        !cmeta_measure_increment(&measurement->record_count) ||
+        !cmeta_measure_increment(&measurement->form_item_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(record),
+            "VoiceXML record/form-item count exceeds configured bounds");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_form(
     salts_xml_node form,
     const vxml_cmeta_compile_options_v1 *options,
