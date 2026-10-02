@@ -1868,6 +1868,32 @@ static vxml_status initialize_form(
         }
     }
 
+    if (!range_valid(
+            form->first_record, form->record_count,
+            program->record_count) ||
+        (form->record_count != 0u && program->records == NULL))
+        return VXML_INVALID_STRUCTURE;
+    {
+        size_t record_offset;
+        for (record_offset = 0u;
+             record_offset < form->record_count;
+             ++record_offset) {
+            const vxml_cmeta_record_row *record =
+                &program->records[
+                    form->first_record + record_offset];
+            unsigned char *form_declared;
+            if (record->form != form_index ||
+                record->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            form_declared = session_declared(
+                session, program, true, form->scope);
+            if (form_declared == NULL)
+                return VXML_INVALID_STRUCTURE;
+            form_declared[record->form_item_slot] = 1u;
+        }
+    }
+
     for (block_offset = 0u; block_offset < form->block_count; ++block_offset) {
         const size_t block_index = form->first_block + block_offset;
         const vxml_cmeta_block_row *block = &program->blocks[block_index];
@@ -2139,9 +2165,12 @@ static vxml_status execute_clear(
                          program->initial_count) ||
             !range_valid(form->first_subdialog, form->subdialog_count,
                          program->subdialog_count) ||
+            !range_valid(form->first_record, form->record_count,
+                         program->record_count) ||
             (form->field_count != 0u && program->fields == NULL) ||
             (form->initial_count != 0u && program->initials == NULL) ||
-            (form->subdialog_count != 0u && program->subdialogs == NULL))
+            (form->subdialog_count != 0u && program->subdialogs == NULL) ||
+            (form->record_count != 0u && program->records == NULL))
             return VXML_INVALID_STRUCTURE;
         for (index = 0u; index < form->block_count; ++index) {
             const vxml_cmeta_block_row *block =
@@ -2181,6 +2210,17 @@ static vxml_status execute_clear(
                 return VXML_INVALID_STRUCTURE;
             root_storage_clear_field(
                 &session->staged_root, program, subdialog->root_field);
+        }
+        for (index = 0u; index < form->record_count; ++index) {
+            const vxml_cmeta_record_row *record =
+                &program->records[form->first_record + index];
+            if (record->form != session->active_form ||
+                record->form_item_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            cmeta_scope_view_clear_slot(
+                &session->staged_scopes[form->scope].view,
+                record->form_item_slot);
         }
         return VXML_OK;
     }
@@ -3787,18 +3827,27 @@ static vxml_status cmeta_session_start_profile_at_entry(
                      program->initial_count) ||
         !range_valid(form->first_subdialog, form->subdialog_count,
                      program->subdialog_count) ||
+        !range_valid(form->first_record, form->record_count,
+                     program->record_count) ||
         !range_valid(form->first_item, form->item_count,
                      program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
+        form->field_count > SIZE_MAX - form->initial_count ||
+        form->field_count + form->initial_count >
+            SIZE_MAX - form->subdialog_count ||
+        form->field_count + form->initial_count +
+            form->subdialog_count >
+            SIZE_MAX - form->record_count ||
         (form->item_count !=
              form->field_count + form->initial_count +
-             form->subdialog_count) ||
+             form->subdialog_count + form->record_count) ||
         ((form->field_count != 0u || form->initial_count != 0u ||
-          form->subdialog_count != 0u) &&
+          form->subdialog_count != 0u || form->record_count != 0u) &&
          ((form->field_count != 0u && program->fields == NULL) ||
           (form->initial_count != 0u && program->initials == NULL) ||
           (form->subdialog_count != 0u && program->subdialogs == NULL) ||
+          (form->record_count != 0u && program->records == NULL) ||
           program->form_items == NULL ||
           form->block_count != 0u ||
           form->menu != VXML_CMETA_NO_INDEX)) ||
@@ -3807,12 +3856,12 @@ static vxml_status cmeta_session_start_profile_at_entry(
           form->menu != VXML_CMETA_NO_INDEX)) ||
         (form->menu != VXML_CMETA_NO_INDEX &&
          (form->field_count != 0u || form->initial_count != 0u ||
-          form->subdialog_count != 0u ||
+          form->subdialog_count != 0u || form->record_count != 0u ||
           form->item_count != 0u || form->block_count != 0u ||
           form->menu >= program->menu_count ||
           program->menus == NULL)) ||
         (form->field_count == 0u && form->initial_count == 0u &&
-         form->subdialog_count == 0u &&
+         form->subdialog_count == 0u && form->record_count == 0u &&
          form->block_count == 0u &&
          form->menu == VXML_CMETA_NO_INDEX))
         return session_fail(session, VXML_INVALID_STRUCTURE);
