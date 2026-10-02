@@ -12912,6 +12912,10 @@ spec("VoiceXML CMeta session execution") {
             "</form></vxml>";
         const vxml_cmeta_name_view undefined = {
             "value", sizeof("value") - 1u};
+        const vxml_cmeta_name_view undefined_with_text[] = {
+            {"value", sizeof("value") - 1u},
+            {"text", sizeof("text") - 1u}
+        };
         vxml_cmeta_compile_options_v1 compile =
             prompt_compile_options();
         vxml_cmeta_session_root root = {0};
@@ -12966,6 +12970,54 @@ spec("VoiceXML CMeta session execution") {
                 dynamic_source, sizeof(dynamic_source) - 1u,
                 NULL, &compile, &program, NULL),
             VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        session_text_destroy(&root.text);
+
+        /* A defined but empty STRING is also semantically invalid. */
+        session = (vxml_session){0};
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+        options.initial_root = &root;
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        /* Explicit typed undefined must fail before provider publication. */
+        memcpy(
+            root.text.bytes,
+            "ignored",
+            sizeof("ignored") - 1u);
+        root.text.size = sizeof("ignored") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+        session = (vxml_session){0};
+        options.initially_undefined = undefined_with_text;
+        options.initially_undefined_count =
+            sizeof(undefined_with_text) /
+            sizeof(undefined_with_text[0]);
+        options.initial_root = &root;
         check_equal(
             vxml_session_init_cmeta(
                 &session, &program, &options),
