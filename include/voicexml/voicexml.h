@@ -116,6 +116,12 @@ typedef struct vxml_navigation_request_v1 {
     size_t uri_size;
     const char *fetchaudio_uri;
     size_t fetchaudio_uri_size;
+
+    /* Optional append-only inherited fetch-audio timing policy. */
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
 } vxml_navigation_request_v1;
 
 /**
