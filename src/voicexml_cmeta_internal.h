@@ -811,6 +811,7 @@ typedef struct vxml_cmeta_session_data {
     void *prompt_media_user;
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;
     vxml_cmeta_prompt_media_segment_v1 *prompt_media_projected_segments;
+    size_t *prompt_media_projected_source_segments;
     size_t prompt_media_projected_segment_capacity;
     vxml_cmeta_prompt_media_fallback_v1 *prompt_media_projected_fallbacks;
     size_t prompt_media_projected_fallback_capacity;
@@ -827,6 +828,7 @@ typedef struct vxml_cmeta_session_data {
     uint64_t prompt_media_barged_generation;
     uint64_t prompt_media_mark_generation;
     size_t prompt_media_last_mark_segment;
+    size_t prompt_media_last_mark_batch_segment;
     atomic_bool prompt_media_last_mark_elapsed_valid;
     atomic_uint_fast64_t prompt_media_last_mark_elapsed_ms;
     char *prompt_media_last_mark_name;
