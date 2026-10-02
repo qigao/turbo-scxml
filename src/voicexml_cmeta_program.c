@@ -4690,6 +4690,7 @@ static vxml_status cmeta_compile_prompt_schema(
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
     out->first_fallback = builder->prompt_fallback_index;
+    out->first_dynamic_mark = builder->prompt_mark_expr_index;
     out->bargein = bargein_attribute.impl == NULL ||
         cmeta_decoded_equal(
             salts_xml_attribute_value(bargein_attribute), "true");
@@ -4928,6 +4929,10 @@ static vxml_status cmeta_compile_prompt_schema(
         if (cmeta_node_named(child, "mark")) {
             const salts_xml_attribute name =
                 cmeta_attribute(child, "name");
+            const salts_xml_attribute nameexpr =
+                cmeta_attribute(child, "nameexpr");
+            const size_t absolute_segment =
+                builder->prompt_segment_index;
             const char *payload = NULL;
             size_t payload_size = 0u;
             if (builder->prompt_segment_index >=
@@ -4936,16 +4941,39 @@ static vxml_status cmeta_compile_prompt_schema(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "VoiceXML prompt segment rows changed between passes");
-            status = cmeta_retain_decoded_view(
-                builder, salts_xml_attribute_value(name),
-                salts_xml_attribute_location(name),
-                &payload, &payload_size);
-            if (status != VXML_OK) return status;
-            if (payload_size == 0u)
+            if ((name.impl == NULL) == (nameexpr.impl == NULL))
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML mark name/nameexpr changed between passes");
+
+            if (nameexpr.impl != NULL) {
+                vxml_cmeta_prompt_mark_expr_row *dynamic;
+                if (builder->prompt_mark_expr_index >=
+                        builder->profile->prompt_mark_expr_count ||
+                    builder->profile->prompt_mark_exprs == NULL)
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(child),
+                        "VoiceXML dynamic mark rows changed between passes");
+                dynamic = &builder->profile->prompt_mark_exprs[
+                    builder->prompt_mark_expr_index++];
+                *dynamic = (vxml_cmeta_prompt_mark_expr_row){
+                    .segment_index = absolute_segment,
+                    .expression = VXML_CMETA_NO_INDEX};
+            } else {
+                status = cmeta_retain_decoded_view(
+                    builder, salts_xml_attribute_value(name),
                     salts_xml_attribute_location(name),
-                    "VoiceXML mark name disappeared between passes");
+                    &payload, &payload_size);
+                if (status != VXML_OK) return status;
+                if (payload_size == 0u)
+                    return cmeta_program_fail(
+                        builder->diagnostic, VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(name),
+                        "VoiceXML mark name disappeared between passes");
+            }
+
             segment = &builder->profile->prompt_segments[
                 builder->prompt_segment_index++];
             *segment = (vxml_cmeta_prompt_media_segment_v1){
@@ -4967,6 +4995,8 @@ static vxml_status cmeta_compile_prompt_schema(
         builder->prompt_segment_index - out->first_segment;
     out->fallback_count =
         builder->prompt_fallback_index - out->first_fallback;
+    out->dynamic_mark_count =
+        builder->prompt_mark_expr_index - out->first_dynamic_mark;
     if (out->segment_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
