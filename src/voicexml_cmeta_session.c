@@ -1156,6 +1156,37 @@ static void field_recording_shadow_reset(
         (vxml_cmeta_field_recording_shadow){0};
 }
 
+static void prompt_mark_result_reset(
+    vxml_cmeta_session_data *session) {
+    char *name;
+    size_t capacity;
+    if (session == NULL) return;
+    name = session->prompt_mark_result.name;
+    capacity = session->prompt_mark_result.name_capacity;
+    session->prompt_mark_result =
+        (vxml_cmeta_mark_result_slot){0};
+    session->prompt_mark_result.name = name;
+    session->prompt_mark_result.name_capacity = capacity;
+}
+
+static void field_mark_shadow_reset(
+    vxml_cmeta_session_data *session,
+    size_t field_index) {
+    vxml_cmeta_field_mark_shadow *shadow;
+    char *name;
+    size_t capacity;
+    if (session == NULL ||
+        session->field_mark_shadows == NULL ||
+        field_index >= session->field_mark_shadow_count)
+        return;
+    shadow = &session->field_mark_shadows[field_index];
+    name = shadow->name;
+    capacity = shadow->name_capacity;
+    *shadow = (vxml_cmeta_field_mark_shadow){0};
+    shadow->name = name;
+    shadow->name_capacity = capacity;
+}
+
 static void collect_quiesce_generation(
     vxml_cmeta_session_data *session,
     uint64_t generation) {
@@ -1564,6 +1595,7 @@ static void apply_retry_resets(
             if (session->retry_reset_pending[index] != 0u) {
                 reset_field_retry_counters(session, index);
                 field_recording_shadow_reset(session, index);
+                field_mark_shadow_reset(session, index);
             }
     if (session->initial_retry_reset_pending != NULL)
         for (index = 0u; index < program->initial_count; ++index)
