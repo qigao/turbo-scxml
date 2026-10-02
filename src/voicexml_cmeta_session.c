@@ -5624,6 +5624,22 @@ vxml_status vxml_session_cmeta_transfer_commit(
         profile->transfer_generation == UINT64_C(0))
         return VXML_INVALID_STATE;
 
+    if (atomic_load_explicit(
+            &profile->transfer_mailbox.state,
+            memory_order_acquire) !=
+            VXML_CMETA_TRANSFER_MAILBOX_DISARMED)
+        return VXML_INVALID_STATE;
+
+    transfer_mailbox_payload_reset(&profile->transfer_mailbox);
+    atomic_store_explicit(
+        &profile->transfer_mailbox.generation,
+        profile->transfer_generation,
+        memory_order_relaxed);
+    atomic_store_explicit(
+        &profile->transfer_mailbox.state,
+        VXML_CMETA_TRANSFER_MAILBOX_EMPTY,
+        memory_order_release);
+
     ticket = profile->transfer_ticket;
     profile->transfer_ticket = (vxml_cmeta_transfer_ticket_v1){0};
     profile->transfer_prepared = false;
