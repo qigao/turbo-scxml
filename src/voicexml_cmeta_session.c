@@ -5851,6 +5851,35 @@ incompatible_failure:
 }
 
 
+static bool prompt_dynamic_mark_segment(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t absolute_segment) {
+    size_t index;
+    size_t matched = 0u;
+    if (program == NULL || prompt == NULL ||
+        prompt->dynamic_mark_count == 0u ||
+        program->prompt_mark_exprs == NULL)
+        return false;
+    for (index = 0u;
+         index < program->prompt_mark_expr_count;
+         ++index) {
+        const vxml_cmeta_prompt_mark_expr_row *row =
+            &program->prompt_mark_exprs[index];
+        if (row->segment_index < prompt->first_segment)
+            continue;
+        if (row->segment_index >=
+            prompt->first_segment + prompt->segment_count)
+            break;
+        ++matched;
+        if (row->segment_index == absolute_segment)
+            return true;
+        if (matched >= prompt->dynamic_mark_count)
+            break;
+    }
+    return false;
+}
+
 static vxml_status selected_prompt_row(
     const vxml_session_impl *impl,
     const vxml_cmeta_field_row **out_field,
@@ -9643,8 +9672,11 @@ static vxml_status selected_prompt_row(
                  segment->kind != VXML_CMETA_PROMPT_MEDIA_SSML &&
                  segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
                  segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
-                segment->payload.data == NULL ||
-                segment->payload.size == 0u ||
+                ((segment->payload.data == NULL ||
+                  segment->payload.size == 0u) &&
+                 !(segment->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+                   prompt_dynamic_mark_segment(
+                       program, row, row->first_segment))) ||
                 row->media_kind != segment->kind ||
                 row->media_payload != segment->payload.data ||
                 row->media_payload_size != segment->payload.size)
@@ -9671,8 +9703,12 @@ static vxml_status selected_prompt_row(
                      segment->kind != VXML_CMETA_PROMPT_MEDIA_SSML &&
                      segment->kind != VXML_CMETA_PROMPT_MEDIA_AUDIO &&
                      segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK) ||
-                    segment->payload.data == NULL ||
-                    segment->payload.size == 0u)
+                    ((segment->payload.data == NULL ||
+                      segment->payload.size == 0u) &&
+                     !(segment->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+                       prompt_dynamic_mark_segment(
+                           program, row,
+                           row->first_segment + segment_offset))))
                     return VXML_INVALID_STRUCTURE;
             }
         }
