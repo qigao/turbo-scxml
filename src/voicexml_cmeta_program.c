@@ -9393,6 +9393,8 @@ static vxml_status cmeta_write_program(
          builder.form_item_index != measurement->form_item_count ||
          builder.prompt_index != measurement->prompt_count ||
          builder.prompt_segment_index != measurement->prompt_segment_count ||
+         builder.prompt_mark_expr_index !=
+             measurement->prompt_mark_expr_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index != measurement->filled_target_count ||
