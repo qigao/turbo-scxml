@@ -1168,6 +1168,15 @@ static vxml_dialog_manager_status follow_external_navigation(
             return VXML_DIALOG_MANAGER_OK;
         }
 
+        if (navigation.fetchaudio_uri_size == 0u &&
+            (navigation.has_fetchaudio_delay ||
+             navigation.has_fetchaudio_minimum)) {
+            (void)queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_INVALID_CONTRACT);
+            return VXML_DIALOG_MANAGER_OK;
+        }
+
         if (navigation.fetchaudio_uri_size != 0u) {
             vxml_resolved_uri_v1 fetchaudio_resolved = {
                 .abi_version = 1u,
@@ -1200,6 +1209,14 @@ static vxml_dialog_manager_status follow_external_navigation(
                 fetchaudio_resolved.document_uri;
             policy.fetchaudio_uri_size =
                 fetchaudio_resolved.document_uri_size;
+            policy.has_fetchaudio_delay =
+                navigation.has_fetchaudio_delay;
+            policy.fetchaudio_delay_us =
+                navigation.fetchaudio_delay_us;
+            policy.has_fetchaudio_minimum =
+                navigation.has_fetchaudio_minimum;
+            policy.fetchaudio_minimum_us =
+                navigation.fetchaudio_minimum_us;
             store_status =
                 vxml_document_store_acquire_with_policy(
                     impl->document_store,
