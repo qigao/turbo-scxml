@@ -1038,7 +1038,7 @@ static void record_mailbox_payload_reset(
         record_release_lease(&mailbox->recording);
     else
         mailbox->recording = (vxml_cmeta_recording_lease_v1){0};
-    mailbox->outcome = 0;
+    mailbox->outcome = (vxml_cmeta_record_outcome)0;
     mailbox->duration_us = UINT64_C(0);
     mailbox->has_termchar = false;
     mailbox->termchar = '\0';
@@ -1150,10 +1150,12 @@ static void settle_record(
         &session->record_mailbox.generation,
         UINT64_C(0), memory_order_relaxed);
 
-    for (index = 0u;
-         index < session->record_result_count;
-         ++index)
-        record_result_slot_reset(&session->record_results[index]);
+    if (session->record_results != NULL)
+        for (index = 0u;
+             index < session->record_result_count;
+             ++index)
+            record_result_slot_reset(
+                &session->record_results[index]);
 }
 
 static void session_data_destroy(
@@ -4848,7 +4850,9 @@ vxml_status vxml_session_cmeta_record_result(
             .has_termchar = result->has_termchar,
             .termchar = result->termchar,
             .media_type = {
-                result->media_type, result->media_type_size},
+                result->media_type_size != 0u
+                    ? result->media_type : NULL,
+                result->media_type_size},
             .data = result->recording.data,
             .size = result->recording.size
         };
