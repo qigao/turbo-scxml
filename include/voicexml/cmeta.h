@@ -180,6 +180,12 @@ typedef struct vxml_cmeta_compile_options_v1 {
      */
     size_t max_collect_recording_media_type_bytes;
     uint64_t max_collect_recording_duration_us;
+
+    /*
+     * Optional append-only VoiceXML 2.1 mark@nameexpr result bound.
+     * Zero keeps dynamic mark names disabled; literal mark@name is unchanged.
+     */
+    size_t max_dynamic_mark_name_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
@@ -1266,16 +1272,22 @@ vxml_status vxml_session_cmeta_prompt(
     vxml_cmeta_prompt_view_v1 *out_prompt);
 
 /**
- * Build the current tapered prompt-media request.
+ * Build the current tapered immutable prompt-media request.
  *
- * V1 returns either zero segments (no eligible prompt) or one literal TEXT
- * segment. All views borrow immutable Program storage.
+ * All returned views borrow Program storage. A selected VoiceXML 2.1
+ * mark@nameexpr has no immutable Program-owned name, so this query fails closed
+ * with VXML_UNSUPPORTED_FEATURE. Queue-time evaluation/materialization happens
+ * only in vxml_session_cmeta_prompt_media_prepare().
  */
 vxml_status vxml_session_cmeta_prompt_media_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_request_v1 *out_request);
 
-/** Borrow the selected prompt as one ordered immutable segment batch. */
+/**
+ * Borrow the selected prompt as one ordered immutable Program segment batch.
+ * Dynamic mark@nameexpr likewise returns VXML_UNSUPPORTED_FEATURE here; use
+ * prompt_media_prepare() to queue the projected generation-owned batch.
+ */
 vxml_status vxml_session_cmeta_prompt_media_batch_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_batch_request_v1 *out_request);

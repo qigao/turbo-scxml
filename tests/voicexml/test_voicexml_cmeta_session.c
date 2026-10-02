@@ -1870,6 +1870,7 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     options.max_prompts = 16u;
     options.max_prompt_bytes = 256u;
     options.max_prompt_segments = 8u;
+    options.max_dynamic_mark_name_bytes = 64u;
     return options;
 }
 
@@ -12697,6 +12698,420 @@ spec("VoiceXML CMeta session execution") {
                 &compile, &program, NULL),
             VXML_SEMANTIC_ERROR);
         vxml_program_destroy(&program);
+    }
+
+
+    it("evaluates mark nameexpr when the selected prompt is queued and keeps that generation-owned name") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>Hello<mark nameexpr='text'/><audio src='a.wav'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_mark_view_v1 mark = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 immutable_batch = {0};
+        vxml_cmeta_prompt_media_completion_v1 completion = {
+            .abi_version =
+                VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1,
+            .struct_size =
+                sizeof(vxml_cmeta_prompt_media_completion_v1),
+            .outcome =
+                VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        vxml_cmeta_prompt_media_outcome outcome = 0;
+        bool progressed = false;
+
+        memcpy(root.text.bytes, "queued_mark", sizeof("queued_mark") - 1u);
+        root.text.size = sizeof("queued_mark") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_batch_request(
+                &session, &immutable_batch),
+            VXML_UNSUPPORTED_FEATURE);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            const vxml_cmeta_session_data *runtime =
+                session_data(&session);
+            check_not_null(compiled);
+            check_not_null(runtime);
+            check_equal(compiled->prompt_mark_expr_count, (size_t)1u);
+            check_not_null(compiled->prompt_mark_exprs);
+            check_equal(
+                compiled->prompt_mark_exprs[0].segment_index,
+                (size_t)1u);
+            check_true(
+                compiled->prompt_mark_exprs[0].expression !=
+                VXML_CMETA_NO_INDEX);
+            check_equal(
+                compiled->prompts[0].dynamic_mark_count,
+                (size_t)1u);
+            check_true(
+                runtime->prompt_media_projected_segment_capacity >=
+                (size_t)3u);
+            check_true(
+                runtime->prompt_media_dynamic_mark_storage_capacity >=
+                sizeof("queued_mark") - 1u);
+        }
+
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)1u);
+        check_equal(media_probe.batch_segment_count, (size_t)3u);
+        check_equal(
+            media_probe.batch_kinds[0],
+            VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(
+            media_probe.batch_kinds[1],
+            VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(
+            media_probe.batch_kinds[2],
+            VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(media_probe.batch_payloads[0], "Hello");
+        check_equal(media_probe.batch_payloads[1], "queued_mark");
+        check_equal(media_probe.batch_payloads[2], "a.wav");
+
+        memset(root.text.bytes, 'x', root.text.size);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark(
+                &session, media_probe.generation, 1u),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.segment_index, (size_t)1u);
+        check_equal(mark.name.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                mark.name.data, "queued_mark",
+                sizeof("queued_mark") - 1u),
+            0);
+
+        media_probe.active = false;
+        completion.generation = media_probe.generation;
+        check_equal(
+            vxml_session_cmeta_prompt_media_try_complete(
+                &session, &completion),
+            VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_run_ready(
+                &session, &progressed, &outcome),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            outcome,
+            VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED);
+
+        /*
+         * A later queue-time projection may reuse its generation storage, but
+         * it must not overwrite the already-published last-mark name snapshot.
+         */
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.batch_prepare_calls, (size_t)2u);
+        mark = (vxml_cmeta_prompt_mark_view_v1){0};
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.name.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                mark.name.data, "queued_mark",
+                sizeof("queued_mark") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_prompt_media_discard(&session),
+            VXML_OK);
+        mark = (vxml_cmeta_prompt_mark_view_v1){0};
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.name.size, sizeof("queued_mark") - 1u);
+        check_equal(
+            memcmp(
+                mark.name.data, "queued_mark",
+                sizeof("queued_mark") - 1u),
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&root.text);
+    }
+
+    it("projects one dynamic mark through the legacy single-segment provider ABI") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark nameexpr='text'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_request_v1 immutable = {0};
+
+        memcpy(
+            root.text.bytes,
+            "single_mark",
+            sizeof("single_mark") - 1u);
+        root.text.size = sizeof("single_mark") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+
+        check_equal(
+            vxml_session_cmeta_prompt_media_request(
+                &session, &immutable),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)1u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+        check_equal(
+            media_probe.kind,
+            VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(
+            strcmp(media_probe.payload, "single_mark"), 0);
+        check_equal(
+            vxml_session_cmeta_prompt_media_discard(&session),
+            VXML_OK);
+        check_equal(media_probe.discard_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&root.text);
+    }
+
+    it("rejects invalid mark nameexpr contracts before provider publication") {
+        static const char both_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark name='a' nameexpr='text'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field>"
+            "</form></vxml>";
+        static const char v20_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark nameexpr='text'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field>"
+            "</form></vxml>";
+        static const char wrong_type_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark nameexpr='other'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field>"
+            "</form></vxml>";
+        static const char dynamic_source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><mark nameexpr='text'/></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field>"
+            "</form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_name_view undefined_with_text[] = {
+            {"value", sizeof("value") - 1u},
+            {"text", sizeof("text") - 1u}
+        };
+        vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_MARK);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                both_source, sizeof(both_source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_compile_cmeta(
+                v20_source, sizeof(v20_source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_compile_cmeta(
+                wrong_type_source,
+                sizeof(wrong_type_source) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_SEMANTIC_ERROR);
+        vxml_program_destroy(&program);
+
+        compile.max_dynamic_mark_name_bytes = 4u;
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        memcpy(root.text.bytes, "toolong", sizeof("toolong") - 1u);
+        root.text.size = sizeof("toolong") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+        options.initial_root = &root;
+
+        check_equal(
+            vxml_compile_cmeta(
+                dynamic_source, sizeof(dynamic_source) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        session_text_destroy(&root.text);
+
+        /* A defined but empty STRING is also semantically invalid. */
+        session = (vxml_session){0};
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+        options.initial_root = &root;
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+
+        /* Explicit typed undefined must fail before provider publication. */
+        memcpy(
+            root.text.bytes,
+            "ignored",
+            sizeof("ignored") - 1u);
+        root.text.size = sizeof("ignored") - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+        session = (vxml_session){0};
+        options.initially_undefined = undefined_with_text;
+        options.initially_undefined_count =
+            sizeof(undefined_with_text) /
+            sizeof(undefined_with_text[0]);
+        options.initial_root = &root;
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&root.text);
     }
 
 }

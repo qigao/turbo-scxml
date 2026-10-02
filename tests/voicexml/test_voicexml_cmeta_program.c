@@ -1507,7 +1507,7 @@ spec("VoiceXML CMeta program compiler") {
         vxml_program_destroy(&program);
     }
 
-    it("rejects missing empty and dynamic mark names in the literal profile") {
+    it("rejects invalid mark names and requires the dynamic-name contract") {
         static const struct {
             const char *body;
             vxml_status expected;
@@ -1525,13 +1525,13 @@ spec("VoiceXML CMeta program compiler") {
             {
                 "<form><field name='value'><prompt><mark nameexpr='x'/></prompt>"
                 "<grammar type='application/srgs+xml' src='a'/></field></form>",
-                VXML_UNSUPPORTED_FEATURE
+                VXML_INVALID_CONTRACT
             },
             {
                 "<form><field name='value'><prompt>"
                 "<mark name='x' nameexpr='y'/></prompt>"
                 "<grammar type='application/srgs+xml' src='a'/></field></form>",
-                VXML_UNSUPPORTED_FEATURE
+                VXML_INVALID_STRUCTURE
             }
         };
         static const char prefix[] =
