@@ -1577,6 +1577,7 @@ static void session_data_destroy(
     vxml_free(session->prompt_media_last_mark_name);
     vxml_free(session->prompt_media_dynamic_mark_storage);
     vxml_free(session->prompt_media_projected_segments);
+    vxml_free(session->collect_dynamic_grammar_uri);
     vxml_free(session->collect_mailbox.recording_media_type);
     vxml_free(session->collect_utterance_result_media_type);
     vxml_free(session->field_recording_shadows);
@@ -3979,6 +3980,42 @@ vxml_status vxml_cmeta_session_init_profile(
                 profile->event_counter_names +
                 index * profile->event_name_stride;
     }
+    {
+        bool uses_dynamic_grammar = false;
+        size_t index;
+        for (index = 0u; index < program->field_count; ++index) {
+            if (program->fields != NULL &&
+                program->fields[index].grammar_expression !=
+                    VXML_CMETA_NO_INDEX) {
+                uses_dynamic_grammar = true;
+                break;
+            }
+        }
+        if (!uses_dynamic_grammar)
+            for (index = 0u; index < program->form_count; ++index) {
+                if (program->forms != NULL &&
+                    program->forms[index].grammar_expression !=
+                        VXML_CMETA_NO_INDEX) {
+                    uses_dynamic_grammar = true;
+                    break;
+                }
+            }
+        if (uses_dynamic_grammar) {
+            if (program->max_grammar_bytes == 0u) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->collect_dynamic_grammar_uri =
+                (char *)vxml_malloc(program->max_grammar_bytes);
+            if (profile->collect_dynamic_grammar_uri == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->collect_dynamic_grammar_uri_capacity =
+                program->max_grammar_bytes;
+        }
+    }
+
     if (program->field_count != 0u ||
         program->initial_count != 0u ||
         program->menu_count != 0u) {
