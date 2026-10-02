@@ -11328,7 +11328,11 @@ static vxml_cmeta_prompt_mark_result prompt_media_mark_impl(
     profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (!profile->prompt_media_in_flight ||
         profile->prompt_media_generation != generation ||
-        profile->prompt_media_mark_generation != generation)
+        profile->prompt_media_mark_generation != generation ||
+        atomic_load_explicit(
+            &profile->prompt_media_mailbox.state,
+            memory_order_acquire) !=
+                VXML_CMETA_PROMPT_MEDIA_MAILBOX_EMPTY)
         return VXML_CMETA_PROMPT_MARK_STALE;
 
     status = selected_prompt_row(
