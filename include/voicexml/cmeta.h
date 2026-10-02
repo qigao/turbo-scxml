@@ -703,6 +703,13 @@ typedef struct vxml_cmeta_collect_adapter_v1 {
         const vxml_cmeta_collect_request_v2 *request,
         vxml_cmeta_collect_ticket_v1 *out_ticket,
         const char **out_error);
+
+    /*
+     * Optional V2 owner barrier. Required for recorded-utterance capture.
+     * Returns only after no callback for generation can still enter the
+     * Session, matching the owned record-result handoff contract.
+     */
+    void (*quiesce)(void *user, uint64_t generation);
 } vxml_cmeta_collect_adapter_v1;
 
 typedef enum vxml_cmeta_collect_ingress_result {
