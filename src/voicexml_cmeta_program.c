@@ -2783,12 +2783,14 @@ done:
 
 static vxml_status cmeta_measure_field(
     salts_xml_node field,
+    bool version_21,
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {"name", "cond"};
-    static const char *const grammar_allowed[] = {"type", "src"};
+    static const char *const grammar_allowed[] = {
+        "type", "src", "srcexpr"};
     const salts_xml_attribute name = cmeta_attribute(field, "name");
     const salts_xml_attribute cond = cmeta_attribute(field, "cond");
     size_t index;
@@ -2827,6 +2829,7 @@ static vxml_status cmeta_measure_field(
             salts_xml_node_child_at(field, index);
         salts_xml_attribute type;
         salts_xml_attribute src;
+        salts_xml_attribute srcexpr;
         size_t type_size = 0u;
         size_t src_size = 0u;
         if (cmeta_node_ignorable(child)) continue;
@@ -2874,17 +2877,24 @@ static vxml_status cmeta_measure_field(
                 "VoiceXML field accepts exactly one grammar in this profile");
         ++grammar_count;
         status = cmeta_validate_attributes(
-            child, grammar_allowed, 2u, diagnostic);
+            child, grammar_allowed, 3u, diagnostic);
         if (status == VXML_OK)
             status = cmeta_validate_empty_element(child, diagnostic);
         if (status != VXML_OK) return status;
         type = cmeta_attribute(child, "type");
         src = cmeta_attribute(child, "src");
-        if (type.impl == NULL || src.impl == NULL)
+        srcexpr = cmeta_attribute(child, "srcexpr");
+        if (type.impl == NULL ||
+            (src.impl == NULL) == (srcexpr.impl == NULL))
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "VoiceXML grammar requires type and src");
+                "VoiceXML grammar requires type and exactly one of src or srcexpr");
+        if (srcexpr.impl != NULL && !version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML grammar srcexpr requires version 2.1");
         if (!cmeta_decoded_equal(
                 salts_xml_attribute_value(type),
                 "application/srgs+xml"))
@@ -2893,16 +2903,23 @@ static vxml_status cmeta_measure_field(
                 salts_xml_attribute_location(type),
                 "directed field profile supports application/srgs+xml only");
         if (!cmeta_decode_entities(
-                salts_xml_attribute_value(type), NULL, 0u, &type_size) ||
+                salts_xml_attribute_value(type), NULL, 0u, &type_size))
+            return cmeta_program_fail(
+                diagnostic, VXML_XML_ERROR,
+                salts_xml_attribute_location(type),
+                "VoiceXML grammar type has invalid XML reference");
+        if (src.impl != NULL &&
             !cmeta_decode_entities(
                 salts_xml_attribute_value(src), NULL, 0u, &src_size))
             return cmeta_program_fail(
                 diagnostic, VXML_XML_ERROR,
-                salts_xml_node_location(child),
-                "VoiceXML grammar attribute has invalid XML reference");
-        if (type_size == 0u || src_size == 0u ||
+                salts_xml_attribute_location(src),
+                "VoiceXML grammar src has invalid XML reference");
+        if (type_size == 0u ||
             type_size > options->max_grammar_bytes ||
-            src_size > options->max_grammar_bytes)
+            (src.impl != NULL &&
+             (src_size == 0u ||
+              src_size > options->max_grammar_bytes)))
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(child),
@@ -2910,9 +2927,17 @@ static vxml_status cmeta_measure_field(
         status = cmeta_measure_name(
             type, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
-        status = cmeta_measure_name(
-            src, measurement, limits, diagnostic);
-        if (status != VXML_OK) return status;
+        if (src.impl != NULL) {
+            status = cmeta_measure_name(
+                src, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+        } else if (!cmeta_measure_increment(
+                       &measurement->expression_count)) {
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML grammar srcexpr count overflow");
+        }
     }
     if (grammar_count != 1u)
         return cmeta_program_fail(
@@ -2925,17 +2950,21 @@ static vxml_status cmeta_measure_field(
 
 static vxml_status cmeta_measure_form_grammar(
     salts_xml_node grammar,
+    bool version_21,
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
-    static const char *const allowed[] = {"type", "src"};
+    static const char *const allowed[] = {
+        "type", "src", "srcexpr"};
     const salts_xml_attribute type = cmeta_attribute(grammar, "type");
     const salts_xml_attribute src = cmeta_attribute(grammar, "src");
+    const salts_xml_attribute srcexpr =
+        cmeta_attribute(grammar, "srcexpr");
     size_t type_size = 0u;
     size_t src_size = 0u;
     vxml_status status = cmeta_validate_attributes(
-        grammar, allowed, 2u, diagnostic);
+        grammar, allowed, 3u, diagnostic);
     if (status == VXML_OK)
         status = cmeta_validate_empty_element(grammar, diagnostic);
     if (status != VXML_OK) return status;
@@ -2944,11 +2973,17 @@ static vxml_status cmeta_measure_form_grammar(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(grammar),
             "form-level grammar requires enabled grammar bounds");
-    if (type.impl == NULL || src.impl == NULL)
+    if (type.impl == NULL ||
+        (src.impl == NULL) == (srcexpr.impl == NULL))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(grammar),
-            "form-level grammar requires type and src");
+            "form-level grammar requires type and exactly one of src or srcexpr");
+    if (srcexpr.impl != NULL && !version_21)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_attribute_location(srcexpr),
+            "form-level grammar srcexpr requires version 2.1");
     if (!cmeta_decoded_equal(
             salts_xml_attribute_value(type), "application/srgs+xml"))
         return cmeta_program_fail(
@@ -2956,23 +2991,38 @@ static vxml_status cmeta_measure_form_grammar(
             salts_xml_attribute_location(type),
             "form-level grammar supports application/srgs+xml only");
     if (!cmeta_decode_entities(
-            salts_xml_attribute_value(type), NULL, 0u, &type_size) ||
+            salts_xml_attribute_value(type), NULL, 0u, &type_size))
+        return cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(type),
+            "form-level grammar type has an invalid XML reference");
+    if (src.impl != NULL &&
         !cmeta_decode_entities(
             salts_xml_attribute_value(src), NULL, 0u, &src_size))
         return cmeta_program_fail(
             diagnostic, VXML_XML_ERROR,
-            salts_xml_node_location(grammar),
-            "form-level grammar attribute has an invalid XML reference");
-    if (type_size == 0u || src_size == 0u ||
+            salts_xml_attribute_location(src),
+            "form-level grammar src has an invalid XML reference");
+    if (type_size == 0u ||
         type_size > options->max_grammar_bytes ||
-        src_size > options->max_grammar_bytes)
+        (src.impl != NULL &&
+         (src_size == 0u ||
+          src_size > options->max_grammar_bytes)))
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(grammar),
             "form-level grammar exceeds max_grammar_bytes");
     status = cmeta_measure_name(type, measurement, limits, diagnostic);
     if (status != VXML_OK) return status;
-    return cmeta_measure_name(src, measurement, limits, diagnostic);
+    if (src.impl != NULL)
+        return cmeta_measure_name(
+            src, measurement, limits, diagnostic);
+    if (!cmeta_measure_increment(&measurement->expression_count))
+        return cmeta_program_fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(srcexpr),
+            "form-level grammar srcexpr count overflow");
+    return VXML_OK;
 }
 
 static vxml_status cmeta_measure_initial(
@@ -3908,7 +3958,8 @@ static vxml_status cmeta_measure_form(
             {
                 const vxml_status grammar_status =
                     cmeta_measure_form_grammar(
-                        child, options, measurement, limits, diagnostic);
+                        child, version_21, options,
+                        measurement, limits, diagnostic);
                 if (grammar_status != VXML_OK) return grammar_status;
             }
             continue;
@@ -3999,7 +4050,8 @@ static vxml_status cmeta_measure_form(
             saw_directed = true;
             {
                 const vxml_status field_status = cmeta_measure_field(
-                    child, options, measurement, limits, diagnostic);
+                    child, version_21, options,
+                    measurement, limits, diagnostic);
                 if (field_status != VXML_OK) return field_status;
             }
             if (!cmeta_measure_increment(&measurement->form_item_count))
@@ -4469,6 +4521,7 @@ static bool cmeta_allocate_rows(
     profile->location_count = measurement->location_count;
     profile->location_candidate_count = candidate_count;
     profile->max_string_bytes = options->max_string_bytes;
+    profile->max_grammar_bytes = options->max_grammar_bytes;
     profile->max_conditional_depth = options->max_conditional_depth;
     if (measurement->subdialog_param_count != 0u)
         profile->max_subdialog_param_value_bytes =
