@@ -852,7 +852,9 @@ static bool cmeta_transfer_options_valid(
         options->max_transfers != 0u &&
         options->max_transfer_uri_bytes != 0u &&
         options->max_transfer_connect_timeout_us != UINT64_C(0) &&
-        options->max_transfer_duration_us != UINT64_C(0);
+        options->max_transfer_duration_us != UINT64_C(0) &&
+        options->max_string_bytes >=
+            sizeof("near_end_disconnect") - 1u;
 }
 
 static bool cmeta_menu_target_options_valid(
@@ -6280,6 +6282,7 @@ static vxml_status cmeta_register_record_item(
         return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
     out->form_item_slot = VXML_CMETA_NO_INDEX;
+    out->result_slot = VXML_CMETA_NO_INDEX;
     out->condition = VXML_CMETA_NO_INDEX;
     out->filled = VXML_CMETA_NO_INDEX;
 
@@ -6373,6 +6376,32 @@ static vxml_status cmeta_register_record_item(
         salts_xml_attribute_location(name_attribute),
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
+
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &vxml_cmeta_transfer_result_data)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer result slot exceeds form scope bounds");
+        goto done;
+    }
+    conflict = false;
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            out->name, out->name_size,
+            &vxml_cmeta_transfer_result_data,
+            &out->result_slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(name_attribute),
+            conflict ? "VoiceXML transfer result slot type conflict"
+                     : "VoiceXML transfer result slot allocation failed");
+        goto done;
+    }
 
     written = snprintf(
         control_name, sizeof(control_name),
