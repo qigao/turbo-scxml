@@ -1777,6 +1777,12 @@ static bool transaction_begin(
     size_t index;
     session->pending_navigation_uri = NULL;
     session->pending_navigation_uri_size = 0u;
+    session->pending_navigation_fetchaudio_uri = NULL;
+    session->pending_navigation_fetchaudio_uri_size = 0u;
+    session->pending_navigation_has_fetchaudio_delay = false;
+    session->pending_navigation_fetchaudio_delay_us = UINT64_C(0);
+    session->pending_navigation_has_fetchaudio_minimum = false;
+    session->pending_navigation_fetchaudio_minimum_us = UINT64_C(0);
     transaction_reset(session, program);
     if (!root_storage_copy(
             &session->staged_root, &session->committed_root, program))
@@ -1839,10 +1845,26 @@ static vxml_status publish_pending_navigation(
         profile->pending_navigation_uri;
     impl->navigation_uri_size =
         profile->pending_navigation_uri_size;
-    impl->navigation_fetchaudio_uri = NULL;
-    impl->navigation_fetchaudio_uri_size = 0u;
+    impl->navigation_fetchaudio_uri =
+        profile->pending_navigation_fetchaudio_uri;
+    impl->navigation_fetchaudio_uri_size =
+        profile->pending_navigation_fetchaudio_uri_size;
+    impl->navigation_has_fetchaudio_delay =
+        profile->pending_navigation_has_fetchaudio_delay;
+    impl->navigation_fetchaudio_delay_us =
+        profile->pending_navigation_fetchaudio_delay_us;
+    impl->navigation_has_fetchaudio_minimum =
+        profile->pending_navigation_has_fetchaudio_minimum;
+    impl->navigation_fetchaudio_minimum_us =
+        profile->pending_navigation_fetchaudio_minimum_us;
     profile->pending_navigation_uri = NULL;
     profile->pending_navigation_uri_size = 0u;
+    profile->pending_navigation_fetchaudio_uri = NULL;
+    profile->pending_navigation_fetchaudio_uri_size = 0u;
+    profile->pending_navigation_has_fetchaudio_delay = false;
+    profile->pending_navigation_fetchaudio_delay_us = UINT64_C(0);
+    profile->pending_navigation_has_fetchaudio_minimum = false;
+    profile->pending_navigation_fetchaudio_minimum_us = UINT64_C(0);
     impl->state = VXML_SESSION_NAVIGATING;
     impl->error = VXML_OK;
     return VXML_OK;
@@ -3283,8 +3305,9 @@ static vxml_status execute_rethrow(
 
 static vxml_status execute_goto(
     vxml_cmeta_session_data *session,
+    const vxml_cmeta_form_row *form,
     const vxml_cmeta_action_row *action) {
-    if (session == NULL || action == NULL ||
+    if (session == NULL || form == NULL || action == NULL ||
         action->kind != VXML_CMETA_ACTION_GOTO ||
         action->navigation_uri == NULL ||
         action->navigation_uri_size == 0u ||
@@ -3297,6 +3320,22 @@ static vxml_status execute_goto(
         action->navigation_uri;
     session->pending_navigation_uri_size =
         action->navigation_uri_size;
+    session->pending_navigation_fetchaudio_uri =
+        action->navigation_fetchaudio_uri != NULL
+            ? action->navigation_fetchaudio_uri
+            : form->fetch_audio.uri;
+    session->pending_navigation_fetchaudio_uri_size =
+        action->navigation_fetchaudio_uri != NULL
+            ? action->navigation_fetchaudio_uri_size
+            : form->fetch_audio.uri_size;
+    session->pending_navigation_has_fetchaudio_delay =
+        form->fetch_audio.has_delay;
+    session->pending_navigation_fetchaudio_delay_us =
+        form->fetch_audio.delay_us;
+    session->pending_navigation_has_fetchaudio_minimum =
+        form->fetch_audio.has_minimum;
+    session->pending_navigation_fetchaudio_minimum_us =
+        form->fetch_audio.minimum_us;
     return VXML_OK;
 }
 
@@ -3463,7 +3502,7 @@ static vxml_status execute_action_range(
             }
             case VXML_CMETA_ACTION_GOTO: {
                 const vxml_status status =
-                    execute_goto(session, action);
+                    execute_goto(session, form, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
