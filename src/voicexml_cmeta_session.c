@@ -8270,15 +8270,18 @@ static bool completion_contains_root_field(
         mailbox->root_fields, mailbox->slot_count, root_field);
 }
 
-static vxml_status filled_should_run_for_roots(
+static vxml_status filled_should_run_for_results(
     const vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
     const vxml_cmeta_filled_row *filled,
     const size_t *completed_root_fields,
     size_t completed_root_field_count,
+    const size_t *completed_transfers,
+    size_t completed_transfer_count,
     bool *out) {
     const cmeta_data_struct_shape *root_shape;
+    const cmeta_scope_view *form_scope;
     size_t index;
     if (out == NULL)
         return VXML_INVALID_ARGUMENT;
@@ -8287,6 +8290,8 @@ static vxml_status filled_should_run_for_roots(
         filled == NULL ||
         (completed_root_field_count != 0u &&
          completed_root_fields == NULL) ||
+        (completed_transfer_count != 0u &&
+         completed_transfers == NULL) ||
         filled->form != profile->active_form)
         return VXML_INVALID_STRUCTURE;
     if (filled->mode == VXML_CMETA_FILLED_FIELD) {
@@ -8296,11 +8301,23 @@ static vxml_status filled_should_run_for_roots(
     if (!range_valid(
             filled->first_target, filled->target_count,
             program->filled_root_field_count) ||
-        filled->target_count == 0u ||
-        program->filled_root_fields == NULL)
+        !range_valid(
+            filled->first_transfer_target,
+            filled->transfer_target_count,
+            program->filled_transfer_target_count) ||
+        (filled->target_count == 0u &&
+         filled->transfer_target_count == 0u) ||
+        (filled->target_count != 0u &&
+         program->filled_root_fields == NULL) ||
+        (filled->transfer_target_count != 0u &&
+         program->filled_transfer_targets == NULL) ||
+        form->scope >= program->scope_count ||
+        profile->staged_scopes == NULL)
         return VXML_INVALID_STRUCTURE;
     root_shape = session_root_shape(program);
-    if (root_shape == NULL)
+    form_scope = &profile->staged_scopes[form->scope].view;
+    if (root_shape == NULL ||
+        !cmeta_scope_view_valid(form_scope))
         return VXML_INVALID_STRUCTURE;
 
     if (filled->mode == VXML_CMETA_FILLED_ALL) {
@@ -8311,6 +8328,24 @@ static vxml_status filled_should_run_for_roots(
             if (root_field >= root_shape->field_count)
                 return VXML_INVALID_STRUCTURE;
             if (profile->staged_root.bound[root_field] == 0u)
+                return VXML_OK;
+        }
+        for (index = 0u;
+             index < filled->transfer_target_count;
+             ++index) {
+            const size_t transfer_index =
+                program->filled_transfer_targets[
+                    filled->first_transfer_target + index];
+            const vxml_cmeta_transfer_row *transfer;
+            if (transfer_index >= program->transfer_count ||
+                program->transfers == NULL)
+                return VXML_INVALID_STRUCTURE;
+            transfer = &program->transfers[transfer_index];
+            if (transfer->form != profile->active_form ||
+                transfer->result_slot >=
+                    program->scopes[form->scope].schema.slot_count)
+                return VXML_INVALID_STRUCTURE;
+            if (form_scope->bound[transfer->result_slot] == 0u)
                 return VXML_OK;
         }
         *out = true;
@@ -8331,9 +8366,40 @@ static vxml_status filled_should_run_for_roots(
                 return VXML_OK;
             }
         }
+        for (index = 0u;
+             index < filled->transfer_target_count;
+             ++index) {
+            const size_t transfer_index =
+                program->filled_transfer_targets[
+                    filled->first_transfer_target + index];
+            if (transfer_index >= program->transfer_count ||
+                program->transfers == NULL)
+                return VXML_INVALID_STRUCTURE;
+            if (root_field_list_contains(
+                    completed_transfers,
+                    completed_transfer_count,
+                    transfer_index)) {
+                *out = true;
+                return VXML_OK;
+            }
+        }
         return VXML_OK;
     }
     return VXML_INVALID_STRUCTURE;
+}
+
+static vxml_status filled_should_run_for_roots(
+    const vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    const vxml_cmeta_filled_row *filled,
+    const size_t *completed_root_fields,
+    size_t completed_root_field_count,
+    bool *out) {
+    return filled_should_run_for_results(
+        profile, program, form, filled,
+        completed_root_fields, completed_root_field_count,
+        NULL, 0u, out);
 }
 
 static vxml_status filled_should_run(
