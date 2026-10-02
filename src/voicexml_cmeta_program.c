@@ -556,6 +556,7 @@ typedef struct cmeta_program_measurement {
     size_t prompt_count;
     size_t prompt_segment_count;
     size_t prompt_mark_expr_count;
+    size_t prompt_foreach_count;
     size_t prompt_fallback_count;
     bool version_21;
     size_t filled_count;
@@ -4708,6 +4709,7 @@ typedef struct cmeta_program_builder {
     size_t prompt_index;
     size_t prompt_segment_index;
     size_t prompt_mark_expr_index;
+    size_t prompt_foreach_index;
     size_t prompt_fallback_index;
     size_t filled_index;
     size_t filled_target_index;
@@ -4776,6 +4778,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->prompt_fallbacks);
+    vxml_free(profile->prompt_foreach);
     vxml_free(profile->prompt_mark_exprs);
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
@@ -4845,6 +4848,14 @@ static bool cmeta_allocate_rows(
     profile->max_dynamic_mark_name_bytes =
         measurement->prompt_mark_expr_count != 0u
             ? options->max_dynamic_mark_name_bytes : 0u;
+    profile->prompt_foreach_count = measurement->prompt_foreach_count;
+    if (measurement->prompt_foreach_count != 0u) {
+        profile->max_prompt_foreach_items = options->max_prompt_foreach_items;
+        profile->max_prompt_foreach_snapshot_bytes =
+            options->max_prompt_foreach_snapshot_bytes;
+        profile->max_prompt_expanded_segments =
+            options->max_prompt_expanded_segments;
+    }
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
@@ -4901,6 +4912,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
     CMETA_ALLOC_ROWS(prompt_mark_exprs, measurement->prompt_mark_expr_count);
+    CMETA_ALLOC_ROWS(prompt_foreach, measurement->prompt_foreach_count);
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
@@ -7369,6 +7381,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->transfer_count * 2u;
+    if (capacity > SIZE_MAX - measurement->prompt_foreach_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->prompt_foreach_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -10258,6 +10276,7 @@ static vxml_status cmeta_write_program(
          builder.prompt_segment_index != measurement->prompt_segment_count ||
          builder.prompt_mark_expr_index !=
              measurement->prompt_mark_expr_count ||
+         builder.prompt_foreach_index != measurement->prompt_foreach_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index >
