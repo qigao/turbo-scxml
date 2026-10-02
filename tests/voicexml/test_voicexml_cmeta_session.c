@@ -8307,8 +8307,6 @@ spec("VoiceXML CMeta session execution") {
         vxml_program program = {0};
         vxml_session session = {0};
         vxml_navigation_request_v1 navigation = {0};
-        vxml_cmeta_value_view value = {0};
-        vxml_cmeta_value_view other = {0};
 
         check_equal(
             vxml_compile_cmeta(
@@ -8337,20 +8335,14 @@ spec("VoiceXML CMeta session execution") {
                 "dialogs/child.vxml#entry",
                 navigation.uri_size),
             0);
-        check_equal(
-            vxml_session_cmeta_read(
-                &session, "value", sizeof("value") - 1u,
-                &value),
-            VXML_OK);
-        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
-        check_equal(value.data.sint, INT64_C(5));
-        check_equal(
-            vxml_session_cmeta_read(
-                &session, "other", sizeof("other") - 1u,
-                &other),
-            VXML_OK);
-        check_equal(other.kind, VXML_CMETA_VALUE_SINT);
-        check_equal(other.data.sint, INT64_C(2));
+        {
+            const vxml_cmeta_session_root *committed =
+                (const vxml_cmeta_session_root *)
+                    session_data(&session)->committed_root.storage;
+            check_not_null(committed);
+            check_equal(committed->value, 5);
+            check_equal(committed->other, 2);
+        }
 
         check_equal(vxml_session_close(&session), VXML_OK);
         vxml_session_destroy(&session);
