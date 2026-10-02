@@ -4672,6 +4672,7 @@ static vxml_status cmeta_compile_prompt_schema(
     const salts_xml_attribute timeout_attribute =
         cmeta_attribute(prompt, "timeout");
     size_t child_index;
+    size_t dynamic_mark_count = 0u;
     unsigned count = 1u;
     bool has_timeout = false;
     uint64_t timeout_us = UINT64_C(0);
@@ -4690,7 +4691,6 @@ static vxml_status cmeta_compile_prompt_schema(
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
     out->first_fallback = builder->prompt_fallback_index;
-    out->first_dynamic_mark = builder->prompt_mark_expr_index;
     out->bargein = bargein_attribute.impl == NULL ||
         cmeta_decoded_equal(
             salts_xml_attribute_value(bargein_attribute), "true");
@@ -4961,6 +4961,7 @@ static vxml_status cmeta_compile_prompt_schema(
                 *dynamic = (vxml_cmeta_prompt_mark_expr_row){
                     .segment_index = absolute_segment,
                     .expression = VXML_CMETA_NO_INDEX};
+                ++dynamic_mark_count;
             } else {
                 status = cmeta_retain_decoded_view(
                     builder, salts_xml_attribute_value(name),
@@ -4995,8 +4996,7 @@ static vxml_status cmeta_compile_prompt_schema(
         builder->prompt_segment_index - out->first_segment;
     out->fallback_count =
         builder->prompt_fallback_index - out->first_fallback;
-    out->dynamic_mark_count =
-        builder->prompt_mark_expr_index - out->first_dynamic_mark;
+    out->dynamic_mark_count = dynamic_mark_count;
     if (out->segment_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -7900,20 +7900,23 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
     const vxml_cmeta_expr_compile_scope *scopes,
     size_t scope_count) {
     size_t child_index;
+    size_t side_index = 0u;
     size_t dynamic_offset = 0u;
     if (builder == NULL || prompt == NULL)
         return VXML_INVALID_ARGUMENT;
     if (prompt->dynamic_mark_count == 0u)
         return VXML_OK;
-    if (!range_valid(
-            prompt->first_dynamic_mark,
-            prompt->dynamic_mark_count,
-            builder->profile->prompt_mark_expr_count) ||
-        builder->profile->prompt_mark_exprs == NULL)
+    if (builder->profile->prompt_mark_exprs == NULL ||
+        builder->profile->prompt_mark_expr_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(prompt_node),
-            "VoiceXML dynamic mark range changed between passes");
+            "VoiceXML dynamic mark rows are missing");
+
+    while (side_index < builder->profile->prompt_mark_expr_count &&
+           builder->profile->prompt_mark_exprs[side_index].segment_index <
+               prompt->first_segment)
+        ++side_index;
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt_node);
@@ -7927,13 +7930,13 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
         if (!cmeta_node_named(child, "mark") ||
             nameexpr.impl == NULL)
             continue;
-        if (dynamic_offset >= prompt->dynamic_mark_count)
+        if (dynamic_offset >= prompt->dynamic_mark_count ||
+            side_index >= builder->profile->prompt_mark_expr_count)
             return cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
                 "VoiceXML dynamic mark count changed between passes");
-        row = &builder->profile->prompt_mark_exprs[
-            prompt->first_dynamic_mark + dynamic_offset++];
+        row = &builder->profile->prompt_mark_exprs[side_index++];
         if (row->segment_index < prompt->first_segment ||
             row->segment_index >=
                 prompt->first_segment + prompt->segment_count ||
@@ -7954,6 +7957,7 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
                 builder->diagnostic, VXML_SEMANTIC_ERROR,
                 salts_xml_attribute_location(nameexpr),
                 "VoiceXML mark nameexpr must produce STRING");
+        ++dynamic_offset;
     }
     if (dynamic_offset != prompt->dynamic_mark_count)
         return cmeta_program_fail(
