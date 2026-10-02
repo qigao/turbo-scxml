@@ -3,6 +3,7 @@
 
 #include <xml_parser/xml_parser.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
