@@ -3639,6 +3639,7 @@ static vxml_status cmeta_measure_record_utterance_property(
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     bool *saw_record_utterance,
+    bool *record_utterance_enabled,
     bool *saw_record_utterance_type,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {"name", "value"};
@@ -3677,8 +3678,9 @@ static vxml_status cmeta_measure_record_utterance_property(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(value),
                 "VoiceXML recordutterance must be true or false");
-        if (cmeta_decoded_equal(
-                salts_xml_attribute_value(value), "true") &&
+        *record_utterance_enabled = cmeta_decoded_equal(
+            salts_xml_attribute_value(value), "true");
+        if (*record_utterance_enabled &&
             !cmeta_collect_recording_options_valid(options))
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_CONTRACT,
@@ -3747,6 +3749,7 @@ static vxml_status cmeta_measure_form(
     bool saw_directed = false;
     bool saw_filled = false;
     bool saw_record_utterance = false;
+    bool record_utterance_enabled = false;
     bool saw_record_utterance_type = false;
     const size_t first_block = measurement->block_count;
     const size_t first_field = measurement->field_count;
@@ -3829,6 +3832,7 @@ static vxml_status cmeta_measure_form(
             property_status = cmeta_measure_record_utterance_property(
                 child, version_21, options, measurement, limits,
                 &saw_record_utterance,
+                &record_utterance_enabled,
                 &saw_record_utterance_type,
                 diagnostic);
             if (property_status != VXML_OK) return property_status;
@@ -4034,6 +4038,12 @@ static vxml_status cmeta_measure_form(
             if (status != VXML_OK) return status;
         }
     }
+
+    if (record_utterance_enabled && form_initial_count != 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(form),
+            "recordutterance with mixed-initiative initial is deferred; use directed fields");
 
     if (measurement->block_count == first_block &&
         measurement->field_count == first_field &&
