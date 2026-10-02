@@ -1668,6 +1668,103 @@ static bool consume_step(vxml_cmeta_session_data *session) {
     return true;
 }
 
+static bool collect_pending_recording_metadata(
+    const vxml_cmeta_session_data *session,
+    size_t source_field,
+    size_t *out_size,
+    uint64_t *out_duration_ms) {
+    unsigned state;
+    if (out_size != NULL) *out_size = 0u;
+    if (out_duration_ms != NULL) *out_duration_ms = UINT64_C(0);
+    if (session == NULL ||
+        !session->collect_in_flight ||
+        !session->collect_mailbox.record_utterance_expected ||
+        session->collect_mailbox.recording.lease == NULL ||
+        session->collect_mailbox.recording.data == NULL ||
+        session->collect_mailbox.recording.size == 0u)
+        return false;
+    if (source_field != VXML_CMETA_NO_INDEX &&
+        session->active_field != source_field)
+        return false;
+    state = atomic_load_explicit(
+        &session->collect_mailbox.state, memory_order_acquire);
+    if (state != VXML_CMETA_COLLECT_MAILBOX_WRITING)
+        return false;
+    if (out_size != NULL)
+        *out_size = session->collect_mailbox.recording.size;
+    if (out_duration_ms != NULL)
+        *out_duration_ms =
+            session->collect_mailbox.recording_duration_us / UINT64_C(1000);
+    return true;
+}
+
+static vxml_status evaluate_recording_shadow_expression(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    bool staged,
+    const vxml_cmeta_expression_row *row,
+    vxml_cmeta_value_view *out_value) {
+    size_t size = 0u;
+    uint64_t duration_ms = UINT64_C(0);
+    bool defined = false;
+    if (session == NULL || program == NULL || row == NULL ||
+        out_value == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_value = (vxml_cmeta_value_view){
+        .kind = VXML_CMETA_VALUE_UNDEFINED};
+
+    switch (row->source_kind) {
+    case VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_SIZE:
+    case VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_DURATION:
+        if (staged)
+            defined = collect_pending_recording_metadata(
+                session, VXML_CMETA_NO_INDEX, &size, &duration_ms);
+        if (!defined && session->collect_utterance_result.live) {
+            size = session->collect_utterance_result.recording.size;
+            duration_ms =
+                session->collect_utterance_result.duration_us /
+                UINT64_C(1000);
+            defined = true;
+        }
+        break;
+    case VXML_CMETA_EXPRESSION_FIELD_RECORDING_SIZE:
+    case VXML_CMETA_EXPRESSION_FIELD_RECORDING_DURATION:
+        if (row->source_field >= program->field_count ||
+            session->field_recording_shadows == NULL ||
+            row->source_field >= session->field_recording_shadow_count)
+            return VXML_INVALID_STRUCTURE;
+        if (staged)
+            defined = collect_pending_recording_metadata(
+                session, row->source_field, &size, &duration_ms);
+        if (!defined) {
+            const vxml_cmeta_field_recording_shadow *shadow =
+                &session->field_recording_shadows[row->source_field];
+            if (shadow->assigned && shadow->has_recording) {
+                size = shadow->size;
+                duration_ms = shadow->duration_ms;
+                defined = true;
+            }
+        }
+        break;
+    case VXML_CMETA_EXPRESSION_GENERIC:
+    default:
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (!defined)
+        return VXML_OK;
+
+    out_value->kind = VXML_CMETA_VALUE_UINT;
+    out_value->data.uint_value =
+        row->source_kind ==
+                VXML_CMETA_EXPRESSION_LASTRESULT_RECORDING_SIZE ||
+            row->source_kind ==
+                VXML_CMETA_EXPRESSION_FIELD_RECORDING_SIZE
+            ? (uint64_t)size
+            : duration_ms;
+    return VXML_OK;
+}
+
 static vxml_status evaluate_expression(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -1684,6 +1781,11 @@ static vxml_status evaluate_expression(
         scope_count > session->runtime_scope_capacity ||
         (scope_count != 0u && scopes == NULL))
         return VXML_INVALID_STRUCTURE;
+    if (program->expressions[expression].source_kind !=
+            VXML_CMETA_EXPRESSION_GENERIC)
+        return evaluate_recording_shadow_expression(
+            session, program, staged,
+            &program->expressions[expression], out_value);
     for (index = 0u; index < scope_count; ++index) {
         const size_t scope = scopes[index];
         unsigned char *declared;
