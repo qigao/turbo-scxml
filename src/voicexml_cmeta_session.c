@@ -133,6 +133,23 @@ static bool session_subdialog_options_valid(
         adapter->cancel != NULL;
 }
 
+static bool session_record_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, max_record_bytes) +
+        sizeof(options->max_record_bytes);
+    const vxml_cmeta_record_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size ||
+        options->max_record_bytes == 0u)
+        return false;
+    adapter = options->record;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_CMETA_RECORD_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->prepare != NULL &&
+        adapter->cancel != NULL;
+}
+
 static bool collect_adapter_has_menu(
     const vxml_cmeta_collect_adapter_v1 *adapter) {
     const size_t tail_size =
@@ -441,12 +458,54 @@ static bool session_subdialogs_valid(
     return true;
 }
 
+static bool session_records_valid(
+    const vxml_cmeta_program_data *program) {
+    size_t index;
+    if (program == NULL ||
+        (program->record_count != 0u && program->records == NULL))
+        return false;
+    for (index = 0u; index < program->record_count; ++index) {
+        const vxml_cmeta_record_row *row = &program->records[index];
+        const vxml_cmeta_form_row *form;
+        if (row->form >= program->form_count ||
+            program->forms == NULL ||
+            row->name == NULL || row->name_size == 0u ||
+            row->max_duration_us == UINT64_C(0) ||
+            row->max_final_silence_us == UINT64_C(0) ||
+            (row->has_maxtime &&
+             row->maxtime_us > row->max_duration_us) ||
+            (row->has_final_silence &&
+             row->final_silence_us > row->max_final_silence_us) ||
+            ((row->media_type == NULL) !=
+             (row->media_type_size == 0u)) ||
+            (row->condition != VXML_CMETA_NO_INDEX &&
+             row->condition >= program->expression_count) ||
+            (row->filled != VXML_CMETA_NO_INDEX &&
+             (row->filled >= program->filled_count ||
+              program->filled == NULL ||
+              program->filled[row->filled].form != row->form ||
+              program->filled[row->filled].mode !=
+                  VXML_CMETA_FILLED_FIELD ||
+              program->filled[row->filled].field !=
+                  VXML_CMETA_NO_INDEX)))
+            return false;
+        form = &program->forms[row->form];
+        if (form->scope >= program->scope_count ||
+            row->form_item_slot == VXML_CMETA_NO_INDEX ||
+            row->form_item_slot >=
+                program->scopes[form->scope].schema.slot_count)
+            return false;
+    }
+    return true;
+}
+
 static bool session_root_contract_valid(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_session_options_v1 *options) {
     const cmeta_data_struct_shape *shape = session_root_shape(program);
     return session_root_fields_valid(program) &&
-        session_subdialogs_valid(program) && shape != NULL &&
+        session_subdialogs_valid(program) &&
+        session_records_valid(program) && shape != NULL &&
         (shape->field_count == 0u || options->initial_root != NULL);
 }
 
@@ -958,6 +1017,26 @@ static void settle_subdialog(
     subdialog_snapshot_destroy(session);
 }
 
+static void settle_record(
+    vxml_cmeta_session_data *session) {
+    if (session == NULL) return;
+    if (session->record_prepared) {
+        vxml_cmeta_record_ticket_v1 ticket =
+            session->record_ticket;
+        session->record_prepared = false;
+        session->record_ticket =
+            (vxml_cmeta_record_ticket_v1){0};
+        if (ticket.discard != NULL)
+            ticket.discard(ticket.user);
+    } else if (session->record_in_flight &&
+               session->record_adapter != NULL) {
+        const uint64_t generation = session->record_generation;
+        session->record_in_flight = false;
+        session->record_adapter->cancel(
+            session->record_user, generation);
+    }
+}
+
 static void session_data_destroy(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
@@ -989,6 +1068,7 @@ static void session_data_destroy(
         VXML_CMETA_COLLECT_MAILBOX_CLOSED,
         memory_order_release);
     settle_subdialog(session);
+    settle_record(session);
     if (session->collect_prepared) {
         vxml_cmeta_collect_ticket_v1 ticket = session->collect_ticket;
         session->collect_prepared = false;
@@ -2830,6 +2910,7 @@ vxml_status vxml_cmeta_session_init_profile(
     profile->active_field = VXML_CMETA_NO_INDEX;
     profile->active_initial = VXML_CMETA_NO_INDEX;
     profile->active_subdialog = VXML_CMETA_NO_INDEX;
+    profile->active_record = VXML_CMETA_NO_INDEX;
     profile->active_menu = VXML_CMETA_NO_INDEX;
     profile->active_block = VXML_CMETA_NO_INDEX;
     profile->collect_mailbox.item_kind = VXML_CMETA_COLLECT_ITEM_FIELD;
@@ -2865,6 +2946,15 @@ vxml_status vxml_cmeta_session_init_profile(
             profile->max_subdialog_snapshot_bytes =
                 options->max_subdialog_snapshot_bytes;
         }
+    }
+    if (program->record_count != 0u) {
+        if (!session_record_options_valid(options)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->record_adapter = options->record;
+        profile->record_user = options->record_user;
+        profile->max_record_bytes = options->max_record_bytes;
     }
     if (session_subdialog_completion_options_present(options)) {
         if (options->max_subdialog_completion_bytes == 0u) {
