@@ -6385,32 +6385,6 @@ static vxml_status cmeta_register_record_item(
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
 
-    if (builder->profile->scopes[form_scope].schema.slot_count >=
-            builder->options->max_scope_slots ||
-        cmeta_scope_storage_limit_exceeded(
-            &builder->profile->scopes[form_scope].schema,
-            &vxml_cmeta_transfer_result_data)) {
-        status = cmeta_program_fail(
-            builder->diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_node_location(transfer),
-            "VoiceXML transfer result slot exceeds form scope bounds");
-        goto done;
-    }
-    conflict = false;
-    if (!cmeta_scope_register(
-            &builder->profile->scopes[form_scope].schema,
-            out->name, out->name_size,
-            &vxml_cmeta_transfer_result_data,
-            &out->result_slot, &conflict)) {
-        status = cmeta_program_fail(
-            builder->diagnostic,
-            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
-            salts_xml_attribute_location(name_attribute),
-            conflict ? "VoiceXML transfer result slot type conflict"
-                     : "VoiceXML transfer result slot allocation failed");
-        goto done;
-    }
-
     written = snprintf(
         control_name, sizeof(control_name),
         "\x1f" "record:%zu", record_index);
@@ -6663,6 +6637,32 @@ static vxml_status cmeta_register_transfer_item(
         salts_xml_attribute_location(name_attribute),
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
+
+    if (builder->profile->scopes[form_scope].schema.slot_count >=
+            builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(
+            &builder->profile->scopes[form_scope].schema,
+            &vxml_cmeta_transfer_result_data)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(transfer),
+            "VoiceXML transfer result slot exceeds form scope bounds");
+        goto done;
+    }
+    conflict = false;
+    if (!cmeta_scope_register(
+            &builder->profile->scopes[form_scope].schema,
+            out->name, out->name_size,
+            &vxml_cmeta_transfer_result_data,
+            &out->result_slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(name_attribute),
+            conflict ? "VoiceXML transfer result slot type conflict"
+                     : "VoiceXML transfer result slot allocation failed");
+        goto done;
+    }
 
     written = snprintf(
         control_name, sizeof(control_name),
@@ -7034,12 +7034,13 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->record_count;
-    if (capacity > SIZE_MAX - measurement->transfer_count)
+    if (measurement->transfer_count >
+            (SIZE_MAX - capacity) / 2u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
-    capacity += measurement->transfer_count;
+    capacity += measurement->transfer_count * 2u;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
