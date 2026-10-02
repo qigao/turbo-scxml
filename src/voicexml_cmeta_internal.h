@@ -691,6 +691,9 @@ typedef struct vxml_cmeta_session_data {
     size_t prompt_media_projected_segment_capacity;
     char *prompt_media_dynamic_mark_storage;
     size_t prompt_media_dynamic_mark_storage_capacity;
+    uint64_t prompt_media_projected_generation;
+    size_t prompt_media_projected_first_segment;
+    size_t prompt_media_projected_segment_count;
     uint64_t prompt_media_generation;
     uint64_t prompt_media_barged_generation;
     uint64_t prompt_media_mark_generation;
