@@ -85,6 +85,9 @@ static_assert(
     std::is_standard_layout<vxml_cmeta_subdialog_completion_v1>::value,
     "subdialog completion must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_navigation_request_v1>::value,
+    "navigation request must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_cmeta_collect_completion_v1>::value,
     "collect completion must remain C-compatible");
 static_assert(
@@ -159,6 +162,7 @@ int main() {
     const cmeta_type_desc *peer_type =
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
+    vxml_navigation_request_v1 navigation_request{};
     vxml_cmeta_prompt_view_v1 prompt_view{};
     vxml_cmeta_prompt_media_segment_v1 prompt_media_segment{};
     vxml_cmeta_prompt_media_fallback_v1 prompt_media_fallback{
@@ -251,6 +255,7 @@ int main() {
     auto discard_subdialog = &vxml_session_cmeta_subdialog_discard;
     auto complete_subdialog = &vxml_session_cmeta_subdialog_try_complete;
     auto run_subdialog_completion = &vxml_session_cmeta_subdialog_run_ready;
+    auto query_navigation = &vxml_session_navigation_request;
     auto query_collect_v2 = &vxml_session_cmeta_collect_request_v2;
     auto complete_collect_v3 =
         &vxml_session_cmeta_collect_try_complete_v3;
@@ -390,6 +395,9 @@ int main() {
         VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED != 0 ||
         subdialog_param.source != VXML_CMETA_SUBDIALOG_PARAM_TYPED ||
         subdialog_ticket.commit != nullptr ||
+        query_navigation == nullptr ||
+        navigation_request.abi_version !=
+            VXML_NAVIGATION_REQUEST_ABI_V1 ||
         query_collect_v2 == nullptr ||
         complete_collect_v3 == nullptr ||
         query_collect_utterance == nullptr ||
@@ -440,6 +448,9 @@ int main() {
     initial_request.abi_version =
         VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1;
     initial_request.struct_size = sizeof(initial_request);
+    navigation_request.abi_version =
+        VXML_NAVIGATION_REQUEST_ABI_V1;
+    navigation_request.struct_size = sizeof(navigation_request);
     collect_request_v2.abi_version =
         VXML_CMETA_COLLECT_REQUEST_ABI_V2;
     collect_request_v2.struct_size = sizeof(collect_request_v2);
