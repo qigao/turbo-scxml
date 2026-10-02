@@ -52,6 +52,13 @@ int main(void) {
     vxml_cmeta_record_adapter_v1 record_adapter = {
         .abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_record_adapter_v1)};
+    vxml_cmeta_transfer_request_v1 transfer_request = {
+        .abi_version = VXML_CMETA_TRANSFER_REQUEST_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_transfer_request_v1)};
+    vxml_cmeta_transfer_ticket_v1 transfer_ticket = {0};
+    vxml_cmeta_transfer_adapter_v1 transfer_adapter = {
+        .abi_version = VXML_CMETA_TRANSFER_ADAPTER_ABI_V1,
+        .struct_size = sizeof(vxml_cmeta_transfer_adapter_v1)};
     vxml_cmeta_recording_lease_v1 recording_lease = {0};
     vxml_cmeta_record_completion_v1 record_completion = {
         .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1,
@@ -187,6 +194,16 @@ int main(void) {
         const vxml_session *, const char *, size_t,
         vxml_cmeta_record_result_view_v1 *) =
         vxml_session_cmeta_record_result;
+    vxml_status (*query_transfer)(
+        const vxml_session *, vxml_cmeta_transfer_request_v1 *) =
+        vxml_session_cmeta_transfer_request;
+    vxml_status (*prepare_transfer)(
+        vxml_session *, const char **) =
+        vxml_session_cmeta_transfer_prepare;
+    vxml_status (*commit_transfer)(vxml_session *) =
+        vxml_session_cmeta_transfer_commit;
+    vxml_status (*discard_transfer)(vxml_session *) =
+        vxml_session_cmeta_transfer_discard;
     vxml_status (*prepare_subdialog)(
         vxml_session *, const char **) =
         vxml_session_cmeta_subdialog_prepare;
@@ -236,6 +253,15 @@ int main(void) {
         record_ticket.commit != NULL ||
         VXML_CMETA_RECORD_CAP_BEEP == 0u ||
         VXML_CMETA_RECORD_CAP_DTMF_TERM == 0u ||
+        query_transfer == NULL || prepare_transfer == NULL ||
+        commit_transfer == NULL || discard_transfer == NULL ||
+        transfer_request.abi_version !=
+            VXML_CMETA_TRANSFER_REQUEST_ABI_V1 ||
+        transfer_adapter.abi_version !=
+            VXML_CMETA_TRANSFER_ADAPTER_ABI_V1 ||
+        transfer_ticket.commit != NULL ||
+        VXML_CMETA_TRANSFER_CAP_BLIND == 0u ||
+        VXML_CMETA_TRANSFER_CAP_BRIDGE == 0u ||
         prepare_subdialog == NULL || commit_subdialog == NULL ||
         discard_subdialog == NULL ||
         complete_subdialog == NULL || run_subdialog_completion == NULL ||
