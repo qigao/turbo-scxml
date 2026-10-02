@@ -919,6 +919,16 @@ typedef struct vxml_cmeta_prompt_mark_view_v1 {
 
 #define VXML_CMETA_PROMPT_MARK_VIEW_ABI_V1 1u
 
+typedef struct vxml_cmeta_prompt_mark_progress_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    size_t segment_index;
+    uint64_t playback_elapsed_ms;
+} vxml_cmeta_prompt_mark_progress_v2;
+
+#define VXML_CMETA_PROMPT_MARK_PROGRESS_ABI_V2 2u
+
 typedef enum vxml_cmeta_prompt_barge_result {
     VXML_CMETA_PROMPT_BARGE_CANCELED = 0,
     VXML_CMETA_PROMPT_BARGE_DISABLED,
@@ -958,6 +968,27 @@ typedef struct vxml_cmeta_prompt_media_completion_v1 {
 } vxml_cmeta_prompt_media_completion_v1;
 
 #define VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1 1u
+
+typedef struct vxml_cmeta_prompt_media_completion_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t generation;
+    vxml_cmeta_prompt_media_outcome outcome;
+    vxml_cmeta_prompt_media_failure failure;
+    uint64_t playback_elapsed_ms;
+} vxml_cmeta_prompt_media_completion_v2;
+
+#define VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V2 2u
+
+typedef struct vxml_cmeta_prompt_barge_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    uint64_t collect_generation;
+    vxml_cmeta_prompt_bargein_type signal_type;
+    uint64_t playback_elapsed_ms;
+} vxml_cmeta_prompt_barge_v2;
+
+#define VXML_CMETA_PROMPT_BARGE_ABI_V2 2u
 
 typedef struct vxml_cmeta_prompt_view_v1 {
     uint32_t abi_version;
@@ -1314,6 +1345,15 @@ vxml_session_cmeta_prompt_media_try_complete(
     const vxml_cmeta_prompt_media_completion_v1 *completion);
 
 /**
+ * V2 terminal observation with provider playback-timeline milliseconds.
+ * ACCEPTED timing is consumed by run_ready(); TurboSCXML does not read a clock.
+ */
+vxml_cmeta_prompt_media_ingress_result
+vxml_session_cmeta_prompt_media_try_complete_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_media_completion_v2 *completion);
+
+/**
  * Single-owner progress point. Settles at most one ready playback completion.
  * A completed provider generation is not canceled again.
  */
@@ -1336,6 +1376,12 @@ vxml_session_cmeta_prompt_media_barge_in(
     uint64_t collect_generation,
     vxml_cmeta_prompt_bargein_type signal_type);
 
+/** V2 barge observation carrying provider playback-timeline milliseconds. */
+vxml_cmeta_prompt_barge_result
+vxml_session_cmeta_prompt_media_barge_in_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_barge_v2 *barge);
+
 /**
  * Single-owner progress point reporting that one Program-owned MARK segment
  * has been executed. An asynchronous provider must marshal its callback to the
@@ -1350,6 +1396,12 @@ vxml_session_cmeta_prompt_media_mark(
     uint64_t generation,
     size_t segment_index);
 
+/** V2 MARK progress carrying provider playback-timeline milliseconds. */
+vxml_cmeta_prompt_mark_result
+vxml_session_cmeta_prompt_media_mark_v2(
+    vxml_session *session,
+    const vxml_cmeta_prompt_mark_progress_v2 *progress);
+
 /**
  * Borrow the last MARK executed for the most recently committed prompt
  * generation. segment_index is relative to that prompt batch. The returned
@@ -1358,6 +1410,17 @@ vxml_session_cmeta_prompt_media_mark(
 vxml_status vxml_session_cmeta_prompt_media_last_mark(
     const vxml_session *session,
     vxml_cmeta_prompt_mark_view_v1 *out_mark);
+
+/**
+ * Resolve exact VoiceXML 2.1 mark result shadow paths.
+ * Supports application.lastresult$.markname / marktime and matching
+ * active-form field_name$ paths. Undefined results return VALUE_UNDEFINED.
+ */
+vxml_status vxml_session_cmeta_mark_shadow_value(
+    const vxml_session *session,
+    const char *path,
+    size_t path_size,
+    vxml_cmeta_value_view *out_value);
 
 vxml_status vxml_session_cmeta_terminal_kind(
     const vxml_session *session,
