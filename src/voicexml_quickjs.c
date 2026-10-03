@@ -1036,14 +1036,34 @@ static vxml_status quickjs_run_at(
     return quickjs_run_from(session, form_index, SIZE_MAX);
 }
 
+static void quickjs_session_data_release(
+    const vxml_quickjs_program_data *program_data,
+    vxml_quickjs_session_data *data) {
+    if (data == NULL) return;
+    if (program_data != NULL &&
+        compile_options_state_enabled(&program_data->options))
+        quickjs_cmeta_state_scratch_destroy(
+            &data->committed_root,
+            program_data->options.root);
+    quickjs_sandbox_runtime_destroy(&data->runtime);
+    vxml_free(data->data_values);
+    vxml_free(data->data_fields);
+    vxml_free(data->dynamic_uri);
+    vxml_free(data);
+}
+
 static vxml_status quickjs_profile_session_init(
     vxml_session_impl *session, const void *options_value) {
     const vxml_quickjs_session_options_v1 *options =
         (const vxml_quickjs_session_options_v1 *)options_value;
     const vxml_quickjs_program_data *program_data;
-    vxml_quickjs_session_data *data;
+    vxml_quickjs_session_data *data = NULL;
     quickjs_sandbox_options sandbox;
     quickjs_sandbox_status sandbox_status;
+    size_t dynamic_uri_bytes;
+    size_t max_fields = 0u;
+    size_t value_slot_bytes = 0u;
+    bool has_data;
 
     if (session == NULL || session->program == NULL ||
         session->program->profile_data == NULL ||
@@ -1057,21 +1077,91 @@ static vxml_status quickjs_profile_session_init(
         (session_initial_state(options) != NULL))
         return VXML_INVALID_ARGUMENT;
 
+    has_data = session->program->data_row_count != 0u;
+    if (has_data) {
+        if (!compile_options_data_enabled(&program_data->options) ||
+            session->program->data_rows == NULL ||
+            !session_options_has_data_tail(options) ||
+            !data_resource_adapter_v3_valid(options->data_resources) ||
+            options->max_data_bytes == 0u ||
+            options->max_data_request_value_bytes == 0u ||
+            options->max_data_request_value_bytes == SIZE_MAX)
+            return VXML_INVALID_ARGUMENT;
+        if (program_requires_data_fetch_audio(session->program) &&
+            !fetch_audio_adapter_valid(options->data_fetch_audio))
+            return VXML_INVALID_ARGUMENT;
+        max_fields = program_max_data_fields(session->program);
+        if (max_fields >
+            program_data->options.max_data_namelist_fields)
+            return VXML_INVALID_CONTRACT;
+        value_slot_bytes =
+            options->max_data_request_value_bytes + 1u;
+        if (max_fields != 0u &&
+            max_fields > SIZE_MAX / value_slot_bytes)
+            return VXML_INVALID_ARGUMENT;
+    }
+
+    dynamic_uri_bytes =
+        program_data->options.max_dynamic_script_uri_bytes;
+    if (compile_options_data_enabled(&program_data->options) &&
+        program_data->options.max_data_uri_bytes > dynamic_uri_bytes)
+        dynamic_uri_bytes =
+            program_data->options.max_data_uri_bytes;
+    if (dynamic_uri_bytes == SIZE_MAX)
+        return VXML_INVALID_CONTRACT;
+
     data = (vxml_quickjs_session_data *)vxml_calloc(1u, sizeof(*data));
     if (data == NULL)
         return VXML_ALLOCATION_FAILED;
     data->dynamic_uri =
-        (char *)vxml_malloc(
-            program_data->options.max_dynamic_script_uri_bytes + 1u);
+        (char *)vxml_malloc(dynamic_uri_bytes + 1u);
     if (data->dynamic_uri == NULL) {
-        vxml_free(data);
+        quickjs_session_data_release(program_data, data);
         return VXML_ALLOCATION_FAILED;
     }
-    data->dynamic_uri_capacity =
-        program_data->options.max_dynamic_script_uri_bytes + 1u;
+    data->dynamic_uri_capacity = dynamic_uri_bytes + 1u;
     data->resume_form = SIZE_MAX;
     data->resume_block = SIZE_MAX;
     data->script_pending = false;
+    data->document_data_done = false;
+
+    if (has_data) {
+        data->data_resources = *options->data_resources;
+        data->data_resource_user = options->data_resource_user;
+        data->has_data_resources = true;
+        data->max_data_bytes = options->max_data_bytes;
+        data->max_data_request_value_bytes =
+            options->max_data_request_value_bytes;
+        data->data_field_capacity = max_fields;
+        if (max_fields != 0u) {
+            data->data_fields =
+                (vxml_cmeta_data_field_v1 *)vxml_calloc(
+                    max_fields, sizeof(*data->data_fields));
+            data->data_values_bytes =
+                max_fields * value_slot_bytes;
+            data->data_values =
+                (char *)vxml_malloc(data->data_values_bytes);
+            if (data->data_fields == NULL ||
+                data->data_values == NULL) {
+                quickjs_session_data_release(
+                    program_data, data);
+                return VXML_ALLOCATION_FAILED;
+            }
+        }
+        if (options->data_fetch_audio != NULL) {
+            if (!fetch_audio_adapter_valid(
+                    options->data_fetch_audio)) {
+                quickjs_session_data_release(
+                    program_data, data);
+                return VXML_INVALID_ARGUMENT;
+            }
+            data->data_fetch_audio =
+                *options->data_fetch_audio;
+            data->data_fetch_audio_user =
+                options->data_fetch_audio_user;
+            data->has_data_fetch_audio = true;
+        }
+    }
 
     if (compile_options_state_enabled(&program_data->options) &&
         !quickjs_cmeta_state_snapshot(
@@ -1079,22 +1169,22 @@ static vxml_status quickjs_profile_session_init(
             program_data->options.root,
             session_initial_state(options),
             program_data->options.max_snapshot_bytes)) {
-        vxml_free(data->dynamic_uri);
-        vxml_free(data);
+        quickjs_session_data_release(program_data, data);
         return VXML_ALLOCATION_FAILED;
     }
 
     sandbox = sandbox_options(&program_data->options);
+    if (has_data &&
+        data->max_data_request_value_bytes >
+            sandbox.max_string_bytes)
+        sandbox.max_string_bytes =
+            data->max_data_request_value_bytes;
     sandbox_status = quickjs_sandbox_runtime_init(
         &data->runtime, &sandbox, NULL, 0u);
     if (sandbox_status != QUICKJS_SANDBOX_OK) {
-        vxml_status status = sandbox_status_to_vxml(sandbox_status);
-        if (compile_options_state_enabled(&program_data->options))
-            quickjs_cmeta_state_scratch_destroy(
-                &data->committed_root,
-                program_data->options.root);
-        vxml_free(data->dynamic_uri);
-        vxml_free(data);
+        const vxml_status status =
+            sandbox_status_to_vxml(sandbox_status);
+        quickjs_session_data_release(program_data, data);
         return status;
     }
     session->profile_data = data;
@@ -1123,23 +1213,17 @@ static vxml_status quickjs_profile_session_start_at(
 
 static void quickjs_profile_session_destroy(
     vxml_session_impl *session) {
+    const vxml_quickjs_program_data *program_data = NULL;
     vxml_quickjs_session_data *data;
     if (session == NULL || session->profile_data == NULL)
         return;
     data = (vxml_quickjs_session_data *)session->profile_data;
     if (session->program != NULL &&
-        session->program->profile_data != NULL) {
-        const vxml_quickjs_program_data *program_data =
+        session->program->profile_data != NULL)
+        program_data =
             (const vxml_quickjs_program_data *)
                 session->program->profile_data;
-        if (compile_options_state_enabled(&program_data->options))
-            quickjs_cmeta_state_scratch_destroy(
-                &data->committed_root,
-                program_data->options.root);
-    }
-    quickjs_sandbox_runtime_destroy(&data->runtime);
-    vxml_free(data->dynamic_uri);
-    vxml_free(data);
+    quickjs_session_data_release(program_data, data);
     session->profile_data = NULL;
 }
 
