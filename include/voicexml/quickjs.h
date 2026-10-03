@@ -21,8 +21,8 @@ extern "C" {
 /**
  * Bounded limits for the opt-in VoiceXML QuickJS script-target profile.
  *
- * No QuickJS ABI type crosses this boundary. These limits apply only to
- * script@srcexpr validation/evaluation and its Session-owned URI result.
+ * No QuickJS ABI type crosses this boundary. These limits cover
+ * script@srcexpr plus the opt-in VoiceXML 2.1 no-DOM <data> request profile.
  *
  * The profile does not expose or claim a deterministic QuickJS bytecode
  * instruction-count quota. Runtime safety uses explicit heap/stack bounds,
