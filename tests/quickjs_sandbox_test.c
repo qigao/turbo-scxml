@@ -309,6 +309,81 @@ spec("private QuickJS sandbox kernel") {
         quickjs_sandbox_runtime_destroy(&runtime);
     }
 
+
+    it("reads exact global namelist properties without evaluating names") {
+        static const char setup[] =
+            "globalThis.alpha='A';"
+            "globalThis.count=42;"
+            "globalThis.flag=true;"
+            "globalThis['na-me']='dash';"
+            "globalThis.obj={};";
+        static const char *const names[] = {
+            "alpha", "count", "flag", "na-me"
+        };
+        static const char *const expected[] = {
+            "A", "42", "true", "dash"
+        };
+        static const char *const rejected[] = {
+            "obj", "Object", "missing"
+        };
+        quickjs_sandbox_options options = sandbox_options();
+        quickjs_sandbox_runtime runtime = {0};
+        char diagnostic[256] = {0};
+        size_t index;
+
+        check_equal(
+            quickjs_sandbox_runtime_init(
+                &runtime, &options,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_equal(
+            quickjs_sandbox_runtime_eval(
+                &runtime,
+                setup, sizeof(setup) - 1u,
+                "<global-setup>",
+                options.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+
+        for (index = 0u;
+             index < sizeof(names) / sizeof(names[0]);
+             ++index) {
+            const char *value = NULL;
+            size_t value_size = 0u;
+            check_equal(
+                quickjs_sandbox_get_global_scalar_string(
+                    &runtime,
+                    names[index], strlen(names[index]),
+                    options.max_eval_milliseconds,
+                    &value, &value_size,
+                    diagnostic, sizeof(diagnostic)),
+                QUICKJS_SANDBOX_OK);
+            check_not_null(value);
+            check_equal(value_size, strlen(expected[index]));
+            check_equal(
+                memcmp(value, expected[index], value_size),
+                0);
+        }
+
+        for (index = 0u;
+             index < sizeof(rejected) / sizeof(rejected[0]);
+             ++index) {
+            const char *value = NULL;
+            size_t value_size = 0u;
+            check_equal(
+                quickjs_sandbox_get_global_scalar_string(
+                    &runtime,
+                    rejected[index], strlen(rejected[index]),
+                    options.max_eval_milliseconds,
+                    &value, &value_size,
+                    diagnostic, sizeof(diagnostic)),
+                QUICKJS_SANDBOX_TYPE_MISMATCH);
+            check_null(value);
+            check_equal(value_size, (size_t)0u);
+        }
+        quickjs_sandbox_runtime_destroy(&runtime);
+    }
+
     it("interrupts an infinite evaluation and recovers with a fresh context") {
         static const char spin[] = "for (;;) {}";
         static const char after[] = "globalThis.afterTimeout = 1;";
