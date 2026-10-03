@@ -1,4 +1,5 @@
 #include <voicexml/cmeta.h>
+#include <voicexml/resource.h>
 
 #include "voicexml_allocator.h"
 #include "voicexml_cmeta_internal.h"
@@ -43,6 +44,9 @@ static bool session_data_options_valid(
     const size_t tail_size =
         offsetof(vxml_cmeta_session_options_v1, max_data_owned_bytes) +
         sizeof(options->max_data_owned_bytes);
+    const size_t adapter_prefix_size =
+        offsetof(vxml_cmeta_data_resource_adapter_v1, close) +
+        sizeof(((vxml_cmeta_data_resource_adapter_v1 *)0)->close);
     const vxml_cmeta_data_resource_adapter_v1 *adapter;
     if (options == NULL || options->struct_size < tail_size ||
         options->max_data_bytes == 0u ||
@@ -51,8 +55,23 @@ static bool session_data_options_valid(
     adapter = options->data_resources;
     return adapter != NULL &&
         adapter->abi_version == VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
-        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->struct_size >= adapter_prefix_size &&
         adapter->open != NULL && adapter->close != NULL;
+}
+
+static bool session_data_fetch_audio_options_valid(
+    const vxml_cmeta_session_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_session_options_v1, data_fetch_audio_user) +
+        sizeof(options->data_fetch_audio_user);
+    const vxml_fetch_audio_adapter_v1 *adapter;
+    if (options == NULL || options->struct_size < tail_size)
+        return false;
+    adapter = options->data_fetch_audio;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_FETCH_AUDIO_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->begin != NULL;
 }
 
 static bool session_event_options_valid(
