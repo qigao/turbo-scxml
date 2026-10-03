@@ -16,6 +16,7 @@ extern "C" {
 #define VXML_CMETA_COMPILE_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
+#define VXML_CMETA_DATA_REQUEST_ABI_V2 2u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V2 2u
@@ -259,6 +260,13 @@ typedef struct vxml_cmeta_session_options_v1 {
      * Required only when the compiled document enables recordutterance.
      */
     size_t max_collect_recording_bytes;
+
+    /*
+     * Optional append-only VoiceXML 2.1 <data> fetch-audio handoff.
+     * Used only when an effective data fetchaudio URI is present.
+     */
+    const struct vxml_fetch_audio_adapter_v1 *data_fetch_audio;
+    void *data_fetch_audio_user;
 } vxml_cmeta_session_options_v1;
 
 typedef enum vxml_cmeta_data_format {
@@ -275,6 +283,35 @@ typedef struct vxml_cmeta_data_resource_v1 {
     void *lease;
 } vxml_cmeta_data_resource_v1;
 
+typedef enum vxml_cmeta_data_fetch_hint {
+    VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED = 0,
+    VXML_CMETA_DATA_FETCH_HINT_PREFETCH,
+    VXML_CMETA_DATA_FETCH_HINT_SAFE
+} vxml_cmeta_data_fetch_hint;
+
+typedef struct vxml_cmeta_data_request_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    size_t max_bytes;
+
+    bool has_timeout;
+    uint64_t timeout_us;
+    vxml_cmeta_data_fetch_hint fetch_hint;
+    bool has_max_age;
+    uint64_t max_age_seconds;
+    bool has_max_stale;
+    uint64_t max_stale_seconds;
+} vxml_cmeta_data_request_v2;
+
+#define VXML_CMETA_DATA_REQUEST_V2_INIT \
+    {VXML_CMETA_DATA_REQUEST_ABI_V2, \
+     sizeof(vxml_cmeta_data_request_v2), \
+     NULL, 0u, 0u, false, UINT64_C(0), \
+     VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED, \
+     false, UINT64_C(0), false, UINT64_C(0)}
+
 typedef struct vxml_cmeta_data_resource_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -286,6 +323,15 @@ typedef struct vxml_cmeta_data_resource_adapter_v1 {
     void (*close)(
         void *user,
         vxml_cmeta_data_resource_v1 *resource);
+
+    /*
+     * Optional append-only policy-aware entry point.
+     * An effective V2 policy must fail closed when this callback is absent.
+     */
+    vxml_status (*open_v2)(
+        void *user,
+        const vxml_cmeta_data_request_v2 *request,
+        vxml_cmeta_data_resource_v1 *out);
 } vxml_cmeta_data_resource_adapter_v1;
 
 typedef struct vxml_cmeta_collect_ticket_v1 {
