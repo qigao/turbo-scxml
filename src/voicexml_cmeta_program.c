@@ -1992,14 +1992,6 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(prompt),
             "VoiceXML prompts require enabled prompt limits");
-    if (builder == NULL || builder->profile == NULL ||
-        builder->profile->prompts == NULL ||
-        out < builder->profile->prompts ||
-        out >= builder->profile->prompts + builder->profile->prompt_count)
-        return VXML_INVALID_STRUCTURE;
-    prompt_index =
-        (size_t)(out - builder->profile->prompts);
-
     if (!is_foreach) {
         status = cmeta_parse_prompt_count(
             count, &parsed_count, diagnostic);
@@ -5417,6 +5409,7 @@ static vxml_status cmeta_compile_prompt_schema(
     salts_xml_node prompt,
     vxml_cmeta_prompt_owner_kind owner_kind,
     size_t owner_index,
+    size_t prompt_index,
     vxml_cmeta_prompt_row *out) {
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
@@ -5428,7 +5421,6 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "timeout");
     const bool is_foreach = cmeta_node_named(prompt, "foreach");
     vxml_cmeta_prompt_foreach_row *foreach_row = NULL;
-    size_t prompt_index = VXML_CMETA_NO_INDEX;
     size_t child_index;
     size_t dynamic_mark_count = 0u;
     unsigned count = 1u;
@@ -5502,7 +5494,8 @@ static vxml_status cmeta_compile_prompt_schema(
                     salts_xml_node_location(child),
                     "nested VoiceXML prompt foreach is not supported");
             status = cmeta_compile_prompt_schema(
-                builder, child, owner_kind, owner_index, &nested);
+                builder, child, owner_kind, owner_index,
+                prompt_index, &nested);
             if (status != VXML_OK) return status;
             if (nested.dynamic_mark_count >
                     SIZE_MAX - dynamic_mark_count)
@@ -7989,12 +7982,17 @@ static vxml_status cmeta_build_schemas(
                                     VXML_INVALID_STRUCTURE,
                                     salts_xml_node_location(nested),
                                     "VoiceXML initial prompt rows changed between compiler passes");
-                            status = cmeta_compile_prompt_schema(
-                                builder, nested,
-                                VXML_CMETA_PROMPT_OWNER_INITIAL,
-                                builder->initial_index,
-                                &builder->profile->prompts[
-                                    builder->prompt_index++]);
+                            {
+                                const size_t prompt_index =
+                                    builder->prompt_index++;
+                                status = cmeta_compile_prompt_schema(
+                                    builder, nested,
+                                    VXML_CMETA_PROMPT_OWNER_INITIAL,
+                                    builder->initial_index,
+                                    prompt_index,
+                                    &builder->profile->prompts[
+                                        prompt_index]);
+                            }
                             if (status != VXML_OK) return status;
                         }
                     }
@@ -8209,12 +8207,17 @@ static vxml_status cmeta_build_schemas(
                                         VXML_INVALID_STRUCTURE,
                                         salts_xml_node_location(nested),
                                         "VoiceXML prompt rows changed between compiler passes");
-                                status = cmeta_compile_prompt_schema(
-                                    builder, nested,
-                                    VXML_CMETA_PROMPT_OWNER_FIELD,
-                                    builder->field_index,
-                                    &builder->profile->prompts[
-                                        builder->prompt_index++]);
+                                {
+                                    const size_t prompt_index =
+                                        builder->prompt_index++;
+                                    status = cmeta_compile_prompt_schema(
+                                        builder, nested,
+                                        VXML_CMETA_PROMPT_OWNER_FIELD,
+                                        builder->field_index,
+                                        prompt_index,
+                                        &builder->profile->prompts[
+                                            prompt_index]);
+                                }
                                 if (status != VXML_OK) return status;
                                 continue;
                             }
