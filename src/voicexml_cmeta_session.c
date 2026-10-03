@@ -11317,10 +11317,10 @@ static vxml_status selected_prompt_row(
                             row->first_foreach + foreach_offset];
                     if (fallback_absolute >= candidate->first_fallback &&
                         fallback_absolute - candidate->first_fallback <
-                            candidate->fallback_count) {
+                            candidate->fallback_count &&
+                        (foreach_owner == NULL ||
+                         candidate->depth > foreach_owner->depth))
                         foreach_owner = candidate;
-                        break;
-                    }
                 }
                 if (foreach_owner != NULL) {
                     source_base = foreach_owner->first_segment;
@@ -11953,9 +11953,11 @@ static vxml_status prompt_media_append_projected_segment(
         required_capabilities == NULL ||
         source_absolute >= program->prompt_segment_count ||
         program->prompt_segments == NULL ||
-        profile->prompt_media_projected_segments == NULL ||
-        *out_count >= profile->prompt_media_projected_segment_capacity)
+        profile->prompt_media_projected_segments == NULL)
         return VXML_INVALID_STRUCTURE;
+    if (*out_count >=
+        profile->prompt_media_projected_segment_capacity)
+        return VXML_LIMIT_EXCEEDED;
     source = &program->prompt_segments[source_absolute];
     capability = prompt_media_segment_capability(source->kind);
     if (capability == UINT64_C(0))
