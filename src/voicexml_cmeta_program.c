@@ -3711,7 +3711,7 @@ static vxml_status cmeta_measure_subdialog(
                 ++filled_count;
                 status = cmeta_measure_filled_content(
                     child, false, 0u,
-                    measurement, limits, diagnostic);
+                    options, measurement, limits, diagnostic);
                 if (status != VXML_OK) return status;
                 continue;
             }
