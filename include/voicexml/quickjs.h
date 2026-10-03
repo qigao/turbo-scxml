@@ -3,6 +3,7 @@
 
 #include <voicexml/voicexml.h>
 #include <voicexml/data_resource.h>
+#include <voicexml/resource.h>
 #include <voicexml/script_resource.h>
 #include <cmeta/data.h>
 
@@ -53,6 +54,17 @@ typedef struct vxml_quickjs_compile_options_v1 {
     /* External source acquisition bounds used by #235 execution. */
     size_t max_resolved_script_uri_bytes;
     size_t max_script_source_bytes;
+
+    /*
+     * Optional append-only VoiceXML 2.1 no-DOM <data> compiler tail.
+     *
+     * A complete nonzero tail enables profile-neutral data metadata and
+     * QuickJS request execution. Older struct prefixes keep <data>
+     * fail-closed.
+     */
+    size_t max_data_rows;
+    size_t max_data_uri_bytes;
+    size_t max_data_namelist_fields;
 } vxml_quickjs_compile_options_v1;
 
 /**
@@ -71,6 +83,21 @@ typedef struct vxml_quickjs_session_options_v1 {
      * transactionally into Session-owned storage during init.
      */
     const void *initial_state;
+
+    /*
+     * Optional append-only no-DOM <data> runtime tail.
+     *
+     * The Session copies the provider operation table and borrows only the
+     * user pointer. Response bytes are never decoded or exposed to JavaScript.
+     */
+    const vxml_cmeta_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t max_data_bytes;
+    size_t max_data_request_value_bytes;
+
+    /* Optional fetch-audio handoff around one real data provider attempt. */
+    const vxml_fetch_audio_adapter_v1 *data_fetch_audio;
+    void *data_fetch_audio_user;
 } vxml_quickjs_session_options_v1;
 
 /**
