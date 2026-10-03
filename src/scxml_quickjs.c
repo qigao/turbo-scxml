@@ -76,6 +76,9 @@ static scxml_quickjs_status quickjs_sandbox_status_to_scxml(
     }
 }
 
+static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
+    const scxml_quickjs_compile_options_v1 *options);
+
 static bool scxml_quickjs_legacy_collection_schema_supported(
     const cmeta_data_desc *root,
     const cmeta_data_desc *descriptor,
