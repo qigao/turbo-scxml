@@ -32,7 +32,8 @@ int main(void) {
         .max_prompt_foreach = 2u,
         .max_prompt_foreach_items = 4u,
         .max_prompt_foreach_snapshot_bytes = 1024u,
-        .max_prompt_expanded_segments = 16u
+        .max_prompt_expanded_segments = 16u,
+        .max_prompt_foreach_depth = 2u
     };
     const vxml_cmeta_session_options_v1 session_options = {
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
