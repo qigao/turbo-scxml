@@ -6633,6 +6633,11 @@ static vxml_status cmeta_compile_external_data(
     out->field_index = VXML_CMETA_NO_INDEX;
     out->method = VXML_SUBMIT_METHOD_GET;
     out->enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+    out->request_v3 =
+        cmeta_attribute(node, "srcexpr").impl != NULL ||
+        cmeta_attribute(node, "method").impl != NULL ||
+        cmeta_attribute(node, "namelist").impl != NULL ||
+        cmeta_attribute(node, "enctype").impl != NULL;
     out->fetch_policy = *inherited_policy;
     out->destination_kind = destination_kind;
     out->legacy_preload = legacy_preload;
