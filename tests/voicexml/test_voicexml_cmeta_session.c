@@ -1263,7 +1263,9 @@ typedef struct cmeta_data_resource_probe {
     vxml_cmeta_data_format format;
     bool ignore_max_bytes;
     size_t open_calls;
+    size_t open_v2_calls;
     size_t close_calls;
+    vxml_cmeta_data_request_v2 last_request;
 } cmeta_data_resource_probe;
 
 static vxml_status cmeta_data_resource_open(
@@ -1299,6 +1301,42 @@ static vxml_status cmeta_data_resource_open(
     return VXML_OK;
 }
 
+static vxml_status cmeta_data_resource_open_v2(
+    void *user,
+    const vxml_cmeta_data_request_v2 *request,
+    vxml_cmeta_data_resource_v1 *out) {
+    static const char default_uri[] = "config.json";
+    cmeta_data_resource_probe *probe =
+        (cmeta_data_resource_probe *)user;
+    const char *expected_uri;
+    size_t expected_uri_size;
+    if (probe == NULL || request == NULL || out == NULL ||
+        request->abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
+        request->struct_size < sizeof(*request) ||
+        request->uri == NULL || request->max_bytes == 0u)
+        return VXML_INVALID_ARGUMENT;
+    expected_uri = probe->expected_uri != NULL
+        ? probe->expected_uri : default_uri;
+    expected_uri_size = probe->expected_uri != NULL
+        ? probe->expected_uri_size : sizeof(default_uri) - 1u;
+    if (request->uri_size != expected_uri_size ||
+        memcmp(request->uri, expected_uri, request->uri_size) != 0)
+        return VXML_INVALID_ARGUMENT;
+    ++probe->open_v2_calls;
+    probe->last_request = *request;
+    memset(out, 0, sizeof(*out));
+    if (probe->open_status != VXML_OK)
+        return probe->open_status;
+    if (!probe->ignore_max_bytes &&
+        probe->payload_size > request->max_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    out->data = probe->payload;
+    out->size = probe->payload_size;
+    out->format = probe->format;
+    out->lease = probe;
+    return VXML_OK;
+}
+
 static void cmeta_data_resource_close(
     void *user, vxml_cmeta_data_resource_v1 *resource) {
     cmeta_data_resource_probe *probe =
@@ -1315,7 +1353,44 @@ cmeta_data_resource_adapter = {
     .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
     .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1),
     .open = cmeta_data_resource_open,
-    .close = cmeta_data_resource_close};
+    .close = cmeta_data_resource_close,
+    .open_v2 = cmeta_data_resource_open_v2};
+
+typedef struct cmeta_data_fetch_audio_probe {
+    bool skip;
+    size_t begin_calls;
+    size_t finish_calls;
+    vxml_fetch_audio_request_v1 request;
+} cmeta_data_fetch_audio_probe;
+
+static void cmeta_data_fetch_audio_finish(void *user) {
+    cmeta_data_fetch_audio_probe *probe =
+        (cmeta_data_fetch_audio_probe *)user;
+    if (probe != NULL)
+        ++probe->finish_calls;
+}
+
+static vxml_fetch_audio_begin_result cmeta_data_fetch_audio_begin(
+    void *user,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_ticket_v1 *out_ticket) {
+    cmeta_data_fetch_audio_probe *probe =
+        (cmeta_data_fetch_audio_probe *)user;
+    if (probe == NULL || request == NULL || out_ticket == NULL)
+        return VXML_FETCH_AUDIO_SKIPPED;
+    ++probe->begin_calls;
+    probe->request = *request;
+    if (probe->skip)
+        return VXML_FETCH_AUDIO_SKIPPED;
+    out_ticket->finish = cmeta_data_fetch_audio_finish;
+    out_ticket->user = probe;
+    return VXML_FETCH_AUDIO_STARTED;
+}
+
+static const vxml_fetch_audio_adapter_v1 cmeta_data_fetch_audio_adapter = {
+    .abi_version = VXML_FETCH_AUDIO_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_fetch_audio_adapter_v1),
+    .begin = cmeta_data_fetch_audio_begin};
 
 static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = compile_options();
