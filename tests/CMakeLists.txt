@@ -350,6 +350,8 @@ turboscxml_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/src
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+set_tests_properties(scxml_quickjs_test PROPERTIES
+  TIMEOUT 30)
 
 if(TURBOSCXML_ENABLE_QUICKJS)
   add_executable(
