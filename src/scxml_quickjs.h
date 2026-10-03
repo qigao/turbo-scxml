@@ -12,7 +12,9 @@ typedef enum scxml_quickjs_status {
     SCXML_QUICKJS_EXCEPTION
 } scxml_quickjs_status;
 
-typedef quickjs_sandbox_runtime scxml_quickjs_runtime;
+struct scxml_quickjs_runtime {
+    quickjs_sandbox_runtime core;
+};
 
 bool scxml_quickjs_limits_valid(
     const scxml_quickjs_compile_options_v1 *options);
