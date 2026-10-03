@@ -11,6 +11,7 @@
 #include <data_bind_yaml_provider.h>
 
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -24,6 +25,14 @@ static vxml_status read_scalar_value(
     vxml_cmeta_value_view *out_value);
 
 static bool range_valid(size_t first, size_t count, size_t total);
+
+static vxml_status execute_external_data_row(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_external_data_row *row,
+    bool staged,
+    const size_t *scopes,
+    size_t scope_count);
 
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
@@ -1659,6 +1668,9 @@ static void session_data_destroy(
     vxml_free(session->field_recording_shadows);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
+    vxml_free(session->data_request_uri);
+    vxml_free(session->data_request_values);
+    vxml_free(session->data_request_fields);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
     vxml_free(session->exec_frames);
@@ -2624,6 +2636,46 @@ static vxml_status initialize_declarations(
     return VXML_OK;
 }
 
+static vxml_status initialize_initializers(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t first, size_t count,
+    const size_t *scopes, size_t scope_count) {
+    size_t offset;
+    if (session == NULL || program == NULL ||
+        scopes == NULL || scope_count == 0u ||
+        !range_valid(first, count, program->initializer_count) ||
+        (count != 0u && program->initializers == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (offset = 0u; offset < count; ++offset) {
+        const vxml_cmeta_initializer_row *initializer =
+            &program->initializers[first + offset];
+        vxml_status status;
+        if (initializer->kind == VXML_CMETA_INITIALIZER_DECLARATION) {
+            if (initializer->index >= program->declaration_count)
+                return VXML_INVALID_STRUCTURE;
+            status = initialize_declarations(
+                session, program, initializer->index, 1u,
+                scopes, scope_count);
+        } else if (initializer->kind == VXML_CMETA_INITIALIZER_DATA) {
+            const vxml_cmeta_external_data_row *row;
+            if (initializer->index >= program->external_data_count ||
+                program->external_data == NULL)
+                return VXML_INVALID_STRUCTURE;
+            row = &program->external_data[initializer->index];
+            if (row->legacy_preload)
+                continue;
+            status = execute_external_data_row(
+                session, program, row, true,
+                scopes, scope_count);
+        } else {
+            return VXML_INVALID_STRUCTURE;
+        }
+        if (status != VXML_OK) return status;
+    }
+    return VXML_OK;
+}
+
 static vxml_status initialize_form(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -2633,14 +2685,18 @@ static vxml_status initialize_form(
     const size_t form_scopes[2] = {form->scope, program->document_scope};
     size_t initial_offset;
     size_t block_offset;
-    vxml_status status = initialize_declarations(
+    vxml_status status = VXML_OK;
+    if (!session->document_initialized) {
+        status = initialize_initializers(
+            session, program,
+            program->first_document_initializer,
+            program->document_initializer_count,
+            document_scopes, 1u);
+        if (status != VXML_OK) return status;
+    }
+    status = initialize_initializers(
         session, program,
-        program->first_document_declaration,
-        program->document_declaration_count,
-        document_scopes, 1u);
-    if (status != VXML_OK) return status;
-    status = initialize_declarations(
-        session, program, form->first_declaration, form->declaration_count,
+        form->first_initializer, form->initializer_count,
         form_scopes, 2u);
     if (status != VXML_OK) return status;
 
@@ -3586,6 +3642,20 @@ static vxml_status execute_action_range(
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
+            case VXML_CMETA_ACTION_DATA: {
+                vxml_status status;
+                if (action->data_index >=
+                        program->external_data_count ||
+                    program->external_data == NULL)
+                    return VXML_INVALID_STRUCTURE;
+                status = execute_external_data_row(
+                    session, program,
+                    &program->external_data[
+                        action->data_index],
+                    true, scopes, scope_count);
+                if (status != VXML_OK) return status;
+                break;
+            }
             default:
                 return VXML_INVALID_STRUCTURE;
         }
@@ -3761,202 +3831,563 @@ static bool data_adapter_has_open_v2(
         adapter->open_v2 != NULL;
 }
 
-static vxml_status load_external_data(
+static bool data_adapter_has_open_v3(
+    const vxml_cmeta_data_resource_adapter_v1 *adapter) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_data_resource_adapter_v1, open_v3) +
+        sizeof(((vxml_cmeta_data_resource_adapter_v1 *)0)->open_v3);
+    return adapter != NULL &&
+        adapter->struct_size >= tail_size &&
+        adapter->open_v3 != NULL;
+}
+
+static bool data_row_requires_v3(
+    const vxml_cmeta_external_data_row *row) {
+    return row != NULL && row->request_v3;
+}
+
+static bool data_fetch_audio_adapter_valid(
+    const vxml_cmeta_session_data *session) {
+    const vxml_fetch_audio_adapter_v1 *adapter =
+        session != NULL ? session->data_fetch_audio : NULL;
+    return adapter != NULL &&
+        adapter->abi_version == VXML_FETCH_AUDIO_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= sizeof(*adapter) &&
+        adapter->begin != NULL;
+}
+
+static vxml_status data_request_uri(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
-    const vxml_cmeta_session_options_v1 *options) {
-    const cmeta_data_struct_shape *root_shape =
-        session_root_shape(program);
-    size_t index;
-    if (program->external_data_count == 0u)
+    const vxml_cmeta_external_data_row *row,
+    bool staged,
+    const size_t *scopes, size_t scope_count,
+    const char **out_uri, size_t *out_uri_size) {
+    vxml_cmeta_value_view value = {0};
+    vxml_status status;
+    if (out_uri != NULL) *out_uri = NULL;
+    if (out_uri_size != NULL) *out_uri_size = 0u;
+    if (session == NULL || program == NULL || row == NULL ||
+        out_uri == NULL || out_uri_size == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (row->uri_expression == VXML_CMETA_NO_INDEX) {
+        if (row->uri == NULL || row->uri_size == 0u ||
+            row->uri_size > program->max_data_uri_bytes ||
+            memchr(row->uri, '\0', row->uri_size) != NULL)
+            return VXML_INVALID_STRUCTURE;
+        *out_uri = row->uri;
+        *out_uri_size = row->uri_size;
         return VXML_OK;
-    if (!session_data_options_valid(options) ||
-        root_shape == NULL || program->external_data == NULL)
+    }
+
+    if (row->uri != NULL || row->uri_size != 0u ||
+        session->data_request_uri == NULL ||
+        session->data_request_uri_capacity == 0u)
+        return VXML_INVALID_STRUCTURE;
+    status = evaluate_expression(
+        session, program, staged, row->uri_expression,
+        scopes, scope_count, &value);
+    if (status != VXML_OK) return status;
+    if (value.kind != VXML_CMETA_VALUE_STRING ||
+        value.data.string.data == NULL ||
+        value.data.string.size == 0u ||
+        value.data.string.size >
+            session->data_request_uri_capacity ||
+        memchr(
+            value.data.string.data, '\0',
+            value.data.string.size) != NULL)
+        return VXML_SEMANTIC_ERROR;
+    memcpy(
+        session->data_request_uri,
+        value.data.string.data,
+        value.data.string.size);
+    *out_uri = session->data_request_uri;
+    *out_uri_size = value.data.string.size;
+    return VXML_OK;
+}
+
+static vxml_status data_request_value_append(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_value_view *value,
+    const char **out_data, size_t *out_size,
+    size_t *used) {
+    char integer[32];
+    const char *source = NULL;
+    size_t size = 0u;
+    int written = 0;
+    if (out_data != NULL) *out_data = NULL;
+    if (out_size != NULL) *out_size = 0u;
+    if (session == NULL || value == NULL ||
+        out_data == NULL || out_size == NULL || used == NULL ||
+        session->data_request_values == NULL ||
+        *used > session->data_request_value_capacity)
+        return VXML_INVALID_ARGUMENT;
+
+    switch (value->kind) {
+    case VXML_CMETA_VALUE_BOOL:
+        source = value->data.boolean ? "true" : "false";
+        size = value->data.boolean
+            ? sizeof("true") - 1u
+            : sizeof("false") - 1u;
+        break;
+    case VXML_CMETA_VALUE_SINT:
+        written = snprintf(
+            integer, sizeof(integer),
+            "%" PRId64, value->data.sint);
+        if (written <= 0 || (size_t)written >= sizeof(integer))
+            return VXML_INVALID_CONTRACT;
+        source = integer;
+        size = (size_t)written;
+        break;
+    case VXML_CMETA_VALUE_UINT:
+        written = snprintf(
+            integer, sizeof(integer),
+            "%" PRIu64, value->data.uint_value);
+        if (written <= 0 || (size_t)written >= sizeof(integer))
+            return VXML_INVALID_CONTRACT;
+        source = integer;
+        size = (size_t)written;
+        break;
+    case VXML_CMETA_VALUE_STRING:
+        source = value->data.string.data;
+        size = value->data.string.size;
+        if ((size != 0u && source == NULL) ||
+            (size != 0u &&
+             memchr(source, '\0', size) != NULL))
+            return VXML_SEMANTIC_ERROR;
+        break;
+    case VXML_CMETA_VALUE_UNDEFINED:
+    case VXML_CMETA_VALUE_FLOAT:
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+
+    if (size > session->data_request_value_capacity - *used)
+        return VXML_LIMIT_EXCEEDED;
+    if (size != 0u)
+        memcpy(
+            session->data_request_values + *used,
+            source, size);
+    *out_data = session->data_request_values + *used;
+    *out_size = size;
+    *used += size;
+    return VXML_OK;
+}
+
+static vxml_status data_request_fields(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_external_data_row *row,
+    bool staged,
+    const vxml_cmeta_data_field_v1 **out_fields,
+    size_t *out_count) {
+    size_t offset;
+    size_t used = 0u;
+    if (out_fields != NULL) *out_fields = NULL;
+    if (out_count != NULL) *out_count = 0u;
+    if (session == NULL || program == NULL || row == NULL ||
+        out_fields == NULL || out_count == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (row->location_count == 0u)
+        return VXML_OK;
+    if (!range_valid(
+            row->first_location, row->location_count,
+            program->location_count) ||
+        program->locations == NULL ||
+        session->data_request_fields == NULL ||
+        row->location_count >
+            session->data_request_field_capacity)
+        return VXML_INVALID_STRUCTURE;
+
+    memset(
+        session->data_request_fields, 0,
+        row->location_count *
+            sizeof(*session->data_request_fields));
+
+    for (offset = 0u; offset < row->location_count; ++offset) {
+        const vxml_cmeta_location_row *location =
+            &program->locations[
+                row->first_location + offset];
+        const cmeta_data_desc *value_data = NULL;
+        const void *object = NULL;
+        vxml_cmeta_value_view value = {0};
+        vxml_cmeta_data_field_v1 *field =
+            &session->data_request_fields[offset];
+        vxml_status status = read_location_object(
+            session, program, location, staged,
+            &value_data, &object);
+        if (status != VXML_OK) return status;
+        if (object == NULL || value_data != location->value ||
+            location->name == NULL ||
+            location->name_size == 0u)
+            return VXML_SEMANTIC_ERROR;
+        status = read_scalar_value(
+            value_data, object,
+            session->read_scratch,
+            session->read_scratch_bytes,
+            &value);
+        if (status != VXML_OK) return status;
+        status = data_request_value_append(
+            session, &value,
+            &field->value, &field->value_size, &used);
+        if (status != VXML_OK) return status;
+        field->name = location->name;
+        field->name_size = location->name_size;
+    }
+
+    *out_fields = session->data_request_fields;
+    *out_count = row->location_count;
+    return VXML_OK;
+}
+
+static vxml_status publish_external_data_value(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_external_data_row *row,
+    bool staged) {
+    cmeta_status meta_status;
+    unsigned char *destination;
+    unsigned char *bound;
+    if (session == NULL || program == NULL || row == NULL ||
+        row->field_data == NULL ||
+        row->field_data->storage_type == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (row->destination_kind ==
+        VXML_CMETA_DATA_DESTINATION_ROOT) {
+        const cmeta_data_struct_shape *shape =
+            session_root_shape(program);
+        vxml_cmeta_root_storage *storage =
+            staged ? &session->staged_root
+                   : &session->committed_root;
+        if (shape == NULL ||
+            row->field_index >= shape->field_count ||
+            shape->fields[row->field_index].value !=
+                row->field_data ||
+            shape->fields[row->field_index].offset !=
+                row->field_offset ||
+            storage->storage == NULL ||
+            storage->bound == NULL)
+            return VXML_INVALID_STRUCTURE;
+        destination =
+            storage->storage + row->field_offset;
+        bound = &storage->bound[row->field_index];
+    } else if (row->destination_kind ==
+                   VXML_CMETA_DATA_DESTINATION_SCOPE) {
+        cmeta_scope_storage *storage;
+        const cmeta_scope_schema *schema;
+        const cmeta_scope_slot *slot;
+        unsigned char *declared;
+        if (!staged ||
+            row->scope >= program->scope_count ||
+            row->slot == VXML_CMETA_NO_INDEX ||
+            session->staged_scopes == NULL)
+            return VXML_INVALID_STRUCTURE;
+        schema = &program->scopes[row->scope].schema;
+        if (row->slot >= schema->slot_count)
+            return VXML_INVALID_STRUCTURE;
+        slot = &schema->slots[row->slot];
+        if (slot->value != row->field_data ||
+            slot->offset > schema->storage_size ||
+            row->field_data->storage_type->size >
+                schema->storage_size - slot->offset)
+            return VXML_INVALID_STRUCTURE;
+        storage = &session->staged_scopes[row->scope];
+        if (!cmeta_scope_view_valid(&storage->view) ||
+            storage->view.schema != schema)
+            return VXML_INVALID_STRUCTURE;
+        declared = session_declared(
+            session, program, true, row->scope);
+        if (declared == NULL)
+            return VXML_INVALID_STRUCTURE;
+        destination =
+            storage->view.storage + slot->offset;
+        bound = &storage->view.bound[row->slot];
+        declared[row->slot] = 1u;
+    } else {
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    meta_status = *bound != 0u
+        ? cmeta_data_value_restore_zero(
+            row->field_data, destination)
+        : cmeta_data_value_init_zero(
+            row->field_data, destination);
+    if (meta_status != CMETA_OK)
+        return VXML_INVALID_CONTRACT;
+    meta_status = cmeta_data_value_move(
+        row->field_data, destination,
+        session->data_value);
+    if (meta_status != CMETA_OK) {
+        (void)cmeta_data_value_restore_zero(
+            row->field_data, destination);
+        *bound = 0u;
+        return VXML_INVALID_CONTRACT;
+    }
+    *bound = 1u;
+    return VXML_OK;
+}
+
+static vxml_status execute_external_data_row(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_external_data_row *row,
+    bool staged,
+    const size_t *scopes, size_t scope_count) {
+    const char *uri = NULL;
+    size_t uri_size = 0u;
+    const vxml_cmeta_data_field_v1 *fields = NULL;
+    size_t field_count = 0u;
+    vxml_cmeta_data_resource_v1 resource = {0};
+    vxml_cmeta_data_request_v2 request_v2 =
+        VXML_CMETA_DATA_REQUEST_V2_INIT;
+    vxml_cmeta_data_request_v3 request_v3 =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
+    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
+    DataBindFormatReader format_reader =
+        DATA_BIND_FORMAT_READER_INIT;
+    DataBindError format_error = DATA_BIND_ERROR_INIT;
+    DataBindNativeDiagnostic native_diagnostic =
+        DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
+    DataBindNativeOptions native_options =
+        DATA_BIND_NATIVE_OPTIONS_INIT;
+    const DataBindFormatProvider *provider;
+    cmeta_status meta_status;
+    DataBindStatus bind_status;
+    vxml_status status;
+    bool resource_open = false;
+    bool reader_open = false;
+    bool fetch_audio_started = false;
+    const bool requires_v3 =
+        data_row_requires_v3(row);
+
+    if (session == NULL || program == NULL || row == NULL ||
+        session->data_resources == NULL ||
+        session->data_resources->close == NULL ||
+        session->max_data_bytes == 0u ||
+        session->max_data_owned_bytes == 0u ||
+        row->plan == NULL ||
+        row->field_data == NULL)
         return VXML_INVALID_CONTRACT;
 
-    for (index = 0u; index < program->external_data_count; ++index) {
-        const vxml_cmeta_external_data_row *row =
-            &program->external_data[index];
-        vxml_cmeta_data_resource_v1 resource = {0};
-        vxml_cmeta_data_request_v2 request =
-            VXML_CMETA_DATA_REQUEST_V2_INIT;
-        vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
-        DataBindFormatReader format_reader =
-            DATA_BIND_FORMAT_READER_INIT;
-        DataBindError format_error = DATA_BIND_ERROR_INIT;
-        DataBindNativeDiagnostic native_diagnostic =
-            DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
-        DataBindNativeOptions native_options =
-            DATA_BIND_NATIVE_OPTIONS_INIT;
-        const DataBindFormatProvider *provider;
-        cmeta_status meta_status;
-        DataBindStatus bind_status;
-        vxml_status status;
-        bool resource_open = false;
-        bool reader_open = false;
-        bool fetch_audio_started = false;
-        unsigned char *destination;
+    status = data_request_uri(
+        session, program, row, staged,
+        scopes, scope_count,
+        &uri, &uri_size);
+    if (status != VXML_OK) return status;
+    status = data_request_fields(
+        session, program, row, staged,
+        &fields, &field_count);
+    if (status != VXML_OK) return status;
 
-        if (row->field_index >= root_shape->field_count ||
-            row->field_data == NULL ||
-            root_shape->fields[row->field_index].value != row->field_data ||
-            root_shape->fields[row->field_index].offset != row->field_offset)
-            return VXML_INVALID_STRUCTURE;
-
-        if (row->fetch_policy.fetchaudio.uri_size != 0u) {
-            vxml_fetch_audio_request_v1 audio_request = {
-                .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
-                .struct_size = sizeof(vxml_fetch_audio_request_v1),
-                .uri = row->fetch_policy.fetchaudio.uri,
-                .uri_size = row->fetch_policy.fetchaudio.uri_size,
-                .has_delay =
-                    row->fetch_policy.fetchaudio.has_delay,
-                .delay_us =
-                    row->fetch_policy.fetchaudio.delay_us,
-                .has_minimum =
-                    row->fetch_policy.fetchaudio.has_minimum,
-                .minimum_us =
-                    row->fetch_policy.fetchaudio.minimum_us};
-            vxml_fetch_audio_begin_result begin_result;
-            if (audio_request.uri == NULL ||
-                !session_data_fetch_audio_options_valid(options))
+    if (row->fetch_policy.fetchaudio.uri_size != 0u) {
+        vxml_fetch_audio_request_v1 audio_request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size =
+                sizeof(vxml_fetch_audio_request_v1),
+            .uri = row->fetch_policy.fetchaudio.uri,
+            .uri_size =
+                row->fetch_policy.fetchaudio.uri_size,
+            .has_delay =
+                row->fetch_policy.fetchaudio.has_delay,
+            .delay_us =
+                row->fetch_policy.fetchaudio.delay_us,
+            .has_minimum =
+                row->fetch_policy.fetchaudio.has_minimum,
+            .minimum_us =
+                row->fetch_policy.fetchaudio.minimum_us};
+        vxml_fetch_audio_begin_result begin_result;
+        if (audio_request.uri == NULL ||
+            !data_fetch_audio_adapter_valid(session))
+            return VXML_INVALID_CONTRACT;
+        begin_result = session->data_fetch_audio->begin(
+            session->data_fetch_audio_user,
+            &audio_request, &fetch_audio_ticket);
+        if (begin_result == VXML_FETCH_AUDIO_STARTED) {
+            if (fetch_audio_ticket.finish == NULL)
                 return VXML_INVALID_CONTRACT;
-            begin_result = options->data_fetch_audio->begin(
-                options->data_fetch_audio_user,
-                &audio_request, &fetch_audio_ticket);
-            if (begin_result == VXML_FETCH_AUDIO_STARTED) {
-                if (fetch_audio_ticket.finish == NULL)
-                    return VXML_INVALID_CONTRACT;
-                fetch_audio_started = true;
-            } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
-                if (fetch_audio_ticket.finish != NULL ||
-                    fetch_audio_ticket.user != NULL)
-                    return VXML_INVALID_CONTRACT;
-            } else {
+            fetch_audio_started = true;
+        } else if (begin_result ==
+                   VXML_FETCH_AUDIO_SKIPPED) {
+            if (fetch_audio_ticket.finish != NULL ||
+                fetch_audio_ticket.user != NULL)
                 return VXML_INVALID_CONTRACT;
-            }
-        }
-
-        if (data_fetch_policy_requires_v2(
-                &row->fetch_policy)) {
-            if (!data_adapter_has_open_v2(
-                    options->data_resources)) {
-                status = VXML_UNSUPPORTED_FEATURE;
-                goto settle;
-            }
-            request.uri = row->uri;
-            request.uri_size = row->uri_size;
-            request.max_bytes = options->max_data_bytes;
-            request.has_timeout =
-                row->fetch_policy.has_timeout;
-            request.timeout_us =
-                row->fetch_policy.timeout_us;
-            request.fetch_hint =
-                row->fetch_policy.fetch_hint;
-            request.has_max_age =
-                row->fetch_policy.has_max_age;
-            request.max_age_seconds =
-                row->fetch_policy.max_age_seconds;
-            request.has_max_stale =
-                row->fetch_policy.has_max_stale;
-            request.max_stale_seconds =
-                row->fetch_policy.max_stale_seconds;
-            status = options->data_resources->open_v2(
-                options->data_resource_user,
-                &request, &resource);
         } else {
-            status = options->data_resources->open(
-                options->data_resource_user,
-                row->uri, row->uri_size,
-                options->max_data_bytes, &resource);
+            return VXML_INVALID_CONTRACT;
         }
-        if (status != VXML_OK)
-            goto settle;
-        resource_open = true;
-        if (resource.lease == NULL ||
-            resource.size > options->max_data_bytes ||
-            (resource.size != 0u && resource.data == NULL)) {
-            status = resource.size > options->max_data_bytes
-                ? VXML_LIMIT_EXCEEDED : VXML_INVALID_CONTRACT;
-            goto settle;
-        }
+    }
 
-        provider = data_format_provider(resource.format);
-        if (provider == NULL) {
+    if (requires_v3) {
+        if (!data_adapter_has_open_v3(
+                session->data_resources)) {
             status = VXML_UNSUPPORTED_FEATURE;
             goto settle;
         }
-        bind_status = data_bind_format_reader_open(
-            provider,
-            (const char *)resource.data, resource.size,
-            program->max_data_bind_depth,
-            &format_reader, &format_error);
-        if (bind_status != DATA_BIND_OK) {
-            status = map_databind_runtime_status(bind_status);
+        request_v3.uri = uri;
+        request_v3.uri_size = uri_size;
+        request_v3.max_bytes = session->max_data_bytes;
+        request_v3.has_timeout =
+            row->fetch_policy.has_timeout;
+        request_v3.timeout_us =
+            row->fetch_policy.timeout_us;
+        request_v3.fetch_hint =
+            row->fetch_policy.fetch_hint;
+        request_v3.has_max_age =
+            row->fetch_policy.has_max_age;
+        request_v3.max_age_seconds =
+            row->fetch_policy.max_age_seconds;
+        request_v3.has_max_stale =
+            row->fetch_policy.has_max_stale;
+        request_v3.max_stale_seconds =
+            row->fetch_policy.max_stale_seconds;
+        request_v3.method = row->method;
+        request_v3.enctype = row->enctype;
+        request_v3.fields = fields;
+        request_v3.field_count = field_count;
+        status = session->data_resources->open_v3(
+            session->data_resource_user,
+            &request_v3, &resource);
+    } else if (data_fetch_policy_requires_v2(
+                   &row->fetch_policy)) {
+        if (!data_adapter_has_open_v2(
+                session->data_resources)) {
+            status = VXML_UNSUPPORTED_FEATURE;
             goto settle;
         }
-        reader_open = true;
+        request_v2.uri = uri;
+        request_v2.uri_size = uri_size;
+        request_v2.max_bytes = session->max_data_bytes;
+        request_v2.has_timeout =
+            row->fetch_policy.has_timeout;
+        request_v2.timeout_us =
+            row->fetch_policy.timeout_us;
+        request_v2.fetch_hint =
+            row->fetch_policy.fetch_hint;
+        request_v2.has_max_age =
+            row->fetch_policy.has_max_age;
+        request_v2.max_age_seconds =
+            row->fetch_policy.max_age_seconds;
+        request_v2.has_max_stale =
+            row->fetch_policy.has_max_stale;
+        request_v2.max_stale_seconds =
+            row->fetch_policy.max_stale_seconds;
+        status = session->data_resources->open_v2(
+            session->data_resource_user,
+            &request_v2, &resource);
+    } else {
+        status = session->data_resources->open(
+            session->data_resource_user,
+            uri, uri_size,
+            session->max_data_bytes, &resource);
+    }
+    if (status != VXML_OK)
+        goto settle;
+    resource_open = true;
+    if (resource.lease == NULL ||
+        resource.size > session->max_data_bytes ||
+        (resource.size != 0u &&
+         resource.data == NULL)) {
+        status = resource.size > session->max_data_bytes
+            ? VXML_LIMIT_EXCEEDED
+            : VXML_INVALID_CONTRACT;
+        goto settle;
+    }
 
-        memset(session->data_value, 0, session->data_value_bytes);
-        meta_status = cmeta_data_value_init_zero(
+    provider = data_format_provider(resource.format);
+    if (provider == NULL) {
+        status = VXML_UNSUPPORTED_FEATURE;
+        goto settle;
+    }
+    bind_status = data_bind_format_reader_open(
+        provider,
+        (const char *)resource.data, resource.size,
+        program->max_data_bind_depth,
+        &format_reader, &format_error);
+    if (bind_status != DATA_BIND_OK) {
+        status = map_databind_runtime_status(bind_status);
+        goto settle;
+    }
+    reader_open = true;
+
+    memset(
+        session->data_value, 0,
+        session->data_value_bytes);
+    meta_status = cmeta_data_value_init_zero(
+        row->field_data, session->data_value);
+    if (meta_status != CMETA_OK) {
+        status = VXML_INVALID_CONTRACT;
+        goto settle;
+    }
+
+    native_options.workspace = session->data_workspace;
+    native_options.workspace_bytes =
+        session->data_workspace_bytes;
+    native_options.max_depth = program->max_data_bind_depth;
+    native_options.max_items = program->max_data_bind_items;
+    native_options.max_owned_bytes =
+        session->max_data_owned_bytes;
+    bind_status = data_bind_native_plan_decode(
+        row->plan, &native_options,
+        format_reader.reader,
+        session->data_value,
+        row->field_data->storage_type->size,
+        &native_diagnostic);
+    if (bind_status != DATA_BIND_OK) {
+        (void)cmeta_data_value_restore_zero(
             row->field_data, session->data_value);
-        if (meta_status != CMETA_OK) {
-            status = VXML_INVALID_CONTRACT;
-            goto settle;
-        }
+        status = map_databind_runtime_status(bind_status);
+        goto settle;
+    }
 
-        native_options.workspace = session->data_workspace;
-        native_options.workspace_bytes = session->data_workspace_bytes;
-        native_options.max_depth = program->max_data_bind_depth;
-        native_options.max_items = program->max_data_bind_items;
-        native_options.max_owned_bytes = options->max_data_owned_bytes;
-        bind_status = data_bind_native_plan_decode(
-            row->plan, &native_options,
-            format_reader.reader,
-            session->data_value,
-            row->field_data->storage_type->size,
-            &native_diagnostic);
-        if (bind_status != DATA_BIND_OK) {
-            (void)cmeta_data_value_restore_zero(
-                row->field_data, session->data_value);
-            status = map_databind_runtime_status(bind_status);
-            goto settle;
-        }
-
-        destination =
-            session->committed_root.storage + row->field_offset;
-        meta_status = session->committed_root.bound[row->field_index] != 0u
-            ? cmeta_data_value_restore_zero(row->field_data, destination)
-            : cmeta_data_value_init_zero(row->field_data, destination);
-        if (meta_status != CMETA_OK) {
-            (void)cmeta_data_value_restore_zero(
-                row->field_data, session->data_value);
-            status = VXML_INVALID_CONTRACT;
-            goto settle;
-        }
-        meta_status = cmeta_data_value_move(
-            row->field_data, destination, session->data_value);
-        if (meta_status != CMETA_OK) {
-            (void)cmeta_data_value_restore_zero(
-                row->field_data, destination);
-            (void)cmeta_data_value_restore_zero(
-                row->field_data, session->data_value);
-            session->committed_root.bound[row->field_index] = 0u;
-            status = VXML_INVALID_CONTRACT;
-            goto settle;
-        }
-        session->committed_root.bound[row->field_index] = 1u;
-        status = VXML_OK;
+    status = publish_external_data_value(
+        session, program, row, staged);
+    if (status != VXML_OK) {
+        (void)cmeta_data_value_restore_zero(
+            row->field_data, session->data_value);
+        goto settle;
+    }
+    status = VXML_OK;
 
 settle:
-        if (reader_open)
-            (void)data_bind_format_reader_close(&format_reader);
-        if (resource_open)
-            options->data_resources->close(
-                options->data_resource_user, &resource);
-        if (fetch_audio_started)
-            fetch_audio_ticket.finish(
-                fetch_audio_ticket.user);
+    if (reader_open)
+        (void)data_bind_format_reader_close(
+            &format_reader);
+    if (resource_open)
+        session->data_resources->close(
+            session->data_resource_user, &resource);
+    if (fetch_audio_started)
+        fetch_audio_ticket.finish(
+            fetch_audio_ticket.user);
+    return status;
+}
+
+static vxml_status load_external_data(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program) {
+    size_t index;
+    if (program->external_data_count == 0u)
+        return VXML_OK;
+    if (session == NULL || program->external_data == NULL)
+        return VXML_INVALID_CONTRACT;
+
+    for (index = 0u;
+         index < program->external_data_count;
+         ++index) {
+        const vxml_cmeta_external_data_row *row =
+            &program->external_data[index];
+        vxml_status status;
+        if (!row->legacy_preload)
+            continue;
+        if (row->destination_kind !=
+                VXML_CMETA_DATA_DESTINATION_ROOT ||
+            row->uri_expression != VXML_CMETA_NO_INDEX ||
+            row->method != VXML_SUBMIT_METHOD_GET ||
+            row->location_count != 0u)
+            return VXML_INVALID_STRUCTURE;
+        status = execute_external_data_row(
+            session, program, row,
+            false, NULL, 0u);
         if (status != VXML_OK)
             return status;
     }
@@ -4623,6 +5054,12 @@ vxml_status vxml_cmeta_session_init_profile(
         size_t value_alignment = 1u;
         size_t workspace_allocation_bytes;
         size_t value_allocation_bytes;
+        size_t field_bytes = 0u;
+        const size_t fetch_audio_tail =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                data_fetch_audio_user) +
+            sizeof(options->data_fetch_audio_user);
         if (!session_data_options_valid(options) ||
             !measure_external_data_scratch(
                 program,
@@ -4632,6 +5069,50 @@ vxml_status vxml_cmeta_session_init_profile(
                 &value_alignment)) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
+        }
+        profile->data_resources = options->data_resources;
+        profile->data_resource_user = options->data_resource_user;
+        profile->max_data_bytes = options->max_data_bytes;
+        profile->max_data_owned_bytes = options->max_data_owned_bytes;
+        if (options->struct_size >= fetch_audio_tail) {
+            profile->data_fetch_audio = options->data_fetch_audio;
+            profile->data_fetch_audio_user =
+                options->data_fetch_audio_user;
+        }
+        if (program->max_data_namelist_fields != 0u ||
+            program->max_data_request_value_bytes != 0u) {
+            if (program->max_data_namelist_fields == 0u ||
+                program->max_data_request_value_bytes == 0u ||
+                program->max_data_uri_bytes == 0u ||
+                !checked_multiply(
+                    program->max_data_namelist_fields,
+                    sizeof(*profile->data_request_fields),
+                    &field_bytes)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->data_request_fields =
+                (vxml_cmeta_data_field_v1 *)vxml_calloc(
+                    program->max_data_namelist_fields,
+                    sizeof(*profile->data_request_fields));
+            profile->data_request_values =
+                (char *)vxml_malloc(
+                    program->max_data_request_value_bytes);
+            profile->data_request_uri =
+                (char *)vxml_malloc(
+                    program->max_data_uri_bytes);
+            if (profile->data_request_fields == NULL ||
+                profile->data_request_values == NULL ||
+                profile->data_request_uri == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->data_request_field_capacity =
+                program->max_data_namelist_fields;
+            profile->data_request_value_capacity =
+                program->max_data_request_value_bytes;
+            profile->data_request_uri_capacity =
+                program->max_data_uri_bytes;
         }
         workspace_allocation_bytes = profile->data_workspace_bytes;
         value_allocation_bytes = profile->data_value_bytes;
@@ -4703,7 +5184,7 @@ vxml_status vxml_cmeta_session_init_profile(
     status = root_storage_copy_initial(
         &profile->committed_root, program, options->initial_root, undefined);
     if (status != VXML_OK) goto failure;
-    status = load_external_data(profile, program, options);
+    status = load_external_data(profile, program);
     if (status != VXML_OK) goto failure;
     vxml_free(undefined);
     session->profile_data = profile;
@@ -5262,6 +5743,9 @@ static vxml_status cmeta_session_start_profile_at_entry(
                      program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
+        !range_valid(
+            form->first_initializer, form->initializer_count,
+            program->initializer_count) ||
         form->field_count > SIZE_MAX - form->initial_count ||
         form->field_count + form->initial_count >
             SIZE_MAX - form->subdialog_count ||
@@ -5317,6 +5801,8 @@ static vxml_status cmeta_session_start_profile_at_entry(
         return session_fail(session, status);
     }
     transaction_commit(profile, program);
+    if (!profile->document_initialized)
+        profile->document_initialized = true;
     if (form->item_count != 0u)
         return select_directed_item(
             session, program, profile, form, form_index);

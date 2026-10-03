@@ -565,6 +565,7 @@ typedef struct cmeta_program_measurement {
     size_t block_count;
     size_t scope_count;
     size_t declaration_count;
+    size_t initializer_count;
     size_t action_count;
     size_t branch_count;
     size_t expression_count;
@@ -888,6 +889,19 @@ static bool cmeta_external_data_options_valid(
         options->max_data_bind_items != 0u;
 }
 
+static bool cmeta_dynamic_data_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_data_request_value_bytes) +
+        sizeof(options->max_data_request_value_bytes);
+    return cmeta_external_data_options_valid(options) &&
+        options->struct_size >= tail_size &&
+        options->max_data_namelist_fields != 0u &&
+        options->max_data_request_value_bytes != 0u;
+}
+
 static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
@@ -1152,14 +1166,23 @@ static vxml_status cmeta_measure_repeated_vars(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_data(
+    salts_xml_node node,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic);
+
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
     bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic);
 
 static vxml_status cmeta_measure_conditional(
     salts_xml_node node, bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const salts_xml_attribute condition = cmeta_attribute(node, "cond");
@@ -1220,7 +1243,7 @@ static vxml_status cmeta_measure_conditional(
         {
             const vxml_status status = cmeta_measure_executable(
                 child, node, index, event_handler,
-                measurement, limits, diagnostic);
+                options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
@@ -1230,6 +1253,7 @@ static vxml_status cmeta_measure_conditional(
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
     bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     salts_xml_attribute expression;
@@ -1255,7 +1279,8 @@ static vxml_status cmeta_measure_executable(
          !cmeta_node_named(node, "throw") &&
          !cmeta_node_named(node, "rethrow") &&
          !cmeta_node_named(node, "reprompt") &&
-         !cmeta_node_named(node, "goto")))
+         !cmeta_node_named(node, "goto") &&
+         !cmeta_node_named(node, "data")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -1264,7 +1289,10 @@ static vxml_status cmeta_measure_executable(
             cmeta_known_profile_element(node)
                 ? "VoiceXML element is invalid in executable content"
                 : "unsupported VoiceXML executable element");
-    if (cmeta_node_named(node, "var")) {
+    if (cmeta_node_named(node, "data")) {
+        status = cmeta_measure_data(
+            node, options, measurement, limits, diagnostic);
+    } else if (cmeta_node_named(node, "var")) {
         status = cmeta_validate_variable_element(node, diagnostic);
     } else if (cmeta_node_named(node, "assign")) {
         static const char *const allowed[] = {"name", "expr"};
@@ -1442,13 +1470,15 @@ static vxml_status cmeta_measure_executable(
     }
     if (cmeta_node_named(node, "if"))
         return cmeta_measure_conditional(
-            node, event_handler, measurement, limits, diagnostic);
+            node, event_handler, options,
+            measurement, limits, diagnostic);
     return VXML_OK;
 }
 
 static bool cmeta_tree_contains_var(salts_xml_node node) {
     size_t index;
-    if (cmeta_node_named(node, "var")) return true;
+    if (cmeta_node_named(node, "var") ||
+        cmeta_node_named(node, "data")) return true;
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child =
             salts_xml_node_child_at(node, index);
@@ -1532,7 +1562,7 @@ static vxml_status cmeta_measure_catch(
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
             child, node, index, true,
-            measurement, limits, diagnostic);
+            options, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1594,6 +1624,7 @@ static vxml_status cmeta_measure_filled_content(
     salts_xml_node filled,
     bool form_level,
     size_t default_target_count,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
@@ -1637,14 +1668,16 @@ static vxml_status cmeta_measure_filled_content(
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
             child, filled, index, false,
-            measurement, limits, diagnostic);
+            options, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
 }
 
 static vxml_status cmeta_measure_block(
-    salts_xml_node block, cmeta_program_measurement *measurement,
+    salts_xml_node block,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
     const salts_xml_attribute block_cond = cmeta_attribute(block, "cond");
@@ -1680,7 +1713,7 @@ static vxml_status cmeta_measure_block(
         {
             const vxml_status status = cmeta_measure_executable(
                 child, block, index, false,
-                measurement, limits, diagnostic);
+                options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
@@ -3269,7 +3302,7 @@ static vxml_status cmeta_measure_field(
                     "VoiceXML field accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -3679,7 +3712,7 @@ static vxml_status cmeta_measure_subdialog(
                 ++filled_count;
                 status = cmeta_measure_filled_content(
                     child, false, 0u,
-                    measurement, limits, diagnostic);
+                    options, measurement, limits, diagnostic);
                 if (status != VXML_OK) return status;
                 continue;
             }
@@ -3915,7 +3948,7 @@ static vxml_status cmeta_measure_record(
                     "VoiceXML record accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -4151,7 +4184,7 @@ static vxml_status cmeta_measure_transfer(
                     "VoiceXML transfer accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -4537,6 +4570,25 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "data")) {
+            vxml_status data_status;
+            if (saw_block || saw_directed || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form data must precede form items");
+            data_status = cmeta_measure_data(
+                child, options, measurement, limits, diagnostic);
+            if (data_status != VXML_OK) return data_status;
+            if (!cmeta_measure_increment(
+                    &measurement->initializer_count))
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML initializer count overflow");
+            continue;
+        }
+
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
@@ -4552,13 +4604,17 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form variables must precede form items");
-            if (!cmeta_measure_increment(&measurement->declaration_count) ||
+            if (!cmeta_measure_increment(
+                    &measurement->declaration_count) ||
+                !cmeta_measure_increment(
+                    &measurement->initializer_count) ||
                 (expression.impl != NULL &&
-                 !cmeta_measure_increment(&measurement->expression_count)))
+                 !cmeta_measure_increment(
+                     &measurement->expression_count)))
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML declaration count overflow");
+                    "VoiceXML declaration/initializer count overflow");
             continue;
         }
 
@@ -4711,7 +4767,7 @@ static vxml_status cmeta_measure_form(
             {
                 const vxml_status filled_status =
                     cmeta_measure_filled_content(
-                        child, true, result_target_count,
+                        child, true, result_target_count, options,
                         measurement, limits, diagnostic);
                 if (filled_status != VXML_OK)
                     return filled_status;
@@ -4736,7 +4792,7 @@ static vxml_status cmeta_measure_form(
         saw_block = true;
         {
             const vxml_status status = cmeta_measure_block(
-                child, measurement, limits, diagnostic);
+                child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
@@ -4767,10 +4823,14 @@ static vxml_status cmeta_measure_data(
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {
-        "name", "src", "fetchaudio", "fetchhint",
-        "fetchtimeout", "maxage", "maxstale"};
+        "name", "src", "srcexpr", "method", "namelist", "enctype",
+        "fetchaudio", "fetchhint", "fetchtimeout", "maxage", "maxstale"};
     const salts_xml_attribute name = cmeta_attribute(node, "name");
     const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute srcexpr = cmeta_attribute(node, "srcexpr");
+    const salts_xml_attribute method = cmeta_attribute(node, "method");
+    const salts_xml_attribute namelist = cmeta_attribute(node, "namelist");
+    const salts_xml_attribute enctype = cmeta_attribute(node, "enctype");
     const salts_xml_attribute fetchaudio =
         cmeta_attribute(node, "fetchaudio");
     const salts_xml_attribute fetchhint =
@@ -4781,23 +4841,40 @@ static vxml_status cmeta_measure_data(
         cmeta_attribute(node, "maxage");
     const salts_xml_attribute maxstale =
         cmeta_attribute(node, "maxstale");
+    const bool dynamic_request =
+        srcexpr.impl != NULL || method.impl != NULL ||
+        namelist.impl != NULL || enctype.impl != NULL;
+    size_t first_location;
     bool has_policy_value = false;
     uint64_t policy_value = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        node, allowed, 7u, diagnostic);
+        node, allowed, sizeof(allowed) / sizeof(allowed[0]), diagnostic);
     if (status == VXML_OK)
         status = cmeta_validate_empty_element(node, diagnostic);
     if (status != VXML_OK) return status;
-    if (name.impl == NULL || src.impl == NULL)
+    if (name.impl == NULL ||
+        ((src.impl == NULL) == (srcexpr.impl == NULL)))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(node),
-            "VoiceXML data requires name and src");
+            "VoiceXML data requires name and exactly one of src or srcexpr");
     if (!cmeta_external_data_options_valid(options))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(node),
             "VoiceXML external data requires enabled DataBind limits");
+    if (dynamic_request) {
+        if (!measurement->version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(node),
+                "dynamic VoiceXML data requests require version 2.1");
+        if (!cmeta_dynamic_data_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_node_location(node),
+                "dynamic VoiceXML data requires enabled request bounds");
+    }
     if (measurement->external_data_count >=
             options->max_external_data_resources ||
         !cmeta_measure_increment(&measurement->external_data_count))
@@ -4807,10 +4884,10 @@ static vxml_status cmeta_measure_data(
             "VoiceXML external data resource count exceeds limit");
     status = cmeta_measure_name(name, measurement, limits, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_measure_name(src, measurement, limits, diagnostic);
-    if (status != VXML_OK) return status;
-    {
+    if (src.impl != NULL) {
         size_t decoded_size = 0u;
+        status = cmeta_measure_name(src, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
         if (!cmeta_decode_entities(
                 salts_xml_attribute_value(src), NULL, 0u, &decoded_size))
             return cmeta_program_fail(
@@ -4820,9 +4897,58 @@ static vxml_status cmeta_measure_data(
         if (decoded_size == 0u ||
             decoded_size > options->max_data_uri_bytes)
             return cmeta_program_fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
+                diagnostic,
+                decoded_size > options->max_data_uri_bytes
+                    ? VXML_LIMIT_EXCEEDED
+                    : VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(src),
-                "VoiceXML data src exceeds max_data_uri_bytes");
+                "VoiceXML data src must be a bounded non-empty URI");
+    } else {
+        if (!cmeta_measure_increment(&measurement->expression_count))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML data srcexpr count overflow");
+    }
+    if (method.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(method), "get") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(method), "post"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(method),
+            "VoiceXML data method must be get or post");
+    if (enctype.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype),
+            "application/x-www-form-urlencoded") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype),
+            "multipart/form-data"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(enctype),
+            "VoiceXML data enctype is unsupported");
+    if (enctype.impl != NULL &&
+        (method.impl == NULL ||
+         cmeta_decoded_equal(
+             salts_xml_attribute_value(method), "get")))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(enctype),
+            "VoiceXML data enctype applies only to POST");
+    first_location = measurement->location_count;
+    if (namelist.impl != NULL) {
+        status = cmeta_measure_namelist(
+            namelist, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+        if (measurement->location_count - first_location >
+                options->max_data_namelist_fields)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(namelist),
+                "VoiceXML data namelist exceeds configured field count");
     }
     if (fetchaudio.impl != NULL) {
         size_t decoded_size = 0u;
@@ -4859,11 +4985,9 @@ static vxml_status cmeta_measure_data(
         maxage, &has_policy_value,
         &policy_value, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_parse_nonnegative_seconds(
+    return cmeta_parse_nonnegative_seconds(
         maxstale, &has_policy_value,
         &policy_value, diagnostic);
-    if (status != VXML_OK) return status;
-    return VXML_OK;
 }
 
 static vxml_status cmeta_measure_program(
@@ -4968,6 +5092,14 @@ static vxml_status cmeta_measure_program(
             status = cmeta_measure_data(
                 child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) break;
+            if (!cmeta_measure_increment(
+                    &measurement->initializer_count)) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML initializer count overflow");
+                break;
+            }
             continue;
         }
         if (cmeta_node_named(child, "catch") ||
@@ -5002,13 +5134,17 @@ static vxml_status cmeta_measure_program(
                     "document variables must precede forms");
                 break;
             }
-            if (!cmeta_measure_increment(&measurement->declaration_count) ||
+            if (!cmeta_measure_increment(
+                    &measurement->declaration_count) ||
+                !cmeta_measure_increment(
+                    &measurement->initializer_count) ||
                 (expression.impl != NULL &&
-                 !cmeta_measure_increment(&measurement->expression_count))) {
+                 !cmeta_measure_increment(
+                     &measurement->expression_count))) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML declaration count overflow");
+                    "VoiceXML declaration/initializer count overflow");
                 break;
             }
             continue;
@@ -5056,6 +5192,8 @@ typedef struct cmeta_program_builder {
     const vxml_cmeta_compile_options_v1 *options;
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
+    size_t data_lower_index;
+    size_t initializer_index;
     size_t form_index;
     size_t menu_index;
     size_t menu_choice_index;
@@ -5134,6 +5272,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->expressions);
     vxml_free(profile->branches);
     vxml_free(profile->actions);
+    vxml_free(profile->initializers);
     vxml_free(profile->declarations);
     vxml_free(profile->event_handlers);
     vxml_free(profile->filled_transfer_targets);
@@ -5233,6 +5372,7 @@ static bool cmeta_allocate_rows(
     profile->event_handler_count = measurement->event_handler_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
+    profile->initializer_count = measurement->initializer_count;
     profile->action_count = measurement->action_count;
     profile->branch_count = measurement->branch_count;
     profile->expression_count = measurement->expression_count;
@@ -5247,6 +5387,13 @@ static bool cmeta_allocate_rows(
     if (measurement->external_data_count != 0u) {
         profile->max_data_bind_depth = options->max_data_bind_depth;
         profile->max_data_bind_items = options->max_data_bind_items;
+        profile->max_data_uri_bytes = options->max_data_uri_bytes;
+        if (cmeta_dynamic_data_options_valid(options)) {
+            profile->max_data_namelist_fields =
+                options->max_data_namelist_fields;
+            profile->max_data_request_value_bytes =
+                options->max_data_request_value_bytes;
+        }
     }
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
@@ -5290,6 +5437,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
+    CMETA_ALLOC_ROWS(initializers, measurement->initializer_count);
     CMETA_ALLOC_ROWS(actions, measurement->action_count);
     CMETA_ALLOC_ROWS(branches, measurement->branch_count);
     CMETA_ALLOC_ROWS(expressions, measurement->expression_count);
@@ -6448,12 +6596,24 @@ static vxml_status cmeta_compile_external_data(
     cmeta_program_builder *builder,
     salts_xml_node root,
     salts_xml_node node,
+    const vxml_cmeta_data_fetch_policy *inherited_policy,
+    vxml_cmeta_data_destination_kind destination_kind,
+    size_t destination_scope,
+    size_t destination_slot,
+    bool legacy_preload,
     vxml_cmeta_external_data_row *out) {
-    const salts_xml_attribute name_attribute = cmeta_attribute(node, "name");
-    const salts_xml_attribute src_attribute = cmeta_attribute(node, "src");
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    const salts_xml_attribute src_attribute =
+        cmeta_attribute(node, "src");
+    const salts_xml_attribute method_attribute =
+        cmeta_attribute(node, "method");
+    const salts_xml_attribute enctype_attribute =
+        cmeta_attribute(node, "enctype");
     cmeta_decoded_value decoded_name = {0};
-    size_t field_index = 0u;
-    const cmeta_data_field_desc *field;
+    size_t field_index = VXML_CMETA_NO_INDEX;
+    size_t field_offset = 0u;
+    const cmeta_data_desc *field_data = NULL;
     DataBindNativeOptions bind_options = DATA_BIND_NATIVE_OPTIONS_INIT;
     DataBindNativeDiagnostic bind_diagnostic =
         DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
@@ -6463,9 +6623,25 @@ static vxml_status cmeta_compile_external_data(
     const DataBindNativeRequirements *requirements;
     vxml_status status;
 
+    if (builder == NULL || out == NULL || inherited_policy == NULL)
+        return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
-    out->fetch_policy =
-        builder->profile->document_data_fetch;
+    out->uri_expression = VXML_CMETA_NO_INDEX;
+    out->first_location = VXML_CMETA_NO_INDEX;
+    out->scope = VXML_CMETA_NO_INDEX;
+    out->slot = VXML_CMETA_NO_INDEX;
+    out->field_index = VXML_CMETA_NO_INDEX;
+    out->method = VXML_SUBMIT_METHOD_GET;
+    out->enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+    out->request_v3 =
+        cmeta_attribute(node, "srcexpr").impl != NULL ||
+        cmeta_attribute(node, "method").impl != NULL ||
+        cmeta_attribute(node, "namelist").impl != NULL ||
+        cmeta_attribute(node, "enctype").impl != NULL;
+    out->fetch_policy = *inherited_policy;
+    out->destination_kind = destination_kind;
+    out->legacy_preload = legacy_preload;
+
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
@@ -6477,23 +6653,56 @@ static vxml_status cmeta_compile_external_data(
             "VoiceXML data name must be a decoded XML NCName");
         goto done;
     }
-    if (cmeta_document_name_conflict(root, node, decoded_name.view)) {
-        status = cmeta_program_fail(
-            builder->diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(name_attribute),
-            "VoiceXML document data/var names must be unique");
+
+    if (destination_kind == VXML_CMETA_DATA_DESTINATION_ROOT) {
+        const cmeta_data_field_desc *field;
+        if (cmeta_document_name_conflict(root, node, decoded_name.view)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML document data/var names must be unique");
+            goto done;
+        }
+        field = cmeta_root_field(
+            builder->profile->root, decoded_name.view, &field_index);
+        if (field == NULL) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data name has no matching application-root field");
+            goto done;
+        }
+        field_offset = field->offset;
+        field_data = field->value;
+    } else if (destination_kind == VXML_CMETA_DATA_DESTINATION_SCOPE) {
+        const cmeta_scope_schema *schema;
+        const cmeta_scope_slot *slot;
+        size_t resolved_slot = VXML_CMETA_NO_INDEX;
+        if (destination_scope >= builder->profile->scope_count ||
+            destination_slot == VXML_CMETA_NO_INDEX) {
+            status = VXML_INVALID_STRUCTURE;
+            goto done;
+        }
+        schema = &builder->profile->scopes[destination_scope].schema;
+        slot = cmeta_scope_find(
+            schema, decoded_name.view.data,
+            decoded_name.view.size, &resolved_slot);
+        if (slot == NULL || resolved_slot != destination_slot) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data lexical destination changed between passes");
+            goto done;
+        }
+        out->scope = destination_scope;
+        out->slot = destination_slot;
+        field_data = slot->value;
+    } else {
+        status = VXML_INVALID_STRUCTURE;
         goto done;
     }
-    field = cmeta_root_field(
-        builder->profile->root, decoded_name.view, &field_index);
-    if (field == NULL) {
-        status = cmeta_program_fail(
-            builder->diagnostic, VXML_SEMANTIC_ERROR,
-            salts_xml_attribute_location(name_attribute),
-            "VoiceXML data name has no matching application-root field");
-        goto done;
-    }
-    if (!cmeta_data_value_move_supported(field->value)) {
+
+    if (!cmeta_data_value_move_supported(field_data)) {
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_attribute_location(name_attribute),
@@ -6506,11 +6715,22 @@ static vxml_status cmeta_compile_external_data(
         salts_xml_attribute_location(name_attribute),
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
-    status = cmeta_retain_decoded_view(
-        builder, salts_xml_attribute_value(src_attribute),
-        salts_xml_attribute_location(src_attribute),
-        &out->uri, &out->uri_size);
-    if (status != VXML_OK) goto done;
+    if (src_attribute.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(src_attribute),
+            salts_xml_attribute_location(src_attribute),
+            &out->uri, &out->uri_size);
+        if (status != VXML_OK) goto done;
+    }
+    if (method_attribute.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(method_attribute), "post"))
+        out->method = VXML_SUBMIT_METHOD_POST;
+    if (enctype_attribute.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype_attribute),
+            "multipart/form-data"))
+        out->enctype = VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
     status = cmeta_apply_data_fetch_attributes(
         builder, node, &out->fetch_policy);
     if (status != VXML_OK) goto done;
@@ -6539,7 +6759,7 @@ static vxml_status cmeta_compile_external_data(
     bind_options.max_items = builder->options->max_data_bind_items;
     bind_options.max_owned_bytes = 0u;
     bind_status = data_bind_native_plan_compile(
-        &bind_options, field->value, &out->plan, &bind_diagnostic);
+        &bind_options, field_data, &out->plan, &bind_diagnostic);
     if (bind_status != DATA_BIND_OK || out->plan == NULL) {
         status = cmeta_program_fail(
             builder->diagnostic,
@@ -6558,8 +6778,8 @@ static vxml_status cmeta_compile_external_data(
         goto done;
     }
     out->field_index = field_index;
-    out->field_offset = field->offset;
-    out->field_data = field->value;
+    out->field_offset = field_offset;
+    out->field_data = field_data;
     out->decode_workspace_bytes = requirements->decode_bytes;
     out->workspace_alignment = requirements->workspace_alignment;
     status = VXML_OK;
@@ -6673,6 +6893,94 @@ static vxml_status cmeta_register_variable(
         goto done;
     }
     if (out_slot != NULL) *out_slot = slot;
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    return status;
+}
+
+static vxml_status cmeta_register_data_variable(
+    cmeta_program_builder *builder, size_t scope_index,
+    salts_xml_node node, bool allow_repeat,
+    size_t *out_slot, bool *out_repeated) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    cmeta_decoded_value decoded = {0};
+    const cmeta_data_field_desc *field;
+    const cmeta_scope_slot *existing;
+    cmeta_scope_schema *schema;
+    bool conflict = false;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    vxml_status status;
+    if (out_slot != NULL) *out_slot = VXML_CMETA_NO_INDEX;
+    if (out_repeated != NULL) *out_repeated = false;
+    if (builder == NULL || scope_index >= builder->profile->scope_count ||
+        name_attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name must be a decoded XML NCName");
+        goto done;
+    }
+    field = cmeta_root_field(
+        builder->profile->root, decoded.view, NULL);
+    if (field == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name has no matching typed root descriptor");
+        goto done;
+    }
+    schema = &builder->profile->scopes[scope_index].schema;
+    existing = cmeta_scope_find(
+        schema, decoded.view.data, decoded.view.size, &slot);
+    if (existing != NULL) {
+        if (!cmeta_data_desc_equal(existing->value, field->value)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data lexical name has incompatible type");
+            goto done;
+        }
+        if (!allow_repeat) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML data lexical declaration");
+            goto done;
+        }
+        if (out_slot != NULL) *out_slot = slot;
+        if (out_repeated != NULL) *out_repeated = true;
+        status = VXML_OK;
+        goto done;
+    }
+    if (schema->slot_count >= builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(schema, field->value)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data lexical scope exceeds configured bounds");
+        goto done;
+    }
+    if (!cmeta_scope_register(
+            schema, decoded.view.data, decoded.view.size,
+            field->value, &slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(name_attribute),
+            conflict
+                ? "VoiceXML data lexical name has conflicting type"
+                : "VoiceXML data lexical schema allocation failed");
+        goto done;
+    }
+    if (out_slot != NULL) *out_slot = slot;
+    status = VXML_OK;
 done:
     cmeta_decoded_value_destroy(&decoded);
     return status;
@@ -6938,6 +7246,10 @@ static vxml_status cmeta_register_executable_variables(
         const salts_xml_node child = salts_xml_node_child_at(container, index);
         if (cmeta_node_named(child, "var")) {
             const vxml_status status = cmeta_register_variable(
+                builder, scope_index, child, true, NULL, NULL);
+            if (status != VXML_OK) return status;
+        } else if (cmeta_node_named(child, "data")) {
+            const vxml_status status = cmeta_register_data_variable(
                 builder, scope_index, child, true, NULL, NULL);
             if (status != VXML_OK) return status;
         }
@@ -8132,6 +8444,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->prompt_foreach_count;
+    if (capacity > SIZE_MAX - measurement->external_data_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->external_data_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -8152,6 +8470,12 @@ static vxml_status cmeta_build_schemas(
                 "VoiceXML lexical schema allocation failed");
     }
     builder->profile->first_document_declaration = 0u;
+    builder->profile->first_document_initializer =
+        builder->initializer_index;
+    builder->profile->document_initializer_count = 0u;
+    builder->profile->first_document_data =
+        builder->external_data_index;
+    builder->profile->document_data_count = 0u;
     for (root_child = 0u;
          root_child < salts_xml_node_child_count(root); ++root_child) {
         const salts_xml_node child =
@@ -8183,18 +8507,50 @@ static vxml_status cmeta_build_schemas(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "VoiceXML external data row count changed between passes");
-            status = cmeta_compile_external_data(
-                builder, root, child,
-                &builder->profile->external_data[
-                    builder->external_data_index++]);
-            if (status != VXML_OK) return status;
+            {
+                const bool legacy_preload =
+                    cmeta_attribute(child, "srcexpr").impl == NULL &&
+                    cmeta_attribute(child, "method").impl == NULL &&
+                    cmeta_attribute(child, "namelist").impl == NULL &&
+                    cmeta_attribute(child, "enctype").impl == NULL;
+                const size_t data_index =
+                    builder->external_data_index++;
+                vxml_cmeta_initializer_row *initializer;
+                if (builder->initializer_index >=
+                        builder->profile->initializer_count ||
+                    builder->profile->initializers == NULL)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(child),
+                        "VoiceXML document initializer rows changed between passes");
+                status = cmeta_compile_external_data(
+                    builder, root, child,
+                    &builder->profile->document_data_fetch,
+                    VXML_CMETA_DATA_DESTINATION_ROOT,
+                    VXML_CMETA_NO_INDEX, VXML_CMETA_NO_INDEX,
+                    legacy_preload,
+                    &builder->profile->external_data[data_index]);
+                if (status != VXML_OK) return status;
+                initializer =
+                    &builder->profile->initializers[
+                        builder->initializer_index++];
+                initializer->kind =
+                    VXML_CMETA_INITIALIZER_DATA;
+                initializer->index = data_index;
+                ++builder->profile->document_data_count;
+                ++builder->profile->document_initializer_count;
+            }
             continue;
         }
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute name_attribute =
                 cmeta_attribute(child, "name");
+            const size_t declaration_index =
+                builder->declaration_index++;
             vxml_cmeta_declaration_row *declaration =
-                &builder->profile->declarations[builder->declaration_index++];
+                &builder->profile->declarations[declaration_index];
+            vxml_cmeta_initializer_row *initializer;
             status = cmeta_register_variable(
                 builder, 0u, child, false, &declaration->slot, NULL);
             if (status != VXML_OK) return status;
@@ -8206,7 +8562,22 @@ static vxml_status cmeta_build_schemas(
             if (status != VXML_OK) return status;
             declaration->expression = VXML_CMETA_NO_INDEX;
             declaration->location = salts_xml_node_location(child);
+            if (builder->initializer_index >=
+                    builder->profile->initializer_count ||
+                builder->profile->initializers == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document initializer rows changed between passes");
+            initializer =
+                &builder->profile->initializers[
+                    builder->initializer_index++];
+            initializer->kind =
+                VXML_CMETA_INITIALIZER_DECLARATION;
+            initializer->index = declaration_index;
             ++builder->profile->document_declaration_count;
+            ++builder->profile->document_initializer_count;
             continue;
         }
         if (cmeta_node_named(child, "menu")) {
@@ -8228,6 +8599,10 @@ static vxml_status cmeta_build_schemas(
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
             form->declaration_count = 0u;
+            form->first_data = builder->external_data_index;
+            form->data_count = 0u;
+            form->first_initializer = builder->initializer_index;
+            form->initializer_count = 0u;
             form->first_field = builder->field_index;
             form->field_count = 0u;
             form->first_initial = builder->initial_index;
@@ -8271,6 +8646,8 @@ static vxml_status cmeta_build_schemas(
             size_t form_child;
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
+            form->first_data = builder->external_data_index;
+            form->first_initializer = builder->initializer_index;
             form->first_field = builder->field_index;
             form->first_initial = builder->initial_index;
             form->first_subdialog = builder->subdialog_index;
@@ -8379,12 +8756,48 @@ static vxml_status cmeta_build_schemas(
                     continue;
                 }
 
+                if (cmeta_node_named(item, "data")) {
+                    size_t data_slot = VXML_CMETA_NO_INDEX;
+                    const size_t data_index =
+                        builder->external_data_index++;
+                    vxml_cmeta_initializer_row *initializer;
+                    if (data_index >=
+                            builder->profile->external_data_count ||
+                        builder->initializer_index >=
+                            builder->profile->initializer_count ||
+                        builder->profile->initializers == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data/initializer rows changed between compiler passes");
+                    status = cmeta_register_data_variable(
+                        builder, form_scope, item, false,
+                        &data_slot, NULL);
+                    if (status != VXML_OK) return status;
+                    status = cmeta_compile_external_data(
+                        builder, root, item, &form->data_fetch,
+                        VXML_CMETA_DATA_DESTINATION_SCOPE,
+                        form_scope, data_slot, false,
+                        &builder->profile->external_data[data_index]);
+                    if (status != VXML_OK) return status;
+                    initializer =
+                        &builder->profile->initializers[
+                            builder->initializer_index++];
+                    initializer->kind =
+                        VXML_CMETA_INITIALIZER_DATA;
+                    initializer->index = data_index;
+                    continue;
+                }
+
                 if (cmeta_node_named(item, "var")) {
                     const salts_xml_attribute name_attribute =
                         cmeta_attribute(item, "name");
+                    const size_t declaration_index =
+                        builder->declaration_index++;
                     vxml_cmeta_declaration_row *declaration =
                         &builder->profile->declarations[
-                            builder->declaration_index++];
+                            declaration_index];
+                    vxml_cmeta_initializer_row *initializer;
                     status = cmeta_register_variable(
                         builder, form_scope, item, false,
                         &declaration->slot, NULL);
@@ -8397,6 +8810,20 @@ static vxml_status cmeta_build_schemas(
                     if (status != VXML_OK) return status;
                     declaration->expression = VXML_CMETA_NO_INDEX;
                     declaration->location = salts_xml_node_location(item);
+                    if (builder->initializer_index >=
+                            builder->profile->initializer_count ||
+                        builder->profile->initializers == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form initializer rows changed between passes");
+                    initializer =
+                        &builder->profile->initializers[
+                            builder->initializer_index++];
+                    initializer->kind =
+                        VXML_CMETA_INITIALIZER_DECLARATION;
+                    initializer->index = declaration_index;
                     continue;
                 }
                 if (cmeta_node_named(item, "grammar")) {
@@ -8758,6 +9185,10 @@ static vxml_status cmeta_build_schemas(
             }
             form->declaration_count =
                 builder->declaration_index - form->first_declaration;
+            form->data_count =
+                builder->external_data_index - form->first_data;
+            form->initializer_count =
+                builder->initializer_index - form->first_initializer;
             form->field_count =
                 builder->field_index - form->first_field;
             form->initial_count =
@@ -9608,6 +10039,211 @@ cmeta_fetchaudio_policy_for_scopes(
     return &builder->profile->document_fetchaudio;
 }
 
+
+static const vxml_cmeta_data_fetch_policy *
+cmeta_data_fetch_policy_for_scopes(
+    const cmeta_program_builder *builder,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    size_t index;
+    if (builder == NULL || builder->profile == NULL)
+        return NULL;
+    for (index = 0u; index < scope_count; ++index) {
+        const size_t scope = scopes[index].scope_id;
+        if (scope < builder->profile->scope_count &&
+            builder->profile->scopes[scope].kind ==
+                VXML_CMETA_SCOPE_FORM) {
+            const size_t form =
+                builder->profile->scopes[scope].owner;
+            if (form < builder->profile->form_count &&
+                builder->profile->forms != NULL)
+                return &builder->profile->forms[form].data_fetch;
+            return NULL;
+        }
+    }
+    return &builder->profile->document_data_fetch;
+}
+
+static bool cmeta_data_request_value_supported(
+    const cmeta_data_desc *value) {
+    if (!cmeta_data_desc_valid(value))
+        return false;
+    switch (value->kind) {
+    case CMETA_DATA_BOOL:
+    case CMETA_DATA_SINT:
+    case CMETA_DATA_UINT:
+    case CMETA_DATA_STRING:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static vxml_status cmeta_lower_data_namelist(
+    cmeta_program_builder *builder,
+    salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    size_t *out_first,
+    size_t *out_count) {
+    cmeta_decoded_value decoded = {0};
+    salts_xml_string_view list;
+    const salts_xml_location location =
+        salts_xml_attribute_location(attribute);
+    salts_xml_string_view name;
+    size_t cursor = 0u;
+    vxml_status status;
+
+    if (builder == NULL || out_first == NULL || out_count == NULL ||
+        builder->profile == NULL ||
+        builder->profile->max_data_namelist_fields == 0u)
+        return VXML_INVALID_ARGUMENT;
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(attribute),
+        location, &decoded);
+    if (status != VXML_OK) return status;
+    list = decoded.view;
+    *out_first = builder->location_index;
+    *out_count = 0u;
+
+    while (cmeta_namelist_next(list, &cursor, &name)) {
+        size_t prior_cursor = 0u;
+        size_t prior_count = 0u;
+        size_t location_index = VXML_CMETA_NO_INDEX;
+        const vxml_cmeta_location_row *row;
+
+        if (*out_count >=
+            builder->profile->max_data_namelist_fields) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                location,
+                "VoiceXML data namelist exceeds configured field count");
+            goto done;
+        }
+
+        while (prior_count < *out_count) {
+            salts_xml_string_view prior;
+            if (!cmeta_namelist_next(
+                    list, &prior_cursor, &prior)) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    location,
+                    "VoiceXML data namelist changed during lowering");
+                goto done;
+            }
+            if (prior.size == name.size &&
+                memcmp(prior.data, name.data, name.size) == 0) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    location,
+                    "VoiceXML data namelist contains a duplicate name");
+                goto done;
+            }
+            ++prior_count;
+        }
+
+        status = cmeta_append_location_view(
+            builder, name, location,
+            scopes, scope_count,
+            false, &location_index);
+        if (status != VXML_OK) goto done;
+        if (location_index >=
+                builder->profile->location_count ||
+            builder->profile->locations == NULL) {
+            status = VXML_INVALID_STRUCTURE;
+            goto done;
+        }
+        row = &builder->profile->locations[location_index];
+        if (!cmeta_data_request_value_supported(row->value)) {
+            status = cmeta_program_fail(
+                builder->diagnostic,
+                VXML_SEMANTIC_ERROR,
+                location,
+                "VoiceXML data namelist admits bool/integer/string values; float canonicalization is not available in this slice");
+            goto done;
+        }
+        ++*out_count;
+    }
+
+    if (*out_count == 0u)
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            location,
+            "VoiceXML data namelist must not be empty");
+    else
+        status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    return status;
+}
+
+static vxml_status cmeta_lower_external_data_request(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    vxml_cmeta_external_data_row *row,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    const salts_xml_attribute srcexpr =
+        cmeta_attribute(node, "srcexpr");
+    const salts_xml_attribute namelist =
+        cmeta_attribute(node, "namelist");
+    vxml_status status;
+
+    if (builder == NULL || row == NULL ||
+        scopes == NULL || scope_count == 0u)
+        return VXML_INVALID_ARGUMENT;
+
+    if (srcexpr.impl != NULL) {
+        if (row->uri != NULL || row->uri_size != 0u ||
+            row->uri_expression != VXML_CMETA_NO_INDEX)
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML data srcexpr changed between compiler passes");
+        status = cmeta_append_expression(
+            builder, srcexpr,
+            scopes, scope_count, false,
+            &row->uri_expression);
+        if (status != VXML_OK) return status;
+        if (cmeta_expression_value_kind(
+                &builder->profile->expressions[
+                    row->uri_expression]) !=
+                VXML_CMETA_VALUE_STRING)
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML data srcexpr must produce STRING");
+    } else if (row->uri == NULL || row->uri_size == 0u ||
+               row->uri_expression != VXML_CMETA_NO_INDEX) {
+        return cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML data URI changed between compiler passes");
+    }
+
+    if (namelist.impl != NULL) {
+        status = cmeta_lower_data_namelist(
+            builder, namelist,
+            scopes, scope_count,
+            &row->first_location,
+            &row->location_count);
+        if (status != VXML_OK) return status;
+    } else {
+        row->first_location = VXML_CMETA_NO_INDEX;
+        row->location_count = 0u;
+    }
+
+    return VXML_OK;
+}
+
 static void cmeta_action_init(vxml_cmeta_action_row *action) {
     memset(action, 0, sizeof(*action));
     action->scope = VXML_CMETA_NO_INDEX;
@@ -9616,6 +10252,7 @@ static void cmeta_action_init(vxml_cmeta_action_row *action) {
     action->expression = VXML_CMETA_NO_INDEX;
     action->first_location = VXML_CMETA_NO_INDEX;
     action->first_branch = VXML_CMETA_NO_INDEX;
+    action->data_index = VXML_CMETA_NO_INDEX;
 }
 
 static bool cmeta_prior_var_action(
@@ -9999,7 +10636,68 @@ static vxml_status cmeta_lower_simple_action(
     action = &builder->profile->actions[builder->action_index];
     cmeta_action_init(action);
     action->location = salts_xml_node_location(node);
-    if (cmeta_node_named(node, "var")) {
+    if (cmeta_node_named(node, "data")) {
+        const salts_xml_attribute name_attribute =
+            cmeta_attribute(node, "name");
+        const vxml_cmeta_data_fetch_policy *inherited =
+            cmeta_data_fetch_policy_for_scopes(
+                builder, scopes, scope_count);
+        cmeta_decoded_value decoded_name = {0};
+        const cmeta_scope_slot *slot;
+        size_t slot_index = VXML_CMETA_NO_INDEX;
+        size_t data_index;
+        vxml_cmeta_external_data_row *row;
+
+        if (inherited == NULL ||
+            execution_scope >= builder->profile->scope_count ||
+            name_attribute.impl == NULL ||
+            builder->external_data_index >=
+                builder->profile->external_data_count ||
+            builder->profile->external_data == NULL)
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML executable data rows changed between compiler passes");
+
+        status = cmeta_decode_temporary(
+            builder,
+            salts_xml_attribute_value(name_attribute),
+            salts_xml_attribute_location(name_attribute),
+            &decoded_name);
+        if (status != VXML_OK) return status;
+        slot = cmeta_scope_find(
+            &builder->profile->scopes[
+                execution_scope].schema,
+            decoded_name.view.data,
+            decoded_name.view.size,
+            &slot_index);
+        if (slot == NULL) {
+            cmeta_decoded_value_destroy(&decoded_name);
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML executable data destination changed between passes");
+        }
+        cmeta_decoded_value_destroy(&decoded_name);
+
+        data_index = builder->external_data_index++;
+        row = &builder->profile->external_data[data_index];
+        status = cmeta_compile_external_data(
+            builder, (salts_xml_node){0}, node,
+            inherited,
+            VXML_CMETA_DATA_DESTINATION_SCOPE,
+            execution_scope, slot_index,
+            false, row);
+        if (status != VXML_OK) return status;
+        status = cmeta_lower_external_data_request(
+            builder, node, row, scopes, scope_count);
+        if (status != VXML_OK) return status;
+
+        action->kind = VXML_CMETA_ACTION_DATA;
+        action->data_index = data_index;
+    } else if (cmeta_node_named(node, "var")) {
         const salts_xml_attribute name_attribute = cmeta_attribute(node, "name");
         const salts_xml_attribute expression = cmeta_attribute(node, "expr");
         cmeta_decoded_value decoded_name = {0};
@@ -10465,6 +11163,7 @@ static vxml_status cmeta_lower_catch(
 
 static vxml_status cmeta_lower_program(
     cmeta_program_builder *builder, salts_xml_node root) {
+    size_t document_data_offset = 0u;
     size_t declaration_index = 0u;
     size_t form_index = 0u;
     size_t field_index = 0u;
@@ -10482,6 +11181,40 @@ static vxml_status cmeta_lower_program(
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "property"))
             continue;
+        if (cmeta_node_named(child, "data")) {
+            const vxml_cmeta_expr_compile_scope scope = {
+                0u, &builder->profile->scopes[0].schema};
+            size_t data_index;
+            vxml_cmeta_external_data_row *row;
+            if (document_data_offset >=
+                    builder->profile->document_data_count ||
+                builder->profile->first_document_data >
+                    builder->profile->external_data_count ||
+                document_data_offset >
+                    builder->profile->external_data_count -
+                        builder->profile->first_document_data ||
+                builder->profile->external_data == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document data rows changed during lowering");
+            data_index =
+                builder->profile->first_document_data +
+                document_data_offset++;
+            if (data_index >=
+                builder->profile->external_data_count)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document data index changed during lowering");
+            row = &builder->profile->external_data[data_index];
+            status = cmeta_lower_external_data_request(
+                builder, child, row, &scope, 1u);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "catch") ||
             cmeta_node_named(child, "help") ||
             cmeta_node_named(child, "noinput") ||
@@ -10524,6 +11257,7 @@ static vxml_status cmeta_lower_program(
                  &builder->profile->scopes[form->scope].schema},
                 {0u, &builder->profile->scopes[0].schema}};
             size_t form_child;
+            size_t form_data_offset = 0u;
             size_t form_filled_offset = 0u;
             for (form_child = 0u;
                  form_child < salts_xml_node_child_count(child);
@@ -10533,6 +11267,37 @@ static vxml_status cmeta_lower_program(
                 if (cmeta_node_ignorable(item)) continue;
                 if (cmeta_node_named(item, "property"))
                     continue;
+                if (cmeta_node_named(item, "data")) {
+                    size_t data_index;
+                    vxml_cmeta_external_data_row *row;
+                    if (form_data_offset >= form->data_count ||
+                        form->first_data >
+                            builder->profile->external_data_count ||
+                        form_data_offset >
+                            builder->profile->external_data_count -
+                                form->first_data ||
+                        builder->profile->external_data == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data rows changed during lowering");
+                    data_index =
+                        form->first_data + form_data_offset++;
+                    if (data_index >=
+                        builder->profile->external_data_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data index changed during lowering");
+                    row = &builder->profile->external_data[
+                        data_index];
+                    status = cmeta_lower_external_data_request(
+                        builder, item, row, scopes, 2u);
+                    if (status != VXML_OK) return status;
+                    continue;
+                }
                 if (cmeta_node_named(item, "var")) {
                     status = cmeta_compile_declaration_expression(
                         builder, item,
@@ -11131,9 +11896,22 @@ static vxml_status cmeta_lower_program(
                     if (status != VXML_OK) return status;
                 }
             }
+            if (form_data_offset != form->data_count)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML form data rows disappeared during lowering");
             ++form_index;
         }
     }
+    if (document_data_offset !=
+            builder->profile->document_data_count)
+        return cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(root),
+            "VoiceXML document data rows disappeared during lowering");
     if (field_index != builder->profile->field_count ||
         initial_index != builder->profile->initial_count ||
         subdialog_index != builder->profile->subdialog_count ||
@@ -11225,6 +12003,7 @@ static vxml_status cmeta_write_program(
          builder.event_handler_index != measurement->event_handler_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
+         builder.initializer_index != measurement->initializer_count ||
          builder.action_index != measurement->action_count ||
          builder.branch_index != measurement->branch_count ||
          builder.expression_index != measurement->expression_count ||

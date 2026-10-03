@@ -151,6 +151,12 @@ static_assert(
 static_assert(
     std::is_standard_layout<vxml_cmeta_data_request_v2>::value,
     "external data request V2 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_field_v1>::value,
+    "external data field V1 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_request_v3>::value,
+    "external data request V3 must remain C-compatible");
 
 int main() {
     static constexpr char document[] =
@@ -215,6 +221,9 @@ int main() {
     vxml_cmeta_data_resource_v1 data_resource{};
     vxml_cmeta_data_request_v2 data_request_v2 =
         VXML_CMETA_DATA_REQUEST_V2_INIT;
+    vxml_cmeta_data_field_v1 data_field_v1{};
+    vxml_cmeta_data_request_v3 data_request_v3 =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
     vxml_cmeta_compile_options_v1 compile_options{};
     vxml_cmeta_session_options_v1 session_options{};
@@ -520,7 +529,12 @@ int main() {
         data_request_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
         data_request_v2.struct_size != sizeof(data_request_v2) ||
         data_request_v2.fetch_hint !=
-            VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED)
+            VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED ||
+        data_request_v3.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        data_request_v3.struct_size != sizeof(data_request_v3) ||
+        data_request_v3.method != VXML_SUBMIT_METHOD_GET ||
+        data_request_v3.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        data_field_v1.name != nullptr)
         return 5;
     compile_options.abi_version = VXML_CMETA_COMPILE_OPTIONS_ABI_V1;
     compile_options.struct_size = sizeof(compile_options);
@@ -542,6 +556,8 @@ int main() {
     compile_options.max_prompt_foreach_snapshot_bytes = 1024u;
     compile_options.max_prompt_expanded_segments = 16u;
     compile_options.max_prompt_foreach_depth = 2u;
+    compile_options.max_data_namelist_fields = 4u;
+    compile_options.max_data_request_value_bytes = 256u;
     compile_options.max_event_handlers = 4u;
     compile_options.max_event_name_bytes = 64u;
     session_options.abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1;

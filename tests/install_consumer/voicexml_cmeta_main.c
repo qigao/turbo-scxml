@@ -33,7 +33,9 @@ int main(void) {
         .max_prompt_foreach_items = 4u,
         .max_prompt_foreach_snapshot_bytes = 1024u,
         .max_prompt_expanded_segments = 16u,
-        .max_prompt_foreach_depth = 2u
+        .max_prompt_foreach_depth = 2u,
+        .max_data_namelist_fields = 4u,
+        .max_data_request_value_bytes = 256u
     };
     const vxml_cmeta_session_options_v1 session_options = {
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
@@ -139,6 +141,9 @@ int main(void) {
     vxml_cmeta_data_resource_v1 data_resource = {0};
     vxml_cmeta_data_request_v2 data_request_v2 =
         VXML_CMETA_DATA_REQUEST_V2_INIT;
+    vxml_cmeta_data_field_v1 data_field_v1 = {0};
+    vxml_cmeta_data_request_v3 data_request_v3 =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
     vxml_cmeta_data_resource_adapter_v1 data_adapter = {
         .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1)};
@@ -417,6 +422,12 @@ int main(void) {
         data_request_v2.struct_size != sizeof(data_request_v2) ||
         data_request_v2.fetch_hint !=
             VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED ||
+        data_request_v3.abi_version !=
+            VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        data_request_v3.struct_size != sizeof(data_request_v3) ||
+        data_request_v3.method != VXML_SUBMIT_METHOD_GET ||
+        data_request_v3.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        data_field_v1.name != NULL ||
         data_resource.format != 0)
         return 5;
     if (collect_adapter.abi_version !=
