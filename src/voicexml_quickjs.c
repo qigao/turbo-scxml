@@ -848,6 +848,7 @@ static vxml_status quickjs_prepare_data_request(
     size_t uri_size = 0u;
     size_t field_index = 0u;
     size_t cursor = 0u;
+    size_t value_bytes_used = 0u;
     bool context_ready = false;
     vxml_status status;
 
@@ -954,24 +955,23 @@ static vxml_status quickjs_prepare_data_request(
         if (status != VXML_OK)
             return status;
         if (value == NULL ||
-            value_size > data->max_data_request_value_bytes)
-            return value_size >
-                    data->max_data_request_value_bytes
+            value_bytes_used > data->data_values_bytes ||
+            value_size >
+                data->data_values_bytes - value_bytes_used)
+            return value != NULL
                 ? VXML_LIMIT_EXCEEDED
                 : VXML_SEMANTIC_ERROR;
         owned_value =
-            data->data_values +
-            field_index *
-                (data->max_data_request_value_bytes + 1u);
+            data->data_values + value_bytes_used;
         if (value_size != 0u)
             memcpy(owned_value, value, value_size);
-        owned_value[value_size] = '\0';
         data->data_fields[field_index] =
             (vxml_cmeta_data_field_v1){
                 .name = name,
                 .name_size = name_size,
                 .value = owned_value,
                 .value_size = value_size};
+        value_bytes_used += value_size;
         ++field_index;
     }
     if (row->namelist_count != 0u) {
@@ -1565,7 +1565,6 @@ static vxml_status quickjs_profile_session_init(
     quickjs_sandbox_status sandbox_status;
     size_t dynamic_uri_bytes;
     size_t max_fields = 0u;
-    size_t value_slot_bytes = 0u;
     bool has_data;
 
     if (session == NULL || session->program == NULL ||
@@ -1597,11 +1596,6 @@ static vxml_status quickjs_profile_session_init(
         if (max_fields >
             program_data->options.max_data_namelist_fields)
             return VXML_INVALID_CONTRACT;
-        value_slot_bytes =
-            options->max_data_request_value_bytes + 1u;
-        if (max_fields != 0u &&
-            max_fields > SIZE_MAX / value_slot_bytes)
-            return VXML_INVALID_ARGUMENT;
     }
 
     dynamic_uri_bytes =
@@ -1641,7 +1635,7 @@ static vxml_status quickjs_profile_session_init(
                 (vxml_cmeta_data_field_v1 *)vxml_calloc(
                     max_fields, sizeof(*data->data_fields));
             data->data_values_bytes =
-                max_fields * value_slot_bytes;
+                options->max_data_request_value_bytes;
             data->data_values =
                 (char *)vxml_malloc(data->data_values_bytes);
             if (data->data_fields == NULL ||
