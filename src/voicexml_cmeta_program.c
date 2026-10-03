@@ -4239,6 +4239,80 @@ static vxml_status cmeta_measure_fetchaudio_property(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_data_fetch_property(
+    salts_xml_node property,
+    bool version_21,
+    bool *out_recognized,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "value"};
+    const salts_xml_attribute name = cmeta_attribute(property, "name");
+    const salts_xml_attribute value = cmeta_attribute(property, "value");
+    bool has_value = false;
+    uint64_t parsed = UINT64_C(0);
+    vxml_status status;
+
+    if (out_recognized == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_recognized = false;
+    status = cmeta_validate_attributes(property, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(property, diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL || value.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(property),
+            "VoiceXML property requires name and value");
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchtimeout")) {
+        *out_recognized = true;
+        status = cmeta_parse_prompt_timeout(
+            value, &has_value, &parsed, diagnostic);
+        if (status != VXML_OK) return status;
+        return has_value
+            ? VXML_OK
+            : cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchtimeout requires a time designation");
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datafetchhint")) {
+        *out_recognized = true;
+        if (!version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML datafetchhint requires version 2.1");
+        if (!cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "prefetch") &&
+            !cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "safe"))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML datafetchhint must be prefetch or safe");
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxage") ||
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxstale")) {
+        *out_recognized = true;
+        if (!version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML data cache properties require version 2.1");
+        return cmeta_parse_nonnegative_seconds(
+            value, &has_value, &parsed, diagnostic);
+    }
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_record_utterance_property(
     salts_xml_node property,
     bool version_21,
@@ -4303,6 +4377,14 @@ static vxml_status cmeta_measure_record_utterance_property(
             &fetch_recognized, diagnostic);
         if (status != VXML_OK) return status;
         if (fetch_recognized) return VXML_OK;
+    }
+    {
+        bool data_recognized = false;
+        status = cmeta_measure_data_fetch_property(
+            property, version_21,
+            &data_recognized, diagnostic);
+        if (status != VXML_OK) return status;
+        if (data_recognized) return VXML_OK;
     }
 
     if (cmeta_decoded_equal(
@@ -4800,6 +4882,12 @@ static vxml_status cmeta_measure_program(
                 child, limits, measurement,
                 &recognized, diagnostic);
             if (status != VXML_OK) break;
+            if (!recognized) {
+                status = cmeta_measure_data_fetch_property(
+                    child, version_21,
+                    &recognized, diagnostic);
+                if (status != VXML_OK) break;
+            }
             if (!recognized) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_UNSUPPORTED_FEATURE,
