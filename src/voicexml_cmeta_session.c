@@ -11394,6 +11394,8 @@ static vxml_status prompt_media_request_from_impl(
         prompt != NULL ? prompt->count : 0u;
     if (prompt == NULL)
         return VXML_OK;
+    if (prompt->foreach_count != 0u)
+        return VXML_UNSUPPORTED_FEATURE;
     out_request->bargein = prompt->bargein;
     out_request->bargein_type = prompt->bargein_type;
     if (prompt->segment_count != 1u)
@@ -11529,6 +11531,18 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     if (impl == NULL) return VXML_INVALID_CONTRACT;
     status = prompt_media_batch_request_from_impl(impl, out_request);
     if (status != VXML_OK) return status;
+    {
+        const vxml_cmeta_field_row *field = NULL;
+        const vxml_cmeta_prompt_row *prompt = NULL;
+        unsigned prompt_count = 0u;
+        status = selected_prompt_row(
+            impl, &field, &prompt, &prompt_count);
+        (void)field;
+        (void)prompt_count;
+        if (status != VXML_OK) return status;
+        if (prompt != NULL && prompt->foreach_count != 0u)
+            return VXML_UNSUPPORTED_FEATURE;
+    }
     for (index = 0u; index < out_request->segment_count; ++index)
         if (prompt_media_unresolved_dynamic_mark(
                 &out_request->segments[index]))
