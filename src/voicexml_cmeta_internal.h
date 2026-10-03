@@ -28,6 +28,7 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_RETHROW,
     VXML_CMETA_ACTION_REPROMPT,
     VXML_CMETA_ACTION_GOTO,
+    VXML_CMETA_ACTION_SUBMIT,
     VXML_CMETA_ACTION_DATA
 } vxml_cmeta_action_kind;
 
@@ -464,6 +465,10 @@ typedef struct vxml_cmeta_action_row {
     const char *navigation_uri;
     size_t navigation_uri_size;
     vxml_cmeta_fetchaudio_policy fetchaudio;
+
+    vxml_submit_method submit_method;
+    vxml_submit_enctype submit_enctype;
+
     size_t data_index;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
@@ -576,6 +581,11 @@ typedef struct vxml_cmeta_program_data {
     size_t max_data_uri_bytes;
     size_t max_data_namelist_fields;
     size_t max_data_request_value_bytes;
+
+    size_t max_submit_fields;
+    size_t max_submit_value_bytes;
+    size_t max_submit_uri_bytes;
+
     vxml_cmeta_action_row *actions;
     size_t action_count;
     vxml_cmeta_branch_row *branches;
@@ -938,6 +948,17 @@ typedef struct vxml_cmeta_session_data {
     size_t data_request_value_capacity;
     char *data_request_uri;
     size_t data_request_uri_capacity;
+
+    vxml_submit_field_v1 *submit_fields;
+    size_t submit_field_capacity;
+    char *submit_values;
+    size_t submit_value_capacity;
+    const char *pending_submit_uri;
+    size_t pending_submit_uri_size;
+    vxml_submit_method pending_submit_method;
+    vxml_submit_enctype pending_submit_enctype;
+    size_t pending_submit_field_count;
+
     vxml_cmeta_expr_runtime_scope *runtime_scopes;
     size_t runtime_scope_capacity;
     vxml_cmeta_exec_frame *exec_frames;
