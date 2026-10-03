@@ -888,6 +888,19 @@ static bool cmeta_external_data_options_valid(
         options->max_data_bind_items != 0u;
 }
 
+static bool cmeta_dynamic_data_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_data_request_value_bytes) +
+        sizeof(options->max_data_request_value_bytes);
+    return cmeta_external_data_options_valid(options) &&
+        options->struct_size >= tail_size &&
+        options->max_data_namelist_fields != 0u &&
+        options->max_data_request_value_bytes != 0u;
+}
+
 static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
@@ -4767,10 +4780,14 @@ static vxml_status cmeta_measure_data(
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     static const char *const allowed[] = {
-        "name", "src", "fetchaudio", "fetchhint",
-        "fetchtimeout", "maxage", "maxstale"};
+        "name", "src", "srcexpr", "method", "namelist", "enctype",
+        "fetchaudio", "fetchhint", "fetchtimeout", "maxage", "maxstale"};
     const salts_xml_attribute name = cmeta_attribute(node, "name");
     const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute srcexpr = cmeta_attribute(node, "srcexpr");
+    const salts_xml_attribute method = cmeta_attribute(node, "method");
+    const salts_xml_attribute namelist = cmeta_attribute(node, "namelist");
+    const salts_xml_attribute enctype = cmeta_attribute(node, "enctype");
     const salts_xml_attribute fetchaudio =
         cmeta_attribute(node, "fetchaudio");
     const salts_xml_attribute fetchhint =
@@ -4781,23 +4798,40 @@ static vxml_status cmeta_measure_data(
         cmeta_attribute(node, "maxage");
     const salts_xml_attribute maxstale =
         cmeta_attribute(node, "maxstale");
+    const bool dynamic_request =
+        srcexpr.impl != NULL || method.impl != NULL ||
+        namelist.impl != NULL || enctype.impl != NULL;
+    size_t first_location;
     bool has_policy_value = false;
     uint64_t policy_value = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        node, allowed, 7u, diagnostic);
+        node, allowed, sizeof(allowed) / sizeof(allowed[0]), diagnostic);
     if (status == VXML_OK)
         status = cmeta_validate_empty_element(node, diagnostic);
     if (status != VXML_OK) return status;
-    if (name.impl == NULL || src.impl == NULL)
+    if (name.impl == NULL ||
+        ((src.impl == NULL) == (srcexpr.impl == NULL)))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(node),
-            "VoiceXML data requires name and src");
+            "VoiceXML data requires name and exactly one of src or srcexpr");
     if (!cmeta_external_data_options_valid(options))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(node),
             "VoiceXML external data requires enabled DataBind limits");
+    if (dynamic_request) {
+        if (!measurement->version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(node),
+                "dynamic VoiceXML data requests require version 2.1");
+        if (!cmeta_dynamic_data_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_node_location(node),
+                "dynamic VoiceXML data requires enabled request bounds");
+    }
     if (measurement->external_data_count >=
             options->max_external_data_resources ||
         !cmeta_measure_increment(&measurement->external_data_count))
@@ -4807,10 +4841,10 @@ static vxml_status cmeta_measure_data(
             "VoiceXML external data resource count exceeds limit");
     status = cmeta_measure_name(name, measurement, limits, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_measure_name(src, measurement, limits, diagnostic);
-    if (status != VXML_OK) return status;
-    {
+    if (src.impl != NULL) {
         size_t decoded_size = 0u;
+        status = cmeta_measure_name(src, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
         if (!cmeta_decode_entities(
                 salts_xml_attribute_value(src), NULL, 0u, &decoded_size))
             return cmeta_program_fail(
@@ -4820,9 +4854,58 @@ static vxml_status cmeta_measure_data(
         if (decoded_size == 0u ||
             decoded_size > options->max_data_uri_bytes)
             return cmeta_program_fail(
-                diagnostic, VXML_LIMIT_EXCEEDED,
+                diagnostic,
+                decoded_size > options->max_data_uri_bytes
+                    ? VXML_LIMIT_EXCEEDED
+                    : VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(src),
-                "VoiceXML data src exceeds max_data_uri_bytes");
+                "VoiceXML data src must be a bounded non-empty URI");
+    } else {
+        if (!cmeta_measure_increment(&measurement->expression_count))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML data srcexpr count overflow");
+    }
+    if (method.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(method), "get") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(method), "post"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(method),
+            "VoiceXML data method must be get or post");
+    if (enctype.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype),
+            "application/x-www-form-urlencoded") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype),
+            "multipart/form-data"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(enctype),
+            "VoiceXML data enctype is unsupported");
+    if (enctype.impl != NULL &&
+        method.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(method), "get"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(enctype),
+            "VoiceXML data enctype applies only to POST");
+    first_location = measurement->location_count;
+    if (namelist.impl != NULL) {
+        status = cmeta_measure_namelist(
+            namelist, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+        if (measurement->location_count - first_location >
+                options->max_data_namelist_fields)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(namelist),
+                "VoiceXML data namelist exceeds configured field count");
     }
     if (fetchaudio.impl != NULL) {
         size_t decoded_size = 0u;
@@ -4859,11 +4942,9 @@ static vxml_status cmeta_measure_data(
         maxage, &has_policy_value,
         &policy_value, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_parse_nonnegative_seconds(
+    return cmeta_parse_nonnegative_seconds(
         maxstale, &has_policy_value,
         &policy_value, diagnostic);
-    if (status != VXML_OK) return status;
-    return VXML_OK;
 }
 
 static vxml_status cmeta_measure_program(
