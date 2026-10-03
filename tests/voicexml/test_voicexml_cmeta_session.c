@@ -17,6 +17,11 @@ typedef struct vxml_cmeta_session_text {
     void *resource;
 } vxml_cmeta_session_text;
 
+typedef struct vxml_cmeta_session_text_sequence {
+    const vxml_cmeta_session_text *data;
+    size_t count;
+} vxml_cmeta_session_text_sequence;
+
 typedef struct vxml_cmeta_session_root {
     int value;
     int other;
@@ -25,6 +30,7 @@ typedef struct vxml_cmeta_session_root {
     vxml_cmeta_session_text text;
     size_t total;
     double ratio;
+    vxml_cmeta_session_text_sequence items;
 } vxml_cmeta_session_root;
 
 static const cmeta_type_identity session_root_identity =
@@ -186,6 +192,65 @@ static const cmeta_data_desc session_text_data = {
     .shape = &session_text_shape,
     .buffer_ops = &session_text_ops
 };
+
+static const cmeta_type_identity session_text_sequence_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.cmeta.session.text_sequence");
+static const cmeta_type_traits session_text_sequence_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY | CMETA_TRAIT_TRIVIAL_DESTROY
+};
+static const cmeta_type_desc session_text_sequence_type = {
+    .name = "vxml_cmeta_session_text_sequence",
+    .size = sizeof(vxml_cmeta_session_text_sequence),
+    .align = _Alignof(vxml_cmeta_session_text_sequence),
+    .kind = CMETA_T_OBJECT,
+    .traits = &session_text_sequence_traits,
+    .identity = &session_text_sequence_identity
+};
+
+static const cmeta_data_desc *session_text_sequence_element(
+    const void *object) {
+    const vxml_cmeta_session_text_sequence *sequence =
+        (const vxml_cmeta_session_text_sequence *)object;
+    if (sequence == NULL) return NULL;
+    return &session_text_data;
+}
+
+static cmeta_status session_text_sequence_read(
+    const void *object, cmeta_data_collection_view *out) {
+    const vxml_cmeta_session_text_sequence *sequence =
+        (const vxml_cmeta_session_text_sequence *)object;
+    if (sequence == NULL || out == NULL ||
+        (sequence->count != 0u && sequence->data == NULL))
+        return CMETA_INVALID_ARGUMENT;
+    *out = (cmeta_data_collection_view){
+        .data = sequence->data,
+        .count = sequence->count,
+        .stride = sizeof(vxml_cmeta_session_text),
+        .element = &session_text_data};
+    return CMETA_OK;
+}
+
+static const cmeta_data_collection_ops session_text_sequence_ops = {
+    .struct_size = sizeof(cmeta_data_collection_ops),
+    .abi_version = CMETA_DATA_COLLECTION_OPS_ABI_VERSION,
+    .storage_type = &session_text_sequence_type,
+    .flags = CMETA_DATA_COLLECTION_CONTIGUOUS |
+             CMETA_DATA_COLLECTION_ORDERED |
+             CMETA_DATA_COLLECTION_RANDOM_ACCESS,
+    .element = session_text_sequence_element,
+    .read = session_text_sequence_read,
+    .element_data = &session_text_data
+};
+
+static const cmeta_data_desc session_text_sequence_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.session.text_sequence.data",
+    .display_name = "VoiceXML CMeta session text sequence",
+    .kind = CMETA_DATA_SEQUENCE,
+    .storage_type = &session_text_sequence_type,
+    .collection_ops = &session_text_sequence_ops
+};
 static const cmeta_field_desc session_root_layout_fields[] = {
     {"value", "int", offsetof(vxml_cmeta_session_root, value),
      sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
@@ -201,14 +266,19 @@ static const cmeta_field_desc session_root_layout_fields[] = {
     {"total", "size_t", offsetof(vxml_cmeta_session_root, total),
      sizeof(size_t), _Alignof(size_t), &cmeta_type_size, NULL},
     {"ratio", "double", offsetof(vxml_cmeta_session_root, ratio),
-     sizeof(double), _Alignof(double), &cmeta_type_double, NULL}
+     sizeof(double), _Alignof(double), &cmeta_type_double, NULL},
+    {"items", "vxml_cmeta_session_text_sequence",
+     offsetof(vxml_cmeta_session_root, items),
+     sizeof(vxml_cmeta_session_text_sequence),
+     _Alignof(vxml_cmeta_session_text_sequence),
+     &session_text_sequence_type, NULL}
 };
 static const cmeta_struct_desc session_root_layout = {
     .name = "vxml_cmeta_session_root",
     .size = sizeof(vxml_cmeta_session_root),
     .align = _Alignof(vxml_cmeta_session_root),
     .fields = session_root_layout_fields,
-    .field_count = 7u
+    .field_count = 8u
 };
 static const cmeta_data_field_desc session_root_fields[] = {
     {"test.voicexml.cmeta.session.root.value", "value",
@@ -224,12 +294,14 @@ static const cmeta_data_field_desc session_root_fields[] = {
     {"test.voicexml.cmeta.session.root.total", "total",
      offsetof(vxml_cmeta_session_root, total), &cmeta_data_size},
     {"test.voicexml.cmeta.session.root.ratio", "ratio",
-     offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double}
+     offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double},
+    {"test.voicexml.cmeta.session.root.items", "items",
+     offsetof(vxml_cmeta_session_root, items), &session_text_sequence_data}
 };
 static const cmeta_data_struct_shape session_root_shape = {
     .layout = &session_root_layout,
     .fields = session_root_fields,
-    .field_count = 7u
+    .field_count = 8u
 };
 static const cmeta_data_desc session_root_data = {
     .struct_size = sizeof(cmeta_data_desc),
