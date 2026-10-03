@@ -1488,6 +1488,8 @@ static vxml_status quickjs_run_from(
                 session->submit_uri_size = action->target_uri_size;
                 session->submit_method = action->submit_method;
                 session->submit_enctype = action->submit_enctype;
+                session->submit_fields = NULL;
+                session->submit_field_count = 0u;
                 session->state = VXML_SESSION_SUBMITTING;
                 return VXML_OK;
             }
