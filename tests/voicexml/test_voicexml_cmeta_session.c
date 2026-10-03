@@ -13103,6 +13103,55 @@ spec("VoiceXML CMeta session execution") {
         session_text_destroy(&root.text);
     }
 
+    it("rejects unsupported prompt foreach language shapes deterministically") {
+        static const char *const sources[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items' item='item'>x</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items'>x</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach item='item'>x</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items' item='item' index='i'>x</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items' item='item'>"
+            "<foreach array='items' item='inner'>x</foreach>"
+            "</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>"
+        };
+        static const vxml_status expected[] = {
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_UNSUPPORTED_FEATURE
+        };
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(sources) / sizeof(sources[0]);
+             ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    sources[index], strlen(sources[index]), NULL,
+                    &compile, &program, NULL),
+                expected[index]);
+            vxml_program_destroy(&program);
+        }
+    }
+
     it("expands prompt foreach from one bounded snapshot and commits the last item") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
