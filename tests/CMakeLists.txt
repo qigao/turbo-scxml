@@ -355,6 +355,23 @@ set_tests_properties(scxml_quickjs_test PROPERTIES
 
 if(TURBOSCXML_ENABLE_QUICKJS)
   add_executable(
+    voicexml_quickjs_test
+    voicexml_quickjs_test.c)
+  target_compile_features(voicexml_quickjs_test PRIVATE c_std_11)
+  set_target_properties(voicexml_quickjs_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_include_directories(voicexml_quickjs_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(voicexml_quickjs_test PRIVATE
+    TurboSCXML::VoiceXMLQuickJS
+    Salts::TinyTest)
+  add_test(NAME voicexml_quickjs_test COMMAND voicexml_quickjs_test)
+endif()
+
+if(TURBOSCXML_ENABLE_QUICKJS)
+  add_executable(
     quickjs_sandbox_test
     quickjs_sandbox_test.c)
   target_compile_features(quickjs_sandbox_test PRIVATE c_std_11)

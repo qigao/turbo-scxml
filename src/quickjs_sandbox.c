@@ -301,6 +301,118 @@ quickjs_sandbox_status quickjs_sandbox_runtime_eval(
 #endif
 }
 
+quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size,
+    const char *filename,
+    uint64_t max_eval_milliseconds,
+    const char **out_string, size_t *out_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    static const char prefix[] = "(\n";
+    static const char suffix[] = "\n)";
+    if (out_string != NULL) *out_string = NULL;
+    if (out_size != NULL) *out_size = 0u;
+    if (runtime == NULL || runtime->runtime == NULL ||
+        runtime->context == NULL ||
+        source == NULL || source_size == 0u ||
+        source_size > runtime->options.max_source_bytes ||
+        source_size > SIZE_MAX - (sizeof(prefix) - 1u) -
+                          (sizeof(suffix) - 1u) - 1u ||
+        filename == NULL || max_eval_milliseconds == 0u ||
+        out_string == NULL || out_size == NULL ||
+        runtime->result_string == NULL ||
+        runtime->result_string_capacity == 0u) {
+        quickjs_sandbox_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid QuickJS string-expression request");
+        return QUICKJS_SANDBOX_INVALID_ARGUMENT;
+    }
+#if !TURBOSCXML_HAS_QUICKJS
+    return QUICKJS_SANDBOX_INVALID_ARGUMENT;
+#else
+    {
+        JSContext *context = (JSContext *)runtime->context;
+        char *wrapped = NULL;
+        size_t wrapped_size;
+        JSValue result = JS_UNDEFINED;
+        const char *text = NULL;
+        size_t text_size = 0u;
+        bool owns_deadline;
+        quickjs_sandbox_status status = QUICKJS_SANDBOX_OK;
+
+        wrapped_size =
+            sizeof(prefix) - 1u + source_size + sizeof(suffix) - 1u;
+        wrapped = (char *)malloc(wrapped_size + 1u);
+        if (wrapped == NULL)
+            return QUICKJS_SANDBOX_ALLOCATION_FAILED;
+        memcpy(wrapped, prefix, sizeof(prefix) - 1u);
+        memcpy(wrapped + sizeof(prefix) - 1u, source, source_size);
+        memcpy(
+            wrapped + sizeof(prefix) - 1u + source_size,
+            suffix, sizeof(suffix) - 1u);
+        wrapped[wrapped_size] = '\0';
+
+        owns_deadline = quickjs_sandbox_deadline_begin(
+            runtime, max_eval_milliseconds);
+        result = JS_Eval(
+            context, wrapped, wrapped_size,
+            filename, JS_EVAL_TYPE_GLOBAL);
+        free(wrapped);
+        if (JS_IsException(result)) {
+            status = quickjs_sandbox_exception(
+                runtime, diagnostic, diagnostic_capacity);
+            goto done;
+        }
+        if (!JS_IsString(result)) {
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS expression result is not a string");
+            status = QUICKJS_SANDBOX_TYPE_MISMATCH;
+            goto done;
+        }
+        text = JS_ToCStringLen(context, &text_size, result);
+        if (text == NULL) {
+            status = quickjs_sandbox_exception(
+                runtime, diagnostic, diagnostic_capacity);
+            goto done;
+        }
+        if (text_size >= runtime->result_string_capacity) {
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS expression string exceeds result bound");
+            status = QUICKJS_SANDBOX_LIMIT_EXCEEDED;
+            goto done;
+        }
+        memcpy(runtime->result_string, text, text_size);
+        runtime->result_string[text_size] = '\0';
+        *out_string = runtime->result_string;
+        *out_size = text_size;
+        if (quickjs_sandbox_deadline_expired(runtime)) {
+            *out_string = NULL;
+            *out_size = 0u;
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS evaluation deadline exceeded");
+            status = QUICKJS_SANDBOX_LIMIT_EXCEEDED;
+            goto done;
+        }
+        quickjs_sandbox_diagnostic(
+            diagnostic, diagnostic_capacity, "");
+
+done:
+        if (text != NULL) JS_FreeCString(context, text);
+        if (!JS_IsUndefined(result))
+            JS_FreeValue(context, result);
+        quickjs_sandbox_deadline_end(runtime, owns_deadline);
+        if (status != QUICKJS_SANDBOX_OK) {
+            *out_string = NULL;
+            *out_size = 0u;
+        }
+        return status;
+    }
+#endif
+}
+
 void quickjs_sandbox_runtime_destroy(
     quickjs_sandbox_runtime *runtime) {
     if (runtime == NULL) return;
