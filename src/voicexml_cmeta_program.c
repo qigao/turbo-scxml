@@ -6791,6 +6791,94 @@ done:
     return status;
 }
 
+static vxml_status cmeta_register_data_variable(
+    cmeta_program_builder *builder, size_t scope_index,
+    salts_xml_node node, bool allow_repeat,
+    size_t *out_slot, bool *out_repeated) {
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    cmeta_decoded_value decoded = {0};
+    const cmeta_data_field_desc *field;
+    const cmeta_scope_slot *existing;
+    cmeta_scope_schema *schema;
+    bool conflict = false;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    vxml_status status;
+    if (out_slot != NULL) *out_slot = VXML_CMETA_NO_INDEX;
+    if (out_repeated != NULL) *out_repeated = false;
+    if (builder == NULL || scope_index >= builder->profile->scope_count ||
+        name_attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(name_attribute),
+        salts_xml_attribute_location(name_attribute), &decoded);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name must be a decoded XML NCName");
+        goto done;
+    }
+    field = cmeta_root_field(
+        builder->profile->root, decoded.view, NULL);
+    if (field == NULL) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data name has no matching typed root descriptor");
+        goto done;
+    }
+    schema = &builder->profile->scopes[scope_index].schema;
+    existing = cmeta_scope_find(
+        schema, decoded.view.data, decoded.view.size, &slot);
+    if (existing != NULL) {
+        if (!cmeta_data_desc_equal(existing->value, field->value)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data lexical name has incompatible type");
+            goto done;
+        }
+        if (!allow_repeat) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "duplicate VoiceXML data lexical declaration");
+            goto done;
+        }
+        if (out_slot != NULL) *out_slot = slot;
+        if (out_repeated != NULL) *out_repeated = true;
+        status = VXML_OK;
+        goto done;
+    }
+    if (schema->slot_count >= builder->options->max_scope_slots ||
+        cmeta_scope_storage_limit_exceeded(schema, field->value)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(name_attribute),
+            "VoiceXML data lexical scope exceeds configured bounds");
+        goto done;
+    }
+    if (!cmeta_scope_register(
+            schema, decoded.view.data, decoded.view.size,
+            field->value, &slot, &conflict)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            conflict ? VXML_INVALID_STRUCTURE : VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(name_attribute),
+            conflict
+                ? "VoiceXML data lexical name has conflicting type"
+                : "VoiceXML data lexical schema allocation failed");
+        goto done;
+    }
+    if (out_slot != NULL) *out_slot = slot;
+    status = VXML_OK;
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    return status;
+}
+
 static vxml_status cmeta_register_form_item(
     cmeta_program_builder *builder, size_t form_scope,
     salts_xml_node block, size_t block_index, size_t *out_slot,
@@ -7051,6 +7139,10 @@ static vxml_status cmeta_register_executable_variables(
         const salts_xml_node child = salts_xml_node_child_at(container, index);
         if (cmeta_node_named(child, "var")) {
             const vxml_status status = cmeta_register_variable(
+                builder, scope_index, child, true, NULL, NULL);
+            if (status != VXML_OK) return status;
+        } else if (cmeta_node_named(child, "data")) {
+            const vxml_status status = cmeta_register_data_variable(
                 builder, scope_index, child, true, NULL, NULL);
             if (status != VXML_OK) return status;
         }
