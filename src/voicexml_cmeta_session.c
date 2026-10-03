@@ -1659,6 +1659,9 @@ static void session_data_destroy(
     vxml_free(session->field_recording_shadows);
     vxml_free(session->collect_mailbox.root_fields);
     vxml_free(session->collect_mailbox.allocation);
+    vxml_free(session->data_request_uri);
+    vxml_free(session->data_request_values);
+    vxml_free(session->data_request_fields);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
     vxml_free(session->exec_frames);
@@ -4623,6 +4626,12 @@ vxml_status vxml_cmeta_session_init_profile(
         size_t value_alignment = 1u;
         size_t workspace_allocation_bytes;
         size_t value_allocation_bytes;
+        size_t field_bytes = 0u;
+        const size_t fetch_audio_tail =
+            offsetof(
+                vxml_cmeta_session_options_v1,
+                data_fetch_audio_user) +
+            sizeof(options->data_fetch_audio_user);
         if (!session_data_options_valid(options) ||
             !measure_external_data_scratch(
                 program,
@@ -4632,6 +4641,50 @@ vxml_status vxml_cmeta_session_init_profile(
                 &value_alignment)) {
             status = VXML_INVALID_CONTRACT;
             goto failure;
+        }
+        profile->data_resources = options->data_resources;
+        profile->data_resource_user = options->data_resource_user;
+        profile->max_data_bytes = options->max_data_bytes;
+        profile->max_data_owned_bytes = options->max_data_owned_bytes;
+        if (options->struct_size >= fetch_audio_tail) {
+            profile->data_fetch_audio = options->data_fetch_audio;
+            profile->data_fetch_audio_user =
+                options->data_fetch_audio_user;
+        }
+        if (program->max_data_namelist_fields != 0u ||
+            program->max_data_request_value_bytes != 0u) {
+            if (program->max_data_namelist_fields == 0u ||
+                program->max_data_request_value_bytes == 0u ||
+                program->max_data_uri_bytes == 0u ||
+                !checked_multiply(
+                    program->max_data_namelist_fields,
+                    sizeof(*profile->data_request_fields),
+                    &field_bytes)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->data_request_fields =
+                (vxml_cmeta_data_field_v1 *)vxml_calloc(
+                    program->max_data_namelist_fields,
+                    sizeof(*profile->data_request_fields));
+            profile->data_request_values =
+                (char *)vxml_malloc(
+                    program->max_data_request_value_bytes);
+            profile->data_request_uri =
+                (char *)vxml_malloc(
+                    program->max_data_uri_bytes);
+            if (profile->data_request_fields == NULL ||
+                profile->data_request_values == NULL ||
+                profile->data_request_uri == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->data_request_field_capacity =
+                program->max_data_namelist_fields;
+            profile->data_request_value_capacity =
+                program->max_data_request_value_bytes;
+            profile->data_request_uri_capacity =
+                program->max_data_uri_bytes;
         }
         workspace_allocation_bytes = profile->data_workspace_bytes;
         value_allocation_bytes = profile->data_value_bytes;
