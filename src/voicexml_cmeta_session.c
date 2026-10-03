@@ -11200,8 +11200,9 @@ static vxml_status selected_prompt_row(
     prompt_count = prompt_retry_count(
         profile, event_scope, owner);
     for (offset = 0u; offset < prompt_row_count; ++offset) {
+        const size_t prompt_index = first_prompt + offset;
         const vxml_cmeta_prompt_row *row =
-            &program->prompts[first_prompt + offset];
+            &program->prompts[prompt_index];
         bool eligible = true;
         if (row->owner_kind != owner_kind ||
             row->owner != owner ||
@@ -11260,6 +11261,32 @@ static vxml_status selected_prompt_row(
                     return VXML_INVALID_STRUCTURE;
             }
         }
+        if (row->foreach_count != 0u) {
+            size_t foreach_offset;
+            if (!range_valid(
+                    row->first_foreach, row->foreach_count,
+                    program->prompt_foreach_count) ||
+                program->prompt_foreach == NULL)
+                return VXML_INVALID_STRUCTURE;
+            for (foreach_offset = 0u;
+                 foreach_offset < row->foreach_count;
+                 ++foreach_offset) {
+                const vxml_cmeta_prompt_foreach_row *foreach_row =
+                    &program->prompt_foreach[
+                        row->first_foreach + foreach_offset];
+                if (foreach_row->prompt != prompt_index ||
+                    foreach_row->segment_count == 0u ||
+                    foreach_row->first_segment < row->first_segment ||
+                    foreach_row->segment_count >
+                        row->first_segment + row->segment_count -
+                            foreach_row->first_segment ||
+                    foreach_row->first_fallback < row->first_fallback ||
+                    foreach_row->fallback_count >
+                        row->first_fallback + row->fallback_count -
+                            foreach_row->first_fallback)
+                    return VXML_INVALID_STRUCTURE;
+            }
+        }
         if (row->fallback_count != 0u) {
             size_t fallback_offset;
             if ((row->required_capabilities &
@@ -11273,20 +11300,42 @@ static vxml_status selected_prompt_row(
             for (fallback_offset = 0u;
                  fallback_offset < row->fallback_count;
                  ++fallback_offset) {
+                const size_t fallback_absolute =
+                    row->first_fallback + fallback_offset;
                 const vxml_cmeta_prompt_media_fallback_v1 *fallback =
-                    &program->prompt_fallbacks[
-                        row->first_fallback + fallback_offset];
+                    &program->prompt_fallbacks[fallback_absolute];
+                const vxml_cmeta_prompt_foreach_row *foreach_owner = NULL;
+                size_t source_base = row->first_segment;
+                size_t source_count = row->segment_count;
+                size_t foreach_offset;
                 size_t fallback_segment_offset;
-                if (fallback->audio_segment_index >= row->segment_count ||
+                for (foreach_offset = 0u;
+                     foreach_offset < row->foreach_count;
+                     ++foreach_offset) {
+                    const vxml_cmeta_prompt_foreach_row *candidate =
+                        &program->prompt_foreach[
+                            row->first_foreach + foreach_offset];
+                    if (fallback_absolute >= candidate->first_fallback &&
+                        fallback_absolute - candidate->first_fallback <
+                            candidate->fallback_count) {
+                        foreach_owner = candidate;
+                        break;
+                    }
+                }
+                if (foreach_owner != NULL) {
+                    source_base = foreach_owner->first_segment;
+                    source_count = foreach_owner->segment_count;
+                }
+                if (fallback->audio_segment_index >= source_count ||
                     fallback->first_fallback_segment !=
                         fallback->audio_segment_index + 1u ||
                     fallback->fallback_segment_count == 0u ||
-                    fallback->first_fallback_segment >= row->segment_count ||
+                    fallback->first_fallback_segment >= source_count ||
                     fallback->fallback_segment_count >
-                        row->segment_count -
+                        source_count -
                             fallback->first_fallback_segment ||
                     program->prompt_segments[
-                        row->first_segment +
+                        source_base +
                         fallback->audio_segment_index].kind !=
                             VXML_CMETA_PROMPT_MEDIA_AUDIO)
                     return VXML_INVALID_STRUCTURE;
@@ -11296,7 +11345,7 @@ static vxml_status selected_prompt_row(
                      ++fallback_segment_offset) {
                     const vxml_cmeta_prompt_media_segment_kind kind =
                         program->prompt_segments[
-                            row->first_segment +
+                            source_base +
                             fallback->first_fallback_segment +
                             fallback_segment_offset].kind;
                     if (kind != VXML_CMETA_PROMPT_MEDIA_TEXT &&
