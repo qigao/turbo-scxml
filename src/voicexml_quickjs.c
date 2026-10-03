@@ -33,6 +33,9 @@ typedef struct vxml_quickjs_session_data {
     quickjs_cmeta_state_scratch committed_root;
     char *dynamic_uri;
     size_t dynamic_uri_capacity;
+    size_t resume_form;
+    size_t resume_block;
+    bool script_pending;
     const char *last_event;
     size_t last_event_size;
 } vxml_quickjs_session_data;
@@ -371,13 +374,19 @@ static vxml_status project_script_target(
     return VXML_OK;
 }
 
-static vxml_status quickjs_run_at(
-    vxml_session_impl *session, size_t form_index) {
+static vxml_status quickjs_run_from(
+    vxml_session_impl *session,
+    size_t form_index,
+    size_t first_block) {
     const vxml_program_impl *program;
+    vxml_quickjs_session_data *data;
     size_t transitions = 0u;
-    if (session == NULL || session->program == NULL)
+    size_t next_block = first_block;
+    if (session == NULL || session->program == NULL ||
+        session->profile_data == NULL)
         return VXML_INVALID_ARGUMENT;
     program = session->program;
+    data = (vxml_quickjs_session_data *)session->profile_data;
     if (program->forms == NULL || program->form_count == 0u)
         return session_fail(
             session, VXML_INVALID_STRUCTURE, NULL, 0u);
@@ -385,6 +394,7 @@ static vxml_status quickjs_run_at(
     for (;;) {
         const vxml_form_row *form;
         size_t block_index;
+        size_t form_end;
         bool jumped = false;
         if (form_index >= program->form_count)
             return session_fail(
@@ -397,9 +407,16 @@ static vxml_status quickjs_run_at(
                 program->block_count))
             return session_fail(
                 session, VXML_INVALID_STRUCTURE, NULL, 0u);
+        form_end = form->first_block + form->block_count;
+        if (next_block == SIZE_MAX)
+            next_block = form->first_block;
+        if (next_block < form->first_block ||
+            next_block > form_end)
+            return session_fail(
+                session, VXML_INVALID_STRUCTURE, NULL, 0u);
 
-        for (block_index = form->first_block;
-             block_index < form->first_block + form->block_count;
+        for (block_index = next_block;
+             block_index < form_end;
              ++block_index) {
             const vxml_block_row *block =
                 &program->blocks[block_index];
@@ -417,8 +434,19 @@ static vxml_status quickjs_run_at(
                 continue;
             action = &program->actions[block->first_action];
 
-            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL)
-                return project_script_target(session, action);
+            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
+                vxml_status status;
+                data->resume_form = form_index;
+                data->resume_block = block_index + 1u;
+                data->script_pending = true;
+                status = project_script_target(session, action);
+                if (status != VXML_OK) {
+                    data->resume_form = SIZE_MAX;
+                    data->resume_block = SIZE_MAX;
+                    data->script_pending = false;
+                }
+                return status;
+            }
 
             if (action->kind == VXML_ACTION_EXIT) {
                 session->state = VXML_SESSION_EXITED;
@@ -476,6 +504,7 @@ static vxml_status quickjs_run_at(
                     session, VXML_INVALID_STRUCTURE, NULL, 0u);
             ++transitions;
             form_index = action->target_form;
+            next_block = SIZE_MAX;
             jumped = true;
             break;
         }
@@ -485,6 +514,11 @@ static vxml_status quickjs_run_at(
             return VXML_OK;
         }
     }
+}
+
+static vxml_status quickjs_run_at(
+    vxml_session_impl *session, size_t form_index) {
+    return quickjs_run_from(session, form_index, SIZE_MAX);
 }
 
 static vxml_status quickjs_profile_session_init(
@@ -520,6 +554,9 @@ static vxml_status quickjs_profile_session_init(
     }
     data->dynamic_uri_capacity =
         program_data->options.max_dynamic_script_uri_bytes + 1u;
+    data->resume_form = SIZE_MAX;
+    data->resume_block = SIZE_MAX;
+    data->script_pending = false;
 
     if (compile_options_state_enabled(&program_data->options) &&
         !quickjs_cmeta_state_snapshot(
