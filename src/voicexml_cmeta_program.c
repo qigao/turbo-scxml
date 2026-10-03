@@ -4766,11 +4766,25 @@ static vxml_status cmeta_measure_data(
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
-    static const char *const allowed[] = {"name", "src"};
+    static const char *const allowed[] = {
+        "name", "src", "fetchaudio", "fetchhint",
+        "fetchtimeout", "maxage", "maxstale"};
     const salts_xml_attribute name = cmeta_attribute(node, "name");
     const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute fetchaudio =
+        cmeta_attribute(node, "fetchaudio");
+    const salts_xml_attribute fetchhint =
+        cmeta_attribute(node, "fetchhint");
+    const salts_xml_attribute fetchtimeout =
+        cmeta_attribute(node, "fetchtimeout");
+    const salts_xml_attribute maxage =
+        cmeta_attribute(node, "maxage");
+    const salts_xml_attribute maxstale =
+        cmeta_attribute(node, "maxstale");
+    bool has_policy_value = false;
+    uint64_t policy_value = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        node, allowed, 2u, diagnostic);
+        node, allowed, 7u, diagnostic);
     if (status == VXML_OK)
         status = cmeta_validate_empty_element(node, diagnostic);
     if (status != VXML_OK) return status;
@@ -4810,6 +4824,45 @@ static vxml_status cmeta_measure_data(
                 salts_xml_attribute_location(src),
                 "VoiceXML data src exceeds max_data_uri_bytes");
     }
+    if (fetchaudio.impl != NULL) {
+        size_t decoded_size = 0u;
+        status = cmeta_measure_name(
+            fetchaudio, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(fetchaudio),
+                NULL, 0u, &decoded_size) ||
+            decoded_size == 0u ||
+            decoded_size > options->max_data_uri_bytes)
+            return cmeta_program_fail(
+                diagnostic,
+                decoded_size > options->max_data_uri_bytes
+                    ? VXML_LIMIT_EXCEEDED
+                    : VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio),
+                "VoiceXML data fetchaudio must be a bounded non-empty URI");
+    }
+    if (fetchhint.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(fetchhint), "prefetch") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(fetchhint), "safe"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(fetchhint),
+            "VoiceXML data fetchhint must be prefetch or safe");
+    status = cmeta_parse_prompt_timeout(
+        fetchtimeout, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_nonnegative_seconds(
+        maxage, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_nonnegative_seconds(
+        maxstale, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
     return VXML_OK;
 }
 
