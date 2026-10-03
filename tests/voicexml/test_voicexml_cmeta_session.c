@@ -31,6 +31,7 @@ typedef struct vxml_cmeta_session_root {
     size_t total;
     double ratio;
     vxml_cmeta_session_text_sequence items;
+    vxml_cmeta_session_text_sequence inner_items;
 } vxml_cmeta_session_root;
 
 static const cmeta_type_identity session_root_identity =
@@ -326,6 +327,11 @@ static const cmeta_field_desc session_foreach_root_layout_fields[] = {
      offsetof(vxml_cmeta_session_root, items),
      sizeof(vxml_cmeta_session_text_sequence),
      _Alignof(vxml_cmeta_session_text_sequence),
+     &session_text_sequence_type, NULL},
+    {"inner_items", "vxml_cmeta_session_text_sequence",
+     offsetof(vxml_cmeta_session_root, inner_items),
+     sizeof(vxml_cmeta_session_text_sequence),
+     _Alignof(vxml_cmeta_session_text_sequence),
      &session_text_sequence_type, NULL}
 };
 static const cmeta_struct_desc session_foreach_root_layout = {
@@ -333,7 +339,7 @@ static const cmeta_struct_desc session_foreach_root_layout = {
     .size = sizeof(vxml_cmeta_session_root),
     .align = _Alignof(vxml_cmeta_session_root),
     .fields = session_foreach_root_layout_fields,
-    .field_count = 8u
+    .field_count = 9u
 };
 static const cmeta_data_field_desc session_foreach_root_fields[] = {
     {"test.voicexml.cmeta.session.foreach_root.value", "value",
@@ -351,12 +357,15 @@ static const cmeta_data_field_desc session_foreach_root_fields[] = {
     {"test.voicexml.cmeta.session.foreach_root.ratio", "ratio",
      offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double},
     {"test.voicexml.cmeta.session.foreach_root.items", "items",
-     offsetof(vxml_cmeta_session_root, items), &session_text_sequence_data}
+     offsetof(vxml_cmeta_session_root, items), &session_text_sequence_data},
+    {"test.voicexml.cmeta.session.foreach_root.inner_items", "inner_items",
+     offsetof(vxml_cmeta_session_root, inner_items),
+     &session_text_sequence_data}
 };
 static const cmeta_data_struct_shape session_foreach_root_shape = {
     .layout = &session_foreach_root_layout,
     .fields = session_foreach_root_fields,
-    .field_count = 8u
+    .field_count = 9u
 };
 static const cmeta_data_desc session_foreach_root_data = {
     .struct_size = sizeof(cmeta_data_desc),
@@ -1798,9 +1807,9 @@ typedef struct cmeta_prompt_media_probe {
     vxml_cmeta_prompt_media_segment_kind kind;
     size_t batch_segment_count;
     size_t batch_fallback_count;
-    vxml_cmeta_prompt_media_fallback_v1 batch_fallbacks[8];
-    vxml_cmeta_prompt_media_segment_kind batch_kinds[16];
-    char batch_payloads[16][128];
+    vxml_cmeta_prompt_media_fallback_v1 batch_fallbacks[16];
+    vxml_cmeta_prompt_media_segment_kind batch_kinds[32];
+    char batch_payloads[32][128];
     char field[32];
     char payload[256];
 } cmeta_prompt_media_probe;
@@ -1882,8 +1891,8 @@ static vxml_status cmeta_prompt_media_prepare_batch(
         request->struct_size < sizeof(*request) ||
         request->segments == NULL ||
         request->segment_count < 2u ||
-        request->segment_count > 16u ||
-        request->fallback_count > 8u ||
+        request->segment_count > 32u ||
+        request->fallback_count > 16u ||
         (request->fallback_count != 0u &&
          request->fallbacks == NULL) ||
         request->field.data == NULL ||
@@ -2009,6 +2018,17 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
 static vxml_cmeta_compile_options_v1 prompt_foreach_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = prompt_compile_options();
     options.root = &session_foreach_root_data;
+    return options;
+}
+
+static vxml_cmeta_compile_options_v1
+prompt_nested_foreach_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options =
+        prompt_foreach_compile_options();
+    options.max_prompt_foreach_depth = 2u;
+    options.max_prompt_foreach_snapshot_bytes =
+        sizeof(vxml_cmeta_session_text) * 8u;
+    options.max_prompt_expanded_segments = 32u;
     return options;
 }
 
