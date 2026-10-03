@@ -82,6 +82,14 @@ typedef enum vxml_submit_enctype {
 } vxml_submit_enctype;
 
 #define VXML_SUBMIT_TARGET_ABI_V1 1u
+#define VXML_SUBMIT_TARGET_ABI_V2 2u
+
+typedef struct vxml_submit_field_v1 {
+    const char *name;
+    size_t name_size;
+    const char *value;
+    size_t value_size;
+} vxml_submit_field_v1;
 
 typedef struct vxml_submit_target_v1 {
     uint32_t abi_version;
@@ -91,6 +99,24 @@ typedef struct vxml_submit_target_v1 {
     vxml_submit_method method;
     vxml_submit_enctype enctype;
 } vxml_submit_target_v1;
+
+/**
+ * Profile-neutral submit handoff with ordered borrowed fields.
+ *
+ * The V1 prefix is layout-compatible. fields are Session-owned or
+ * Program-owned borrowed views valid while the Session remains in
+ * VXML_SESSION_SUBMITTING.
+ */
+typedef struct vxml_submit_target_v2 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    const vxml_submit_field_v1 *fields;
+    size_t field_count;
+} vxml_submit_target_v2;
 
 #define VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 1u
 
@@ -189,6 +215,11 @@ vxml_status vxml_session_navigation_request(
 vxml_status vxml_session_submit(
     const vxml_session *session,
     vxml_submit_target_v1 *out_target);
+
+/** Borrow the submit target plus ordered field snapshot. */
+vxml_status vxml_session_submit_v2(
+    const vxml_session *session,
+    vxml_submit_target_v2 *out_target);
 
 /** Borrow the external script descriptor while state is VXML_SESSION_SCRIPTING. */
 vxml_status vxml_session_script(
