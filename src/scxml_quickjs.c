@@ -227,6 +227,11 @@ static scxml_quickjs_status quickjs_exception(
             runtime, diagnostic, diagnostic_capacity));
 }
 
+static void quickjs_context_destroy(
+    scxml_quickjs_runtime *runtime) {
+    quickjs_sandbox_context_destroy(runtime);
+}
+
 static scxml_quickjs_status quickjs_context_recreate(
     scxml_quickjs_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity) {
