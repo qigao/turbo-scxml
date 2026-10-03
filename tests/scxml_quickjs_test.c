@@ -1278,6 +1278,35 @@ spec("SCXML optional QuickJS sandbox profile") {
         scxml_quickjs_runtime_destroy(&runtime);
     }
 
+    it("keeps max_instructions as compiler IR budget instead of a QuickJS runtime quota") {
+        scxml_quickjs_compile_options_v1 options =
+            scxml_quickjs_default_compile_options(&quickjs_test_data);
+        scxml_quickjs_runtime runtime = {0};
+        char diagnostic[SCXML_DIAGNOSTIC_CAPACITY] = {0};
+        static const char finite_loop[] =
+            "let total=0; for(let i=0;i<1000;++i){total+=i;}";
+
+        /*
+         * The field remains required because it bounds TurboSCXML's own
+         * expression/compiler IR. It is deliberately not forwarded to the
+         * QuickJS sandbox runtime as a bytecode instruction counter.
+         */
+        options.max_instructions = 1u;
+        check_equal(
+            scxml_quickjs_runtime_init(
+                &runtime, &options, diagnostic, sizeof(diagnostic)),
+            SCXML_QUICKJS_OK);
+        check_equal(
+            scxml_quickjs_runtime_eval(
+                &runtime,
+                finite_loop, sizeof(finite_loop) - 1u,
+                "finite-loop.js",
+                options.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            SCXML_QUICKJS_OK);
+        scxml_quickjs_runtime_destroy(&runtime);
+    }
+
     it("interrupts an evaluation at its positive deadline") {
         scxml_quickjs_compile_options_v1 options =
             scxml_quickjs_default_compile_options(&quickjs_test_data);
