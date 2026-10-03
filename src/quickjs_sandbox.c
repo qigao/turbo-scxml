@@ -120,15 +120,17 @@ quickjs_sandbox_status quickjs_sandbox_exception(
 #endif
 }
 
-#if TURBOSCXML_HAS_QUICKJS
-static void quickjs_sandbox_context_destroy(
+void quickjs_sandbox_context_destroy(
     quickjs_sandbox_runtime *runtime) {
-    if (runtime != NULL && runtime->context != NULL) {
+    if (runtime == NULL) return;
+#if TURBOSCXML_HAS_QUICKJS
+    if (runtime->context != NULL)
         JS_FreeContext((JSContext *)runtime->context);
-        runtime->context = NULL;
-    }
+#endif
+    runtime->context = NULL;
 }
 
+#if TURBOSCXML_HAS_QUICKJS
 static quickjs_sandbox_status quickjs_sandbox_context_create(
     quickjs_sandbox_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity) {
