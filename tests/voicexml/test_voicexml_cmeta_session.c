@@ -1460,6 +1460,8 @@ static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     options.max_data_uri_bytes = 128u;
     options.max_data_bind_depth = 16u;
     options.max_data_bind_items = 128u;
+    options.max_data_namelist_fields = 8u;
+    options.max_data_request_value_bytes = 512u;
     return options;
 }
 
