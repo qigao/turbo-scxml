@@ -35,8 +35,25 @@ typedef struct vxml_quickjs_program_data {
 typedef struct vxml_quickjs_session_data {
     quickjs_sandbox_runtime runtime;
     quickjs_cmeta_state_scratch committed_root;
+
     char *dynamic_uri;
     size_t dynamic_uri_capacity;
+
+    vxml_cmeta_data_resource_adapter_v1 data_resources;
+    void *data_resource_user;
+    bool has_data_resources;
+    size_t max_data_bytes;
+    size_t max_data_request_value_bytes;
+    vxml_cmeta_data_field_v1 *data_fields;
+    size_t data_field_capacity;
+    char *data_values;
+    size_t data_values_bytes;
+
+    vxml_fetch_audio_adapter_v1 data_fetch_audio;
+    void *data_fetch_audio_user;
+    bool has_data_fetch_audio;
+
+    bool document_data_done;
     size_t resume_form;
     size_t resume_block;
     bool script_pending;
@@ -200,6 +217,56 @@ static const void *session_initial_state(
     const vxml_quickjs_session_options_v1 *options) {
     return session_options_has_state_tail(options)
         ? options->initial_state : NULL;
+}
+
+
+static bool data_resource_adapter_v3_valid(
+    const vxml_cmeta_data_resource_adapter_v1 *adapter) {
+    const size_t prefix =
+        offsetof(vxml_cmeta_data_resource_adapter_v1, open_v3) +
+        sizeof(adapter->open_v3);
+    return adapter != NULL &&
+        adapter->abi_version ==
+            VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= prefix &&
+        adapter->close != NULL &&
+        adapter->open_v3 != NULL;
+}
+
+static bool fetch_audio_adapter_valid(
+    const vxml_fetch_audio_adapter_v1 *adapter) {
+    const size_t prefix =
+        offsetof(vxml_fetch_audio_adapter_v1, begin) +
+        sizeof(adapter->begin);
+    return adapter != NULL &&
+        adapter->abi_version == VXML_FETCH_AUDIO_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= prefix &&
+        adapter->begin != NULL;
+}
+
+static bool program_requires_data_fetch_audio(
+    const vxml_program_impl *program) {
+    size_t index;
+    if (program == NULL || program->data_row_count == 0u)
+        return false;
+    if (program->data_rows == NULL)
+        return true;
+    for (index = 0u; index < program->data_row_count; ++index)
+        if (program->data_rows[index].fetch_policy.fetchaudio_uri != NULL)
+            return true;
+    return false;
+}
+
+static size_t program_max_data_fields(
+    const vxml_program_impl *program) {
+    size_t result = 0u;
+    size_t index;
+    if (program == NULL || program->data_rows == NULL)
+        return 0u;
+    for (index = 0u; index < program->data_row_count; ++index)
+        if (program->data_rows[index].namelist_count > result)
+            result = program->data_rows[index].namelist_count;
+    return result;
 }
 
 static quickjs_sandbox_options sandbox_options(
