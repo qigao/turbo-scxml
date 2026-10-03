@@ -197,6 +197,8 @@ typedef struct vxml_cmeta_prompt_mark_expr_row {
 
 typedef struct vxml_cmeta_prompt_foreach_row {
     size_t prompt;
+    size_t parent_foreach;
+    size_t depth;
     size_t collection_location;
     size_t scope;
     size_t item_slot;
@@ -495,6 +497,7 @@ typedef struct vxml_cmeta_program_data {
     size_t max_prompt_foreach_items;
     size_t max_prompt_foreach_snapshot_bytes;
     size_t max_prompt_expanded_segments;
+    size_t max_prompt_foreach_depth;
     size_t max_prompt_foreach_element_alignment;
     vxml_cmeta_prompt_media_fallback_v1 *prompt_fallbacks;
     size_t prompt_fallback_count;
