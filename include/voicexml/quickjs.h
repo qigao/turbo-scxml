@@ -2,6 +2,7 @@
 #define TURBO_VOICEXML_QUICKJS_H
 
 #include <voicexml/voicexml.h>
+#include <voicexml/data_resource.h>
 #include <voicexml/script_resource.h>
 #include <cmeta/data.h>
 
