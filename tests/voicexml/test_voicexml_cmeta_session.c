@@ -9655,6 +9655,112 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("rolls back staged writes when a dynamic data provider refuses without retry") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<assign name='other' expr='5'/>"
+            "<data name='late' srcexpr='&quot;fail.json&quot;' "
+            "method='post'/>"
+            "<exit expr='other'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {
+            .other = 2, .late = 3};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_UNSUPPORTED_FEATURE,
+            .expected_uri = "fail.json",
+            .expected_uri_size = sizeof("fail.json") - 1u};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_session_root *committed;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)0u);
+        runtime = session_data(&session);
+        committed = (const vxml_cmeta_session_root *)
+            runtime->committed_root.storage;
+        check_equal(committed->other, 2);
+        check_equal(committed->late, 3);
+
+        check_equal(
+            vxml_session_start(&session),
+            VXML_INVALID_STATE);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails dynamic data before provider admission when V3 is unavailable") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' srcexpr='&quot;dynamic.json&quot;'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .expected_uri = "dynamic.json",
+            .expected_uri_size = sizeof("dynamic.json") - 1u};
+        vxml_cmeta_data_resource_adapter_v1 legacy =
+            cmeta_data_resource_adapter;
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        legacy.struct_size =
+            offsetof(
+                vxml_cmeta_data_resource_adapter_v1,
+                open_v2) +
+            sizeof(legacy.open_v2);
+        legacy.open_v3 = NULL;
+        options.data_resources = &legacy;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(probe.open_v3_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("keeps fetchaudio SKIPPED independent from legacy V1 data fetch") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
