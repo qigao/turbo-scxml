@@ -911,7 +911,7 @@ typedef struct vxml_cmeta_session_data {
     void *data_resource_user;
     size_t max_data_bytes;
     size_t max_data_owned_bytes;
-    const vxml_fetch_audio_adapter_v1 *data_fetch_audio;
+    const struct vxml_fetch_audio_adapter_v1 *data_fetch_audio;
     void *data_fetch_audio_user;
 
     vxml_cmeta_data_field_v1 *data_request_fields;
