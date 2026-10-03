@@ -9,6 +9,7 @@
 #define VXML_DEFAULT_MAX_NAME_BYTES (256u * 1024u)
 
 #define VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT UINT64_C(1)
+#define VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR UINT64_C(2)
 
 typedef enum vxml_action_kind {
     VXML_ACTION_EXIT = 1,
@@ -31,8 +32,11 @@ typedef struct vxml_action_row {
     vxml_submit_enctype submit_enctype;
     const char *script_src;
     size_t script_src_size;
+    const char *script_srcexpr;
+    size_t script_srcexpr_size;
     const char *script_charset;
     size_t script_charset_size;
+    salts_xml_location script_location;
 } vxml_action_row;
 
 typedef struct vxml_block_row {
@@ -49,7 +53,8 @@ typedef struct vxml_form_row {
 
 typedef enum vxml_profile_kind {
     VXML_PROFILE_LITERAL = 0,
-    VXML_PROFILE_CMETA
+    VXML_PROFILE_CMETA,
+    VXML_PROFILE_QUICKJS
 } vxml_profile_kind;
 
 typedef struct vxml_session_impl vxml_session_impl;

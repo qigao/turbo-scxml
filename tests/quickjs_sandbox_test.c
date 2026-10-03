@@ -36,6 +36,38 @@ static quickjs_sandbox_status recreate_from_deep_host_stack(
     return status;
 }
 
+static quickjs_sandbox_status eval_string_from_deep_host_stack(
+    quickjs_sandbox_runtime *runtime,
+    size_t depth,
+    const char **out_string, size_t *out_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    static const char expression[] = "'deep-string-entry'";
+    volatile unsigned char host_stack_pad[2048];
+    quickjs_sandbox_status status;
+    host_stack_pad[0] = (unsigned char)depth;
+    host_stack_pad[sizeof(host_stack_pad) - 1u] =
+        (unsigned char)(depth ^ 0xa5u);
+    if (depth != 0u) {
+        status = eval_string_from_deep_host_stack(
+            runtime, depth - 1u,
+            out_string, out_size,
+            diagnostic, diagnostic_capacity);
+    } else {
+        status = quickjs_sandbox_eval_expression_string(
+            runtime,
+            expression, sizeof(expression) - 1u,
+            "<deep-string-entry>",
+            UINT64_C(50),
+            out_string, out_size,
+            diagnostic, diagnostic_capacity);
+    }
+    if (host_stack_pad[0] != (unsigned char)depth ||
+        host_stack_pad[sizeof(host_stack_pad) - 1u] !=
+            (unsigned char)(depth ^ 0xa5u))
+        return QUICKJS_SANDBOX_EXCEPTION;
+    return status;
+}
+
 spec("private QuickJS sandbox kernel") {
     it("validates hard positive limits and preserves max-string overflow status") {
         quickjs_sandbox_options options = sandbox_options();
@@ -133,6 +165,25 @@ spec("private QuickJS sandbox kernel") {
                 options.max_eval_milliseconds,
                 diagnostic, sizeof(diagnostic)),
             QUICKJS_SANDBOX_OK);
+        {
+            const char *value = NULL;
+            size_t value_size = 0u;
+            check_equal(
+                eval_string_from_deep_host_stack(
+                    &runtime, 48u,
+                    &value, &value_size,
+                    diagnostic, sizeof(diagnostic)),
+                QUICKJS_SANDBOX_OK);
+            check_not_null(value);
+            check_equal(
+                value_size,
+                sizeof("deep-string-entry") - 1u);
+            check_equal(
+                memcmp(
+                    value, "deep-string-entry",
+                    value_size),
+                0);
+        }
         quickjs_sandbox_runtime_destroy(&runtime);
     }
 

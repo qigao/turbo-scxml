@@ -315,6 +315,29 @@ target_include_directories(turbo_voicexml_script_resource
 target_link_libraries(turbo_voicexml_script_resource
   PUBLIC TurboSCXML::VoiceXMLDocumentStore)
 
+if(TURBOSCXML_ENABLE_QUICKJS)
+  add_library(turbo_voicexml_quickjs STATIC
+    src/voicexml_quickjs.c)
+  add_library(TurboSCXML::VoiceXMLQuickJS ALIAS
+    turbo_voicexml_quickjs)
+  set_target_properties(turbo_voicexml_quickjs PROPERTIES
+    EXPORT_NAME VoiceXMLQuickJS
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_voicexml_quickjs PUBLIC c_std_11)
+  target_compile_options(turbo_voicexml_quickjs
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_voicexml_quickjs
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(turbo_voicexml_quickjs
+    PUBLIC TurboSCXML::VoiceXML
+    PRIVATE TurboSCXML::_QuickJSSandbox)
+endif()
+
 add_library(turbo_voicexml_submit_resource STATIC
   src/voicexml_submit_resource.c)
 add_library(TurboSCXML::VoiceXMLSubmitResource ALIAS
@@ -560,6 +583,17 @@ if(BUILD_TESTING)
       "TurboSCXML::VoiceXMLScriptResource dependency contract changed")
   endif()
 
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    get_target_property(
+      TURBOVOICEXML_QUICKJS_PUBLIC_LINKS
+      turbo_voicexml_quickjs INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOVOICEXML_QUICKJS_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::VoiceXML;$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
+      message(FATAL_ERROR
+        "TurboSCXML::VoiceXMLQuickJS dependency contract changed")
+    endif()
+  endif()
+
   get_target_property(
     TURBOVOICEXML_SUBMIT_RESOURCE_PUBLIC_LINKS
     turbo_voicexml_submit_resource INTERFACE_LINK_LIBRARIES)
@@ -700,6 +734,14 @@ install(TARGETS turbo_voicexml_script_resource
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+if(TURBOSCXML_ENABLE_QUICKJS)
+  install(TARGETS turbo_voicexml_quickjs
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(TARGETS turbo_voicexml_submit_resource
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -772,6 +814,11 @@ install(
     include/voicexml/script_resource.h
     include/voicexml/submit_resource.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
+if(TURBOSCXML_ENABLE_QUICKJS)
+  install(
+    FILES include/voicexml/quickjs.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
+endif()
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
   install(
     FILES
@@ -800,6 +847,8 @@ set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
 set(TURBOSCXML_PACKAGE_HAS_VOICEXML_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
 set(TURBOSCXML_PACKAGE_HAS_QUICKJS
+  ${TURBOSCXML_ENABLE_QUICKJS})
+set(TURBOSCXML_PACKAGE_HAS_VOICEXML_QUICKJS
   ${TURBOSCXML_ENABLE_QUICKJS})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_EVENT_IO
   ${TURBOSCXML_ENABLE_CHTTP_EVENT_IO})
