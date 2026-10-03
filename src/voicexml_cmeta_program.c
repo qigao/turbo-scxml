@@ -8283,6 +8283,8 @@ static vxml_status cmeta_build_schemas(
             form->grammar_expression = VXML_CMETA_NO_INDEX;
             form->fetchaudio =
                 builder->profile->document_fetchaudio;
+            form->data_fetch =
+                builder->profile->document_data_fetch;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             status = cmeta_retain_dialog_id(
