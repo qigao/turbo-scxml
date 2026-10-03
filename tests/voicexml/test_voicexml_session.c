@@ -379,7 +379,7 @@ spec("VoiceXML session") {
                 check_equal(
                     vxml_session_submit_v2(&session, &submit_v2),
                     VXML_OK);
-                check_equal(submit_v2.fields, fields);
+                check_true(submit_v2.fields == fields);
                 check_equal(submit_v2.field_count, (size_t)1u);
             }
             check_equal(
