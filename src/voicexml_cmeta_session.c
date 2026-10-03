@@ -2685,12 +2685,15 @@ static vxml_status initialize_form(
     const size_t form_scopes[2] = {form->scope, program->document_scope};
     size_t initial_offset;
     size_t block_offset;
-    vxml_status status = initialize_initializers(
-        session, program,
-        program->first_document_initializer,
-        program->document_initializer_count,
-        document_scopes, 1u);
-    if (status != VXML_OK) return status;
+    vxml_status status = VXML_OK;
+    if (!session->document_initialized) {
+        status = initialize_initializers(
+            session, program,
+            program->first_document_initializer,
+            program->document_initializer_count,
+            document_scopes, 1u);
+        if (status != VXML_OK) return status;
+    }
     status = initialize_initializers(
         session, program,
         form->first_initializer, form->initializer_count,
@@ -3638,6 +3641,20 @@ static vxml_status execute_action_range(
                     execute_goto(session, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_DATA: {
+                vxml_status status;
+                if (action->data_index >=
+                        program->external_data_count ||
+                    program->external_data == NULL)
+                    return VXML_INVALID_STRUCTURE;
+                status = execute_external_data_row(
+                    session, program,
+                    &program->external_data[
+                        action->data_index],
+                    true, scopes, scope_count);
+                if (status != VXML_OK) return status;
+                break;
             }
             default:
                 return VXML_INVALID_STRUCTURE;
@@ -5726,6 +5743,9 @@ static vxml_status cmeta_session_start_profile_at_entry(
                      program->form_item_count) ||
         !range_valid(form->first_block, form->block_count,
                      program->block_count) ||
+        !range_valid(
+            form->first_initializer, form->initializer_count,
+            program->initializer_count) ||
         form->field_count > SIZE_MAX - form->initial_count ||
         form->field_count + form->initial_count >
             SIZE_MAX - form->subdialog_count ||
@@ -5781,6 +5801,8 @@ static vxml_status cmeta_session_start_profile_at_entry(
         return session_fail(session, status);
     }
     transaction_commit(profile, program);
+    if (!profile->document_initialized)
+        profile->document_initialized = true;
     if (form->item_count != 0u)
         return select_directed_item(
             session, program, profile, form, form_index);
