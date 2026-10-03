@@ -3301,7 +3301,7 @@ static vxml_status cmeta_measure_field(
                     "VoiceXML field accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -3947,7 +3947,7 @@ static vxml_status cmeta_measure_record(
                     "VoiceXML record accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -4183,7 +4183,7 @@ static vxml_status cmeta_measure_transfer(
                     "VoiceXML transfer accepts at most one filled handler");
             ++filled_count;
             status = cmeta_measure_filled_content(
-                child, false, 0u,
+                child, false, 0u, options,
                 measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
             continue;
@@ -4743,7 +4743,7 @@ static vxml_status cmeta_measure_form(
             {
                 const vxml_status filled_status =
                     cmeta_measure_filled_content(
-                        child, true, result_target_count,
+                        child, true, result_target_count, options,
                         measurement, limits, diagnostic);
                 if (filled_status != VXML_OK)
                     return filled_status;
@@ -4768,7 +4768,7 @@ static vxml_status cmeta_measure_form(
         saw_block = true;
         {
             const vxml_status status = cmeta_measure_block(
-                child, measurement, limits, diagnostic);
+                child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
