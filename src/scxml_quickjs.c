@@ -77,7 +77,19 @@ static scxml_quickjs_status quickjs_sandbox_status_to_scxml(
 }
 
 static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
-    const scxml_quickjs_compile_options_v1 *options);
+    const scxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_cmeta_limits){
+        .max_conversion_depth =
+            options != NULL ? options->max_conversion_depth : 0u,
+        .max_properties =
+            options != NULL ? options->max_properties : 0u,
+        .max_array_items =
+            options != NULL ? options->max_array_items : 0u,
+        .max_snapshot_bytes =
+            options != NULL ? options->max_snapshot_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_string_bytes : 0u};
+}
 
 static bool scxml_quickjs_legacy_collection_schema_supported(
     const cmeta_data_desc *root,
@@ -93,6 +105,40 @@ scxml_quickjs_legacy_schema_adapter = {
     .schema_supported =
         scxml_quickjs_legacy_collection_schema_supported
 };
+
+static bool scxml_quickjs_legacy_collection_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user) {
+    const cmeta_type_desc *element_type;
+    const cmeta_data_desc *element_data;
+    (void)user;
+    if (descriptor == NULL ||
+        descriptor->kind != CMETA_DATA_SEQUENCE ||
+        !cmeta_declared_type_valid(declared_type) ||
+        declared_type->arity != 1u ||
+        (descriptor->storage_type != NULL &&
+         !cmeta_type_equal(
+             declared_type->storage_type,
+             descriptor->storage_type)))
+        return false;
+    element_type =
+        cmeta_declared_type_argument(declared_type, 0u);
+    element_data = cmeta_scope_find_data_for_type(
+        root, element_type,
+        limits->max_conversion_depth);
+    return element_data != NULL &&
+        element_data->kind != CMETA_DATA_SEQUENCE &&
+        quickjs_cmeta_value_schema_supported(
+            root, element_data, NULL,
+            depth + 1u, limits,
+            &scxml_quickjs_legacy_schema_adapter,
+            NULL, true, properties);
+}
 
 bool scxml_quickjs_static_property_budget_valid(
     const scxml_quickjs_compile_options_v1 *options,
@@ -580,20 +626,6 @@ static bool quickjs_property_budget(
         ++conversion->properties <= conversion->limits->max_properties;
 }
 
-static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
-    const scxml_quickjs_compile_options_v1 *options) {
-    return (quickjs_cmeta_limits){
-        .max_conversion_depth =
-            options != NULL ? options->max_conversion_depth : 0u,
-        .max_properties =
-            options != NULL ? options->max_properties : 0u,
-        .max_array_items =
-            options != NULL ? options->max_array_items : 0u,
-        .max_snapshot_bytes =
-            options != NULL ? options->max_snapshot_bytes : 0u,
-        .max_string_bytes =
-            options != NULL ? options->max_string_bytes : 0u};
-}
 
 static JSValue scxml_quickjs_legacy_import_collection(
     quickjs_cmeta_bridge *bridge,
@@ -715,39 +747,6 @@ static bool quickjs_export_root(
     return result;
 }
 
-static bool scxml_quickjs_legacy_collection_schema_supported(
-    const cmeta_data_desc *root,
-    const cmeta_data_desc *descriptor,
-    const cmeta_declared_type *declared_type,
-    size_t depth,
-    const quickjs_cmeta_limits *limits,
-    size_t *properties,
-    void *user) {
-    const cmeta_type_desc *element_type;
-    const cmeta_data_desc *element_data;
-    (void)user;
-    if (descriptor == NULL ||
-        descriptor->kind != CMETA_DATA_SEQUENCE ||
-        !cmeta_declared_type_valid(declared_type) ||
-        declared_type->arity != 1u ||
-        (descriptor->storage_type != NULL &&
-         !cmeta_type_equal(
-             declared_type->storage_type,
-             descriptor->storage_type)))
-        return false;
-    element_type =
-        cmeta_declared_type_argument(declared_type, 0u);
-    element_data = cmeta_scope_find_data_for_type(
-        root, element_type,
-        limits->max_conversion_depth);
-    return element_data != NULL &&
-        element_data->kind != CMETA_DATA_SEQUENCE &&
-        quickjs_cmeta_value_schema_supported(
-            root, element_data, NULL,
-            depth + 1u, limits,
-            &scxml_quickjs_legacy_collection_adapter,
-            NULL, true, properties);
-}
 
 static JSValue scxml_quickjs_legacy_import_collection(
     quickjs_cmeta_bridge *bridge,
