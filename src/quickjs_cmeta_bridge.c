@@ -214,6 +214,32 @@ bool quickjs_cmeta_bridge_init(
     return true;
 }
 
+static bool quickjs_cmeta_default_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user) {
+    const cmeta_data_desc *element;
+    (void)root;
+    (void)declared_type;
+    (void)user;
+    if (descriptor == NULL ||
+        cmeta_data_collection_ops_of(descriptor) == NULL ||
+        descriptor->storage_type == NULL)
+        return false;
+    element = cmeta_data_collection_element_data(descriptor);
+    return element != NULL &&
+        element->kind != CMETA_DATA_SEQUENCE &&
+        quickjs_cmeta_schema_supported_impl(
+            root, element, NULL,
+            depth + 1u, limits,
+            quickjs_cmeta_default_collection_adapter(),
+            NULL, true, properties);
+}
+
 #if TURBOSCXML_HAS_QUICKJS
 
 static bool quickjs_cmeta_read_signed(
@@ -696,32 +722,6 @@ bool quickjs_cmeta_export_root(
     }
     JS_FreeValue(bridge->context, global);
     return ok;
-}
-
-static bool quickjs_cmeta_default_schema_supported(
-    const cmeta_data_desc *root,
-    const cmeta_data_desc *descriptor,
-    const cmeta_declared_type *declared_type,
-    size_t depth,
-    const quickjs_cmeta_limits *limits,
-    size_t *properties,
-    void *user) {
-    const cmeta_data_desc *element;
-    (void)root;
-    (void)declared_type;
-    (void)user;
-    if (descriptor == NULL ||
-        cmeta_data_collection_ops_of(descriptor) == NULL ||
-        descriptor->storage_type == NULL)
-        return false;
-    element = cmeta_data_collection_element_data(descriptor);
-    return element != NULL &&
-        element->kind != CMETA_DATA_SEQUENCE &&
-        quickjs_cmeta_schema_supported_impl(
-            root, element, NULL,
-            depth + 1u, limits,
-            quickjs_cmeta_default_collection_adapter(),
-            NULL, true, properties);
 }
 
 static JSValue quickjs_cmeta_default_import_collection(
