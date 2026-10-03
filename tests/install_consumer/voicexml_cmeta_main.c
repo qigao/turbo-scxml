@@ -137,6 +137,8 @@ int main(void) {
         .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_collect_adapter_v1)};
     vxml_cmeta_data_resource_v1 data_resource = {0};
+    vxml_cmeta_data_request_v2 data_request_v2 =
+        VXML_CMETA_DATA_REQUEST_V2_INIT;
     vxml_cmeta_data_resource_adapter_v1 data_adapter = {
         .abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
         .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1)};
@@ -410,6 +412,11 @@ int main(void) {
 
     if (data_adapter.abi_version !=
             VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 ||
+        data_request_v2.abi_version !=
+            VXML_CMETA_DATA_REQUEST_ABI_V2 ||
+        data_request_v2.struct_size != sizeof(data_request_v2) ||
+        data_request_v2.fetch_hint !=
+            VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED ||
         data_resource.format != 0)
         return 5;
     if (collect_adapter.abi_version !=

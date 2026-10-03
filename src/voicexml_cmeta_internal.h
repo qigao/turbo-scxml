@@ -147,6 +147,17 @@ typedef struct vxml_cmeta_fetchaudio_policy {
     uint64_t minimum_us;
 } vxml_cmeta_fetchaudio_policy;
 
+typedef struct vxml_cmeta_data_fetch_policy {
+    vxml_cmeta_fetchaudio_policy fetchaudio;
+    bool has_timeout;
+    uint64_t timeout_us;
+    vxml_cmeta_data_fetch_hint fetch_hint;
+    bool has_max_age;
+    uint64_t max_age_seconds;
+    bool has_max_stale;
+    uint64_t max_stale_seconds;
+} vxml_cmeta_data_fetch_policy;
+
 typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
@@ -176,6 +187,7 @@ typedef struct vxml_cmeta_form_row {
     uint64_t grammar_required_capabilities;
 
     vxml_cmeta_fetchaudio_policy fetchaudio;
+    vxml_cmeta_data_fetch_policy data_fetch;
 
     /* VoiceXML 2.1 form-scoped recorded-utterance policy. */
     bool record_utterance;
@@ -396,6 +408,7 @@ typedef struct vxml_cmeta_external_data_row {
     DataBindNativePlan *plan;
     size_t decode_workspace_bytes;
     size_t workspace_alignment;
+    vxml_cmeta_data_fetch_policy fetch_policy;
 } vxml_cmeta_external_data_row;
 
 typedef struct vxml_cmeta_action_row {
@@ -455,6 +468,7 @@ static inline bool vxml_cmeta_event_token_valid(
 typedef struct vxml_cmeta_program_data {
     const cmeta_data_desc *root;
     vxml_cmeta_fetchaudio_policy document_fetchaudio;
+    vxml_cmeta_data_fetch_policy document_data_fetch;
     const cmeta_data_desc **semantic_data;
     size_t semantic_data_count;
     vxml_cmeta_scope_row *scopes;

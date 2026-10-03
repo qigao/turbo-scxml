@@ -148,6 +148,9 @@ static_assert(
 static_assert(
     std::is_standard_layout<vxml_cmeta_data_resource_adapter_v1>::value,
     "external data adapter must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_request_v2>::value,
+    "external data request V2 must remain C-compatible");
 
 int main() {
     static constexpr char document[] =
@@ -210,6 +213,8 @@ int main() {
     vxml_cmeta_recording_ref_view_v1 recording_shadow{};
     vxml_cmeta_collect_adapter_v1 collect_adapter{};
     vxml_cmeta_data_resource_v1 data_resource{};
+    vxml_cmeta_data_request_v2 data_request_v2 =
+        VXML_CMETA_DATA_REQUEST_V2_INIT;
     vxml_cmeta_data_resource_adapter_v1 data_adapter{};
     vxml_cmeta_compile_options_v1 compile_options{};
     vxml_cmeta_session_options_v1 session_options{};
@@ -511,7 +516,11 @@ int main() {
     data_adapter.abi_version = VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1;
     data_adapter.struct_size = sizeof(data_adapter);
     if (data_resource.format != static_cast<vxml_cmeta_data_format>(0) ||
-        data_adapter.abi_version != VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1)
+        data_adapter.abi_version != VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 ||
+        data_request_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
+        data_request_v2.struct_size != sizeof(data_request_v2) ||
+        data_request_v2.fetch_hint !=
+            VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED)
         return 5;
     compile_options.abi_version = VXML_CMETA_COMPILE_OPTIONS_ABI_V1;
     compile_options.struct_size = sizeof(compile_options);

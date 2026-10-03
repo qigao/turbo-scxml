@@ -1840,6 +1840,73 @@ done:
     return status;
 }
 
+static vxml_status cmeta_parse_nonnegative_seconds(
+    salts_xml_attribute attribute,
+    bool *out_has_value,
+    uint64_t *out_seconds,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t index;
+    uint64_t value = UINT64_C(0);
+    vxml_status status = VXML_OK;
+
+    if (out_has_value == NULL || out_seconds == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_has_value = false;
+    *out_seconds = UINT64_C(0);
+    if (attribute.impl == NULL)
+        return VXML_OK;
+    raw = salts_xml_attribute_value(attribute);
+    if (!cmeta_decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age must be a non-negative integer");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age decoding allocation failed");
+    if (!cmeta_decode_entities(
+            raw, decoded, decoded_size, &decoded_size)) {
+        status = cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age decoding changed between passes");
+        goto done;
+    }
+    decoded[decoded_size] = '\0';
+    for (index = 0u; index < decoded_size; ++index) {
+        const unsigned char ch = (unsigned char)decoded[index];
+        uint64_t digit;
+        if (ch < (unsigned char)'0' || ch > (unsigned char)'9') {
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age must be a non-negative integer");
+            goto done;
+        }
+        digit = (uint64_t)(ch - (unsigned char)'0');
+        if (value > (UINT64_MAX - digit) / UINT64_C(10)) {
+            status = cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age exceeds uint64 seconds");
+            goto done;
+        }
+        value = value * UINT64_C(10) + digit;
+    }
+    *out_has_value = true;
+    *out_seconds = value;
+done:
+    vxml_free(decoded);
+    return status;
+}
+
 static vxml_status cmeta_parse_prompt_count(
     salts_xml_attribute attribute,
     unsigned *out_count,
@@ -4172,6 +4239,80 @@ static vxml_status cmeta_measure_fetchaudio_property(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_data_fetch_property(
+    salts_xml_node property,
+    bool version_21,
+    bool *out_recognized,
+    vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {"name", "value"};
+    const salts_xml_attribute name = cmeta_attribute(property, "name");
+    const salts_xml_attribute value = cmeta_attribute(property, "value");
+    bool has_value = false;
+    uint64_t parsed = UINT64_C(0);
+    vxml_status status;
+
+    if (out_recognized == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_recognized = false;
+    status = cmeta_validate_attributes(property, allowed, 2u, diagnostic);
+    if (status == VXML_OK)
+        status = cmeta_validate_empty_element(property, diagnostic);
+    if (status != VXML_OK) return status;
+    if (name.impl == NULL || value.impl == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(property),
+            "VoiceXML property requires name and value");
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchtimeout")) {
+        *out_recognized = true;
+        status = cmeta_parse_prompt_timeout(
+            value, &has_value, &parsed, diagnostic);
+        if (status != VXML_OK) return status;
+        return has_value
+            ? VXML_OK
+            : cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchtimeout requires a time designation");
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datafetchhint")) {
+        *out_recognized = true;
+        if (!version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML datafetchhint requires version 2.1");
+        if (!cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "prefetch") &&
+            !cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "safe"))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML datafetchhint must be prefetch or safe");
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxage") ||
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxstale")) {
+        *out_recognized = true;
+        if (!version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML data cache properties require version 2.1");
+        return cmeta_parse_nonnegative_seconds(
+            value, &has_value, &parsed, diagnostic);
+    }
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_record_utterance_property(
     salts_xml_node property,
     bool version_21,
@@ -4236,6 +4377,14 @@ static vxml_status cmeta_measure_record_utterance_property(
             &fetch_recognized, diagnostic);
         if (status != VXML_OK) return status;
         if (fetch_recognized) return VXML_OK;
+    }
+    {
+        bool data_recognized = false;
+        status = cmeta_measure_data_fetch_property(
+            property, version_21,
+            &data_recognized, diagnostic);
+        if (status != VXML_OK) return status;
+        if (data_recognized) return VXML_OK;
     }
 
     if (cmeta_decoded_equal(
@@ -4617,11 +4766,25 @@ static vxml_status cmeta_measure_data(
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
-    static const char *const allowed[] = {"name", "src"};
+    static const char *const allowed[] = {
+        "name", "src", "fetchaudio", "fetchhint",
+        "fetchtimeout", "maxage", "maxstale"};
     const salts_xml_attribute name = cmeta_attribute(node, "name");
     const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute fetchaudio =
+        cmeta_attribute(node, "fetchaudio");
+    const salts_xml_attribute fetchhint =
+        cmeta_attribute(node, "fetchhint");
+    const salts_xml_attribute fetchtimeout =
+        cmeta_attribute(node, "fetchtimeout");
+    const salts_xml_attribute maxage =
+        cmeta_attribute(node, "maxage");
+    const salts_xml_attribute maxstale =
+        cmeta_attribute(node, "maxstale");
+    bool has_policy_value = false;
+    uint64_t policy_value = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        node, allowed, 2u, diagnostic);
+        node, allowed, 7u, diagnostic);
     if (status == VXML_OK)
         status = cmeta_validate_empty_element(node, diagnostic);
     if (status != VXML_OK) return status;
@@ -4661,6 +4824,45 @@ static vxml_status cmeta_measure_data(
                 salts_xml_attribute_location(src),
                 "VoiceXML data src exceeds max_data_uri_bytes");
     }
+    if (fetchaudio.impl != NULL) {
+        size_t decoded_size = 0u;
+        status = cmeta_measure_name(
+            fetchaudio, measurement, limits, diagnostic);
+        if (status != VXML_OK) return status;
+        if (!cmeta_decode_entities(
+                salts_xml_attribute_value(fetchaudio),
+                NULL, 0u, &decoded_size) ||
+            decoded_size == 0u ||
+            decoded_size > options->max_data_uri_bytes)
+            return cmeta_program_fail(
+                diagnostic,
+                decoded_size > options->max_data_uri_bytes
+                    ? VXML_LIMIT_EXCEEDED
+                    : VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio),
+                "VoiceXML data fetchaudio must be a bounded non-empty URI");
+    }
+    if (fetchhint.impl != NULL &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(fetchhint), "prefetch") &&
+        !cmeta_decoded_equal(
+            salts_xml_attribute_value(fetchhint), "safe"))
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(fetchhint),
+            "VoiceXML data fetchhint must be prefetch or safe");
+    status = cmeta_parse_prompt_timeout(
+        fetchtimeout, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_nonnegative_seconds(
+        maxage, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_parse_nonnegative_seconds(
+        maxstale, &has_policy_value,
+        &policy_value, diagnostic);
+    if (status != VXML_OK) return status;
     return VXML_OK;
 }
 
@@ -4733,6 +4935,12 @@ static vxml_status cmeta_measure_program(
                 child, limits, measurement,
                 &recognized, diagnostic);
             if (status != VXML_OK) break;
+            if (!recognized) {
+                status = cmeta_measure_data_fetch_property(
+                    child, version_21,
+                    &recognized, diagnostic);
+                if (status != VXML_OK) break;
+            }
             if (!recognized) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_UNSUPPORTED_FEATURE,
@@ -5210,6 +5418,156 @@ static vxml_status cmeta_apply_fetchaudio_property(
     }
 
     return VXML_UNSUPPORTED_FEATURE;
+}
+
+typedef struct cmeta_data_fetch_property_seen {
+    bool timeout;
+    bool hint;
+    bool max_age;
+    bool max_stale;
+} cmeta_data_fetch_property_seen;
+
+static vxml_status cmeta_apply_data_fetch_property(
+    cmeta_program_builder *builder,
+    salts_xml_node property,
+    vxml_cmeta_data_fetch_policy *policy,
+    cmeta_data_fetch_property_seen *seen) {
+    const salts_xml_attribute name =
+        cmeta_attribute(property, "name");
+    const salts_xml_attribute value =
+        cmeta_attribute(property, "value");
+    if (builder == NULL || policy == NULL || seen == NULL ||
+        name.impl == NULL || value.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "fetchtimeout")) {
+        if (seen->timeout)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchtimeout property");
+        seen->timeout = true;
+        return cmeta_parse_prompt_timeout(
+            value, &policy->has_timeout,
+            &policy->timeout_us, builder->diagnostic);
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datafetchhint")) {
+        if (seen->hint)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datafetchhint property");
+        seen->hint = true;
+        if (cmeta_decoded_equal(
+                salts_xml_attribute_value(value), "prefetch"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_PREFETCH;
+        else if (cmeta_decoded_equal(
+                     salts_xml_attribute_value(value), "safe"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_SAFE;
+        else
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML datafetchhint must be prefetch or safe");
+        return VXML_OK;
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxage")) {
+        if (seen->max_age)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datamaxage property");
+        seen->max_age = true;
+        return cmeta_parse_nonnegative_seconds(
+            value, &policy->has_max_age,
+            &policy->max_age_seconds, builder->diagnostic);
+    }
+
+    if (cmeta_decoded_equal(
+            salts_xml_attribute_value(name), "datamaxstale")) {
+        if (seen->max_stale)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datamaxstale property");
+        seen->max_stale = true;
+        return cmeta_parse_nonnegative_seconds(
+            value, &policy->has_max_stale,
+            &policy->max_stale_seconds, builder->diagnostic);
+    }
+    return VXML_UNSUPPORTED_FEATURE;
+}
+
+static vxml_status cmeta_apply_data_fetch_attributes(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    vxml_cmeta_data_fetch_policy *policy) {
+    const salts_xml_attribute fetchaudio =
+        cmeta_attribute(node, "fetchaudio");
+    const salts_xml_attribute fetchhint =
+        cmeta_attribute(node, "fetchhint");
+    const salts_xml_attribute fetchtimeout =
+        cmeta_attribute(node, "fetchtimeout");
+    const salts_xml_attribute maxage =
+        cmeta_attribute(node, "maxage");
+    const salts_xml_attribute maxstale =
+        cmeta_attribute(node, "maxstale");
+    vxml_status status;
+
+    if (builder == NULL || policy == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (fetchaudio.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(fetchaudio),
+            salts_xml_attribute_location(fetchaudio),
+            &policy->fetchaudio.uri,
+            &policy->fetchaudio.uri_size);
+        if (status != VXML_OK) return status;
+        if (policy->fetchaudio.uri_size == 0u)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio),
+                "VoiceXML data fetchaudio must be non-empty");
+    }
+    if (fetchhint.impl != NULL) {
+        if (cmeta_decoded_equal(
+                salts_xml_attribute_value(fetchhint), "prefetch"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_PREFETCH;
+        else if (cmeta_decoded_equal(
+                     salts_xml_attribute_value(fetchhint), "safe"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_SAFE;
+        else
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchhint),
+                "VoiceXML data fetchhint must be prefetch or safe");
+    }
+    if (fetchtimeout.impl != NULL) {
+        status = cmeta_parse_prompt_timeout(
+            fetchtimeout, &policy->has_timeout,
+            &policy->timeout_us, builder->diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (maxage.impl != NULL) {
+        status = cmeta_parse_nonnegative_seconds(
+            maxage, &policy->has_max_age,
+            &policy->max_age_seconds, builder->diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (maxstale.impl != NULL)
+        return cmeta_parse_nonnegative_seconds(
+            maxstale, &policy->has_max_stale,
+            &policy->max_stale_seconds, builder->diagnostic);
+    return VXML_OK;
 }
 
 typedef struct cmeta_decoded_value {
@@ -6106,6 +6464,8 @@ static vxml_status cmeta_compile_external_data(
     vxml_status status;
 
     memset(out, 0, sizeof(*out));
+    out->fetch_policy =
+        builder->profile->document_data_fetch;
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
@@ -6150,6 +6510,9 @@ static vxml_status cmeta_compile_external_data(
         builder, salts_xml_attribute_value(src_attribute),
         salts_xml_attribute_location(src_attribute),
         &out->uri, &out->uri_size);
+    if (status != VXML_OK) goto done;
+    status = cmeta_apply_data_fetch_attributes(
+        builder, node, &out->fetch_policy);
     if (status != VXML_OK) goto done;
 
     bind_status = data_bind_native_probe_workspace_size(
@@ -7730,6 +8093,7 @@ static vxml_status cmeta_build_schemas(
     size_t root_child;
     size_t scope_index;
     cmeta_fetch_property_seen document_fetch_seen = {0};
+    cmeta_data_fetch_property_seen document_data_seen = {0};
     vxml_status status;
     if (capacity > SIZE_MAX - measurement->action_count)
         return cmeta_program_fail(
@@ -7798,6 +8162,17 @@ static vxml_status cmeta_build_schemas(
                 builder, child,
                 &builder->profile->document_fetchaudio,
                 &document_fetch_seen);
+            if (status == VXML_OK) {
+                builder->profile->document_data_fetch.fetchaudio =
+                    builder->profile->document_fetchaudio;
+                continue;
+            }
+            if (status != VXML_UNSUPPORTED_FEATURE)
+                return status;
+            status = cmeta_apply_data_fetch_property(
+                builder, child,
+                &builder->profile->document_data_fetch,
+                &document_data_seen);
             if (status != VXML_OK) return status;
             continue;
         }
@@ -7873,6 +8248,8 @@ static vxml_status cmeta_build_schemas(
             form->grammar_expression = VXML_CMETA_NO_INDEX;
             form->fetchaudio =
                 builder->profile->document_fetchaudio;
+            form->data_fetch =
+                builder->profile->document_data_fetch;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             base_form->block_count = 0u;
@@ -7890,6 +8267,7 @@ static vxml_status cmeta_build_schemas(
             vxml_cmeta_form_row *form = &builder->profile->forms[form_index];
             vxml_form_row *base_form = &builder->impl->forms[form_index];
             cmeta_fetch_property_seen form_fetch_seen = {0};
+            cmeta_data_fetch_property_seen form_data_seen = {0};
             size_t form_child;
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
@@ -7905,6 +8283,8 @@ static vxml_status cmeta_build_schemas(
             form->grammar_expression = VXML_CMETA_NO_INDEX;
             form->fetchaudio =
                 builder->profile->document_fetchaudio;
+            form->data_fetch =
+                builder->profile->document_data_fetch;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             status = cmeta_retain_dialog_id(
@@ -7935,6 +8315,26 @@ static vxml_status cmeta_build_schemas(
                             builder, item,
                             &form->fetchaudio,
                             &form_fetch_seen);
+                        if (status != VXML_OK) return status;
+                        form->data_fetch.fetchaudio =
+                            form->fetchaudio;
+                        fetch_recognized = true;
+                    } else if (cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "fetchtimeout") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datafetchhint") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datamaxage") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datamaxstale")) {
+                        status = cmeta_apply_data_fetch_property(
+                            builder, item,
+                            &form->data_fetch,
+                            &form_data_seen);
                         if (status != VXML_OK) return status;
                         fetch_recognized = true;
                     }
