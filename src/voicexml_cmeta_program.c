@@ -5361,6 +5361,7 @@ static bool cmeta_allocate_rows(
     if (measurement->external_data_count != 0u) {
         profile->max_data_bind_depth = options->max_data_bind_depth;
         profile->max_data_bind_items = options->max_data_bind_items;
+        profile->max_data_uri_bytes = options->max_data_uri_bytes;
         if (cmeta_dynamic_data_options_valid(options)) {
             profile->max_data_namelist_fields =
                 options->max_data_namelist_fields;
