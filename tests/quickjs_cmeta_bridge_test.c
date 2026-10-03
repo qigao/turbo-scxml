@@ -64,6 +64,22 @@ static const cmeta_data_desc *bridge_sequence_element(
     return &cmeta_data_int;
 }
 
+static cmeta_status bridge_sequence_read(
+    const void *object,
+    cmeta_data_collection_view *out) {
+    const bridge_int_sequence *sequence =
+        (const bridge_int_sequence *)object;
+    if (sequence == NULL || out == NULL ||
+        sequence->count > 8u)
+        return CMETA_INVALID_ARGUMENT;
+    *out = (cmeta_data_collection_view){
+        .data = sequence->values,
+        .count = sequence->count,
+        .stride = sizeof(int),
+        .element = &cmeta_data_int};
+    return CMETA_OK;
+}
+
 static size_t bridge_sequence_borrow_size(
     const void *object) {
     const bridge_int_sequence *sequence =
@@ -157,7 +173,7 @@ static const cmeta_data_collection_ops bridge_sequence_ops = {
     .flags = CMETA_DATA_COLLECTION_ORDERED |
              CMETA_DATA_COLLECTION_RANDOM_ACCESS,
     .element = bridge_sequence_element,
-    .read = NULL,
+    .read = bridge_sequence_read,
     .foreach = NULL,
     .collector = bridge_sequence_collector,
     .borrow = &bridge_sequence_borrow_ops,
