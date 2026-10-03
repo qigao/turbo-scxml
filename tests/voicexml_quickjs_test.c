@@ -8,6 +8,221 @@
 #include <stdio.h>
 #include <string.h>
 
+typedef struct voice_quickjs_state {
+    int value;
+} voice_quickjs_state;
+
+static const cmeta_type_identity voice_quickjs_state_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.quickjs.state");
+static const cmeta_type_traits voice_quickjs_state_traits = {
+    .flags = CMETA_TRAIT_TRIVIAL_COPY |
+             CMETA_TRAIT_TRIVIAL_DESTROY
+};
+static const cmeta_type_desc voice_quickjs_state_type = {
+    .name = "voice_quickjs_state",
+    .size = sizeof(voice_quickjs_state),
+    .align = _Alignof(voice_quickjs_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &voice_quickjs_state_traits,
+    .identity = &voice_quickjs_state_identity
+};
+static const cmeta_field_desc voice_quickjs_state_layout_fields[] = {
+    {"value", "int", offsetof(voice_quickjs_state, value),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL}
+};
+static const cmeta_struct_desc voice_quickjs_state_layout = {
+    .name = "voice_quickjs_state",
+    .size = sizeof(voice_quickjs_state),
+    .align = _Alignof(voice_quickjs_state),
+    .fields = voice_quickjs_state_layout_fields,
+    .field_count = 1u
+};
+static const cmeta_data_field_desc voice_quickjs_state_fields[] = {
+    {"test.voicexml.quickjs.state.value", "value",
+     offsetof(voice_quickjs_state, value), &cmeta_data_int}
+};
+static const cmeta_data_struct_shape voice_quickjs_state_shape = {
+    .layout = &voice_quickjs_state_layout,
+    .fields = voice_quickjs_state_fields,
+    .field_count = 1u
+};
+static const cmeta_data_desc voice_quickjs_state_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.quickjs.state.data",
+    .display_name = "VoiceXML QuickJS test state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &voice_quickjs_state_type,
+    .shape = &voice_quickjs_state_shape
+};
+
+typedef struct quickjs_script_probe {
+    size_t open_calls;
+    size_t close_calls;
+    vxml_script_resource_status open_status;
+    bool publish_on_failure;
+    const char *first_body;
+    size_t first_body_size;
+    const char *second_body;
+    size_t second_body_size;
+    char last_uri[256];
+    size_t last_uri_size;
+} quickjs_script_probe;
+
+static vxml_script_resource_status quickjs_script_open(
+    void *user,
+    const char *resolved_uri,
+    size_t resolved_uri_size,
+    const char *charset,
+    size_t charset_size,
+    size_t max_bytes,
+    vxml_script_source *out_source) {
+    quickjs_script_probe *probe =
+        (quickjs_script_probe *)user;
+    const char *body;
+    size_t body_size;
+    if (probe == NULL || resolved_uri == NULL ||
+        resolved_uri_size == 0u ||
+        resolved_uri_size >= sizeof(probe->last_uri) ||
+        charset == NULL || charset_size == 0u ||
+        out_source == NULL)
+        return VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT;
+    ++probe->open_calls;
+    memcpy(
+        probe->last_uri, resolved_uri,
+        resolved_uri_size);
+    probe->last_uri[resolved_uri_size] = '\0';
+    probe->last_uri_size = resolved_uri_size;
+    if (probe->open_calls == 1u) {
+        body = probe->first_body;
+        body_size = probe->first_body_size;
+    } else {
+        body = probe->second_body;
+        body_size = probe->second_body_size;
+    }
+    if (body_size > max_bytes)
+        return VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED;
+    if (probe->open_status != VXML_SCRIPT_RESOURCE_OK) {
+        if (probe->publish_on_failure) {
+            *out_source = (vxml_script_source){
+                .data = body,
+                .size = body_size,
+                .lease = probe};
+        }
+        return probe->open_status;
+    }
+    *out_source = (vxml_script_source){
+        .data = body,
+        .size = body_size,
+        .lease = probe};
+    return VXML_SCRIPT_RESOURCE_OK;
+}
+
+static void quickjs_script_close(
+    void *user, vxml_script_source *source) {
+    quickjs_script_probe *probe =
+        (quickjs_script_probe *)user;
+    if (probe != NULL && source != NULL &&
+        source->lease == probe)
+        ++probe->close_calls;
+    if (source != NULL)
+        *source = (vxml_script_source){0};
+}
+
+static const vxml_script_resource_adapter_v1
+quickjs_script_adapter = {
+    .abi_version = VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size =
+        sizeof(vxml_script_resource_adapter_v1),
+    .open = quickjs_script_open,
+    .close = quickjs_script_close
+};
+
+static vxml_dialog_manager_status quickjs_unused_document_open(
+    void *user,
+    const char *source, size_t source_size,
+    const char *media_type, size_t media_type_size,
+    size_t max_bytes,
+    vxml_dialog_document *out_document) {
+    (void)user;
+    (void)source;
+    (void)source_size;
+    (void)media_type;
+    (void)media_type_size;
+    (void)max_bytes;
+    if (out_document != NULL)
+        *out_document = (vxml_dialog_document){0};
+    return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+}
+
+static void quickjs_unused_document_close(
+    void *user, vxml_dialog_document *document) {
+    (void)user;
+    if (document != NULL)
+        *document = (vxml_dialog_document){0};
+}
+
+static const vxml_dialog_document_adapter_v1
+quickjs_document_adapter = {
+    .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1,
+    .struct_size =
+        sizeof(vxml_dialog_document_adapter_v1),
+    .open = quickjs_unused_document_open,
+    .close = quickjs_unused_document_close
+};
+
+static void quickjs_init_resolver(
+    vxml_document_store *store) {
+    vxml_document_store_config_v1 config = {
+        .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1,
+        .struct_size =
+            sizeof(vxml_document_store_config_v1),
+        .application_uri =
+            "https://voice.example/app/root.vxml",
+        .application_uri_size =
+            sizeof("https://voice.example/app/root.vxml") - 1u,
+        .capacity = 1u,
+        .max_uri_bytes = 255u,
+        .max_document_bytes = 1024u,
+        .max_cache_bytes = 2048u,
+        .documents = &quickjs_document_adapter
+    };
+    config.voice_limits = vxml_default_limits();
+    check_equal(
+        vxml_document_store_init(store, &config),
+        VXML_DOCUMENT_STORE_OK);
+}
+
+static vxml_quickjs_compile_options_v1
+typed_compile_options(void) {
+    vxml_quickjs_compile_options_v1 options =
+        vxml_quickjs_default_compile_options();
+    options.root = &voice_quickjs_state_data;
+    return options;
+}
+
+static vxml_quickjs_session_options_v1
+typed_session_options(
+    const voice_quickjs_state *initial) {
+    vxml_quickjs_session_options_v1 options =
+        vxml_quickjs_default_session_options();
+    options.initial_state = initial;
+    return options;
+}
+
+static vxml_quickjs_script_execution_v1
+script_execution(vxml_document_store *store) {
+    vxml_quickjs_script_execution_v1 execution =
+        VXML_QUICKJS_SCRIPT_EXECUTION_V1_INIT;
+    execution.resolver = store;
+    execution.script_resources = &quickjs_script_adapter;
+    execution.base_document_uri =
+        "https://voice.example/app/dialogs/current.vxml";
+    execution.base_document_uri_size =
+        sizeof("https://voice.example/app/dialogs/current.vxml") - 1u;
+    return execution;
+}
+
 static vxml_quickjs_session_options_v1 session_options(void) {
     return vxml_quickjs_default_session_options();
 }
