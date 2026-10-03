@@ -4931,9 +4931,9 @@ static vxml_status cmeta_measure_data(
             salts_xml_attribute_location(enctype),
             "VoiceXML data enctype is unsupported");
     if (enctype.impl != NULL &&
-        method.impl != NULL &&
-        cmeta_decoded_equal(
-            salts_xml_attribute_value(method), "get"))
+        (method.impl == NULL ||
+         cmeta_decoded_equal(
+             salts_xml_attribute_value(method), "get")))
         return cmeta_program_fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(enctype),
