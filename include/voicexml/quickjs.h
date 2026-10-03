@@ -129,6 +129,17 @@ vxml_status vxml_quickjs_session_execute_script(
     vxml_session *session,
     const vxml_quickjs_script_execution_v1 *execution);
 
+/**
+ * Borrow the current committed typed CMeta root.
+ *
+ * Valid only for a Session whose Program enabled the typed-state tail. The
+ * returned object is Session-owned and may change only after a successful
+ * transactional script publication.
+ */
+vxml_status vxml_quickjs_session_state(
+    const vxml_session *session,
+    const void **out_state);
+
 /** Query the exact Event produced by the last profile-level failure. */
 vxml_status vxml_quickjs_session_last_event(
     const vxml_session *session,
