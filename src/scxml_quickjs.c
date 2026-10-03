@@ -3,8 +3,6 @@
 #include "scxml_session.h"
 
 #include <cmeta/container.h>
-#include <salts/clock.h>
-
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,25 +24,6 @@ enum {
     SCXML_QUICKJS_DEFAULT_MAX_SNAPSHOT_BYTES = 4u * 1024u * 1024u
 };
 
-#if TURBOSCXML_HAS_QUICKJS
-static const char quickjs_hardening_source[] =
-    "(function(){"
-    "const deny=['fetch','std','os','process','require','module',"
-    "'Deno','Bun','XMLHttpRequest','WebSocket'];"
-    "for(const name of deny)Object.defineProperty(globalThis,name,{"
-    "value:undefined,writable:false,configurable:false});"
-    "Object.defineProperty(Function.prototype,'constructor',{"
-    "value:undefined,writable:false,configurable:false});"
-    "for(const value of [Object.prototype,Array.prototype,"
-    "Function.prototype,Number.prototype,String.prototype,"
-    "Boolean.prototype])Object.freeze(value);"
-    "Object.defineProperty(globalThis,'eval',{value:undefined,"
-    "writable:false,configurable:false});"
-    "Object.defineProperty(globalThis,'Function',{value:undefined,"
-    "writable:false,configurable:false});"
-    "})();";
-#endif
-
 static scxml_status quickjs_fail(
     scxml_diagnostic *diagnostic, scxml_status status,
     const char *message) {
@@ -61,6 +40,39 @@ static void quickjs_diagnostic(
     char *diagnostic, size_t capacity, const char *message) {
     if (diagnostic == NULL || capacity == 0u) return;
     (void)snprintf(diagnostic, capacity, "%s", message != NULL ? message : "");
+}
+
+static quickjs_sandbox_options quickjs_sandbox_options_from_scxml(
+    const scxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_sandbox_options){
+        .max_source_bytes =
+            options != NULL ? options->max_source_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_string_bytes : 0u,
+        .max_heap_bytes =
+            options != NULL ? options->max_heap_bytes : 0u,
+        .max_stack_bytes =
+            options != NULL ? options->max_stack_bytes : 0u,
+        .max_eval_milliseconds =
+            options != NULL ? options->max_eval_milliseconds : 0u};
+}
+
+static scxml_quickjs_status quickjs_sandbox_status_to_scxml(
+    quickjs_sandbox_status status) {
+    switch (status) {
+    case QUICKJS_SANDBOX_OK:
+        return SCXML_QUICKJS_OK;
+    case QUICKJS_SANDBOX_INVALID_ARGUMENT:
+        return SCXML_QUICKJS_INVALID_ARGUMENT;
+    case QUICKJS_SANDBOX_ALLOCATION_FAILED:
+        return SCXML_QUICKJS_ALLOCATION_FAILED;
+    case QUICKJS_SANDBOX_LIMIT_EXCEEDED:
+        return SCXML_QUICKJS_LIMIT_EXCEEDED;
+    case QUICKJS_SANDBOX_EXCEPTION:
+        return SCXML_QUICKJS_EXCEPTION;
+    default:
+        return SCXML_QUICKJS_INVALID_ARGUMENT;
+    }
 }
 
 static bool quickjs_schema_supported(
@@ -191,87 +203,38 @@ static const int64_t quickjs_max_safe_integer =
 static const int64_t quickjs_min_safe_integer =
     -INT64_C(9007199254740991);
 
-static bool quickjs_deadline_expired(scxml_quickjs_runtime *runtime) {
-    if (runtime == NULL || runtime->deadline_ms == 0u) return false;
-    if (salts_monotonic_ms() < runtime->deadline_ms) return false;
-    runtime->interrupted = true;
-    return true;
-}
-
-static int quickjs_interrupt(JSRuntime *js_runtime, void *opaque) {
-    (void)js_runtime;
-    return quickjs_deadline_expired((scxml_quickjs_runtime *)opaque) ? 1 : 0;
+static bool quickjs_deadline_expired(
+    scxml_quickjs_runtime *runtime) {
+    return quickjs_sandbox_deadline_expired(&runtime->core);
 }
 
 static bool quickjs_deadline_begin(
     scxml_quickjs_runtime *runtime, uint64_t milliseconds) {
-    uint64_t now;
-    if (runtime->deadline_ms != 0u) return false;
-    now = salts_monotonic_ms();
-    runtime->deadline_ms = now > UINT64_MAX - milliseconds
-        ? UINT64_MAX : now + milliseconds;
-    runtime->interrupted = false;
-    return true;
+    return quickjs_sandbox_deadline_begin(&runtime->core, milliseconds);
 }
 
 static void quickjs_deadline_end(
     scxml_quickjs_runtime *runtime, bool owned) {
-    if (owned) runtime->deadline_ms = 0u;
+    quickjs_sandbox_deadline_end(&runtime->core, owned);
 }
 
 static scxml_quickjs_status quickjs_exception(
-    scxml_quickjs_runtime *runtime, char *diagnostic,
-    size_t diagnostic_capacity) {
-    JSContext *context = (JSContext *)runtime->context;
-    JSValue exception = JS_GetException(context);
-    const char *message = JS_ToCString(context, exception);
-    const scxml_quickjs_status status = runtime->interrupted
-        ? SCXML_QUICKJS_LIMIT_EXCEEDED : SCXML_QUICKJS_EXCEPTION;
-    quickjs_diagnostic(
-        diagnostic, diagnostic_capacity,
-        runtime->interrupted ? "QuickJS evaluation deadline exceeded"
-                             : (message != NULL ? message
-                                                : "QuickJS exception"));
-    if (message != NULL) JS_FreeCString(context, message);
-    JS_FreeValue(context, exception);
-    return status;
-}
-
-static void quickjs_context_destroy(scxml_quickjs_runtime *runtime) {
-    if (runtime != NULL && runtime->context != NULL) {
-        JS_FreeContext((JSContext *)runtime->context);
-        runtime->context = NULL;
-    }
-}
-
-static scxml_quickjs_status quickjs_context_create(
     scxml_quickjs_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity) {
-    JSContext *context;
-    scxml_quickjs_status status;
-    if (runtime == NULL || runtime->runtime == NULL ||
-        runtime->context != NULL)
-        return SCXML_QUICKJS_INVALID_ARGUMENT;
-    context = JS_NewContextRaw((JSRuntime *)runtime->runtime);
-    if (context == NULL) return SCXML_QUICKJS_ALLOCATION_FAILED;
-    JS_AddIntrinsicBaseObjects(context);
-    JS_AddIntrinsicEval(context);
-    JS_AddIntrinsicJSON(context);
-    runtime->context = context;
-    status = scxml_quickjs_runtime_eval(
-        runtime, quickjs_hardening_source,
-        sizeof(quickjs_hardening_source) - 1u, "<sandbox-init>",
-        runtime->options.max_eval_milliseconds,
-        diagnostic, diagnostic_capacity);
-    if (status != SCXML_QUICKJS_OK) quickjs_context_destroy(runtime);
-    return status;
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_exception(&runtime->core, diagnostic, diagnostic_capacity));
+}
+
+static void quickjs_context_destroy(
+    scxml_quickjs_runtime *runtime) {
+    quickjs_sandbox_context_destroy(&runtime->core);
 }
 
 static scxml_quickjs_status quickjs_context_recreate(
     scxml_quickjs_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity) {
-    quickjs_context_destroy(runtime);
-    return quickjs_context_create(runtime, diagnostic, diagnostic_capacity);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_context_recreate(&runtime->core, diagnostic, diagnostic_capacity));
 }
 #endif
 
@@ -279,8 +242,10 @@ scxml_quickjs_status scxml_quickjs_runtime_init(
     scxml_quickjs_runtime *runtime,
     const scxml_quickjs_compile_options_v1 *options,
     char *diagnostic, size_t diagnostic_capacity) {
-    if (runtime == NULL || runtime->runtime != NULL ||
-        runtime->context != NULL || !scxml_quickjs_limits_valid(options)) {
+    quickjs_sandbox_options sandbox;
+    if (runtime == NULL || runtime->core.runtime != NULL ||
+        runtime->core.context != NULL ||
+        !scxml_quickjs_limits_valid(options)) {
         quickjs_diagnostic(
             diagnostic, diagnostic_capacity,
             "invalid QuickJS runtime options");
@@ -292,36 +257,10 @@ scxml_quickjs_status scxml_quickjs_runtime_init(
         "TurboSCXML was built without quickjs-sandbox support");
     return SCXML_QUICKJS_INVALID_ARGUMENT;
 #else
-    {
-        JSRuntime *js_runtime = JS_NewRuntime();
-        scxml_quickjs_status status;
-        if (js_runtime == NULL) return SCXML_QUICKJS_ALLOCATION_FAILED;
-        JS_SetMemoryLimit(js_runtime, options->max_heap_bytes);
-        JS_SetMaxStackSize(js_runtime, options->max_stack_bytes);
-        JS_SetCanBlock(js_runtime, false);
-        JS_SetInterruptHandler(js_runtime, quickjs_interrupt, runtime);
-        if (options->max_string_bytes == SIZE_MAX) {
-            JS_FreeRuntime(js_runtime);
-            return SCXML_QUICKJS_LIMIT_EXCEEDED;
-        }
-        runtime->runtime = js_runtime;
-        runtime->options = *options;
-        runtime->max_diagnostic_bytes = diagnostic_capacity;
-        runtime->result_string_capacity = options->max_string_bytes + 1u;
-        runtime->result_string =
-            (char *)malloc(runtime->result_string_capacity);
-        if (runtime->result_string == NULL) {
-            scxml_quickjs_runtime_destroy(runtime);
-            return SCXML_QUICKJS_ALLOCATION_FAILED;
-        }
-        status = quickjs_context_create(
-            runtime, diagnostic, diagnostic_capacity);
-        if (status != SCXML_QUICKJS_OK) {
-            scxml_quickjs_runtime_destroy(runtime);
-            return status;
-        }
-    }
-    return SCXML_QUICKJS_OK;
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_runtime_init(&runtime->core, &sandbox,
+            diagnostic, diagnostic_capacity));
 #endif
 }
 
@@ -331,123 +270,59 @@ scxml_quickjs_status scxml_quickjs_runtime_eval(
     const char *filename,
     uint64_t max_eval_milliseconds,
     char *diagnostic, size_t diagnostic_capacity) {
-    if (runtime == NULL || runtime->runtime == NULL ||
-        runtime->context == NULL || source == NULL || source_size == 0u ||
-        source_size > runtime->options.max_source_bytes ||
-        source_size == SIZE_MAX || filename == NULL ||
-        max_eval_milliseconds == 0u) {
-        quickjs_diagnostic(
-            diagnostic, diagnostic_capacity,
-            "invalid QuickJS evaluation request");
-        return SCXML_QUICKJS_INVALID_ARGUMENT;
-    }
 #if !TURBOSCXML_HAS_QUICKJS
+    (void)runtime;
+    (void)source;
+    (void)source_size;
+    (void)filename;
+    (void)max_eval_milliseconds;
+    quickjs_diagnostic(
+        diagnostic, diagnostic_capacity,
+        "TurboSCXML was built without quickjs-sandbox support");
     return SCXML_QUICKJS_INVALID_ARGUMENT;
 #else
-    {
-        JSContext *context = (JSContext *)runtime->context;
-        JSValue result;
-        char *terminated_source = (char *)malloc(source_size + 1u);
-        scxml_quickjs_status status;
-        if (terminated_source == NULL) {
-            quickjs_diagnostic(
-                diagnostic, diagnostic_capacity,
-                "QuickJS evaluation source allocation failed");
-            return SCXML_QUICKJS_ALLOCATION_FAILED;
-        }
-        memcpy(terminated_source, source, source_size);
-        terminated_source[source_size] = '\0';
-        const bool owns_deadline = quickjs_deadline_begin(
-            runtime, max_eval_milliseconds);
-        result = JS_Eval(
-            context, terminated_source, source_size,
-            filename, JS_EVAL_TYPE_GLOBAL);
-        if (JS_IsException(result)) {
-            status = quickjs_exception(
-                runtime, diagnostic, diagnostic_capacity);
-            quickjs_deadline_end(runtime, owns_deadline);
-            free(terminated_source);
-            return status;
-        }
-        JS_FreeValue(context, result);
-        if (quickjs_deadline_expired(runtime)) {
-            quickjs_deadline_end(runtime, owns_deadline);
-            free(terminated_source);
-            quickjs_diagnostic(
-                diagnostic, diagnostic_capacity,
-                "QuickJS evaluation deadline exceeded");
-            return SCXML_QUICKJS_LIMIT_EXCEEDED;
-        }
-        quickjs_deadline_end(runtime, owns_deadline);
-        free(terminated_source);
-        quickjs_diagnostic(diagnostic, diagnostic_capacity, "");
-        return SCXML_QUICKJS_OK;
-    }
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_runtime_eval(&runtime->core, source, source_size, filename,
+            max_eval_milliseconds,
+            diagnostic, diagnostic_capacity));
 #endif
 }
 
-void scxml_quickjs_runtime_destroy(scxml_quickjs_runtime *runtime) {
-    if (runtime == NULL) return;
+void scxml_quickjs_runtime_destroy(
+    scxml_quickjs_runtime *runtime) {
 #if TURBOSCXML_HAS_QUICKJS
-    quickjs_context_destroy(runtime);
-    if (runtime->runtime != NULL)
-        JS_FreeRuntime((JSRuntime *)runtime->runtime);
+    quickjs_sandbox_runtime_destroy(&runtime->core);
+#else
+    if (runtime != NULL)
+        memset(runtime, 0, sizeof(*runtime));
 #endif
-    free(runtime->result_string);
-    memset(runtime, 0, sizeof(*runtime));
 }
 
 scxml_quickjs_status scxml_quickjs_validate_source(
     const scxml_quickjs_compile_options_v1 *options,
     const char *source, size_t source_size,
     char *diagnostic, size_t diagnostic_capacity) {
-    if (!scxml_quickjs_limits_valid(options) || source == NULL ||
+    quickjs_sandbox_options sandbox;
+    if (!scxml_quickjs_limits_valid(options) ||
+        source == NULL ||
         source_size > options->max_source_bytes) {
         quickjs_diagnostic(
             diagnostic, diagnostic_capacity,
             "invalid or oversized QuickJS source");
         return source_size > 0u && options != NULL &&
                        source_size > options->max_source_bytes
-                   ? SCXML_QUICKJS_LIMIT_EXCEEDED
-                   : SCXML_QUICKJS_INVALID_ARGUMENT;
+            ? SCXML_QUICKJS_LIMIT_EXCEEDED
+            : SCXML_QUICKJS_INVALID_ARGUMENT;
     }
 #if !TURBOSCXML_HAS_QUICKJS
     return SCXML_QUICKJS_INVALID_ARGUMENT;
 #else
-    {
-        scxml_quickjs_runtime runtime = {0};
-        JSContext *context;
-        JSValue compiled;
-        char *terminated_source;
-        scxml_quickjs_status status = scxml_quickjs_runtime_init(
-            &runtime, options, diagnostic, diagnostic_capacity);
-        if (status != SCXML_QUICKJS_OK) return status;
-        if (source_size == SIZE_MAX) {
-            scxml_quickjs_runtime_destroy(&runtime);
-            return SCXML_QUICKJS_LIMIT_EXCEEDED;
-        }
-        terminated_source = (char *)malloc(source_size + 1u);
-        if (terminated_source == NULL) {
-            scxml_quickjs_runtime_destroy(&runtime);
-            return SCXML_QUICKJS_ALLOCATION_FAILED;
-        }
-        memcpy(terminated_source, source, source_size);
-        terminated_source[source_size] = '\0';
-        context = (JSContext *)runtime.context;
-        compiled = JS_Eval(
-            context, terminated_source, source_size, "<scxml-script>",
-            JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-        if (JS_IsException(compiled)) {
-            status = quickjs_exception(
-                &runtime, diagnostic, diagnostic_capacity);
-        } else {
-            JS_FreeValue(context, compiled);
-            status = SCXML_QUICKJS_OK;
-        }
-        free(terminated_source);
-        scxml_quickjs_runtime_destroy(&runtime);
-        return status;
-    }
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_validate_source(
+            &sandbox, source, source_size,
+            "<scxml-script>",
+            diagnostic, diagnostic_capacity));
 #endif
 }
 
@@ -455,50 +330,27 @@ scxml_quickjs_status scxml_quickjs_validate_expression(
     const scxml_quickjs_compile_options_v1 *options,
     const char *source, size_t source_size,
     char *diagnostic, size_t diagnostic_capacity) {
-    static const char prefix[] = "(\n";
-    static const char suffix[] = "\n)";
-    if (!scxml_quickjs_limits_valid(options) || source == NULL ||
-        source_size == 0u || source_size > options->max_source_bytes ||
-        source_size > SIZE_MAX - (sizeof(prefix) - 1u) -
-                          (sizeof(suffix) - 1u) - 1u) {
-        quickjs_diagnostic(diagnostic, diagnostic_capacity,
-                           "invalid or oversized QuickJS expression");
+    quickjs_sandbox_options sandbox;
+    if (!scxml_quickjs_limits_valid(options) ||
+        source == NULL || source_size == 0u ||
+        source_size > options->max_source_bytes) {
+        quickjs_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid or oversized QuickJS expression");
         return source_size > 0u && options != NULL &&
                        source_size > options->max_source_bytes
-                   ? SCXML_QUICKJS_LIMIT_EXCEEDED
-                   : SCXML_QUICKJS_INVALID_ARGUMENT;
+            ? SCXML_QUICKJS_LIMIT_EXCEEDED
+            : SCXML_QUICKJS_INVALID_ARGUMENT;
     }
 #if !TURBOSCXML_HAS_QUICKJS
     return SCXML_QUICKJS_INVALID_ARGUMENT;
 #else
-    scxml_quickjs_runtime runtime = {0};
-    char *wrapped = NULL;
-    size_t wrapped_size;
-    scxml_quickjs_status status;
-    wrapped_size = sizeof(prefix) - 1u + source_size + sizeof(suffix) - 1u;
-    wrapped = (char *)malloc(wrapped_size + 1u);
-    if (wrapped == NULL) return SCXML_QUICKJS_ALLOCATION_FAILED;
-    memcpy(wrapped, prefix, sizeof(prefix) - 1u);
-    memcpy(wrapped + sizeof(prefix) - 1u, source, source_size);
-    memcpy(wrapped + sizeof(prefix) - 1u + source_size,
-           suffix, sizeof(suffix) - 1u);
-    wrapped[wrapped_size] = '\0';
-    status = scxml_quickjs_runtime_init(
-        &runtime, options, diagnostic, diagnostic_capacity);
-    if (status == SCXML_QUICKJS_OK) {
-        JSValue compiled = JS_Eval(
-            (JSContext *)runtime.context, wrapped, wrapped_size,
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_validate_expression(
+            &sandbox, source, source_size,
             "<scxml-expression>",
-            JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-        if (JS_IsException(compiled))
-            status = quickjs_exception(
-                &runtime, diagnostic, diagnostic_capacity);
-        else
-            JS_FreeValue((JSContext *)runtime.context, compiled);
-    }
-    scxml_quickjs_runtime_destroy(&runtime);
-    free(wrapped);
-    return status;
+            diagnostic, diagnostic_capacity));
 #endif
 }
 
@@ -1638,7 +1490,7 @@ static bool quickjs_convert_scalar_result(
     scxml_quickjs_runtime *runtime, JSValueConst result,
     scxml_expr_value_kind expected_kind,
     scxml_expr_value *out_value) {
-    JSContext *context = (JSContext *)runtime->context;
+    JSContext *context = (JSContext *)runtime->core.context;
     scxml_expr_value value = {0};
     if (expected_kind == SCXML_EXPR_VALUE_INVALID) {
         if (JS_IsBool(result)) expected_kind = SCXML_EXPR_VALUE_BOOL;
@@ -1682,14 +1534,14 @@ static bool quickjs_convert_scalar_result(
         size_t size;
         if (!JS_IsString(result)) return false;
         text = JS_ToCStringLen(context, &size, result);
-        if (text == NULL || size >= runtime->result_string_capacity) {
+        if (text == NULL || size >= runtime->core.result_string_capacity) {
             if (text != NULL) JS_FreeCString(context, text);
             return false;
         }
-        memcpy(runtime->result_string, text, size);
-        runtime->result_string[size] = '\0';
+        memcpy(runtime->core.result_string, text, size);
+        runtime->core.result_string[size] = '\0';
         JS_FreeCString(context, text);
-        value.data.string.data = runtime->result_string;
+        value.data.string.data = runtime->core.result_string;
         value.data.string.size = size;
     } else {
         return false;
@@ -1767,9 +1619,20 @@ scxml_expr_status scxml_quickjs_evaluate_expression(
     status = quickjs_context_recreate(
         runtime, quickjs_diagnostic_text,
         sizeof(quickjs_diagnostic_text));
-    if (status != SCXML_QUICKJS_OK) goto cleanup;
+    if (status != SCXML_QUICKJS_OK) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+        (void)fprintf(
+            stderr,
+            "[scxml-quickjs] expression context recreate status=%d deadline=%llu interrupted=%d diagnostic=%s\n",
+            (int)status,
+            (unsigned long long)runtime->core.deadline_ms,
+            runtime->core.interrupted ? 1 : 0,
+            quickjs_diagnostic_text);
+#endif
+        goto cleanup;
+    }
     conversion = (quickjs_conversion){
-        (JSContext *)runtime->context, &program->quickjs_options,
+        (JSContext *)runtime->core.context, &program->quickjs_options,
         program->cmeta_root, 0u};
     active = (quickjs_active_context){session, is_active, active_user};
     owns_deadline = quickjs_deadline_begin(
@@ -1786,7 +1649,7 @@ scxml_expr_status scxml_quickjs_evaluate_expression(
         goto cleanup;
     }
     result = JS_Eval(
-        (JSContext *)runtime->context, wrapped, wrapped_size,
+        (JSContext *)runtime->core.context, wrapped, wrapped_size,
         "<scxml-expression>", JS_EVAL_TYPE_GLOBAL);
     if (JS_IsException(result)) {
         status = quickjs_exception(
@@ -1814,7 +1677,7 @@ scxml_expr_status scxml_quickjs_evaluate_expression(
     }
     expression_status = SCXML_EXPR_OK;
 cleanup:
-    if (runtime != NULL && runtime->interrupted &&
+    if (runtime != NULL && runtime->core.interrupted &&
         expression_status != SCXML_EXPR_OK) {
         expression_status = SCXML_EXPR_LIMIT_EXCEEDED;
         quickjs_diagnostic(
@@ -1822,10 +1685,10 @@ cleanup:
             "QuickJS expression transaction deadline exceeded");
     }
     if (runtime != NULL) quickjs_deadline_end(runtime, owns_deadline);
-    if (runtime != NULL && runtime->context != NULL) {
-        JS_SetContextOpaque((JSContext *)runtime->context, NULL);
+    if (runtime != NULL && runtime->core.context != NULL) {
+        JS_SetContextOpaque((JSContext *)runtime->core.context, NULL);
         if (!JS_IsUndefined(result))
-            JS_FreeValue((JSContext *)runtime->context, result);
+            JS_FreeValue((JSContext *)runtime->core.context, result);
         quickjs_context_destroy(runtime);
     }
     if (runtime != NULL && expression_status != SCXML_EXPR_OK) {
@@ -1935,11 +1798,20 @@ bool scxml_quickjs_execute_script(
         status = quickjs_context_recreate(
             runtime, diagnostic, sizeof(diagnostic));
         if (status != SCXML_QUICKJS_OK) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+            (void)fprintf(
+                stderr,
+                "[scxml-quickjs] script context recreate status=%d deadline=%llu interrupted=%d diagnostic=%s\n",
+                (int)status,
+                (unsigned long long)runtime->core.deadline_ms,
+                runtime->core.interrupted ? 1 : 0,
+                diagnostic);
+#endif
             *out_error = "QuickJS working context initialization failed";
             goto cleanup;
         }
         conversion = (quickjs_conversion){
-            (JSContext *)runtime->context, &program->quickjs_options,
+            (JSContext *)runtime->core.context, &program->quickjs_options,
             program->cmeta_root, 0u};
         active = (quickjs_active_context){session, is_active, active_user};
         owns_deadline = quickjs_deadline_begin(
@@ -2049,11 +1921,11 @@ bool scxml_quickjs_execute_script(
             memcpy(state, state_scratch.value, type->size);
         }
 cleanup:
-        if (runtime->interrupted && *out_error != NULL)
+        if (runtime->core.interrupted && *out_error != NULL)
             *out_error = "QuickJS script transaction deadline exceeded";
         quickjs_deadline_end(runtime, owns_deadline);
-        if (runtime->context != NULL) {
-            JS_SetContextOpaque((JSContext *)runtime->context, NULL);
+        if (runtime->core.context != NULL) {
+            JS_SetContextOpaque((JSContext *)runtime->core.context, NULL);
             quickjs_context_destroy(runtime);
         }
         scxml_scope_view_clear(&scope_scratch);
@@ -2061,6 +1933,10 @@ cleanup:
         quickjs_aligned_storage_destroy(
             &state_scratch, type, scratch_live);
         if (*out_error != NULL) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+            (void)fprintf(
+                stderr, "[scxml-quickjs] %s\n", *out_error);
+#endif
             scxml_quickjs_runtime_destroy(runtime);
             if (scxml_quickjs_runtime_init(
                     runtime, &program->quickjs_options,

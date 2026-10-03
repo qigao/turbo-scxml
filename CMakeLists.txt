@@ -193,7 +193,25 @@ target_compile_definitions(turbo_scxml
   PUBLIC TURBOSCXML_HAS_QUICKJS=$<BOOL:${TURBOSCXML_ENABLE_QUICKJS}>)
 if(TURBOSCXML_ENABLE_QUICKJS)
   find_package(qjs CONFIG REQUIRED)
-  target_link_libraries(turbo_scxml PRIVATE qjs)
+  add_library(turbo_quickjs_sandbox STATIC
+    src/quickjs_sandbox.c)
+  add_library(TurboSCXML::_QuickJSSandbox ALIAS
+    turbo_quickjs_sandbox)
+  set_target_properties(turbo_quickjs_sandbox PROPERTIES
+    EXPORT_NAME _QuickJSSandbox
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_quickjs_sandbox PUBLIC c_std_11)
+  target_include_directories(turbo_quickjs_sandbox
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+  target_compile_definitions(turbo_quickjs_sandbox
+    PUBLIC TURBOSCXML_HAS_QUICKJS=1)
+  target_link_libraries(turbo_quickjs_sandbox
+    PUBLIC qjs
+    PRIVATE Salts::Core)
+  target_link_libraries(turbo_scxml
+    PRIVATE TurboSCXML::_QuickJSSandbox)
 endif()
 
 if(TURBOSCXML_ENABLE_PLUGIN)
@@ -472,6 +490,10 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
 endif()
 
 if(BUILD_TESTING)
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    target_compile_definitions(turbo_scxml PRIVATE
+      TURBOSCXML_QUICKJS_TRACE_FAILURES=1)
+  endif()
   get_target_property(
     CFLOW_PUBLIC_LINKS Salts::CFlow INTERFACE_LINK_LIBRARIES)
   if(CFLOW_PUBLIC_LINKS MATCHES "XmlParser|cxml|CSerde|SCXML")
@@ -484,7 +506,16 @@ if(BUILD_TESTING)
   set(TURBOSCXML_EXPECTED_LINKS
     "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
-    string(APPEND TURBOSCXML_EXPECTED_LINKS ";$<LINK_ONLY:qjs>")
+    string(APPEND TURBOSCXML_EXPECTED_LINKS
+      ";$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
+    get_target_property(
+      TURBOSCXML_QUICKJS_SANDBOX_PUBLIC_LINKS
+      turbo_quickjs_sandbox INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_QUICKJS_SANDBOX_PUBLIC_LINKS STREQUAL
+       "qjs;$<LINK_ONLY:Salts::Core>")
+      message(FATAL_ERROR
+        "TurboSCXML::_QuickJSSandbox dependency contract changed")
+    endif()
   endif()
   if(NOT TURBOSCXML_PUBLIC_LINKS STREQUAL TURBOSCXML_EXPECTED_LINKS)
     message(FATAL_ERROR
@@ -630,6 +661,13 @@ install(TARGETS turbo_scxml_cmeta_runtime
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+if(TURBOSCXML_ENABLE_QUICKJS)
+  install(TARGETS turbo_quickjs_sandbox
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(TARGETS turbo_scxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

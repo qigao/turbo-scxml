@@ -108,13 +108,13 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --only-binarycaching
 
       - name: Configure
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
 
       - name: Build and test
         shell: bash
@@ -152,7 +152,8 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON \
-            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING=ON
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON
           cmake --build build/consumer-no-plugin --parallel 2
 
       - name: Install and verify installed consumers
@@ -240,7 +241,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --only-binarycaching
 
       - name: Configure sanitizer build
         shell: bash
@@ -257,6 +258,7 @@ jobs:
             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON \
             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON \
             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON \
+            -DTURBOSCXML_ENABLE_QUICKJS=ON \
             -DCMAKE_C_FLAGS="$sanitizer_flags" \
             -DCMAKE_CXX_FLAGS="$sanitizer_flags" \
             -DCMAKE_EXE_LINKER_FLAGS="$sanitizer_flags" \
@@ -342,14 +344,14 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           if (Test-Path -LiteralPath vcpkg_installed) { Remove-Item -Recurse -Force vcpkg_installed }
-          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" --triplet x64-windows --only-binarycaching
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" --triplet x64-windows --x-feature=quickjs --only-binarycaching
           if ($LASTEXITCODE -ne 0) { throw "vcpkg cache-only restore failed" }
 
       - name: Configure
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\stage\turboscxml"
+          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\stage\turboscxml"
           if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
       - name: Build and test
@@ -464,13 +466,13 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
 
       - name: Configure
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S . -B build/ci-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+          cmake -S . -B build/ci-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
 
       - name: Build and test
         shell: bash
@@ -565,13 +567,13 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
 
       - name: Configure and build
         shell: bash
         run: |
           set -euo pipefail
-          cmake -S . -B build/ci-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DBUILD_TESTING=OFF             -DBUILD_TESTS=OFF             -DBUILD_EXAMPLES=OFF             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
+          cmake -S . -B build/ci-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DBUILD_TESTING=OFF             -DBUILD_TESTS=OFF             -DBUILD_EXAMPLES=OFF             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
           cmake --build build/ci-android --parallel 2
           cmake --install build/ci-android
 
