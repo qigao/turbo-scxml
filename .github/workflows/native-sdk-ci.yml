@@ -152,7 +152,8 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
             -DVCPKG_MANIFEST_MODE=OFF \
             -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON \
-            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING=ON
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN_MISSING=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON
           cmake --build build/consumer-no-plugin --parallel 2
 
       - name: Install and verify installed consumers
