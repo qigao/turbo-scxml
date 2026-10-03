@@ -228,6 +228,258 @@ static vxml_quickjs_session_options_v1 session_options(void) {
 }
 
 spec("VoiceXML QuickJS script target profile") {
+    it("executes static and dynamic scripts transactionally and resumes after each action") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form>"
+            "<block><script src='scripts/first.js'/></block>"
+            "<block><script srcexpr=\"'scripts/'+value+'.js'\"/></block>"
+            "<block><exit/></block>"
+            "</form></vxml>";
+        static const char first_body[] = "value = 7;";
+        static const char second_body[] = "value = 9;";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {1};
+        vxml_quickjs_session_options_v1 options =
+            typed_session_options(&initial);
+        quickjs_script_probe probe = {
+            .open_status = VXML_SCRIPT_RESOURCE_OK,
+            .first_body = first_body,
+            .first_body_size = sizeof(first_body) - 1u,
+            .second_body = second_body,
+            .second_body_size = sizeof(second_body) - 1u};
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_document_store store = {0};
+        vxml_quickjs_script_execution_v1 execution;
+        vxml_external_script_target_v1 target = {0};
+        const void *state = NULL;
+
+        quickjs_init_resolver(&store);
+        execution = script_execution(&store);
+        execution.script_resource_user = &probe;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SCRIPTING);
+        check_equal(
+            vxml_session_script(&session, &target),
+            VXML_OK);
+        check_equal(target.src_size, sizeof("scripts/first.js") - 1u);
+        check_equal(
+            memcmp(
+                target.src, "scripts/first.js",
+                target.src_size),
+            0);
+        check_equal(
+            vxml_quickjs_session_state(&session, &state),
+            VXML_OK);
+        check_equal(
+            ((const voice_quickjs_state *)state)->value,
+            1);
+
+        check_equal(
+            vxml_quickjs_session_execute_script(
+                &session, &execution),
+            VXML_OK);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SCRIPTING);
+        target = (vxml_external_script_target_v1){0};
+        check_equal(
+            vxml_session_script(&session, &target),
+            VXML_OK);
+        check_equal(target.src_size, sizeof("scripts/7.js") - 1u);
+        check_equal(
+            memcmp(
+                target.src, "scripts/7.js",
+                target.src_size),
+            0);
+        state = NULL;
+        check_equal(
+            vxml_quickjs_session_state(&session, &state),
+            VXML_OK);
+        check_equal(
+            ((const voice_quickjs_state *)state)->value,
+            7);
+
+        check_equal(
+            vxml_quickjs_session_execute_script(
+                &session, &execution),
+            VXML_OK);
+        check_equal(probe.open_calls, (size_t)2u);
+        check_equal(probe.close_calls, (size_t)2u);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        state = NULL;
+        check_equal(
+            vxml_quickjs_session_state(&session, &state),
+            VXML_OK);
+        check_equal(
+            ((const voice_quickjs_state *)state)->value,
+            9);
+        check_equal(
+            probe.last_uri,
+            "https://voice.example/app/dialogs/scripts/7.js");
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("rolls back committed CMeta state and closes the lease when script throws") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='scripts/fail.js'/></block>"
+            "<block><exit/></block></form></vxml>";
+        static const char body[] =
+            "value = 77; throw new Error('boom');";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {3};
+        vxml_quickjs_session_options_v1 options =
+            typed_session_options(&initial);
+        quickjs_script_probe probe = {
+            .open_status = VXML_SCRIPT_RESOURCE_OK,
+            .first_body = body,
+            .first_body_size = sizeof(body) - 1u};
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_document_store store = {0};
+        vxml_quickjs_script_execution_v1 execution;
+        const void *state = NULL;
+        const char *event = NULL;
+        size_t event_size = 0u;
+
+        quickjs_init_resolver(&store);
+        execution = script_execution(&store);
+        execution.script_resource_user = &probe;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_quickjs_session_execute_script(
+                &session, &execution),
+            VXML_SEMANTIC_ERROR);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            vxml_quickjs_session_state(&session, &state),
+            VXML_OK);
+        check_equal(
+            ((const voice_quickjs_state *)state)->value,
+            3);
+        check_equal(
+            vxml_quickjs_session_last_event(
+                &session, &event, &event_size),
+            VXML_OK);
+        check_equal(
+            event_size, sizeof("error.semantic") - 1u);
+        check_equal(
+            memcmp(event, "error.semantic", event_size),
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("projects ScriptResource failure event and keeps committed state unchanged") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='scripts/missing.js'/></block>"
+            "</form></vxml>";
+        static const char body[] = "value = 88;";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {5};
+        vxml_quickjs_session_options_v1 options =
+            typed_session_options(&initial);
+        quickjs_script_probe probe = {
+            .open_status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR,
+            .publish_on_failure = true,
+            .first_body = body,
+            .first_body_size = sizeof(body) - 1u};
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_document_store store = {0};
+        vxml_quickjs_script_execution_v1 execution;
+        const void *state = NULL;
+        const char *event = NULL;
+        size_t event_size = 0u;
+
+        quickjs_init_resolver(&store);
+        execution = script_execution(&store);
+        execution.script_resource_user = &probe;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_quickjs_session_execute_script(
+                &session, &execution),
+            VXML_SEMANTIC_ERROR);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            vxml_quickjs_session_state(&session, &state),
+            VXML_OK);
+        check_equal(
+            ((const voice_quickjs_state *)state)->value,
+            5);
+        check_equal(
+            vxml_quickjs_session_last_event(
+                &session, &event, &event_size),
+            VXML_OK);
+        check_equal(
+            event_size, sizeof("error.badfetch") - 1u);
+        check_equal(
+            memcmp(event, "error.badfetch", event_size),
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("keeps base and static script profiles fail-closed for srcexpr") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
