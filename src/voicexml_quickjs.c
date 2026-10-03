@@ -1366,6 +1366,7 @@ static vxml_status quickjs_run_from(
     vxml_quickjs_session_data *data;
     size_t transitions = 0u;
     size_t next_block = first_block;
+    vxml_status status;
     if (session == NULL || session->program == NULL ||
         session->profile_data == NULL)
         return VXML_INVALID_ARGUMENT;
@@ -1374,6 +1375,17 @@ static vxml_status quickjs_run_from(
     if (program->forms == NULL || program->form_count == 0u)
         return session_fail(
             session, VXML_INVALID_STRUCTURE, NULL, 0u);
+    if (form_index >= program->form_count)
+        return session_fail(
+            session, VXML_INVALID_STRUCTURE, NULL, 0u);
+
+    if (!data->document_data_done) {
+        status = quickjs_execute_data_initializers(
+            session, VXML_DATA_DOCUMENT, SIZE_MAX);
+        if (status != VXML_OK)
+            return status;
+        data->document_data_done = true;
+    }
 
     for (;;) {
         const vxml_form_row *form;
@@ -1392,8 +1404,13 @@ static vxml_status quickjs_run_from(
             return session_fail(
                 session, VXML_INVALID_STRUCTURE, NULL, 0u);
         form_end = form->first_block + form->block_count;
-        if (next_block == SIZE_MAX)
+        if (next_block == SIZE_MAX) {
+            status = quickjs_execute_data_initializers(
+                session, VXML_DATA_FORM, form_index);
+            if (status != VXML_OK)
+                return status;
             next_block = form->first_block;
+        }
         if (next_block < form->first_block ||
             next_block > form_end)
             return session_fail(
@@ -1418,8 +1435,25 @@ static vxml_status quickjs_run_from(
                 continue;
             action = &program->actions[block->first_action];
 
+            if (action->kind == VXML_ACTION_DATA) {
+                if (action->data_index >=
+                        program->data_row_count ||
+                    program->data_rows == NULL ||
+                    program->data_rows[
+                        action->data_index].placement !=
+                        VXML_DATA_EXECUTABLE)
+                    return session_fail(
+                        session, VXML_INVALID_STRUCTURE,
+                        NULL, 0u);
+                status = quickjs_execute_data_row(
+                    session,
+                    &program->data_rows[action->data_index]);
+                if (status != VXML_OK)
+                    return status;
+                continue;
+            }
+
             if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
-                vxml_status status;
                 data->resume_form = form_index;
                 data->resume_block = block_index + 1u;
                 data->script_pending = true;
