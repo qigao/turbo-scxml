@@ -1501,9 +1501,16 @@ scxml_expr_status scxml_quickjs_evaluate_expression(
 #endif
         goto cleanup;
     }
-    conversion = (quickjs_conversion){
-        (JSContext *)runtime->core.context, &program->quickjs_options,
-        program->cmeta_root, 0u};
+    if (!quickjs_conversion_init(
+            &conversion, runtime,
+            &program->quickjs_options,
+            program->cmeta_root)) {
+        quickjs_diagnostic(
+            quickjs_diagnostic_text,
+            sizeof(quickjs_diagnostic_text),
+            "QuickJS CMeta bridge initialization failed");
+        goto cleanup;
+    }
     active = (quickjs_active_context){session, is_active, active_user};
     owns_deadline = quickjs_deadline_begin(
         runtime, program->quickjs_options.max_eval_milliseconds);
@@ -1680,9 +1687,14 @@ bool scxml_quickjs_execute_script(
             *out_error = "QuickJS working context initialization failed";
             goto cleanup;
         }
-        conversion = (quickjs_conversion){
-            (JSContext *)runtime->core.context, &program->quickjs_options,
-            program->cmeta_root, 0u};
+        if (!quickjs_conversion_init(
+                &conversion, runtime,
+                &program->quickjs_options,
+                program->cmeta_root)) {
+            *out_error =
+                "QuickJS CMeta bridge initialization failed";
+            goto cleanup;
+        }
         active = (quickjs_active_context){session, is_active, active_user};
         owns_deadline = quickjs_deadline_begin(
             runtime, program->quickjs_options.max_eval_milliseconds);
