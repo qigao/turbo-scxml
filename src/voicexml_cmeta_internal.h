@@ -27,7 +27,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_THROW,
     VXML_CMETA_ACTION_RETHROW,
     VXML_CMETA_ACTION_REPROMPT,
-    VXML_CMETA_ACTION_GOTO
+    VXML_CMETA_ACTION_GOTO,
+    VXML_CMETA_ACTION_DATA
 } vxml_cmeta_action_kind;
 
 typedef struct vxml_cmeta_scope_row {
@@ -162,6 +163,8 @@ typedef struct vxml_cmeta_form_row {
     size_t scope;
     size_t first_declaration;
     size_t declaration_count;
+    size_t first_data;
+    size_t data_count;
     size_t first_field;
     size_t field_count;
     size_t first_initial;
@@ -397,18 +400,37 @@ typedef struct vxml_cmeta_event_counter {
     unsigned count;
 } vxml_cmeta_event_counter;
 
+typedef enum vxml_cmeta_data_destination_kind {
+    VXML_CMETA_DATA_DESTINATION_ROOT = 0,
+    VXML_CMETA_DATA_DESTINATION_SCOPE
+} vxml_cmeta_data_destination_kind;
+
 typedef struct vxml_cmeta_external_data_row {
     const char *name;
     size_t name_size;
+
     const char *uri;
     size_t uri_size;
+    size_t uri_expression;
+
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    size_t first_location;
+    size_t location_count;
+
+    vxml_cmeta_data_destination_kind destination_kind;
     size_t field_index;
     size_t field_offset;
+    size_t scope;
+    size_t slot;
     const cmeta_data_desc *field_data;
+
     DataBindNativePlan *plan;
     size_t decode_workspace_bytes;
     size_t workspace_alignment;
     vxml_cmeta_data_fetch_policy fetch_policy;
+
+    bool legacy_preload;
 } vxml_cmeta_external_data_row;
 
 typedef struct vxml_cmeta_action_row {
@@ -429,6 +451,7 @@ typedef struct vxml_cmeta_action_row {
     const char *navigation_uri;
     size_t navigation_uri_size;
     vxml_cmeta_fetchaudio_policy fetchaudio;
+    size_t data_index;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
 
@@ -531,6 +554,10 @@ typedef struct vxml_cmeta_program_data {
     size_t document_declaration_count;
     vxml_cmeta_external_data_row *external_data;
     size_t external_data_count;
+    size_t first_document_data;
+    size_t document_data_count;
+    size_t max_data_namelist_fields;
+    size_t max_data_request_value_bytes;
     vxml_cmeta_action_row *actions;
     size_t action_count;
     vxml_cmeta_branch_row *branches;
@@ -879,6 +906,20 @@ typedef struct vxml_cmeta_session_data {
     unsigned char *data_value_allocation;
     unsigned char *data_value;
     size_t data_value_bytes;
+
+    const vxml_cmeta_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t max_data_bytes;
+    size_t max_data_owned_bytes;
+    const vxml_fetch_audio_adapter_v1 *data_fetch_audio;
+    void *data_fetch_audio_user;
+
+    vxml_cmeta_data_field_v1 *data_request_fields;
+    size_t data_request_field_capacity;
+    char *data_request_values;
+    size_t data_request_value_capacity;
+    char *data_request_uri;
+    size_t data_request_uri_capacity;
     vxml_cmeta_expr_runtime_scope *runtime_scopes;
     size_t runtime_scope_capacity;
     vxml_cmeta_exec_frame *exec_frames;
