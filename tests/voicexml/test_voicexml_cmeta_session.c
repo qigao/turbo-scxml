@@ -13103,6 +13103,303 @@ spec("VoiceXML CMeta session execution") {
         session_text_destroy(&root.text);
     }
 
+    it("expands prompt foreach from one bounded snapshot and commits the last item") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt>H<foreach array='items' item='item'>"
+            "<mark nameexpr='item'/>"
+            "<audio src='tone.wav'><emphasis>fallback</emphasis></audio>"
+            "</foreach><mark nameexpr='item'/>T</prompt>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_text items[2] = {{0}, {0}};
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_TEXT |
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO |
+                VXML_CMETA_PROMPT_MEDIA_CAP_SSML |
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_prompt_media_batch_request_v1 immutable_batch = {0};
+        vxml_cmeta_prompt_mark_view_v1 mark = {0};
+        const cmeta_data_desc *item_data = NULL;
+        const void *item_object = NULL;
+
+        memcpy(items[0].bytes, "one", sizeof("one") - 1u);
+        items[0].size = sizeof("one") - 1u;
+        items[0].resource = malloc(1u);
+        check_not_null(items[0].resource);
+        ++session_text_live_resources;
+        memcpy(items[1].bytes, "two", sizeof("two") - 1u);
+        items[1].size = sizeof("two") - 1u;
+        items[1].resource = malloc(1u);
+        check_not_null(items[1].resource);
+        ++session_text_live_resources;
+        root.items.data = items;
+        root.items.count = 2u;
+
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            check_not_null(compiled);
+            check_equal(compiled->prompt_foreach_count, (size_t)1u);
+            check_not_null(compiled->prompt_foreach);
+            check_equal(compiled->prompts[0].foreach_count, (size_t)1u);
+            check_true(
+                cmeta_data_desc_equal(
+                    compiled->prompt_foreach[0].element,
+                    &session_text_data));
+        }
+
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_batch_request(
+                &session, &immutable_batch),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)1u);
+        check_equal(media_probe.batch_segment_count, (size_t)9u);
+        check_equal(media_probe.batch_fallback_count, (size_t)2u);
+        check_equal(
+            media_probe.batch_kinds[0],
+            VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(
+            media_probe.batch_kinds[1],
+            VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(
+            media_probe.batch_kinds[2],
+            VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(
+            media_probe.batch_kinds[3],
+            VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_equal(
+            media_probe.batch_kinds[4],
+            VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(
+            media_probe.batch_kinds[5],
+            VXML_CMETA_PROMPT_MEDIA_AUDIO);
+        check_equal(
+            media_probe.batch_kinds[6],
+            VXML_CMETA_PROMPT_MEDIA_SSML);
+        check_equal(
+            media_probe.batch_kinds[7],
+            VXML_CMETA_PROMPT_MEDIA_MARK);
+        check_equal(
+            media_probe.batch_kinds[8],
+            VXML_CMETA_PROMPT_MEDIA_TEXT);
+        check_equal(media_probe.batch_payloads[0], "H");
+        check_equal(media_probe.batch_payloads[1], "one");
+        check_equal(media_probe.batch_payloads[2], "tone.wav");
+        check_not_null(strstr(media_probe.batch_payloads[3], "<emphasis"));
+        check_equal(media_probe.batch_payloads[4], "two");
+        check_equal(media_probe.batch_payloads[5], "tone.wav");
+        check_not_null(strstr(media_probe.batch_payloads[6], "<emphasis"));
+        check_equal(media_probe.batch_payloads[7], "two");
+        check_equal(media_probe.batch_payloads[8], "T");
+        check_equal(
+            media_probe.batch_fallbacks[0].audio_segment_index,
+            (size_t)2u);
+        check_equal(
+            media_probe.batch_fallbacks[0].first_fallback_segment,
+            (size_t)3u);
+        check_equal(
+            media_probe.batch_fallbacks[0].fallback_segment_count,
+            (size_t)1u);
+        check_equal(
+            media_probe.batch_fallbacks[1].audio_segment_index,
+            (size_t)5u);
+        check_equal(
+            media_probe.batch_fallbacks[1].first_fallback_segment,
+            (size_t)6u);
+        check_equal(
+            media_probe.batch_fallbacks[1].fallback_segment_count,
+            (size_t)1u);
+
+        memset(items[0].bytes, 'x', items[0].size);
+        memset(items[1].bytes, 'y', items[1].size);
+        check_equal(media_probe.batch_payloads[1], "one");
+        check_equal(media_probe.batch_payloads[4], "two");
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            const vxml_cmeta_session_data *runtime =
+                session_data(&session);
+            const vxml_cmeta_prompt_foreach_row *foreach_row =
+                &compiled->prompt_foreach[0];
+            check_true(
+                cmeta_scope_view_read(
+                    &runtime->committed_scopes[
+                        foreach_row->scope].view,
+                    foreach_row->item_slot,
+                    &item_data, &item_object));
+            check_true(
+                cmeta_data_desc_equal(
+                    item_data, &session_text_data));
+            check_not_null(item_object);
+            check_equal(
+                ((const vxml_cmeta_session_text *)item_object)->size,
+                sizeof("two") - 1u);
+            check_equal(
+                memcmp(
+                    ((const vxml_cmeta_session_text *)item_object)->bytes,
+                    "two", sizeof("two") - 1u),
+                0);
+        }
+
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark(
+                &session, media_probe.generation, 1u),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.name.size, sizeof("one") - 1u);
+        check_equal(
+            memcmp(mark.name.data, "one", sizeof("one") - 1u), 0);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark(
+                &session, media_probe.generation, 4u),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_prompt_media_mark(
+                &session, media_probe.generation, 7u),
+            VXML_CMETA_PROMPT_MARK_ACCEPTED);
+        mark = (vxml_cmeta_prompt_mark_view_v1){0};
+        check_equal(
+            vxml_session_cmeta_prompt_media_last_mark(
+                &session, &mark),
+            VXML_OK);
+        check_equal(mark.segment_index, (size_t)7u);
+        check_equal(mark.name.size, sizeof("two") - 1u);
+        check_equal(
+            memcmp(mark.name.data, "two", sizeof("two") - 1u), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&items[0]);
+        session_text_destroy(&items[1]);
+    }
+
+    it("commits an empty foreach as a no-provider declared undefined item") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items' item='item'>"
+            "<mark nameexpr='item'/></foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g.grxml'/>"
+            "</field></form></vxml>";
+        const vxml_cmeta_name_view undefined = {
+            "value", sizeof("value") - 1u};
+        const vxml_cmeta_compile_options_v1 compile =
+            prompt_compile_options();
+        vxml_cmeta_session_root root = {0};
+        cmeta_collect_probe collect_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_collect_adapter_v1 collect_adapter =
+            cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        cmeta_prompt_media_probe media_probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_prompt_media_adapter_v1 media_adapter =
+            cmeta_prompt_media_adapter(
+                VXML_CMETA_PROMPT_MEDIA_CAP_MARK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH);
+        vxml_cmeta_session_options_v1 options =
+            event_session_options(
+                &root, &collect_adapter, &collect_probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        root.items.data = NULL;
+        root.items.count = 0u;
+        attach_prompt_media(&options, &media_adapter, &media_probe);
+        options.initially_undefined = &undefined;
+        options.initially_undefined_count = 1u;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_prompt_media_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(media_probe.prepare_calls, (size_t)0u);
+        check_equal(media_probe.batch_prepare_calls, (size_t)0u);
+        check_equal(media_probe.commit_calls, (size_t)0u);
+        check_equal(
+            vxml_session_cmeta_prompt_media_commit(&session),
+            VXML_OK);
+        check_equal(media_probe.commit_calls, (size_t)0u);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            const vxml_cmeta_session_data *runtime =
+                session_data(&session);
+            const vxml_cmeta_prompt_foreach_row *foreach_row =
+                &compiled->prompt_foreach[0];
+            const size_t declared =
+                runtime->declared_offsets[foreach_row->scope] +
+                foreach_row->item_slot;
+            check_true(declared < runtime->declared_count);
+            check_equal(
+                runtime->committed_declared[declared],
+                (unsigned char)1u);
+            check_equal(
+                runtime->committed_scopes[
+                    foreach_row->scope].view.bound[
+                        foreach_row->item_slot],
+                (unsigned char)0u);
+        }
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("projects one dynamic mark through the legacy single-segment provider ABI") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
