@@ -1619,7 +1619,18 @@ scxml_expr_status scxml_quickjs_evaluate_expression(
     status = quickjs_context_recreate(
         runtime, quickjs_diagnostic_text,
         sizeof(quickjs_diagnostic_text));
-    if (status != SCXML_QUICKJS_OK) goto cleanup;
+    if (status != SCXML_QUICKJS_OK) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+        (void)fprintf(
+            stderr,
+            "[scxml-quickjs] expression context recreate status=%d deadline=%llu interrupted=%d diagnostic=%s\n",
+            (int)status,
+            (unsigned long long)runtime->core.deadline_ms,
+            runtime->core.interrupted ? 1 : 0,
+            quickjs_diagnostic_text);
+#endif
+        goto cleanup;
+    }
     conversion = (quickjs_conversion){
         (JSContext *)runtime->core.context, &program->quickjs_options,
         program->cmeta_root, 0u};
@@ -1787,6 +1798,15 @@ bool scxml_quickjs_execute_script(
         status = quickjs_context_recreate(
             runtime, diagnostic, sizeof(diagnostic));
         if (status != SCXML_QUICKJS_OK) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+            (void)fprintf(
+                stderr,
+                "[scxml-quickjs] script context recreate status=%d deadline=%llu interrupted=%d diagnostic=%s\n",
+                (int)status,
+                (unsigned long long)runtime->core.deadline_ms,
+                runtime->core.interrupted ? 1 : 0,
+                diagnostic);
+#endif
             *out_error = "QuickJS working context initialization failed";
             goto cleanup;
         }
