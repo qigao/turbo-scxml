@@ -13,6 +13,29 @@ static quickjs_sandbox_options sandbox_options(void) {
         .max_eval_milliseconds = UINT64_C(50)};
 }
 
+static quickjs_sandbox_status recreate_from_deep_host_stack(
+    quickjs_sandbox_runtime *runtime,
+    size_t depth,
+    char *diagnostic, size_t diagnostic_capacity) {
+    volatile unsigned char host_stack_pad[2048];
+    quickjs_sandbox_status status;
+    host_stack_pad[0] = (unsigned char)depth;
+    host_stack_pad[sizeof(host_stack_pad) - 1u] =
+        (unsigned char)(depth ^ 0x5au);
+    if (depth != 0u)
+        status = recreate_from_deep_host_stack(
+            runtime, depth - 1u,
+            diagnostic, diagnostic_capacity);
+    else
+        status = quickjs_sandbox_context_recreate(
+            runtime, diagnostic, diagnostic_capacity);
+    if (host_stack_pad[0] != (unsigned char)depth ||
+        host_stack_pad[sizeof(host_stack_pad) - 1u] !=
+            (unsigned char)(depth ^ 0x5au))
+        return QUICKJS_SANDBOX_EXCEPTION;
+    return status;
+}
+
 spec("private QuickJS sandbox kernel") {
     it("validates hard positive limits and preserves max-string overflow status") {
         quickjs_sandbox_options options = sandbox_options();
@@ -83,6 +106,34 @@ spec("private QuickJS sandbox kernel") {
         quickjs_sandbox_runtime_destroy(&runtime);
         check_null(runtime.runtime);
         check_null(runtime.context);
+    }
+
+    it("refreshes QuickJS stack top across deep host call stacks") {
+        static const char after[] =
+            "globalThis.deepHostEntry = 1;";
+        quickjs_sandbox_options options = sandbox_options();
+        quickjs_sandbox_runtime runtime = {0};
+        char diagnostic[256] = {0};
+
+        check_equal(
+            quickjs_sandbox_runtime_init(
+                &runtime, &options,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_equal(
+            recreate_from_deep_host_stack(
+                &runtime, 48u,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_equal(
+            quickjs_sandbox_runtime_eval(
+                &runtime,
+                after, sizeof(after) - 1u,
+                "<deep-host-entry>",
+                options.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        quickjs_sandbox_runtime_destroy(&runtime);
     }
 
     it("validates source and expression syntax without executing them") {
