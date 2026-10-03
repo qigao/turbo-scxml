@@ -360,8 +360,12 @@ if(TURBOSCXML_ENABLE_QUICKJS)
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(turbo_voicexml_quickjs
-    PUBLIC TurboSCXML::VoiceXML
-    PRIVATE TurboSCXML::_QuickJSSandbox)
+    PUBLIC
+      TurboSCXML::VoiceXML
+      Salts::CMeta
+    PRIVATE
+      TurboSCXML::_QuickJSSandbox
+      TurboSCXML::_QuickJSCMetaBridge)
 endif()
 
 add_library(turbo_voicexml_submit_resource STATIC
@@ -630,7 +634,7 @@ if(BUILD_TESTING)
       TURBOVOICEXML_QUICKJS_PUBLIC_LINKS
       turbo_voicexml_quickjs INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOVOICEXML_QUICKJS_PUBLIC_LINKS STREQUAL
-       "TurboSCXML::VoiceXML;$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
+       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>;$<LINK_ONLY:TurboSCXML::_QuickJSCMetaBridge>")
       message(FATAL_ERROR
         "TurboSCXML::VoiceXMLQuickJS dependency contract changed")
     endif()
