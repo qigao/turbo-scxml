@@ -514,6 +514,8 @@ vxml_status vxml_session_close(vxml_session *session) {
         impl->submit_uri_size = 0u;
         impl->submit_method = 0;
         impl->submit_enctype = 0;
+        impl->submit_fields = NULL;
+        impl->submit_field_count = 0u;
         impl->state = VXML_SESSION_CLOSED;
     }
     return VXML_OK;
