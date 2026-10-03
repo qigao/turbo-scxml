@@ -1265,8 +1265,12 @@ typedef struct cmeta_data_resource_probe {
     bool ignore_max_bytes;
     size_t open_calls;
     size_t open_v2_calls;
+    size_t open_v3_calls;
     size_t close_calls;
     vxml_cmeta_data_request_v2 last_request;
+    vxml_cmeta_data_request_v3 last_request_v3;
+    vxml_cmeta_data_field_v1 last_fields[8];
+    char last_values[8][128];
 } cmeta_data_resource_probe;
 
 static vxml_status cmeta_data_resource_open(
@@ -1338,6 +1342,62 @@ static vxml_status cmeta_data_resource_open_v2(
     return VXML_OK;
 }
 
+static vxml_status cmeta_data_resource_open_v3(
+    void *user,
+    const vxml_cmeta_data_request_v3 *request,
+    vxml_cmeta_data_resource_v1 *out) {
+    cmeta_data_resource_probe *probe =
+        (cmeta_data_resource_probe *)user;
+    size_t index;
+    if (probe == NULL || request == NULL || out == NULL ||
+        request->abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        request->struct_size < sizeof(*request) ||
+        request->uri == NULL || request->uri_size == 0u ||
+        request->max_bytes == 0u ||
+        request->field_count > 8u ||
+        (request->field_count != 0u && request->fields == NULL))
+        return VXML_INVALID_ARGUMENT;
+    if (probe->expected_uri != NULL &&
+        (request->uri_size != probe->expected_uri_size ||
+         memcmp(
+             request->uri, probe->expected_uri,
+             request->uri_size) != 0))
+        return VXML_INVALID_ARGUMENT;
+    ++probe->open_v3_calls;
+    probe->last_request_v3 = *request;
+    for (index = 0u; index < request->field_count; ++index) {
+        const vxml_cmeta_data_field_v1 *field =
+            &request->fields[index];
+        if (field->name == NULL || field->name_size == 0u ||
+            field->name_size >= sizeof(probe->last_values[index]) ||
+            field->value_size >= sizeof(probe->last_values[index]) ||
+            (field->value_size != 0u && field->value == NULL))
+            return VXML_INVALID_ARGUMENT;
+        probe->last_fields[index] = *field;
+        if (field->value_size != 0u)
+            memcpy(
+                probe->last_values[index],
+                field->value, field->value_size);
+        probe->last_values[index][field->value_size] = '\0';
+        probe->last_fields[index].value =
+            probe->last_values[index];
+    }
+    probe->last_request_v3.fields =
+        request->field_count != 0u
+            ? probe->last_fields : NULL;
+    memset(out, 0, sizeof(*out));
+    if (probe->open_status != VXML_OK)
+        return probe->open_status;
+    if (!probe->ignore_max_bytes &&
+        probe->payload_size > request->max_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    out->data = probe->payload;
+    out->size = probe->payload_size;
+    out->format = probe->format;
+    out->lease = probe;
+    return VXML_OK;
+}
+
 static void cmeta_data_resource_close(
     void *user, vxml_cmeta_data_resource_v1 *resource) {
     cmeta_data_resource_probe *probe =
@@ -1355,7 +1415,8 @@ cmeta_data_resource_adapter = {
     .struct_size = sizeof(vxml_cmeta_data_resource_adapter_v1),
     .open = cmeta_data_resource_open,
     .close = cmeta_data_resource_close,
-    .open_v2 = cmeta_data_resource_open_v2};
+    .open_v2 = cmeta_data_resource_open_v2,
+    .open_v3 = cmeta_data_resource_open_v3};
 
 typedef struct cmeta_data_fetch_audio_probe {
     bool skip;
