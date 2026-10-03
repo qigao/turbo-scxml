@@ -2,6 +2,7 @@
 #define TURBO_SCXML_QUICKJS_H
 
 #include "scxml_impl.h"
+#include "quickjs_sandbox.h"
 
 typedef enum scxml_quickjs_status {
     SCXML_QUICKJS_OK = 0,
@@ -11,16 +12,7 @@ typedef enum scxml_quickjs_status {
     SCXML_QUICKJS_EXCEPTION
 } scxml_quickjs_status;
 
-typedef struct scxml_quickjs_runtime {
-    void *runtime;
-    void *context;
-    scxml_quickjs_compile_options_v1 options;
-    char *result_string;
-    size_t result_string_capacity;
-    uint64_t deadline_ms;
-    size_t max_diagnostic_bytes;
-    bool interrupted;
-} scxml_quickjs_runtime;
+typedef quickjs_sandbox_runtime scxml_quickjs_runtime;
 
 bool scxml_quickjs_limits_valid(
     const scxml_quickjs_compile_options_v1 *options);
