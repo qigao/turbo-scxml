@@ -1,4 +1,5 @@
 #include "scxml_quickjs.h"
+#include "quickjs_cmeta_bridge.h"
 #include "scxml_program.h"
 #include "scxml_session.h"
 
@@ -589,6 +590,7 @@ typedef struct quickjs_conversion {
     const scxml_quickjs_compile_options_v1 *limits;
     const cmeta_data_desc *root;
     size_t properties;
+    quickjs_cmeta_bridge bridge;
 } quickjs_conversion;
 
 typedef struct quickjs_aligned_storage {
@@ -633,566 +635,434 @@ static void quickjs_aligned_storage_destroy(
     memset(storage, 0, sizeof(*storage));
 }
 
-static bool quickjs_property_budget(quickjs_conversion *conversion) {
-    return conversion->properties < conversion->limits->max_properties &&
-           ++conversion->properties <= conversion->limits->max_properties;
+
+static bool quickjs_property_budget(
+    quickjs_conversion *conversion) {
+    return conversion != NULL &&
+        conversion->properties < conversion->limits->max_properties &&
+        ++conversion->properties <= conversion->limits->max_properties;
 }
 
-static bool quickjs_read_signed(
-    const cmeta_data_desc *descriptor, const void *object, int64_t *out) {
-    const size_t size = descriptor->storage_type->size;
-    if (size == sizeof(int8_t)) {
-        int8_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(int16_t)) {
-        int16_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(int32_t)) {
-        int32_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(int64_t)) {
-        memcpy(out, object, size);
-    } else {
-        return false;
-    }
-    return true;
+static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
+    const scxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_cmeta_limits){
+        .max_conversion_depth =
+            options != NULL ? options->max_conversion_depth : 0u,
+        .max_properties =
+            options != NULL ? options->max_properties : 0u,
+        .max_array_items =
+            options != NULL ? options->max_array_items : 0u,
+        .max_snapshot_bytes =
+            options != NULL ? options->max_snapshot_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_string_bytes : 0u};
 }
 
-static bool quickjs_read_unsigned(
-    const cmeta_data_desc *descriptor, const void *object, uint64_t *out) {
-    const size_t size = descriptor->storage_type->size;
-    if (size == sizeof(uint8_t)) {
-        uint8_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(uint16_t)) {
-        uint16_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(uint32_t)) {
-        uint32_t value;
-        memcpy(&value, object, size);
-        *out = value;
-    } else if (size == sizeof(uint64_t)) {
-        memcpy(out, object, size);
-    } else {
+static bool scxml_quickjs_legacy_collection_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user);
+
+static JSValue scxml_quickjs_legacy_import_collection(
+    quickjs_cmeta_bridge *bridge,
+    const cmeta_data_desc *descriptor,
+    const cmeta_type_desc *storage_type,
+    const cmeta_declared_type *declared_type,
+    const void *object,
+    size_t depth,
+    void *user);
+
+static bool scxml_quickjs_legacy_export_collection(
+    quickjs_cmeta_bridge *bridge,
+    const cmeta_data_desc *descriptor,
+    const cmeta_type_desc *storage_type,
+    const cmeta_declared_type *declared_type,
+    JSValueConst value,
+    void *object,
+    size_t depth,
+    void *user);
+
+static const quickjs_cmeta_collection_adapter
+scxml_quickjs_legacy_collection_adapter = {
+    scxml_quickjs_legacy_collection_schema_supported,
+    scxml_quickjs_legacy_import_collection,
+    scxml_quickjs_legacy_export_collection};
+
+static bool quickjs_conversion_init(
+    quickjs_conversion *conversion,
+    scxml_quickjs_runtime *runtime,
+    const scxml_quickjs_compile_options_v1 *options,
+    const cmeta_data_desc *root) {
+    quickjs_cmeta_limits limits;
+    if (conversion == NULL || runtime == NULL ||
+        options == NULL || root == NULL ||
+        runtime->core.context == NULL)
         return false;
-    }
-    return true;
+    memset(conversion, 0, sizeof(*conversion));
+    conversion->context = (JSContext *)runtime->core.context;
+    conversion->limits = options;
+    conversion->root = root;
+    limits = quickjs_cmeta_limits_from_scxml(options);
+    return quickjs_cmeta_bridge_init(
+        &conversion->bridge, &runtime->core,
+        root, &limits,
+        &scxml_quickjs_legacy_collection_adapter,
+        NULL);
 }
 
-static bool quickjs_write_signed(
-    const cmeta_data_desc *descriptor, void *object, int64_t value) {
-    const size_t size = descriptor->storage_type->size;
-    const cmeta_data_integer_shape *shape =
-        (const cmeta_data_integer_shape *)descriptor->shape;
-    const uint8_t bits = shape != NULL ? shape->bits : (uint8_t)(size * 8u);
-    if (bits == 0u || bits > 64u ||
-        (bits < 64u &&
-         (value < -(INT64_C(1) << (bits - 1u)) ||
-          value > (INT64_C(1) << (bits - 1u)) - 1)))
-        return false;
-    if (size == sizeof(int8_t)) {
-        const int8_t native = (int8_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(int16_t)) {
-        const int16_t native = (int16_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(int32_t)) {
-        const int32_t native = (int32_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(int64_t)) {
-        memcpy(object, &value, size);
-    } else {
-        return false;
-    }
-    return true;
+static void quickjs_conversion_to_bridge(
+    quickjs_conversion *conversion) {
+    conversion->bridge.properties = conversion->properties;
 }
 
-static bool quickjs_write_unsigned(
-    const cmeta_data_desc *descriptor, void *object, uint64_t value) {
-    const size_t size = descriptor->storage_type->size;
-    const cmeta_data_integer_shape *shape =
-        (const cmeta_data_integer_shape *)descriptor->shape;
-    const uint8_t bits = shape != NULL ? shape->bits : (uint8_t)(size * 8u);
-    if (bits == 0u || bits > 64u ||
-        (bits < 64u && value > (UINT64_C(1) << bits) - 1u))
-        return false;
-    if (size == sizeof(uint8_t)) {
-        const uint8_t native = (uint8_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(uint16_t)) {
-        const uint16_t native = (uint16_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(uint32_t)) {
-        const uint32_t native = (uint32_t)value;
-        memcpy(object, &native, size);
-    } else if (size == sizeof(uint64_t)) {
-        memcpy(object, &value, size);
-    } else {
-        return false;
-    }
-    return true;
+static void quickjs_conversion_from_bridge(
+    quickjs_conversion *conversion) {
+    conversion->properties = conversion->bridge.properties;
 }
 
 static JSValue quickjs_import_value(
-    quickjs_conversion *conversion, const cmeta_data_desc *descriptor,
+    quickjs_conversion *conversion,
+    const cmeta_data_desc *descriptor,
     const void *object, size_t depth) {
-    JSContext *context = conversion->context;
-    if (descriptor == NULL || object == NULL ||
-        depth > conversion->limits->max_conversion_depth)
+    JSValue result;
+    if (conversion == NULL || descriptor == NULL)
         return JS_EXCEPTION;
-    switch (descriptor->kind) {
-        case CMETA_DATA_BOOL: {
-            bool value;
-            memcpy(&value, object, sizeof(value));
-            return JS_NewBool(context, value);
-        }
-        case CMETA_DATA_SINT: {
-            int64_t value;
-            if (!quickjs_read_signed(descriptor, object, &value) ||
-                value < quickjs_min_safe_integer ||
-                value > quickjs_max_safe_integer)
-                return JS_EXCEPTION;
-            return JS_NewFloat64(context, (double)value);
-        }
-        case CMETA_DATA_UINT: {
-            uint64_t value;
-            if (!quickjs_read_unsigned(descriptor, object, &value) ||
-                value > UINT64_C(9007199254740991))
-                return JS_EXCEPTION;
-            return JS_NewFloat64(context, (double)value);
-        }
-        case CMETA_DATA_ENUM: {
-            int64_t value;
-            if (cmeta_data_enum_read(descriptor, object, &value) != CMETA_OK ||
-                value < quickjs_min_safe_integer ||
-                value > quickjs_max_safe_integer)
-                return JS_EXCEPTION;
-            return JS_NewFloat64(context, (double)value);
-        }
-        case CMETA_DATA_FLOAT: {
-            double value;
-            if (descriptor->storage_type->size == sizeof(float)) {
-                float native;
-                memcpy(&native, object, sizeof(native));
-                value = native;
-            } else if (descriptor->storage_type->size == sizeof(double)) {
-                memcpy(&value, object, sizeof(value));
-            } else {
-                return JS_EXCEPTION;
-            }
-            return JS_NewFloat64(context, value);
-        }
-        case CMETA_DATA_STRING: {
-            const unsigned char *data = NULL;
-            size_t size = 0u;
-            if (cmeta_data_buffer_read(
-                    descriptor, object,
-                    conversion->limits->max_string_bytes,
-                    &data, &size) != CMETA_OK)
-                return JS_EXCEPTION;
-            return JS_NewStringLen(context, (const char *)data, size);
-        }
-        case CMETA_DATA_STRUCT: {
-            const cmeta_data_struct_shape *shape =
-                (const cmeta_data_struct_shape *)descriptor->shape;
-            JSValue result;
-            size_t index;
-            if (shape == NULL || shape->fields == NULL ||
-                shape->field_count > conversion->limits->max_properties)
-                return JS_EXCEPTION;
-            result = JS_NewObject(context);
-            if (JS_IsException(result)) return result;
-            for (index = 0u; index < shape->field_count; ++index) {
-                const cmeta_data_field_desc *field = &shape->fields[index];
-                JSValue value;
-                if (field->name == NULL || field->value == NULL ||
-                    !quickjs_property_budget(conversion)) {
-                    JS_FreeValue(context, result);
-                    return JS_EXCEPTION;
-                }
-                value = quickjs_import_value(
-                    conversion, field->value,
-                    (const unsigned char *)object + field->offset,
-                    depth + 1u);
-                if (JS_IsException(value) ||
-                    JS_SetPropertyStr(context, result, field->name, value) < 0) {
-                    if (JS_IsException(value)) JS_FreeValue(context, value);
-                    JS_FreeValue(context, result);
-                    return JS_EXCEPTION;
-                }
-            }
-            return result;
-        }
-        case CMETA_DATA_SEQUENCE: {
-            const cmeta_data_desc *semantic =
-                cmeta_container_data(object);
-            const cmeta_type_desc *element_type;
-            const cmeta_data_desc *element_data;
-            cmeta_range range = {0};
-            cmeta_range_cursor cursor = {0};
-            quickjs_aligned_storage element = {0};
-            JSValue result;
-            size_t length;
-            size_t index;
-            bool element_live = false;
-            const bool managed =
-                cmeta_container_range_constructs_values(
-                    cmeta_container_type_argument(object, 0u));
-            if (semantic == NULL || semantic->kind != CMETA_DATA_SEQUENCE ||
-                !cmeta_container_type_application_valid(object) ||
-                cmeta_container_type_arity(object) != 1u ||
-                !cmeta_container_range_view(
-                    object, CMETA_CONTAINER_VIEW_DEFAULT, &range) ||
-                range.size == NULL ||
-                (range.flags & (CMETA_RANGE_SIZED | CMETA_RANGE_ORDERED)) !=
-                    (CMETA_RANGE_SIZED | CMETA_RANGE_ORDERED))
-                return JS_EXCEPTION;
-            element_type = cmeta_container_type_argument(object, 0u);
-            element_data = scxml_scope_find_data_for_type(
-                conversion->root, element_type,
-                conversion->limits->max_conversion_depth);
-            length = cmeta_range_size(&range);
-            if (element_data == NULL || length > UINT32_MAX ||
-                length > conversion->limits->max_array_items ||
-                (managed &&
-                 (range.flags & CMETA_RANGE_CONSTRUCTS_VALUES) == 0u) ||
-                !quickjs_aligned_storage_init(&element, element_type))
-                return JS_EXCEPTION;
-            result = JS_NewArray(conversion->context);
-            if (JS_IsException(result)) {
-                quickjs_aligned_storage_destroy(
-                    &element, element_type, false);
-                return result;
-            }
-            for (index = 0u; index < length; ++index) {
-                const cmeta_gen_status generated = cmeta_range_next(
-                    &range, &cursor, element.value);
-                JSValue value;
-                if ((generated != CMETA_GEN_VALUE &&
-                     generated != CMETA_GEN_VALUE_AND_DONE) ||
-                    !quickjs_property_budget(conversion)) {
-                    JS_FreeValue(conversion->context, result);
-                    quickjs_aligned_storage_destroy(
-                        &element, element_type, element_live);
-                    return JS_EXCEPTION;
-                }
-                element_live = managed;
-                value = quickjs_import_value(
-                    conversion, element_data, element.value, depth + 1u);
-                if (element_live) {
-                    element_type->traits->destroy(element.value);
-                    memset(element.value, 0, element_type->size);
-                    element_live = false;
-                }
-                if (JS_IsException(value) ||
-                    JS_SetPropertyUint32(
-                        conversion->context, result,
-                        (uint32_t)index, value) < 0) {
-                    if (JS_IsException(value))
-                        JS_FreeValue(conversion->context, value);
-                    JS_FreeValue(conversion->context, result);
-                    quickjs_aligned_storage_destroy(
-                        &element, element_type, false);
-                    return JS_EXCEPTION;
-                }
-                if (generated == CMETA_GEN_VALUE_AND_DONE &&
-                    index + 1u != length) {
-                    JS_FreeValue(conversion->context, result);
-                    quickjs_aligned_storage_destroy(
-                        &element, element_type, false);
-                    return JS_EXCEPTION;
-                }
-            }
-            quickjs_aligned_storage_destroy(
-                &element, element_type, false);
-            return result;
-        }
-        default: return JS_EXCEPTION;
-    }
+    quickjs_conversion_to_bridge(conversion);
+    result = quickjs_cmeta_import_value(
+        &conversion->bridge,
+        descriptor,
+        descriptor->kind == CMETA_DATA_SEQUENCE
+            ? NULL : descriptor->storage_type,
+        NULL, object, depth);
+    quickjs_conversion_from_bridge(conversion);
+    return result;
 }
 
 static bool quickjs_export_value(
-    quickjs_conversion *conversion, const cmeta_data_desc *descriptor,
+    quickjs_conversion *conversion,
+    const cmeta_data_desc *descriptor,
     const cmeta_type_desc *storage_type,
     const cmeta_declared_type *declared_type,
     JSValueConst value, void *object, size_t depth) {
-    JSContext *context = conversion->context;
-    if (descriptor == NULL || object == NULL ||
-        !cmeta_type_desc_valid(storage_type) ||
-        (descriptor->storage_type != NULL &&
-         !cmeta_type_equal(descriptor->storage_type, storage_type)) ||
-        depth > conversion->limits->max_conversion_depth)
-        return false;
-    switch (descriptor->kind) {
-        case CMETA_DATA_BOOL: {
-            const int native = JS_ToBool(context, value);
-            const bool result = native != 0;
-            if (native < 0 || !JS_IsBool(value)) return false;
-            memcpy(object, &result, sizeof(result));
-            return true;
-        }
-        case CMETA_DATA_SINT: {
-            double number;
-            int64_t native;
-            if (!JS_IsNumber(value) ||
-                JS_ToFloat64(context, &number, value) != 0 ||
-                !isfinite(number) ||
-                number < (double)quickjs_min_safe_integer ||
-                number > (double)quickjs_max_safe_integer ||
-                number != (double)(native = (int64_t)number))
-                return false;
-            return quickjs_write_signed(descriptor, object, native);
-        }
-        case CMETA_DATA_UINT: {
-            double number;
-            uint64_t native;
-            if (!JS_IsNumber(value) ||
-                JS_ToFloat64(context, &number, value) != 0 ||
-                !isfinite(number) || number < 0.0 ||
-                number > (double)quickjs_max_safe_integer ||
-                number != (double)(native = (uint64_t)number))
-                return false;
-            return quickjs_write_unsigned(descriptor, object, native);
-        }
-        case CMETA_DATA_ENUM: {
-            double number;
-            int64_t native;
-            if (!JS_IsNumber(value) ||
-                JS_ToFloat64(context, &number, value) != 0 ||
-                !isfinite(number) ||
-                number < (double)quickjs_min_safe_integer ||
-                number > (double)quickjs_max_safe_integer ||
-                number != (double)(native = (int64_t)number) ||
-                cmeta_data_enum_restore_zero(descriptor, object) != CMETA_OK)
-                return false;
-            return cmeta_data_enum_assign(descriptor, object, native) ==
-                CMETA_OK;
-        }
-        case CMETA_DATA_FLOAT: {
-            double number;
-            if (!JS_IsNumber(value) ||
-                JS_ToFloat64(context, &number, value) != 0)
-                return false;
-            if (descriptor->storage_type->size == sizeof(float)) {
-                const float native = (float)number;
-                memcpy(object, &native, sizeof(native));
-                return true;
-            }
-            if (descriptor->storage_type->size == sizeof(double)) {
-                memcpy(object, &number, sizeof(number));
-                return true;
-            }
-            return false;
-        }
-        case CMETA_DATA_STRING: {
-            const char *text;
-            size_t size;
-            cmeta_status status;
-            if (!JS_IsString(value)) return false;
-            text = JS_ToCStringLen(context, &size, value);
-            if (text == NULL) return false;
-            status = cmeta_data_buffer_assign(
-                descriptor, object, (const unsigned char *)text, size,
-                conversion->limits->max_string_bytes);
-            JS_FreeCString(context, text);
-            return status == CMETA_OK;
-        }
-        case CMETA_DATA_STRUCT: {
-            const cmeta_data_struct_shape *shape =
-                (const cmeta_data_struct_shape *)descriptor->shape;
-            size_t index;
-            if (!JS_IsObject(value) || shape == NULL || shape->fields == NULL ||
-                shape->field_count > conversion->limits->max_properties)
-                return false;
-            for (index = 0u; index < shape->field_count; ++index) {
-                const cmeta_data_field_desc *field = &shape->fields[index];
-                const cmeta_field_desc *layout_field;
-                JSValue property;
-                bool ok;
-                if (field->name == NULL || field->value == NULL ||
-                    !quickjs_property_budget(conversion))
-                    return false;
-                layout_field = cmeta_struct_find_field(
-                    shape->layout, field->name);
-                if (layout_field == NULL ||
-                    layout_field->offset != field->offset ||
-                    !cmeta_type_desc_valid(layout_field->type))
-                    return false;
-                property = JS_GetPropertyStr(context, value, field->name);
-                if (JS_IsException(property)) return false;
-                ok = quickjs_export_value(
-                    conversion, field->value, layout_field->type,
-                    layout_field->declared_type, property,
-                    (unsigned char *)object + field->offset, depth + 1u);
-                JS_FreeValue(context, property);
-                if (!ok) return false;
-            }
-            return true;
-        }
-        case CMETA_DATA_SEQUENCE: {
-            const cmeta_container_desc *container =
-                cmeta_container_descriptor(object);
-            const cmeta_type_desc *element_type;
-            const cmeta_data_desc *element_data;
-            quickjs_aligned_storage element = {0};
-            cmeta_collector collector;
-            JSValue length_value;
-            uint32_t length = 0u;
-            uint32_t index;
-            bool element_live = false;
-            bool ok = false;
-            if (!JS_IsArray(value) || container == NULL ||
-                container->collector == NULL ||
-                cmeta_container_data(object) == NULL ||
-                cmeta_container_data(object)->kind != CMETA_DATA_SEQUENCE ||
-                !cmeta_container_type_application_valid(object) ||
-                cmeta_container_type_arity(object) != 1u ||
-                !cmeta_declared_type_valid(declared_type) ||
-                declared_type->arity != 1u ||
-                !cmeta_type_equal(
-                    declared_type->storage_type, storage_type))
-                return false;
-            element_type = cmeta_container_type_argument(object, 0u);
-            element_data = scxml_scope_find_data_for_type(
-                conversion->root, element_type,
-                conversion->limits->max_conversion_depth);
-            if (element_data == NULL ||
-                !quickjs_aligned_storage_init(&element, element_type))
-                goto sequence_cleanup;
-            length_value = JS_GetPropertyStr(
-                conversion->context, value, "length");
-            if (JS_IsException(length_value) ||
-                JS_ToUint32(
-                    conversion->context, &length, length_value) != 0) {
-                if (!JS_IsException(length_value))
-                    JS_FreeValue(conversion->context, length_value);
-                goto sequence_cleanup;
-            }
-            JS_FreeValue(conversion->context, length_value);
-            if (length > conversion->limits->max_array_items)
-                goto sequence_cleanup;
-            if (cmeta_container_restore_zero(
-                    object, declared_type) != CMETA_OK ||
-                cmeta_container_bind_types(
-                    object, declared_type) != CMETA_OK)
-                goto sequence_cleanup;
-            collector = container->collector(
-                object, conversion->limits->max_array_items);
-            if (cmeta_collector_begin(&collector) != CMETA_OK)
-                goto sequence_cleanup;
-            for (index = 0u; index < length; ++index) {
-                JSValue item;
-                if (!quickjs_property_budget(conversion)) {
-                    cmeta_collector_abort(&collector);
-                    goto sequence_cleanup;
-                }
-                item = JS_GetPropertyUint32(
-                    conversion->context, value, index);
-                if (JS_IsException(item) ||
-                    !quickjs_export_value(
-                        conversion, element_data, element_type, NULL, item,
-                        element.value, depth + 1u)) {
-                    if (!JS_IsException(item))
-                        JS_FreeValue(conversion->context, item);
-                    cmeta_collector_abort(&collector);
-                    goto sequence_cleanup;
-                }
-                JS_FreeValue(conversion->context, item);
-                element_live = cmeta_type_require_traits(
-                    element_type, CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK;
-                if (cmeta_collector_accept(
-                        &collector, element_type,
-                        element.value) != CMETA_OK) {
-                    cmeta_collector_abort(&collector);
-                    goto sequence_cleanup;
-                }
-                if (element_live) {
-                    element_type->traits->destroy(element.value);
-                    element_live = false;
-                }
-                memset(element.value, 0, element_type->size);
-            }
-            if (cmeta_collector_finish(&collector) != CMETA_OK)
-                goto sequence_cleanup;
-            ok = true;
-sequence_cleanup:
-            quickjs_aligned_storage_destroy(
-                &element, element_type, element_live);
-            return ok;
-        }
-        default: return false;
-    }
+    bool result;
+    if (conversion == NULL) return false;
+    quickjs_conversion_to_bridge(conversion);
+    result = quickjs_cmeta_export_value(
+        &conversion->bridge,
+        descriptor, storage_type, declared_type,
+        value, object, depth);
+    quickjs_conversion_from_bridge(conversion);
+    return result;
 }
 
 static bool quickjs_import_root(
-    quickjs_conversion *conversion, const cmeta_data_desc *root,
+    quickjs_conversion *conversion,
+    const cmeta_data_desc *root,
     const void *state) {
-    const cmeta_data_struct_shape *shape =
-        (const cmeta_data_struct_shape *)root->shape;
-    JSValue global = JS_GetGlobalObject(conversion->context);
-    size_t index;
-    bool ok = !JS_IsException(global) && shape != NULL;
-    for (index = 0u; ok && index < shape->field_count; ++index) {
-        const cmeta_data_field_desc *field = &shape->fields[index];
-        JSValue value;
-        if (field->name == NULL || !quickjs_property_budget(conversion)) {
-            ok = false;
-            break;
-        }
-        value = quickjs_import_value(
-            conversion, field->value,
-            (const unsigned char *)state + field->offset, 1u);
-        if (JS_IsException(value) ||
-            JS_SetPropertyStr(
-                conversion->context, global, field->name, value) < 0) {
-            if (JS_IsException(value)) JS_FreeValue(conversion->context, value);
-            ok = false;
-        }
-    }
-    JS_FreeValue(conversion->context, global);
-    return ok;
+    bool result;
+    if (conversion == NULL || root != conversion->root)
+        return false;
+    quickjs_conversion_to_bridge(conversion);
+    result = quickjs_cmeta_import_root(
+        &conversion->bridge, state);
+    quickjs_conversion_from_bridge(conversion);
+    return result;
 }
 
 static bool quickjs_export_root(
-    quickjs_conversion *conversion, const cmeta_data_desc *root,
+    quickjs_conversion *conversion,
+    const cmeta_data_desc *root,
     void *state) {
-    const cmeta_data_struct_shape *shape =
-        (const cmeta_data_struct_shape *)root->shape;
-    JSValue global = JS_GetGlobalObject(conversion->context);
+    bool result;
+    if (conversion == NULL || root != conversion->root)
+        return false;
+    quickjs_conversion_to_bridge(conversion);
+    result = quickjs_cmeta_export_root(
+        &conversion->bridge, state);
+    quickjs_conversion_from_bridge(conversion);
+    return result;
+}
+
+static bool scxml_quickjs_legacy_collection_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user) {
+    const cmeta_type_desc *element_type;
+    const cmeta_data_desc *element_data;
+    (void)user;
+    if (descriptor == NULL ||
+        descriptor->kind != CMETA_DATA_SEQUENCE ||
+        !cmeta_declared_type_valid(declared_type) ||
+        declared_type->arity != 1u ||
+        (descriptor->storage_type != NULL &&
+         !cmeta_type_equal(
+             declared_type->storage_type,
+             descriptor->storage_type)))
+        return false;
+    element_type =
+        cmeta_declared_type_argument(declared_type, 0u);
+    element_data = cmeta_scope_find_data_for_type(
+        root, element_type,
+        limits->max_conversion_depth);
+    return element_data != NULL &&
+        element_data->kind != CMETA_DATA_SEQUENCE &&
+        quickjs_cmeta_value_schema_supported(
+            root, element_data, NULL,
+            depth + 1u, limits,
+            &scxml_quickjs_legacy_collection_adapter,
+            NULL, true, properties);
+}
+
+static JSValue scxml_quickjs_legacy_import_collection(
+    quickjs_cmeta_bridge *bridge,
+    const cmeta_data_desc *descriptor,
+    const cmeta_type_desc *storage_type,
+    const cmeta_declared_type *declared_type,
+    const void *object,
+    size_t depth,
+    void *user) {
+    const cmeta_data_desc *semantic;
+    const cmeta_type_desc *element_type;
+    const cmeta_data_desc *element_data;
+    cmeta_range range = {0};
+    cmeta_range_cursor cursor = {0};
+    quickjs_aligned_storage element = {0};
+    JSValue result;
+    size_t length;
     size_t index;
-    bool ok = !JS_IsException(global) && shape != NULL;
-    for (index = 0u; ok && index < shape->field_count; ++index) {
-        const cmeta_data_field_desc *field = &shape->fields[index];
-        const cmeta_field_desc *layout_field;
-        JSValue value;
-        if (field->name == NULL || !quickjs_property_budget(conversion)) {
-            ok = false;
-            break;
-        }
-        layout_field = cmeta_struct_find_field(shape->layout, field->name);
-        if (layout_field == NULL ||
-            layout_field->offset != field->offset ||
-            !cmeta_type_desc_valid(layout_field->type)) {
-            ok = false;
-            break;
-        }
-        value = JS_GetPropertyStr(conversion->context, global, field->name);
-        if (JS_IsException(value)) {
-            ok = false;
-            break;
-        }
-        ok = quickjs_export_value(
-            conversion, field->value, layout_field->type,
-            layout_field->declared_type, value,
-            (unsigned char *)state + field->offset, 1u);
-        JS_FreeValue(conversion->context, value);
+    bool element_live = false;
+    bool managed;
+    (void)descriptor;
+    (void)storage_type;
+    (void)declared_type;
+    (void)user;
+    if (bridge == NULL || object == NULL)
+        return JS_EXCEPTION;
+    semantic = cmeta_container_data(object);
+    if (semantic == NULL ||
+        semantic->kind != CMETA_DATA_SEQUENCE ||
+        !cmeta_container_type_application_valid(object) ||
+        cmeta_container_type_arity(object) != 1u ||
+        !cmeta_container_range_view(
+            object, CMETA_CONTAINER_VIEW_DEFAULT, &range) ||
+        range.size == NULL ||
+        (range.flags &
+         (CMETA_RANGE_SIZED | CMETA_RANGE_ORDERED)) !=
+            (CMETA_RANGE_SIZED | CMETA_RANGE_ORDERED))
+        return JS_EXCEPTION;
+    element_type =
+        cmeta_container_type_argument(object, 0u);
+    element_data = cmeta_scope_find_data_for_type(
+        bridge->root, element_type,
+        bridge->limits.max_conversion_depth);
+    length = cmeta_range_size(&range);
+    managed =
+        cmeta_container_range_constructs_values(
+            element_type);
+    if (element_data == NULL ||
+        length > UINT32_MAX ||
+        length > bridge->limits.max_array_items ||
+        (managed &&
+         (range.flags &
+          CMETA_RANGE_CONSTRUCTS_VALUES) == 0u) ||
+        !quickjs_aligned_storage_init(
+            &element, element_type))
+        return JS_EXCEPTION;
+    result = JS_NewArray(bridge->context);
+    if (JS_IsException(result)) {
+        quickjs_aligned_storage_destroy(
+            &element, element_type, false);
+        return result;
     }
-    JS_FreeValue(conversion->context, global);
+    for (index = 0u; index < length; ++index) {
+        const cmeta_gen_status generated =
+            cmeta_range_next(
+                &range, &cursor, element.value);
+        JSValue value;
+        if ((generated != CMETA_GEN_VALUE &&
+             generated != CMETA_GEN_VALUE_AND_DONE) ||
+            bridge->properties >=
+                bridge->limits.max_properties ||
+            ++bridge->properties >
+                bridge->limits.max_properties) {
+            JS_FreeValue(bridge->context, result);
+            quickjs_aligned_storage_destroy(
+                &element, element_type, element_live);
+            return JS_EXCEPTION;
+        }
+        element_live = managed;
+        value = quickjs_cmeta_import_value(
+            bridge, element_data, element_type,
+            NULL, element.value, depth + 1u);
+        if (element_live) {
+            element_type->traits->destroy(
+                element.value);
+            memset(
+                element.value, 0,
+                element_type->size);
+            element_live = false;
+        }
+        if (JS_IsException(value) ||
+            JS_SetPropertyUint32(
+                bridge->context, result,
+                (uint32_t)index, value) < 0) {
+            if (JS_IsException(value))
+                JS_FreeValue(
+                    bridge->context, value);
+            JS_FreeValue(
+                bridge->context, result);
+            quickjs_aligned_storage_destroy(
+                &element, element_type, false);
+            return JS_EXCEPTION;
+        }
+        if (generated ==
+                CMETA_GEN_VALUE_AND_DONE &&
+            index + 1u != length) {
+            JS_FreeValue(
+                bridge->context, result);
+            quickjs_aligned_storage_destroy(
+                &element, element_type, false);
+            return JS_EXCEPTION;
+        }
+    }
+    quickjs_aligned_storage_destroy(
+        &element, element_type, false);
+    return result;
+}
+
+static bool scxml_quickjs_legacy_export_collection(
+    quickjs_cmeta_bridge *bridge,
+    const cmeta_data_desc *descriptor,
+    const cmeta_type_desc *storage_type,
+    const cmeta_declared_type *declared_type,
+    JSValueConst value,
+    void *object,
+    size_t depth,
+    void *user) {
+    const cmeta_container_desc *container;
+    const cmeta_type_desc *element_type;
+    const cmeta_data_desc *element_data;
+    quickjs_aligned_storage element = {0};
+    cmeta_collector collector = {0};
+    JSValue length_value;
+    uint32_t length = 0u;
+    uint32_t index;
+    bool element_live = false;
+    bool begun = false;
+    bool ok = false;
+    (void)descriptor;
+    (void)user;
+    if (bridge == NULL || object == NULL ||
+        !JS_IsArray(value))
+        return false;
+    container = cmeta_container_descriptor(object);
+    if (container == NULL ||
+        container->collector == NULL ||
+        cmeta_container_data(object) == NULL ||
+        cmeta_container_data(object)->kind !=
+            CMETA_DATA_SEQUENCE ||
+        !cmeta_container_type_application_valid(object) ||
+        cmeta_container_type_arity(object) != 1u ||
+        !cmeta_declared_type_valid(declared_type) ||
+        declared_type->arity != 1u ||
+        !cmeta_type_equal(
+            declared_type->storage_type,
+            storage_type))
+        return false;
+    element_type =
+        cmeta_container_type_argument(object, 0u);
+    element_data = cmeta_scope_find_data_for_type(
+        bridge->root, element_type,
+        bridge->limits.max_conversion_depth);
+    if (element_data == NULL ||
+        !quickjs_aligned_storage_init(
+            &element, element_type))
+        goto cleanup;
+    length_value = JS_GetPropertyStr(
+        bridge->context, value, "length");
+    if (JS_IsException(length_value) ||
+        JS_ToUint32(
+            bridge->context, &length,
+            length_value) != 0) {
+        if (!JS_IsException(length_value))
+            JS_FreeValue(
+                bridge->context, length_value);
+        goto cleanup;
+    }
+    JS_FreeValue(
+        bridge->context, length_value);
+    if (length >
+        bridge->limits.max_array_items)
+        goto cleanup;
+    if (cmeta_container_restore_zero(
+            object, declared_type) != CMETA_OK ||
+        cmeta_container_bind_types(
+            object, declared_type) != CMETA_OK)
+        goto cleanup;
+    collector = container->collector(
+        object, bridge->limits.max_array_items);
+    if (cmeta_collector_begin(&collector) != CMETA_OK)
+        goto cleanup;
+    begun = true;
+    for (index = 0u; index < length; ++index) {
+        JSValue item;
+        if (bridge->properties >=
+                bridge->limits.max_properties ||
+            ++bridge->properties >
+                bridge->limits.max_properties)
+            goto cleanup;
+        item = JS_GetPropertyUint32(
+            bridge->context, value, index);
+        if (JS_IsException(item) ||
+            !quickjs_cmeta_export_value(
+                bridge, element_data,
+                element_type, NULL, item,
+                element.value, depth + 1u)) {
+            if (!JS_IsException(item))
+                JS_FreeValue(
+                    bridge->context, item);
+            goto cleanup;
+        }
+        JS_FreeValue(
+            bridge->context, item);
+        element_live =
+            cmeta_type_require_traits(
+                element_type,
+                CMETA_TRAIT_TRIVIAL_DESTROY) !=
+            CMETA_OK;
+        if (cmeta_collector_accept(
+                &collector, element_type,
+                element.value) != CMETA_OK)
+            goto cleanup;
+        if (element_live) {
+            element_type->traits->destroy(
+                element.value);
+            element_live = false;
+        }
+        memset(
+            element.value, 0,
+            element_type->size);
+    }
+    if (cmeta_collector_finish(
+            &collector) != CMETA_OK)
+        goto cleanup;
+    begun = false;
+    ok = true;
+
+cleanup:
+    if (begun)
+        cmeta_collector_abort(&collector);
+    quickjs_aligned_storage_destroy(
+        &element, element_type,
+        element_live);
     return ok;
 }
 
