@@ -9021,6 +9021,112 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("evaluates document data srcexpr at activation and snapshots ordered V3 namelist") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' srcexpr='text' method='post' "
+            "namelist='flag other' "
+            "enctype='application/x-www-form-urlencoded'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        static const char payload[] = "11";
+        static const char uri[] = "dynamic.json";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        vxml_cmeta_session_root root = {
+            .value = 1,
+            .other = 5,
+            .flag = true};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .expected_uri = uri,
+            .expected_uri_size = sizeof(uri) - 1u,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_value_view value = {0};
+
+        memcpy(root.text.bytes, uri, sizeof(uri) - 1u);
+        root.text.size = sizeof(uri) - 1u;
+        root.text.resource = malloc(1u);
+        check_not_null(root.text.resource);
+        ++session_text_live_resources;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.open_v3_calls, (size_t)0u);
+
+        memset(root.text.bytes, 'x', root.text.size);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            probe.last_request_v3.method,
+            VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            probe.last_request_v3.enctype,
+            VXML_SUBMIT_ENCTYPE_URLENCODED);
+        check_equal(probe.last_request_v3.field_count, (size_t)2u);
+        check_equal(
+            probe.last_request_v3.fields[0].name_size,
+            sizeof("flag") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[0].name,
+                "flag", sizeof("flag") - 1u),
+            0);
+        check_equal(
+            probe.last_request_v3.fields[0].value_size,
+            sizeof("true") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[0].value,
+                "true", sizeof("true") - 1u),
+            0);
+        check_equal(
+            probe.last_request_v3.fields[1].name_size,
+            sizeof("other") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[1].name,
+                "other", sizeof("other") - 1u),
+            0);
+        check_equal(
+            probe.last_request_v3.fields[1].value_size,
+            sizeof("5") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[1].value,
+                "5", sizeof("5") - 1u),
+            0);
+
+        check_equal(
+            vxml_session_cmeta_read(
+                &session, "value", sizeof("value") - 1u, &value),
+            VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(value.data.sint, INT64_C(11));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        session_text_destroy(&root.text);
+    }
+
     it("applies effective data fetch policy through V2 and brackets fetchaudio") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
