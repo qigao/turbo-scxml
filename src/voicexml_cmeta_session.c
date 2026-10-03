@@ -26,6 +26,14 @@ static vxml_status read_scalar_value(
 
 static bool range_valid(size_t first, size_t count, size_t total);
 
+static vxml_status execute_external_data_row(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_external_data_row *row,
+    bool staged,
+    const size_t *scopes,
+    size_t scope_count);
+
 static bool session_options_valid(
     const vxml_cmeta_session_options_v1 *options) {
     const size_t v1_prefix_size =
@@ -2628,6 +2636,46 @@ static vxml_status initialize_declarations(
     return VXML_OK;
 }
 
+static vxml_status initialize_initializers(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    size_t first, size_t count,
+    const size_t *scopes, size_t scope_count) {
+    size_t offset;
+    if (session == NULL || program == NULL ||
+        scopes == NULL || scope_count == 0u ||
+        !range_valid(first, count, program->initializer_count) ||
+        (count != 0u && program->initializers == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (offset = 0u; offset < count; ++offset) {
+        const vxml_cmeta_initializer_row *initializer =
+            &program->initializers[first + offset];
+        vxml_status status;
+        if (initializer->kind == VXML_CMETA_INITIALIZER_DECLARATION) {
+            if (initializer->index >= program->declaration_count)
+                return VXML_INVALID_STRUCTURE;
+            status = initialize_declarations(
+                session, program, initializer->index, 1u,
+                scopes, scope_count);
+        } else if (initializer->kind == VXML_CMETA_INITIALIZER_DATA) {
+            const vxml_cmeta_external_data_row *row;
+            if (initializer->index >= program->external_data_count ||
+                program->external_data == NULL)
+                return VXML_INVALID_STRUCTURE;
+            row = &program->external_data[initializer->index];
+            if (row->legacy_preload)
+                continue;
+            status = execute_external_data_row(
+                session, program, row, true,
+                scopes, scope_count);
+        } else {
+            return VXML_INVALID_STRUCTURE;
+        }
+        if (status != VXML_OK) return status;
+    }
+    return VXML_OK;
+}
+
 static vxml_status initialize_form(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -2637,14 +2685,15 @@ static vxml_status initialize_form(
     const size_t form_scopes[2] = {form->scope, program->document_scope};
     size_t initial_offset;
     size_t block_offset;
-    vxml_status status = initialize_declarations(
+    vxml_status status = initialize_initializers(
         session, program,
-        program->first_document_declaration,
-        program->document_declaration_count,
+        program->first_document_initializer,
+        program->document_initializer_count,
         document_scopes, 1u);
     if (status != VXML_OK) return status;
-    status = initialize_declarations(
-        session, program, form->first_declaration, form->declaration_count,
+    status = initialize_initializers(
+        session, program,
+        form->first_initializer, form->initializer_count,
         form_scopes, 2u);
     if (status != VXML_OK) return status;
 
