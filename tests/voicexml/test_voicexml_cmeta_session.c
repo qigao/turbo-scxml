@@ -1743,9 +1743,9 @@ typedef struct cmeta_prompt_media_probe {
     vxml_cmeta_prompt_media_segment_kind kind;
     size_t batch_segment_count;
     size_t batch_fallback_count;
-    vxml_cmeta_prompt_media_fallback_v1 batch_fallbacks[4];
-    vxml_cmeta_prompt_media_segment_kind batch_kinds[8];
-    char batch_payloads[8][128];
+    vxml_cmeta_prompt_media_fallback_v1 batch_fallbacks[8];
+    vxml_cmeta_prompt_media_segment_kind batch_kinds[16];
+    char batch_payloads[16][128];
     char field[32];
     char payload[256];
 } cmeta_prompt_media_probe;
@@ -1827,8 +1827,8 @@ static vxml_status cmeta_prompt_media_prepare_batch(
         request->struct_size < sizeof(*request) ||
         request->segments == NULL ||
         request->segment_count < 2u ||
-        request->segment_count > 8u ||
-        request->fallback_count > 4u ||
+        request->segment_count > 16u ||
+        request->fallback_count > 8u ||
         (request->fallback_count != 0u &&
          request->fallbacks == NULL) ||
         request->field.data == NULL ||
