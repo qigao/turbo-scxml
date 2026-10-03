@@ -1,6 +1,7 @@
 #include <voicexml/quickjs.h>
 
 #include "quickjs_sandbox.h"
+#include "quickjs_cmeta_bridge.h"
 #include "voicexml_allocator.h"
 #include "voicexml_internal.h"
 
@@ -14,7 +15,13 @@ enum {
     VXML_QUICKJS_DEFAULT_URI_BYTES = 4096u,
     VXML_QUICKJS_DEFAULT_HEAP_BYTES = 8u * 1024u * 1024u,
     VXML_QUICKJS_DEFAULT_STACK_BYTES = 256u * 1024u,
-    VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS = 50u
+    VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS = 50u,
+    VXML_QUICKJS_DEFAULT_CONVERSION_DEPTH = 32u,
+    VXML_QUICKJS_DEFAULT_PROPERTIES = 4096u,
+    VXML_QUICKJS_DEFAULT_ARRAY_ITEMS = 4096u,
+    VXML_QUICKJS_DEFAULT_SNAPSHOT_BYTES = 4u * 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_STATE_STRING_BYTES = 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES = 1024u * 1024u
 };
 
 typedef struct vxml_quickjs_program_data {
@@ -23,6 +30,7 @@ typedef struct vxml_quickjs_program_data {
 
 typedef struct vxml_quickjs_session_data {
     quickjs_sandbox_runtime runtime;
+    quickjs_cmeta_state_scratch committed_root;
     char *dynamic_uri;
     size_t dynamic_uri_capacity;
     const char *last_event;
@@ -40,24 +48,86 @@ static void quickjs_profile_session_destroy(
 static void quickjs_profile_program_destroy(
     vxml_program_impl *program);
 
-static bool compile_options_valid(
+static size_t compile_options_v1_prefix_size(void) {
+    return offsetof(vxml_quickjs_compile_options_v1, root);
+}
+
+static size_t session_options_v1_prefix_size(void) {
+    return offsetof(vxml_quickjs_session_options_v1, initial_state);
+}
+
+static bool compile_options_has_state_tail(
     const vxml_quickjs_compile_options_v1 *options) {
     return options != NULL &&
-        options->abi_version == VXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options) &&
-        options->max_expression_bytes != 0u &&
-        options->max_dynamic_script_uri_bytes != 0u &&
-        options->max_dynamic_script_uri_bytes != SIZE_MAX &&
-        options->max_heap_bytes != 0u &&
-        options->max_stack_bytes != 0u &&
-        options->max_eval_milliseconds != 0u;
+        options->struct_size >= sizeof(*options);
+}
+
+static bool compile_options_state_enabled(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return compile_options_has_state_tail(options) &&
+        options->root != NULL;
+}
+
+static quickjs_cmeta_limits cmeta_limits(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_cmeta_limits){
+        .max_conversion_depth =
+            options != NULL ? options->max_conversion_depth : 0u,
+        .max_properties =
+            options != NULL ? options->max_properties : 0u,
+        .max_array_items =
+            options != NULL ? options->max_array_items : 0u,
+        .max_snapshot_bytes =
+            options != NULL ? options->max_snapshot_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_state_string_bytes : 0u};
+}
+
+static bool compile_options_valid(
+    const vxml_quickjs_compile_options_v1 *options) {
+    if (options == NULL ||
+        options->abi_version != VXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 ||
+        options->struct_size < compile_options_v1_prefix_size() ||
+        options->max_expression_bytes == 0u ||
+        options->max_dynamic_script_uri_bytes == 0u ||
+        options->max_dynamic_script_uri_bytes == SIZE_MAX ||
+        options->max_heap_bytes == 0u ||
+        options->max_stack_bytes == 0u ||
+        options->max_eval_milliseconds == 0u)
+        return false;
+    if (!compile_options_has_state_tail(options))
+        return true;
+    if (options->max_resolved_script_uri_bytes == 0u ||
+        options->max_resolved_script_uri_bytes == SIZE_MAX ||
+        options->max_script_source_bytes == 0u)
+        return false;
+    if (options->root == NULL)
+        return true;
+    return options->max_conversion_depth != 0u &&
+        options->max_properties != 0u &&
+        options->max_array_items != 0u &&
+        options->max_snapshot_bytes != 0u &&
+        options->max_state_string_bytes != 0u &&
+        quickjs_cmeta_limits_valid(&(quickjs_cmeta_limits){
+            options->max_conversion_depth,
+            options->max_properties,
+            options->max_array_items,
+            options->max_snapshot_bytes,
+            options->max_state_string_bytes});
 }
 
 static bool session_options_valid(
     const vxml_quickjs_session_options_v1 *options) {
     return options != NULL &&
         options->abi_version == VXML_QUICKJS_SESSION_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options);
+        options->struct_size >= session_options_v1_prefix_size();
+}
+
+static const void *session_initial_state(
+    const vxml_quickjs_session_options_v1 *options) {
+    return options != NULL &&
+        options->struct_size >= sizeof(*options)
+        ? options->initial_state : NULL;
 }
 
 static quickjs_sandbox_options sandbox_options(
