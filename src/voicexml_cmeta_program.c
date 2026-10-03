@@ -8888,11 +8888,16 @@ static vxml_status cmeta_append_collection_location(
     if (ops == NULL || element == NULL ||
         (ops->flags & CMETA_DATA_COLLECTION_ORDERED) == 0u ||
         element->storage_type == NULL ||
+        (element->kind != CMETA_DATA_BOOL &&
+         element->kind != CMETA_DATA_SINT &&
+         element->kind != CMETA_DATA_UINT &&
+         element->kind != CMETA_DATA_FLOAT &&
+         element->kind != CMETA_DATA_STRING) ||
         !cmeta_data_value_copy_supported(element))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             salts_xml_attribute_location(attribute),
-            "VoiceXML foreach array must be an ordered reflected collection with a copyable static element type");
+            "VoiceXML foreach array must be an ordered reflected collection with a copyable scalar/string element type");
     if (out_element != NULL) *out_element = element;
     return VXML_OK;
 }
