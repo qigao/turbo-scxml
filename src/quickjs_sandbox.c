@@ -354,6 +354,7 @@ quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
 
         owns_deadline = quickjs_sandbox_deadline_begin(
             runtime, max_eval_milliseconds);
+        JS_UpdateStackTop((JSRuntime *)runtime->runtime);
         result = JS_Eval(
             context, wrapped, wrapped_size,
             filename, JS_EVAL_TYPE_GLOBAL);
