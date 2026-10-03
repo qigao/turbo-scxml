@@ -556,6 +556,7 @@ typedef struct cmeta_program_measurement {
     size_t prompt_count;
     size_t prompt_segment_count;
     size_t prompt_mark_expr_count;
+    size_t prompt_foreach_count;
     size_t prompt_fallback_count;
     bool version_21;
     size_t filled_count;
@@ -1885,11 +1886,19 @@ static vxml_status cmeta_measure_prompt(
     salts_xml_node prompt,
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
-    vxml_diagnostic *diagnostic) {
+    vxml_diagnostic *diagnostic,
+    size_t *out_segment_count,
+    size_t *out_content_bytes) {
     static const char *const allowed[] = {
         "count", "cond", "bargein", "bargeintype", "timeout"};
+    static const char *const foreach_allowed[] = {"array", "item"};
     static const char *const audio_allowed[] = {"src"};
     static const char *const mark_allowed[] = {"name", "nameexpr"};
+    const bool is_foreach = cmeta_node_named(prompt, "foreach");
+    const salts_xml_attribute foreach_array =
+        cmeta_attribute(prompt, "array");
+    const salts_xml_attribute foreach_item =
+        cmeta_attribute(prompt, "item");
     const salts_xml_attribute count = cmeta_attribute(prompt, "count");
     const salts_xml_attribute cond = cmeta_attribute(prompt, "cond");
     const salts_xml_attribute bargein =
@@ -1906,13 +1915,53 @@ static vxml_status cmeta_measure_prompt(
     size_t mark_count = 0u;
     size_t ssml_count = 0u;
     size_t total_prompt_bytes = 0u;
+    size_t nested_segment_count = 0u;
+    size_t nested_expanded_segment_count = 0u;
+    size_t nested_prompt_bytes = 0u;
     unsigned parsed_count = 1u;
     bool has_timeout = false;
     uint64_t timeout_us = UINT64_C(0);
     vxml_status status = cmeta_validate_attributes(
-        prompt, allowed, 5u, diagnostic);
+        prompt,
+        is_foreach ? foreach_allowed : allowed,
+        is_foreach ? 2u : 5u, diagnostic);
     if (status != VXML_OK) return status;
-    if (bargein.impl != NULL &&
+    if (is_foreach) {
+        const size_t tail_size =
+            offsetof(
+                vxml_cmeta_compile_options_v1,
+                max_prompt_expanded_segments) +
+            sizeof(options->max_prompt_expanded_segments);
+        if (!measurement->version_21)
+            return cmeta_program_fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt foreach requires version 2.1");
+        if (foreach_array.impl == NULL || foreach_item.impl == NULL)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(prompt),
+                "VoiceXML foreach requires array and item");
+        if (options->struct_size < tail_size ||
+            options->max_prompt_foreach == 0u ||
+            options->max_prompt_foreach_items == 0u ||
+            options->max_prompt_foreach_snapshot_bytes == 0u ||
+            options->max_prompt_expanded_segments == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_node_location(prompt),
+                "VoiceXML foreach requires enabled foreach bounds");
+        if (measurement->prompt_foreach_count >=
+                options->max_prompt_foreach ||
+            !cmeta_measure_increment(
+                &measurement->prompt_foreach_count) ||
+            !cmeta_measure_increment(&measurement->location_count))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt foreach count exceeds configured bounds");
+    }
+    if (!is_foreach && bargein.impl != NULL &&
         !cmeta_decoded_equal(
             salts_xml_attribute_value(bargein), "true") &&
         !cmeta_decoded_equal(
@@ -1921,7 +1970,7 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(bargein),
             "VoiceXML prompt bargein must be true or false");
-    if (bargeintype.impl != NULL &&
+    if (!is_foreach && bargeintype.impl != NULL &&
         !cmeta_decoded_equal(
             salts_xml_attribute_value(bargeintype), "speech") &&
         !cmeta_decoded_equal(
@@ -1930,7 +1979,7 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(bargeintype),
             "VoiceXML prompt bargeintype must be speech or hotword");
-    if (bargeintype.impl != NULL &&
+    if (!is_foreach && bargeintype.impl != NULL &&
         bargein.impl != NULL &&
         cmeta_decoded_equal(
             salts_xml_attribute_value(bargein), "false"))
@@ -1943,27 +1992,29 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(prompt),
             "VoiceXML prompts require enabled prompt limits");
-    status = cmeta_parse_prompt_count(
-        count, &parsed_count, diagnostic);
-    if (status != VXML_OK) return status;
-    status = cmeta_parse_prompt_timeout(
-        timeout, &has_timeout, &timeout_us, diagnostic);
-    if (status != VXML_OK) return status;
-    (void)parsed_count;
-    (void)has_timeout;
-    (void)timeout_us;
-    if (measurement->prompt_count >= options->max_prompts ||
-        !cmeta_measure_increment(&measurement->prompt_count))
-        return cmeta_program_fail(
-            diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_node_location(prompt),
-            "VoiceXML prompt count exceeds max_prompts");
-    if (cond.impl != NULL &&
-        !cmeta_measure_increment(&measurement->expression_count))
-        return cmeta_program_fail(
-            diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_attribute_location(cond),
-            "VoiceXML prompt condition count overflow");
+    if (!is_foreach) {
+        status = cmeta_parse_prompt_count(
+            count, &parsed_count, diagnostic);
+        if (status != VXML_OK) return status;
+        status = cmeta_parse_prompt_timeout(
+            timeout, &has_timeout, &timeout_us, diagnostic);
+        if (status != VXML_OK) return status;
+        (void)parsed_count;
+        (void)has_timeout;
+        (void)timeout_us;
+        if (measurement->prompt_count >= options->max_prompts ||
+            !cmeta_measure_increment(&measurement->prompt_count))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt count exceeds max_prompts");
+        if (cond.impl != NULL &&
+            !cmeta_measure_increment(&measurement->expression_count))
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(cond),
+                "VoiceXML prompt condition count overflow");
+    }
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
@@ -1974,6 +2025,40 @@ static vxml_status cmeta_measure_prompt(
         if (kind == SALTS_XML_COMMENT ||
             kind == SALTS_XML_PROCESSING_INSTRUCTION)
             continue;
+        if (cmeta_node_named(child, "foreach")) {
+            size_t child_segments = 0u;
+            size_t child_bytes = 0u;
+            size_t expanded = 0u;
+            if (is_foreach)
+                return cmeta_program_fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "nested VoiceXML prompt foreach is not supported");
+            status = cmeta_measure_prompt(
+                child, options, measurement, diagnostic,
+                &child_segments, &child_bytes);
+            if (status != VXML_OK) return status;
+            if (child_segments == 0u ||
+                child_segments >
+                    SIZE_MAX / options->max_prompt_foreach_items)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML foreach expansion bounds overflow");
+            expanded =
+                child_segments * options->max_prompt_foreach_items;
+            if (nested_segment_count > SIZE_MAX - child_segments ||
+                nested_expanded_segment_count > SIZE_MAX - expanded ||
+                nested_prompt_bytes > SIZE_MAX - child_bytes)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML foreach expansion bounds overflow");
+            nested_segment_count += child_segments;
+            nested_expanded_segment_count += expanded;
+            nested_prompt_bytes += child_bytes;
+            continue;
+        }
         if (kind == SALTS_XML_TEXT) {
             const salts_xml_string_view text =
                 salts_xml_node_text_view(child);
@@ -2219,33 +2304,54 @@ static vxml_status cmeta_measure_prompt(
     }
 
     {
-        size_t segment_count = text_segment_count;
+        size_t direct_segment_count = text_segment_count;
+        size_t segment_count;
+        size_t expanded_segment_count;
         const size_t tail_size =
             offsetof(vxml_cmeta_compile_options_v1, max_prompt_segments) +
             sizeof(options->max_prompt_segments);
-        if (audio_count > SIZE_MAX - segment_count)
+        if (audio_count > SIZE_MAX - direct_segment_count)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment count overflow");
-        segment_count += audio_count;
-        if (ssml_count > SIZE_MAX - segment_count)
+        direct_segment_count += audio_count;
+        if (ssml_count > SIZE_MAX - direct_segment_count)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment count overflow");
-        segment_count += ssml_count;
-        if (mark_count > SIZE_MAX - segment_count)
+        direct_segment_count += ssml_count;
+        if (mark_count > SIZE_MAX - direct_segment_count)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment count overflow");
-        segment_count += mark_count;
+        direct_segment_count += mark_count;
+        if (direct_segment_count > SIZE_MAX - nested_segment_count)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt segment count overflow");
+        segment_count = direct_segment_count + nested_segment_count;
+        if (direct_segment_count > SIZE_MAX - nested_expanded_segment_count)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt expanded segment count overflow");
+        expanded_segment_count =
+            direct_segment_count + nested_expanded_segment_count;
         if (segment_count == 0u)
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt requires literal text, audio, or mark");
+        if (total_prompt_bytes > SIZE_MAX - nested_prompt_bytes)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML prompt content size overflow");
+        total_prompt_bytes += nested_prompt_bytes;
         if (total_prompt_bytes > options->max_prompt_bytes)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -2259,16 +2365,25 @@ static vxml_status cmeta_measure_prompt(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "mixed VoiceXML prompt exceeds max_prompt_segments");
+        if (!is_foreach && nested_segment_count != 0u &&
+            expanded_segment_count > options->max_prompt_expanded_segments)
+            return cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_node_location(prompt),
+                "VoiceXML foreach expansion exceeds max_prompt_expanded_segments");
         if (measurement->prompt_segment_count >
-                SIZE_MAX - segment_count)
+                SIZE_MAX - direct_segment_count)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment table overflow");
-        measurement->prompt_segment_count += segment_count;
+        measurement->prompt_segment_count += direct_segment_count;
+        if (out_segment_count != NULL) *out_segment_count = segment_count;
+        if (out_content_bytes != NULL) *out_content_bytes = total_prompt_bytes;
     }
 
-    if (audio_count == 0u && text_bytes > options->max_prompt_bytes)
+    if (audio_count == 0u && nested_segment_count == 0u &&
+        text_bytes > options->max_prompt_bytes)
         return cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(prompt),
@@ -3027,7 +3142,7 @@ static vxml_status cmeta_measure_field(
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "prompt")) {
             status = cmeta_measure_prompt(
-                child, options, measurement, diagnostic);
+                child, options, measurement, diagnostic, NULL, NULL);
             if (status != VXML_OK) return status;
             continue;
         }
@@ -3255,7 +3370,7 @@ static vxml_status cmeta_measure_initial(
             }
             if (cmeta_node_named(child, "prompt")) {
                 status = cmeta_measure_prompt(
-                    child, options, measurement, diagnostic);
+                    child, options, measurement, diagnostic, NULL, NULL);
                 if (status != VXML_OK) return status;
                 continue;
             }
@@ -4708,6 +4823,7 @@ typedef struct cmeta_program_builder {
     size_t prompt_index;
     size_t prompt_segment_index;
     size_t prompt_mark_expr_index;
+    size_t prompt_foreach_index;
     size_t prompt_fallback_index;
     size_t filled_index;
     size_t filled_target_index;
@@ -4776,6 +4892,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->filled_root_fields);
     vxml_free(profile->filled);
     vxml_free(profile->prompt_fallbacks);
+    vxml_free(profile->prompt_foreach);
     vxml_free(profile->prompt_mark_exprs);
     vxml_free(profile->prompt_segments);
     vxml_free(profile->prompts);
@@ -4845,6 +4962,14 @@ static bool cmeta_allocate_rows(
     profile->max_dynamic_mark_name_bytes =
         measurement->prompt_mark_expr_count != 0u
             ? options->max_dynamic_mark_name_bytes : 0u;
+    profile->prompt_foreach_count = measurement->prompt_foreach_count;
+    if (measurement->prompt_foreach_count != 0u) {
+        profile->max_prompt_foreach_items = options->max_prompt_foreach_items;
+        profile->max_prompt_foreach_snapshot_bytes =
+            options->max_prompt_foreach_snapshot_bytes;
+        profile->max_prompt_expanded_segments =
+            options->max_prompt_expanded_segments;
+    }
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
     profile->filled_root_field_count = measurement->filled_target_count;
@@ -4901,6 +5026,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(prompts, measurement->prompt_count);
     CMETA_ALLOC_ROWS(prompt_segments, measurement->prompt_segment_count);
     CMETA_ALLOC_ROWS(prompt_mark_exprs, measurement->prompt_mark_expr_count);
+    CMETA_ALLOC_ROWS(prompt_foreach, measurement->prompt_foreach_count);
     CMETA_ALLOC_ROWS(prompt_fallbacks, measurement->prompt_fallback_count);
     CMETA_ALLOC_ROWS(filled, measurement->filled_count);
     CMETA_ALLOC_ROWS(filled_root_fields, measurement->filled_target_count);
@@ -5124,11 +5250,166 @@ static const cmeta_data_field_desc *cmeta_root_field(
     return NULL;
 }
 
+static bool cmeta_ascii_ncname(salts_xml_string_view name);
+
+static bool cmeta_scope_storage_limit_exceeded(
+    const cmeta_scope_schema *schema, const cmeta_data_desc *value);
+
+static vxml_status cmeta_append_collection_location(
+    cmeta_program_builder *builder, salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
+    size_t *out_location, const cmeta_data_desc **out_element);
+
+static vxml_status cmeta_prompt_form_scope(
+    cmeta_program_builder *builder,
+    vxml_cmeta_prompt_owner_kind owner_kind,
+    size_t owner_index,
+    size_t *out_scope) {
+    size_t form_index;
+    if (builder == NULL || out_scope == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_scope = VXML_CMETA_NO_INDEX;
+    if (owner_kind == VXML_CMETA_PROMPT_OWNER_FIELD) {
+        if (owner_index >= builder->profile->field_count ||
+            builder->profile->fields == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = builder->profile->fields[owner_index].form;
+    } else if (owner_kind == VXML_CMETA_PROMPT_OWNER_INITIAL) {
+        if (owner_index >= builder->profile->initial_count ||
+            builder->profile->initials == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = builder->profile->initials[owner_index].form;
+    } else {
+        return VXML_INVALID_STRUCTURE;
+    }
+    if (form_index >= builder->profile->form_count ||
+        builder->profile->forms == NULL)
+        return VXML_INVALID_STRUCTURE;
+    *out_scope = builder->profile->forms[form_index].scope;
+    if (*out_scope >= builder->profile->scope_count ||
+        builder->profile->scopes == NULL)
+        return VXML_INVALID_STRUCTURE;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_register_prompt_foreach(
+    cmeta_program_builder *builder,
+    salts_xml_node node,
+    vxml_cmeta_prompt_owner_kind owner_kind,
+    size_t owner_index,
+    size_t prompt_index,
+    vxml_cmeta_prompt_foreach_row *row) {
+    const salts_xml_attribute array = cmeta_attribute(node, "array");
+    const salts_xml_attribute item = cmeta_attribute(node, "item");
+    vxml_cmeta_expr_compile_scope scopes[2];
+    cmeta_decoded_value decoded_item = {0};
+    const cmeta_data_desc *element = NULL;
+    const cmeta_scope_slot *existing;
+    cmeta_scope_schema *schema;
+    size_t form_scope = VXML_CMETA_NO_INDEX;
+    size_t slot = VXML_CMETA_NO_INDEX;
+    bool conflict = false;
+    vxml_status status;
+
+    if (row == NULL || array.impl == NULL || item.impl == NULL)
+        return VXML_INVALID_STRUCTURE;
+    memset(row, 0, sizeof(*row));
+    row->prompt = prompt_index;
+    row->collection_location = VXML_CMETA_NO_INDEX;
+    row->scope = VXML_CMETA_NO_INDEX;
+    row->item_slot = VXML_CMETA_NO_INDEX;
+    row->first_segment = builder->prompt_segment_index;
+    row->first_fallback = builder->prompt_fallback_index;
+
+    status = cmeta_prompt_form_scope(
+        builder, owner_kind, owner_index, &form_scope);
+    if (status != VXML_OK) return status;
+    scopes[0] = (vxml_cmeta_expr_compile_scope){
+        form_scope, &builder->profile->scopes[form_scope].schema};
+    scopes[1] = (vxml_cmeta_expr_compile_scope){
+        builder->profile->document_scope,
+        &builder->profile->scopes[
+            builder->profile->document_scope].schema};
+
+    status = cmeta_append_collection_location(
+        builder, array, scopes, 2u,
+        &row->collection_location, &element);
+    if (status != VXML_OK) return status;
+    if (element == NULL || element->storage_type == NULL ||
+        element->storage_type->size == 0u ||
+        element->storage_type->size >
+            builder->options->max_prompt_foreach_snapshot_bytes)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(array),
+            "VoiceXML foreach element exceeds snapshot byte bound");
+
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(item),
+        salts_xml_attribute_location(item), &decoded_item);
+    if (status != VXML_OK) return status;
+    if (!cmeta_ascii_ncname(decoded_item.view)) {
+        status = cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(item),
+            "VoiceXML foreach item must be an XML NCName");
+        goto done;
+    }
+
+    schema = &builder->profile->scopes[form_scope].schema;
+    existing = cmeta_scope_find(
+        schema, decoded_item.view.data, decoded_item.view.size, &slot);
+    if (existing != NULL) {
+        if (!cmeta_data_desc_equal(existing->value, element)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(item),
+                "VoiceXML foreach item has incompatible declared type");
+            goto done;
+        }
+    } else {
+        if (schema->slot_count >= builder->options->max_scope_slots ||
+            cmeta_scope_storage_limit_exceeded(schema, element)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(item),
+                "VoiceXML foreach item exceeds lexical scope bounds");
+            goto done;
+        }
+        if (!cmeta_scope_register(
+                schema, decoded_item.view.data, decoded_item.view.size,
+                element, &slot, &conflict)) {
+            status = cmeta_program_fail(
+                builder->diagnostic,
+                conflict ? VXML_SEMANTIC_ERROR : VXML_ALLOCATION_FAILED,
+                salts_xml_attribute_location(item),
+                conflict
+                    ? "VoiceXML foreach item has conflicting type"
+                    : "VoiceXML foreach item schema allocation failed");
+            goto done;
+        }
+    }
+
+    row->scope = form_scope;
+    row->item_slot = slot;
+    row->element = element;
+    if (element->storage_type->align >
+        builder->profile->max_prompt_foreach_element_alignment)
+        builder->profile->max_prompt_foreach_element_alignment =
+            element->storage_type->align;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded_item);
+    return status;
+}
+
 static vxml_status cmeta_compile_prompt_schema(
     cmeta_program_builder *builder,
     salts_xml_node prompt,
     vxml_cmeta_prompt_owner_kind owner_kind,
     size_t owner_index,
+    size_t prompt_index,
     vxml_cmeta_prompt_row *out) {
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
@@ -5138,19 +5419,24 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "bargeintype");
     const salts_xml_attribute timeout_attribute =
         cmeta_attribute(prompt, "timeout");
+    const bool is_foreach = cmeta_node_named(prompt, "foreach");
+    vxml_cmeta_prompt_foreach_row *foreach_row = NULL;
     size_t child_index;
     size_t dynamic_mark_count = 0u;
     unsigned count = 1u;
     bool has_timeout = false;
     uint64_t timeout_us = UINT64_C(0);
-    vxml_status status = cmeta_parse_prompt_count(
-        count_attribute, &count, builder->diagnostic);
+    vxml_status status = VXML_OK;
 
-    if (status != VXML_OK) return status;
-    status = cmeta_parse_prompt_timeout(
-        timeout_attribute, &has_timeout, &timeout_us,
-        builder->diagnostic);
-    if (status != VXML_OK) return status;
+    if (!is_foreach) {
+        status = cmeta_parse_prompt_count(
+            count_attribute, &count, builder->diagnostic);
+        if (status != VXML_OK) return status;
+        status = cmeta_parse_prompt_timeout(
+            timeout_attribute, &has_timeout, &timeout_us,
+            builder->diagnostic);
+        if (status != VXML_OK) return status;
+    }
     memset(out, 0, sizeof(*out));
     out->owner_kind = owner_kind;
     out->owner = owner_index;
@@ -5158,17 +5444,34 @@ static vxml_status cmeta_compile_prompt_schema(
     out->condition = VXML_CMETA_NO_INDEX;
     out->first_segment = builder->prompt_segment_index;
     out->first_fallback = builder->prompt_fallback_index;
-    out->bargein = bargein_attribute.impl == NULL ||
-        cmeta_decoded_equal(
-            salts_xml_attribute_value(bargein_attribute), "true");
-    out->bargein_type = VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED;
-    if (bargeintype_attribute.impl != NULL)
-        out->bargein_type = cmeta_decoded_equal(
-            salts_xml_attribute_value(bargeintype_attribute), "speech")
-            ? VXML_CMETA_PROMPT_BARGEIN_SPEECH
-            : VXML_CMETA_PROMPT_BARGEIN_HOTWORD;
-    out->has_timeout = has_timeout;
-    out->timeout_us = timeout_us;
+    out->first_foreach = builder->prompt_foreach_index;
+    if (!is_foreach) {
+        out->bargein = bargein_attribute.impl == NULL ||
+            cmeta_decoded_equal(
+                salts_xml_attribute_value(bargein_attribute), "true");
+        out->bargein_type = VXML_CMETA_PROMPT_BARGEIN_UNSPECIFIED;
+        if (bargeintype_attribute.impl != NULL)
+            out->bargein_type = cmeta_decoded_equal(
+                salts_xml_attribute_value(bargeintype_attribute), "speech")
+                ? VXML_CMETA_PROMPT_BARGEIN_SPEECH
+                : VXML_CMETA_PROMPT_BARGEIN_HOTWORD;
+        out->has_timeout = has_timeout;
+        out->timeout_us = timeout_us;
+    } else {
+        if (builder->prompt_foreach_index >=
+                builder->profile->prompt_foreach_count ||
+            builder->profile->prompt_foreach == NULL)
+            return cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(prompt),
+                "VoiceXML foreach rows changed between compiler passes");
+        foreach_row = &builder->profile->prompt_foreach[
+            builder->prompt_foreach_index++];
+        status = cmeta_register_prompt_foreach(
+            builder, prompt, owner_kind, owner_index,
+            prompt_index, foreach_row);
+        if (status != VXML_OK) return status;
+    }
 
     for (child_index = 0u;
          child_index < salts_xml_node_child_count(prompt);
@@ -5182,6 +5485,29 @@ static vxml_status cmeta_compile_prompt_schema(
         if (kind == SALTS_XML_COMMENT ||
             kind == SALTS_XML_PROCESSING_INSTRUCTION)
             continue;
+
+        if (cmeta_node_named(child, "foreach")) {
+            vxml_cmeta_prompt_row nested = {0};
+            if (is_foreach)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(child),
+                    "nested VoiceXML prompt foreach is not supported");
+            status = cmeta_compile_prompt_schema(
+                builder, child, owner_kind, owner_index,
+                prompt_index, &nested);
+            if (status != VXML_OK) return status;
+            if (nested.dynamic_mark_count >
+                    SIZE_MAX - dynamic_mark_count)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML foreach dynamic mark count overflow");
+            dynamic_mark_count += nested.dynamic_mark_count;
+            out->required_capabilities |=
+                nested.required_capabilities;
+            continue;
+        }
 
         if (kind == SALTS_XML_TEXT) {
             const salts_xml_string_view text =
@@ -5464,6 +5790,13 @@ static vxml_status cmeta_compile_prompt_schema(
     out->fallback_count =
         builder->prompt_fallback_index - out->first_fallback;
     out->dynamic_mark_count = dynamic_mark_count;
+    out->foreach_count =
+        builder->prompt_foreach_index - out->first_foreach;
+    if (foreach_row != NULL) {
+        foreach_row->segment_count = out->segment_count;
+        foreach_row->fallback_count = out->fallback_count;
+        foreach_row->dynamic_mark_count = out->dynamic_mark_count;
+    }
     if (out->segment_count == 0u)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -7369,6 +7702,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->transfer_count * 2u;
+    if (capacity > SIZE_MAX - measurement->prompt_foreach_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->prompt_foreach_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -7643,12 +7982,17 @@ static vxml_status cmeta_build_schemas(
                                     VXML_INVALID_STRUCTURE,
                                     salts_xml_node_location(nested),
                                     "VoiceXML initial prompt rows changed between compiler passes");
-                            status = cmeta_compile_prompt_schema(
-                                builder, nested,
-                                VXML_CMETA_PROMPT_OWNER_INITIAL,
-                                builder->initial_index,
-                                &builder->profile->prompts[
-                                    builder->prompt_index++]);
+                            {
+                                const size_t prompt_index =
+                                    builder->prompt_index++;
+                                status = cmeta_compile_prompt_schema(
+                                    builder, nested,
+                                    VXML_CMETA_PROMPT_OWNER_INITIAL,
+                                    builder->initial_index,
+                                    prompt_index,
+                                    &builder->profile->prompts[
+                                        prompt_index]);
+                            }
                             if (status != VXML_OK) return status;
                         }
                     }
@@ -7863,12 +8207,17 @@ static vxml_status cmeta_build_schemas(
                                         VXML_INVALID_STRUCTURE,
                                         salts_xml_node_location(nested),
                                         "VoiceXML prompt rows changed between compiler passes");
-                                status = cmeta_compile_prompt_schema(
-                                    builder, nested,
-                                    VXML_CMETA_PROMPT_OWNER_FIELD,
-                                    builder->field_index,
-                                    &builder->profile->prompts[
-                                        builder->prompt_index++]);
+                                {
+                                    const size_t prompt_index =
+                                        builder->prompt_index++;
+                                    status = cmeta_compile_prompt_schema(
+                                        builder, nested,
+                                        VXML_CMETA_PROMPT_OWNER_FIELD,
+                                        builder->field_index,
+                                        prompt_index,
+                                        &builder->profile->prompts[
+                                            prompt_index]);
+                                }
                                 if (status != VXML_OK) return status;
                                 continue;
                             }
@@ -8354,13 +8703,17 @@ static vxml_status cmeta_add_location_candidate(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             row->location,
             "VoiceXML location candidate count changed between passes");
-    if (cmeta_data_value_kind(location.value) == VXML_CMETA_VALUE_UNDEFINED)
+    if (!row->collection &&
+        cmeta_data_value_kind(location.value) ==
+            VXML_CMETA_VALUE_UNDEFINED)
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             row->location,
             "VoiceXML location terminal is not a supported scalar at byte offset 0");
     if (row->candidate_count != 0u &&
-        !cmeta_same_location_type(row->value, location.value))
+        (row->collection
+            ? !cmeta_data_desc_equal(row->value, location.value)
+            : !cmeta_same_location_type(row->value, location.value)))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             row->location,
@@ -8398,7 +8751,7 @@ static vxml_status cmeta_append_location_view(
     cmeta_program_builder *builder, salts_xml_string_view name,
     salts_xml_location source_location,
     const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
-    size_t *out_location) {
+    bool collection, size_t *out_location) {
     vxml_cmeta_location_row *row;
     size_t index;
     size_t first_size = 0u;
@@ -8433,6 +8786,7 @@ static vxml_status cmeta_append_location_view(
     }
     row = &builder->profile->locations[builder->location_index];
     row->location = source_location;
+    row->collection = collection;
     row->first_candidate = builder->candidate_index;
     row->name = cmeta_retain_view(builder, name);
     row->name_size = name.size;
@@ -8516,9 +8870,50 @@ static vxml_status cmeta_append_location(
     if (status == VXML_OK)
         status = cmeta_append_location_view(
             builder, decoded.view, salts_xml_attribute_location(attribute),
-            scopes, scope_count, out_location);
+            scopes, scope_count, false, out_location);
     cmeta_decoded_value_destroy(&decoded);
     return status;
+}
+
+static vxml_status cmeta_append_collection_location(
+    cmeta_program_builder *builder, salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
+    size_t *out_location, const cmeta_data_desc **out_element) {
+    cmeta_decoded_value decoded = {0};
+    const cmeta_data_collection_ops *ops;
+    const cmeta_data_desc *element;
+    vxml_cmeta_location_row *row;
+    vxml_status status;
+    if (out_element != NULL) *out_element = NULL;
+    status = cmeta_decode_temporary(
+        builder, salts_xml_attribute_value(attribute),
+        salts_xml_attribute_location(attribute), &decoded);
+    if (status == VXML_OK)
+        status = cmeta_append_location_view(
+            builder, decoded.view, salts_xml_attribute_location(attribute),
+            scopes, scope_count, true, out_location);
+    cmeta_decoded_value_destroy(&decoded);
+    if (status != VXML_OK) return status;
+    if (*out_location >= builder->profile->location_count)
+        return VXML_INVALID_STRUCTURE;
+    row = &builder->profile->locations[*out_location];
+    ops = cmeta_data_collection_ops_of(row->value);
+    element = cmeta_data_collection_element_data(row->value);
+    if (ops == NULL || element == NULL ||
+        (ops->flags & CMETA_DATA_COLLECTION_ORDERED) == 0u ||
+        element->storage_type == NULL ||
+        (element->kind != CMETA_DATA_BOOL &&
+         element->kind != CMETA_DATA_SINT &&
+         element->kind != CMETA_DATA_UINT &&
+         element->kind != CMETA_DATA_FLOAT &&
+         element->kind != CMETA_DATA_STRING) ||
+        !cmeta_data_value_copy_supported(element))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML foreach array must be an ordered reflected collection with a copyable scalar/string element type");
+    if (out_element != NULL) *out_element = element;
+    return VXML_OK;
 }
 
 static void cmeta_compile_scope_chain(
@@ -8568,6 +8963,7 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
     size_t child_index;
     size_t side_index = 0u;
     size_t dynamic_offset = 0u;
+    size_t foreach_offset = 0u;
     if (builder == NULL || prompt == NULL)
         return VXML_INVALID_ARGUMENT;
     if (prompt->dynamic_mark_count == 0u)
@@ -8593,6 +8989,44 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
             cmeta_attribute(child, "nameexpr");
         vxml_cmeta_prompt_mark_expr_row *row;
         vxml_status status;
+        if (cmeta_node_named(child, "foreach")) {
+            const vxml_cmeta_prompt_foreach_row *foreach_row;
+            vxml_cmeta_prompt_row nested = {0};
+            if (foreach_offset >= prompt->foreach_count ||
+                prompt->first_foreach + foreach_offset >=
+                    builder->profile->prompt_foreach_count ||
+                builder->profile->prompt_foreach == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML foreach rows changed between lowering passes");
+            foreach_row = &builder->profile->prompt_foreach[
+                prompt->first_foreach + foreach_offset++];
+            nested.first_segment = foreach_row->first_segment;
+            nested.segment_count = foreach_row->segment_count;
+            nested.first_fallback = foreach_row->first_fallback;
+            nested.fallback_count = foreach_row->fallback_count;
+            nested.dynamic_mark_count = foreach_row->dynamic_mark_count;
+            nested.first_foreach =
+                prompt->first_foreach + foreach_offset;
+            nested.foreach_count = 0u;
+            status = cmeta_lower_prompt_mark_nameexprs(
+                builder, child, &nested, scopes, scope_count);
+            if (status != VXML_OK) return status;
+            if (dynamic_offset > prompt->dynamic_mark_count ||
+                side_index > builder->profile->prompt_mark_expr_count ||
+                foreach_row->dynamic_mark_count >
+                    prompt->dynamic_mark_count - dynamic_offset ||
+                foreach_row->dynamic_mark_count >
+                    builder->profile->prompt_mark_expr_count - side_index)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML foreach dynamic mark rows are inconsistent");
+            dynamic_offset += foreach_row->dynamic_mark_count;
+            side_index += foreach_row->dynamic_mark_count;
+            continue;
+        }
         if (!cmeta_node_named(child, "mark") ||
             nameexpr.impl == NULL)
             continue;
@@ -8625,6 +9059,11 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs(
                 "VoiceXML mark nameexpr must produce STRING");
         ++dynamic_offset;
     }
+    if (foreach_offset != prompt->foreach_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(prompt_node),
+            "VoiceXML foreach rows disappeared between lowering passes");
     if (dynamic_offset != prompt->dynamic_mark_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
@@ -8701,7 +9140,7 @@ static vxml_status cmeta_lower_namelist(
         size_t ignored_location;
         status = cmeta_append_location_view(
             builder, name, location, scopes, scope_count,
-            &ignored_location);
+            false, &ignored_location);
         if (status != VXML_OK) goto done;
         ++*out_count;
     }
@@ -10258,6 +10697,7 @@ static vxml_status cmeta_write_program(
          builder.prompt_segment_index != measurement->prompt_segment_count ||
          builder.prompt_mark_expr_index !=
              measurement->prompt_mark_expr_count ||
+         builder.prompt_foreach_index != measurement->prompt_foreach_count ||
          builder.prompt_fallback_index != measurement->prompt_fallback_count ||
          builder.filled_index != measurement->filled_count ||
          builder.filled_target_index >

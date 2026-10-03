@@ -188,6 +188,15 @@ typedef struct vxml_cmeta_compile_options_v1 {
      * Zero keeps dynamic mark names disabled; literal mark@name is unchanged.
      */
     size_t max_dynamic_mark_name_bytes;
+
+    /*
+     * Optional append-only VoiceXML 2.1 prompt foreach bounds.
+     * Zero max_prompt_foreach keeps <foreach> disabled.
+     */
+    size_t max_prompt_foreach;
+    size_t max_prompt_foreach_items;
+    size_t max_prompt_foreach_snapshot_bytes;
+    size_t max_prompt_expanded_segments;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
