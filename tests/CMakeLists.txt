@@ -399,6 +399,7 @@ if(TURBOSCXML_ENABLE_QUICKJS)
     ${PROJECT_SOURCE_DIR}/src)
   target_link_libraries(quickjs_cmeta_bridge_test PRIVATE
     TurboSCXML::_QuickJSCMetaBridge
+    TurboSCXML::_QuickJSSandbox
     Salts::TinyTest)
   add_test(NAME quickjs_cmeta_bridge_test COMMAND quickjs_cmeta_bridge_test)
 endif()
