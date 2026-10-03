@@ -266,19 +266,14 @@ static const cmeta_field_desc session_root_layout_fields[] = {
     {"total", "size_t", offsetof(vxml_cmeta_session_root, total),
      sizeof(size_t), _Alignof(size_t), &cmeta_type_size, NULL},
     {"ratio", "double", offsetof(vxml_cmeta_session_root, ratio),
-     sizeof(double), _Alignof(double), &cmeta_type_double, NULL},
-    {"items", "vxml_cmeta_session_text_sequence",
-     offsetof(vxml_cmeta_session_root, items),
-     sizeof(vxml_cmeta_session_text_sequence),
-     _Alignof(vxml_cmeta_session_text_sequence),
-     &session_text_sequence_type, NULL}
+     sizeof(double), _Alignof(double), &cmeta_type_double, NULL}
 };
 static const cmeta_struct_desc session_root_layout = {
     .name = "vxml_cmeta_session_root",
     .size = sizeof(vxml_cmeta_session_root),
     .align = _Alignof(vxml_cmeta_session_root),
     .fields = session_root_layout_fields,
-    .field_count = 8u
+    .field_count = 7u
 };
 static const cmeta_data_field_desc session_root_fields[] = {
     {"test.voicexml.cmeta.session.root.value", "value",
@@ -294,14 +289,12 @@ static const cmeta_data_field_desc session_root_fields[] = {
     {"test.voicexml.cmeta.session.root.total", "total",
      offsetof(vxml_cmeta_session_root, total), &cmeta_data_size},
     {"test.voicexml.cmeta.session.root.ratio", "ratio",
-     offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double},
-    {"test.voicexml.cmeta.session.root.items", "items",
-     offsetof(vxml_cmeta_session_root, items), &session_text_sequence_data}
+     offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double}
 };
 static const cmeta_data_struct_shape session_root_shape = {
     .layout = &session_root_layout,
     .fields = session_root_fields,
-    .field_count = 8u
+    .field_count = 7u
 };
 static const cmeta_data_desc session_root_data = {
     .struct_size = sizeof(cmeta_data_desc),
@@ -311,6 +304,68 @@ static const cmeta_data_desc session_root_data = {
     .kind = CMETA_DATA_STRUCT,
     .storage_type = &session_root_type,
     .shape = &session_root_shape
+};
+
+static const cmeta_field_desc session_foreach_root_layout_fields[] = {
+    {"value", "int", offsetof(vxml_cmeta_session_root, value),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
+    {"other", "int", offsetof(vxml_cmeta_session_root, other),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
+    {"late", "int", offsetof(vxml_cmeta_session_root, late),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL},
+    {"flag", "bool", offsetof(vxml_cmeta_session_root, flag),
+     sizeof(bool), _Alignof(bool), &cmeta_type_bool, NULL},
+    {"text", "vxml_cmeta_session_text",
+     offsetof(vxml_cmeta_session_root, text), sizeof(vxml_cmeta_session_text),
+     _Alignof(vxml_cmeta_session_text), &session_text_type, NULL},
+    {"total", "size_t", offsetof(vxml_cmeta_session_root, total),
+     sizeof(size_t), _Alignof(size_t), &cmeta_type_size, NULL},
+    {"ratio", "double", offsetof(vxml_cmeta_session_root, ratio),
+     sizeof(double), _Alignof(double), &cmeta_type_double, NULL},
+    {"items", "vxml_cmeta_session_text_sequence",
+     offsetof(vxml_cmeta_session_root, items),
+     sizeof(vxml_cmeta_session_text_sequence),
+     _Alignof(vxml_cmeta_session_text_sequence),
+     &session_text_sequence_type, NULL}
+};
+static const cmeta_struct_desc session_foreach_root_layout = {
+    .name = "vxml_cmeta_session_foreach_root",
+    .size = sizeof(vxml_cmeta_session_root),
+    .align = _Alignof(vxml_cmeta_session_root),
+    .fields = session_foreach_root_layout_fields,
+    .field_count = 8u
+};
+static const cmeta_data_field_desc session_foreach_root_fields[] = {
+    {"test.voicexml.cmeta.session.foreach_root.value", "value",
+     offsetof(vxml_cmeta_session_root, value), &cmeta_data_int},
+    {"test.voicexml.cmeta.session.foreach_root.other", "other",
+     offsetof(vxml_cmeta_session_root, other), &cmeta_data_int},
+    {"test.voicexml.cmeta.session.foreach_root.late", "late",
+     offsetof(vxml_cmeta_session_root, late), &cmeta_data_int},
+    {"test.voicexml.cmeta.session.foreach_root.flag", "flag",
+     offsetof(vxml_cmeta_session_root, flag), &cmeta_data_bool},
+    {"test.voicexml.cmeta.session.foreach_root.text", "text",
+     offsetof(vxml_cmeta_session_root, text), &session_text_data},
+    {"test.voicexml.cmeta.session.foreach_root.total", "total",
+     offsetof(vxml_cmeta_session_root, total), &cmeta_data_size},
+    {"test.voicexml.cmeta.session.foreach_root.ratio", "ratio",
+     offsetof(vxml_cmeta_session_root, ratio), &cmeta_data_double},
+    {"test.voicexml.cmeta.session.foreach_root.items", "items",
+     offsetof(vxml_cmeta_session_root, items), &session_text_sequence_data}
+};
+static const cmeta_data_struct_shape session_foreach_root_shape = {
+    .layout = &session_foreach_root_layout,
+    .fields = session_foreach_root_fields,
+    .field_count = 8u
+};
+static const cmeta_data_desc session_foreach_root_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.cmeta.session.foreach_root.data",
+    .display_name = "VoiceXML CMeta foreach test root",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &session_root_type,
+    .shape = &session_foreach_root_shape
 };
 
 
