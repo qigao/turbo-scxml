@@ -76,6 +76,597 @@ static scxml_quickjs_status quickjs_sandbox_status_to_scxml(
     }
 }
 
+static bool quickjs_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth, size_t max_depth,
+    size_t max_properties, bool inside_sequence,
+    size_t *static_properties) {
+    if (!cmeta_data_desc_valid(descriptor) || depth > max_depth ||
+        (descriptor->kind != CMETA_DATA_SEQUENCE &&
+         descriptor->storage_type == NULL))
+        return false;
+    switch (descriptor->kind) {
+        case CMETA_DATA_BOOL:
+            return descriptor->storage_type->size == sizeof(bool);
+        case CMETA_DATA_SINT:
+        case CMETA_DATA_UINT:
+            return descriptor->storage_type->size == sizeof(uint8_t) ||
+                descriptor->storage_type->size == sizeof(uint16_t) ||
+                descriptor->storage_type->size == sizeof(uint32_t) ||
+                descriptor->storage_type->size == sizeof(uint64_t);
+        case CMETA_DATA_FLOAT:
+            return descriptor->storage_type->size == sizeof(float) ||
+                descriptor->storage_type->size == sizeof(double);
+        case CMETA_DATA_STRING:
+            return cmeta_data_buffer_ops_of(descriptor) != NULL;
+        case CMETA_DATA_ENUM:
+            return cmeta_data_enum_ops_of(descriptor) != NULL;
+        case CMETA_DATA_STRUCT: {
+            const cmeta_data_struct_shape *shape =
+                (const cmeta_data_struct_shape *)descriptor->shape;
+            size_t index;
+            if (shape == NULL || shape->layout == NULL ||
+                shape->fields == NULL ||
+                shape->field_count != shape->layout->field_count ||
+                shape->field_count > max_properties)
+                return false;
+            for (index = 0u; index < shape->field_count; ++index) {
+                const cmeta_data_field_desc *field = &shape->fields[index];
+                const cmeta_field_desc *layout_field;
+                if (field->name == NULL || field->value == NULL ||
+                    (!inside_sequence &&
+                     (*static_properties >= max_properties ||
+                      ++*static_properties > max_properties)) ||
+                    (inside_sequence &&
+                     field->value->kind == CMETA_DATA_SEQUENCE))
+                    return false;
+                layout_field = cmeta_struct_find_field(
+                    shape->layout, field->name);
+                if (layout_field == NULL ||
+                    layout_field->offset != field->offset ||
+                    !quickjs_schema_supported(
+                        root, field->value, layout_field->declared_type,
+                        depth + 1u, max_depth, max_properties,
+                        inside_sequence, static_properties))
+                    return false;
+            }
+            return true;
+        }
+        case CMETA_DATA_SEQUENCE: {
+            const cmeta_type_desc *element_type;
+            const cmeta_data_desc *element_data;
+            if (!cmeta_declared_type_valid(declared_type) ||
+                declared_type->arity != 1u ||
+                (descriptor->storage_type != NULL &&
+                 !cmeta_type_equal(
+                     declared_type->storage_type,
+                     descriptor->storage_type)))
+                return false;
+            element_type = cmeta_declared_type_argument(declared_type, 0u);
+            element_data = scxml_scope_find_data_for_type(
+                root, element_type, max_depth);
+            /* CMeta's element descriptor does not retain nested generic type
+             * arguments, so that shape cannot be rebuilt transactionally. */
+            return element_data != NULL &&
+                element_data->kind != CMETA_DATA_SEQUENCE &&
+                quickjs_schema_supported(
+                    root, element_data, NULL, depth + 1u, max_depth,
+                    max_properties, true, static_properties);
+        }
+        default:
+            return false;
+    }
+}
+
+bool scxml_quickjs_static_property_budget_valid(
+    const scxml_quickjs_compile_options_v1 *options,
+    size_t supplemental_properties) {
+    size_t static_properties = supplemental_properties;
+    return options != NULL && supplemental_properties <= options->max_properties &&
+        quickjs_schema_supported(
+            options->root, options->root, NULL, 0u,
+            options->max_conversion_depth, options->max_properties, false,
+            &static_properties);
+}
+
+bool scxml_quickjs_limits_valid(
+    const scxml_quickjs_compile_options_v1 *options) {
+    return options != NULL &&
+        options->abi_version == SCXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 &&
+        options->struct_size >= sizeof(*options) &&
+        cmeta_data_desc_valid(options->root) &&
+        options->root->kind == CMETA_DATA_STRUCT &&
+        options->root->storage_type != NULL &&
+        options->max_source_bytes != 0u &&
+        options->max_instructions != 0u &&
+        options->max_operands != 0u &&
+        options->max_expression_depth != 0u &&
+        options->max_path_depth != 0u &&
+        options->max_literal_bytes != 0u &&
+        options->max_string_bytes != 0u &&
+        options->max_iterations != 0u &&
+        options->max_script_variables != 0u &&
+        options->max_heap_bytes != 0u &&
+        options->max_stack_bytes != 0u &&
+        options->max_eval_milliseconds != 0u &&
+        options->max_conversion_depth != 0u &&
+        options->max_properties != 0u &&
+        options->max_array_items != 0u &&
+        options->max_snapshot_bytes != 0u &&
+        scxml_quickjs_static_property_budget_valid(options, 0u);
+}
+
+#if TURBOSCXML_HAS_QUICKJS
+static const int64_t quickjs_max_safe_integer =
+    INT64_C(9007199254740991);
+static const int64_t quickjs_min_safe_integer =
+    -INT64_C(9007199254740991);
+
+static bool quickjs_deadline_expired(
+    scxml_quickjs_runtime *runtime) {
+    return quickjs_sandbox_deadline_expired(&runtime->core);
+}
+
+static bool quickjs_deadline_begin(
+    scxml_quickjs_runtime *runtime, uint64_t milliseconds) {
+    return quickjs_sandbox_deadline_begin(&runtime->core, milliseconds);
+}
+
+static void quickjs_deadline_end(
+    scxml_quickjs_runtime *runtime, bool owned) {
+    quickjs_sandbox_deadline_end(&runtime->core, owned);
+}
+
+static scxml_quickjs_status quickjs_exception(
+    scxml_quickjs_runtime *runtime,
+    char *diagnostic, size_t diagnostic_capacity) {
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_exception(&runtime->core, diagnostic, diagnostic_capacity));
+}
+
+static void quickjs_context_destroy(
+    scxml_quickjs_runtime *runtime) {
+    quickjs_sandbox_context_destroy(&runtime->core);
+}
+
+static scxml_quickjs_status quickjs_context_recreate(
+    scxml_quickjs_runtime *runtime,
+    char *diagnostic, size_t diagnostic_capacity) {
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_context_recreate(&runtime->core, diagnostic, diagnostic_capacity));
+}
+#endif
+
+scxml_quickjs_status scxml_quickjs_runtime_init(
+    scxml_quickjs_runtime *runtime,
+    const scxml_quickjs_compile_options_v1 *options,
+    char *diagnostic, size_t diagnostic_capacity) {
+    quickjs_sandbox_options sandbox;
+    if (runtime == NULL || runtime->core.runtime != NULL ||
+        runtime->core.context != NULL ||
+        !scxml_quickjs_limits_valid(options)) {
+        quickjs_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid QuickJS runtime options");
+        return SCXML_QUICKJS_INVALID_ARGUMENT;
+    }
+#if !TURBOSCXML_HAS_QUICKJS
+    quickjs_diagnostic(
+        diagnostic, diagnostic_capacity,
+        "TurboSCXML was built without quickjs-sandbox support");
+    return SCXML_QUICKJS_INVALID_ARGUMENT;
+#else
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_runtime_init(&runtime->core, &sandbox,
+            diagnostic, diagnostic_capacity));
+#endif
+}
+
+scxml_quickjs_status scxml_quickjs_runtime_eval(
+    scxml_quickjs_runtime *runtime,
+    const char *source, size_t source_size,
+    const char *filename,
+    uint64_t max_eval_milliseconds,
+    char *diagnostic, size_t diagnostic_capacity) {
+#if !TURBOSCXML_HAS_QUICKJS
+    (void)runtime;
+    (void)source;
+    (void)source_size;
+    (void)filename;
+    (void)max_eval_milliseconds;
+    quickjs_diagnostic(
+        diagnostic, diagnostic_capacity,
+        "TurboSCXML was built without quickjs-sandbox support");
+    return SCXML_QUICKJS_INVALID_ARGUMENT;
+#else
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_runtime_eval(&runtime->core, source, source_size, filename,
+            max_eval_milliseconds,
+            diagnostic, diagnostic_capacity));
+#endif
+}
+
+void scxml_quickjs_runtime_destroy(
+    scxml_quickjs_runtime *runtime) {
+#if TURBOSCXML_HAS_QUICKJS
+    quickjs_sandbox_runtime_destroy(&runtime->core);
+#else
+    if (runtime != NULL)
+        memset(runtime, 0, sizeof(*runtime));
+#endif
+}
+
+scxml_quickjs_status scxml_quickjs_validate_source(
+    const scxml_quickjs_compile_options_v1 *options,
+    const char *source, size_t source_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    quickjs_sandbox_options sandbox;
+    if (!scxml_quickjs_limits_valid(options) ||
+        source == NULL ||
+        source_size > options->max_source_bytes) {
+        quickjs_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid or oversized QuickJS source");
+        return source_size > 0u && options != NULL &&
+                       source_size > options->max_source_bytes
+            ? SCXML_QUICKJS_LIMIT_EXCEEDED
+            : SCXML_QUICKJS_INVALID_ARGUMENT;
+    }
+#if !TURBOSCXML_HAS_QUICKJS
+    return SCXML_QUICKJS_INVALID_ARGUMENT;
+#else
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_validate_source(
+            &sandbox, source, source_size,
+            "<scxml-script>",
+            diagnostic, diagnostic_capacity));
+#endif
+}
+
+scxml_quickjs_status scxml_quickjs_validate_expression(
+    const scxml_quickjs_compile_options_v1 *options,
+    const char *source, size_t source_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    quickjs_sandbox_options sandbox;
+    if (!scxml_quickjs_limits_valid(options) ||
+        source == NULL || source_size == 0u ||
+        source_size > options->max_source_bytes) {
+        quickjs_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid or oversized QuickJS expression");
+        return source_size > 0u && options != NULL &&
+                       source_size > options->max_source_bytes
+            ? SCXML_QUICKJS_LIMIT_EXCEEDED
+            : SCXML_QUICKJS_INVALID_ARGUMENT;
+    }
+#if !TURBOSCXML_HAS_QUICKJS
+    return SCXML_QUICKJS_INVALID_ARGUMENT;
+#else
+    sandbox = quickjs_sandbox_options_from_scxml(options);
+    return quickjs_sandbox_status_to_scxml(
+        quickjs_sandbox_validate_expression(
+            &sandbox, source, source_size,
+            "<scxml-expression>",
+            diagnostic, diagnostic_capacity));
+#endif
+}
+
+static bool quickjs_identifier_start(unsigned char value) {
+    return (value >= (unsigned char)'A' && value <= (unsigned char)'Z') ||
+           (value >= (unsigned char)'a' && value <= (unsigned char)'z') ||
+           value == (unsigned char)'_';
+}
+
+static bool quickjs_identifier_continue(unsigned char value) {
+    return quickjs_identifier_start(value) ||
+           (value >= (unsigned char)'0' && value <= (unsigned char)'9');
+}
+
+static size_t quickjs_skip_space(
+    const char *source, size_t source_size, size_t offset) {
+    while (offset < source_size &&
+           (source[offset] == ' ' || source[offset] == '\t' ||
+            source[offset] == '\r' || source[offset] == '\n'))
+        ++offset;
+    return offset;
+}
+
+static const cmeta_data_desc *quickjs_root_field(
+    const cmeta_data_desc *root, const char *name, size_t name_size) {
+    const cmeta_data_struct_shape *shape;
+    size_t index;
+    if (root == NULL || root->kind != CMETA_DATA_STRUCT ||
+        root->shape == NULL)
+        return NULL;
+    shape = (const cmeta_data_struct_shape *)root->shape;
+    for (index = 0u; index < shape->field_count; ++index) {
+        const cmeta_data_field_desc *field = &shape->fields[index];
+        if (field->name != NULL && strlen(field->name) == name_size &&
+            memcmp(field->name, name, name_size) == 0)
+            return field->value;
+    }
+    return NULL;
+}
+
+static const cmeta_data_desc *quickjs_infer_variable_data(
+    const cmeta_data_desc *root, const char *source, size_t source_size,
+    size_t offset) {
+    const size_t start = quickjs_skip_space(source, source_size, offset);
+    size_t end = start;
+    bool floating = false;
+    if (start >= source_size || source[start] != '=')
+        return &cmeta_data_int;
+    offset = quickjs_skip_space(source, source_size, start + 1u);
+    if (offset >= source_size) return &cmeta_data_int;
+    if (source_size - offset >= 4u &&
+        memcmp(source + offset, "true", 4u) == 0 &&
+        (offset + 4u == source_size ||
+         !quickjs_identifier_continue((unsigned char)source[offset + 4u])))
+        return &cmeta_data_bool;
+    if (source_size - offset >= 5u &&
+        memcmp(source + offset, "false", 5u) == 0 &&
+        (offset + 5u == source_size ||
+         !quickjs_identifier_continue((unsigned char)source[offset + 5u])))
+        return &cmeta_data_bool;
+    if (source[offset] == '+' || source[offset] == '-') ++offset;
+    if (offset < source_size && source[offset] >= '0' &&
+        source[offset] <= '9') {
+        for (end = offset; end < source_size; ++end) {
+            const char value = source[end];
+            if (value == '.' || value == 'e' || value == 'E')
+                floating = true;
+            if (!(value >= '0' && value <= '9') && value != '.' &&
+                value != 'e' && value != 'E' && value != '+' && value != '-')
+                break;
+        }
+        return floating ? &cmeta_data_double : &cmeta_data_int;
+    }
+    if (quickjs_identifier_start((unsigned char)source[offset])) {
+        const cmeta_data_desc *field;
+        end = offset + 1u;
+        while (end < source_size &&
+               quickjs_identifier_continue((unsigned char)source[end]))
+            ++end;
+        field = quickjs_root_field(root, source + offset, end - offset);
+        if (field != NULL) return field;
+    }
+    return &cmeta_data_double;
+}
+
+scxml_quickjs_status scxml_quickjs_collect_script_variables(
+    scxml_scope_schema *scope, const cmeta_data_desc *root,
+    const char *source, size_t source_size,
+    size_t max_variables, size_t *variable_count,
+    char *diagnostic, size_t diagnostic_capacity) {
+    size_t offset = 0u;
+    size_t brace_depth = 0u;
+    char quote = '\0';
+    bool escaped = false;
+    bool line_comment = false;
+    bool block_comment = false;
+    if (scope == NULL || !cmeta_data_desc_valid(root) || source == NULL ||
+        source_size == 0u || max_variables == 0u || variable_count == NULL) {
+        quickjs_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid QuickJS script-variable scan context");
+        return SCXML_QUICKJS_INVALID_ARGUMENT;
+    }
+    while (offset < source_size) {
+        const char value = source[offset];
+        if (line_comment) {
+            if (value == '\r' || value == '\n') line_comment = false;
+            ++offset;
+            continue;
+        }
+        if (block_comment) {
+            if (value == '*' && offset + 1u < source_size &&
+                source[offset + 1u] == '/') {
+                block_comment = false;
+                offset += 2u;
+            } else {
+                ++offset;
+            }
+            continue;
+        }
+        if (quote != '\0') {
+            if (escaped) {
+                escaped = false;
+            } else if (value == '\\') {
+                escaped = true;
+            } else if (value == quote) {
+                quote = '\0';
+            }
+            ++offset;
+            continue;
+        }
+        if (value == '/' && offset + 1u < source_size) {
+            if (source[offset + 1u] == '/') {
+                line_comment = true;
+                offset += 2u;
+                continue;
+            }
+            if (source[offset + 1u] == '*') {
+                block_comment = true;
+                offset += 2u;
+                continue;
+            }
+        }
+        if (value == '\'' || value == '"' || value == '`') {
+            quote = value;
+            ++offset;
+            continue;
+        }
+        if (value == '{') {
+            ++brace_depth;
+            ++offset;
+            continue;
+        }
+        if (value == '}') {
+            if (brace_depth != 0u) --brace_depth;
+            ++offset;
+            continue;
+        }
+        if (brace_depth == 0u && source_size - offset >= 3u &&
+            memcmp(source + offset, "var", 3u) == 0 &&
+            (offset == 0u ||
+             !quickjs_identifier_continue((unsigned char)source[offset - 1u])) &&
+            (offset + 3u == source_size ||
+             !quickjs_identifier_continue((unsigned char)source[offset + 3u]))) {
+            const cmeta_data_desc *value_data;
+            const cmeta_data_desc *root_data;
+            size_t name_start = quickjs_skip_space(
+                source, source_size, offset + 3u);
+            size_t name_end;
+            size_t slot = SIZE_MAX;
+            bool conflict = false;
+            if (name_start >= source_size ||
+                !quickjs_identifier_start(
+                    (unsigned char)source[name_start])) {
+                quickjs_diagnostic(
+                    diagnostic, diagnostic_capacity,
+                    "global var must declare an SCXML-compatible identifier");
+                return SCXML_QUICKJS_INVALID_ARGUMENT;
+            }
+            name_end = name_start + 1u;
+            while (name_end < source_size &&
+                   quickjs_identifier_continue(
+                       (unsigned char)source[name_end]))
+                ++name_end;
+            if (source[name_start] == '_') {
+                quickjs_diagnostic(
+                    diagnostic, diagnostic_capacity,
+                    "global var cannot shadow an SCXML system variable");
+                return SCXML_QUICKJS_INVALID_ARGUMENT;
+            }
+            root_data = quickjs_root_field(
+                root, source + name_start, name_end - name_start);
+            if (root_data == NULL) {
+                const scxml_scope_slot *existing;
+                value_data = quickjs_infer_variable_data(
+                    root, source, source_size, name_end);
+                existing = scxml_scope_find(
+                    scope, source + name_start,
+                    name_end - name_start, NULL);
+                if (existing == NULL &&
+                    *variable_count >= max_variables) {
+                    quickjs_diagnostic(
+                        diagnostic, diagnostic_capacity,
+                        "QuickJS script-variable limit exceeded");
+                    return SCXML_QUICKJS_LIMIT_EXCEEDED;
+                }
+                {
+                    const size_t before = scope->slot_count;
+                    if (!scxml_scope_register(
+                            scope, source + name_start,
+                            name_end - name_start, value_data,
+                            &slot, &conflict)) {
+                        quickjs_diagnostic(
+                            diagnostic, diagnostic_capacity,
+                            conflict
+                                ? "QuickJS script variable has conflicting types"
+                                : "QuickJS script variable could not be retained");
+                        return conflict ? SCXML_QUICKJS_INVALID_ARGUMENT
+                                        : SCXML_QUICKJS_ALLOCATION_FAILED;
+                    }
+                    if (scope->slot_count != before) ++*variable_count;
+                }
+            }
+            offset = name_end;
+            continue;
+        }
+        ++offset;
+    }
+    quickjs_diagnostic(diagnostic, diagnostic_capacity, "");
+    return SCXML_QUICKJS_OK;
+}
+
+#if TURBOSCXML_HAS_QUICKJS
+typedef struct quickjs_conversion {
+    JSContext *context;
+    const scxml_quickjs_compile_options_v1 *limits;
+    const cmeta_data_desc *root;
+    size_t properties;
+    quickjs_cmeta_bridge bridge;
+} quickjs_conversion;
+
+typedef struct quickjs_aligned_storage {
+    void *allocation;
+    void *value;
+} quickjs_aligned_storage;
+
+static bool quickjs_aligned_storage_init(
+    quickjs_aligned_storage *storage, const cmeta_type_desc *type) {
+    uintptr_t address;
+    uintptr_t aligned;
+    size_t allocation_size;
+    if (storage == NULL || storage->allocation != NULL ||
+        storage->value != NULL || !cmeta_type_desc_valid(type) ||
+        type->size == 0u || type->align == 0u ||
+        (type->align & (type->align - 1u)) != 0u ||
+        type->size > SIZE_MAX - (type->align - 1u))
+        return false;
+    allocation_size = type->size + type->align - 1u;
+    storage->allocation = calloc(1u, allocation_size);
+    if (storage->allocation == NULL) return false;
+    address = (uintptr_t)storage->allocation;
+    if (address > UINTPTR_MAX - (type->align - 1u)) {
+        free(storage->allocation);
+        memset(storage, 0, sizeof(*storage));
+        return false;
+    }
+    aligned = (address + type->align - 1u) &
+              ~((uintptr_t)type->align - 1u);
+    storage->value = (void *)aligned;
+    return true;
+}
+
+static void quickjs_aligned_storage_destroy(
+    quickjs_aligned_storage *storage,
+    const cmeta_type_desc *type, bool live) {
+    if (storage == NULL) return;
+    if (live && storage->value != NULL && type != NULL &&
+        type->traits != NULL && type->traits->destroy != NULL)
+        type->traits->destroy(storage->value);
+    free(storage->allocation);
+    memset(storage, 0, sizeof(*storage));
+}
+
+
+static bool quickjs_property_budget(
+    quickjs_conversion *conversion) {
+    return conversion != NULL &&
+        conversion->properties < conversion->limits->max_properties &&
+        ++conversion->properties <= conversion->limits->max_properties;
+}
+
+static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
+    const scxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_cmeta_limits){
+        .max_conversion_depth =
+            options != NULL ? options->max_conversion_depth : 0u,
+        .max_properties =
+            options != NULL ? options->max_properties : 0u,
+        .max_array_items =
+            options != NULL ? options->max_array_items : 0u,
+        .max_snapshot_bytes =
+            options != NULL ? options->max_snapshot_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_string_bytes : 0u};
+}
+
+static bool scxml_quickjs_legacy_collection_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user);
+
 static JSValue scxml_quickjs_legacy_import_collection(
     quickjs_cmeta_bridge *bridge,
     const cmeta_data_desc *descriptor,
@@ -194,6 +785,40 @@ static bool quickjs_export_root(
         &conversion->bridge, state);
     quickjs_conversion_from_bridge(conversion);
     return result;
+}
+
+static bool scxml_quickjs_legacy_collection_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user) {
+    const cmeta_type_desc *element_type;
+    const cmeta_data_desc *element_data;
+    (void)user;
+    if (descriptor == NULL ||
+        descriptor->kind != CMETA_DATA_SEQUENCE ||
+        !cmeta_declared_type_valid(declared_type) ||
+        declared_type->arity != 1u ||
+        (descriptor->storage_type != NULL &&
+         !cmeta_type_equal(
+             declared_type->storage_type,
+             descriptor->storage_type)))
+        return false;
+    element_type =
+        cmeta_declared_type_argument(declared_type, 0u);
+    element_data = cmeta_scope_find_data_for_type(
+        root, element_type,
+        limits->max_conversion_depth);
+    return element_data != NULL &&
+        element_data->kind != CMETA_DATA_SEQUENCE &&
+        quickjs_cmeta_value_schema_supported(
+            root, element_data, NULL,
+            depth + 1u, limits,
+            &scxml_quickjs_legacy_collection_adapter,
+            NULL, true, properties);
 }
 
 static JSValue scxml_quickjs_legacy_import_collection(
@@ -1034,7 +1659,7 @@ bool scxml_quickjs_execute_script(
         quickjs_conversion conversion;
         quickjs_active_context active;
         const cmeta_type_desc *type = program->cmeta_root->storage_type;
-        quickjs_cmeta_state_scratch state_scratch = {0};
+        quickjs_aligned_storage state_scratch = {0};
         void *scope_scratch_allocation = NULL;
         scxml_scope_view scope_scratch = {0};
         size_t scope_scratch_bytes = 0u;
@@ -1042,6 +1667,8 @@ bool scxml_quickjs_execute_script(
         size_t scope_align;
         uintptr_t scope_address;
         uintptr_t scope_aligned;
+        bool managed;
+        bool scratch_live = false;
         bool owns_deadline = false;
         char diagnostic[SCXML_DIAGNOSTIC_CAPACITY] = {0};
         scxml_quickjs_status status;
@@ -1133,12 +1760,24 @@ bool scxml_quickjs_execute_script(
                 ? "QuickJS script limit exceeded" : "QuickJS script exception";
             goto cleanup;
         }
-        if (!quickjs_cmeta_state_snapshot(
-                &state_scratch,
-                program->cmeta_root, state,
-                program->quickjs_options.max_snapshot_bytes)) {
-            *out_error = "QuickJS state snapshot failed";
+        if (!quickjs_aligned_storage_init(&state_scratch, type)) {
+            *out_error = "QuickJS state scratch allocation failed";
             goto cleanup;
+        }
+        managed = cmeta_type_require_traits(
+                      type, CMETA_TRAIT_TRIVIAL_COPY |
+                                CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK;
+        if (managed) {
+            if (cmeta_type_require_traits(
+                    type, CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE |
+                              CMETA_TRAIT_DESTROY) != CMETA_OK ||
+                !type->traits->copy_construct(state_scratch.value, state)) {
+                *out_error = "QuickJS state snapshot failed";
+                goto cleanup;
+            }
+            scratch_live = true;
+        } else {
+            memcpy(state_scratch.value, state, type->size);
         }
         conversion.properties = 0u;
         if (!quickjs_export_root(
@@ -1156,11 +1795,12 @@ bool scxml_quickjs_execute_script(
             *out_error = "QuickJS scope publication failed";
             goto cleanup;
         }
-        if (!quickjs_cmeta_state_publish(
-                program->cmeta_root, state,
-                &state_scratch)) {
-            *out_error = "QuickJS state publication failed";
-            goto cleanup;
+        if (managed) {
+            type->traits->destroy(state);
+            type->traits->move_construct(state, state_scratch.value);
+            scratch_live = false;
+        } else {
+            memcpy(state, state_scratch.value, type->size);
         }
 cleanup:
         if (runtime->core.interrupted && *out_error != NULL)
@@ -1172,8 +1812,8 @@ cleanup:
         }
         scxml_scope_view_clear(&scope_scratch);
         free(scope_scratch_allocation);
-        quickjs_cmeta_state_scratch_destroy(
-            &state_scratch, program->cmeta_root);
+        quickjs_aligned_storage_destroy(
+            &state_scratch, type, scratch_live);
         if (*out_error != NULL) {
 #if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
             (void)fprintf(
