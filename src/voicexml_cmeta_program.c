@@ -1992,6 +1992,14 @@ static vxml_status cmeta_measure_prompt(
             diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_node_location(prompt),
             "VoiceXML prompts require enabled prompt limits");
+    if (builder == NULL || builder->profile == NULL ||
+        builder->profile->prompts == NULL ||
+        out < builder->profile->prompts ||
+        out >= builder->profile->prompts + builder->profile->prompt_count)
+        return VXML_INVALID_STRUCTURE;
+    prompt_index =
+        (size_t)(out - builder->profile->prompts);
+
     if (!is_foreach) {
         status = cmeta_parse_prompt_count(
             count, &parsed_count, diagnostic);
@@ -5297,6 +5305,7 @@ static vxml_status cmeta_register_prompt_foreach(
     salts_xml_node node,
     vxml_cmeta_prompt_owner_kind owner_kind,
     size_t owner_index,
+    size_t prompt_index,
     vxml_cmeta_prompt_foreach_row *row) {
     const salts_xml_attribute array = cmeta_attribute(node, "array");
     const salts_xml_attribute item = cmeta_attribute(node, "item");
@@ -5313,7 +5322,7 @@ static vxml_status cmeta_register_prompt_foreach(
     if (row == NULL || array.impl == NULL || item.impl == NULL)
         return VXML_INVALID_STRUCTURE;
     memset(row, 0, sizeof(*row));
-    row->prompt = builder->prompt_index;
+    row->prompt = prompt_index;
     row->collection_location = VXML_CMETA_NO_INDEX;
     row->scope = VXML_CMETA_NO_INDEX;
     row->item_slot = VXML_CMETA_NO_INDEX;
@@ -5419,6 +5428,7 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "timeout");
     const bool is_foreach = cmeta_node_named(prompt, "foreach");
     vxml_cmeta_prompt_foreach_row *foreach_row = NULL;
+    size_t prompt_index = VXML_CMETA_NO_INDEX;
     size_t child_index;
     size_t dynamic_mark_count = 0u;
     unsigned count = 1u;
@@ -5466,7 +5476,8 @@ static vxml_status cmeta_compile_prompt_schema(
         foreach_row = &builder->profile->prompt_foreach[
             builder->prompt_foreach_index++];
         status = cmeta_register_prompt_foreach(
-            builder, prompt, owner_kind, owner_index, foreach_row);
+            builder, prompt, owner_kind, owner_index,
+            prompt_index, foreach_row);
         if (status != VXML_OK) return status;
     }
 
