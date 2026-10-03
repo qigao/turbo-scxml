@@ -21,7 +21,11 @@ enum {
     VXML_QUICKJS_DEFAULT_ARRAY_ITEMS = 4096u,
     VXML_QUICKJS_DEFAULT_SNAPSHOT_BYTES = 4u * 1024u * 1024u,
     VXML_QUICKJS_DEFAULT_STATE_STRING_BYTES = 1024u * 1024u,
-    VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES = 1024u * 1024u
+    VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES = 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_DATA_ROWS = 128u,
+    VXML_QUICKJS_DEFAULT_DATA_NAMELIST_FIELDS = 64u,
+    VXML_QUICKJS_DEFAULT_DATA_BYTES = 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_DATA_VALUE_BYTES = 64u * 1024u
 };
 
 typedef struct vxml_quickjs_program_data {
@@ -31,8 +35,25 @@ typedef struct vxml_quickjs_program_data {
 typedef struct vxml_quickjs_session_data {
     quickjs_sandbox_runtime runtime;
     quickjs_cmeta_state_scratch committed_root;
+
     char *dynamic_uri;
     size_t dynamic_uri_capacity;
+
+    vxml_cmeta_data_resource_adapter_v1 data_resources;
+    void *data_resource_user;
+    bool has_data_resources;
+    size_t max_data_bytes;
+    size_t max_data_request_value_bytes;
+    vxml_cmeta_data_field_v1 *data_fields;
+    size_t data_field_capacity;
+    char *data_values;
+    size_t data_values_bytes;
+
+    vxml_fetch_audio_adapter_v1 data_fetch_audio;
+    void *data_fetch_audio_user;
+    bool has_data_fetch_audio;
+
+    bool document_data_done;
     size_t resume_form;
     size_t resume_block;
     bool script_pending;
@@ -55,14 +76,64 @@ static size_t compile_options_v1_prefix_size(void) {
     return offsetof(vxml_quickjs_compile_options_v1, root);
 }
 
+static size_t compile_options_state_tail_size(void) {
+    return offsetof(
+        vxml_quickjs_compile_options_v1,
+        max_script_source_bytes) + sizeof(size_t);
+}
+
+static size_t compile_options_data_tail_size(void) {
+    return offsetof(
+        vxml_quickjs_compile_options_v1,
+        max_data_namelist_fields) + sizeof(size_t);
+}
+
 static size_t session_options_v1_prefix_size(void) {
     return offsetof(vxml_quickjs_session_options_v1, initial_state);
+}
+
+static size_t session_options_state_tail_size(void) {
+    return offsetof(
+        vxml_quickjs_session_options_v1,
+        initial_state) + sizeof(const void *);
+}
+
+static size_t session_options_data_tail_size(void) {
+    return offsetof(
+        vxml_quickjs_session_options_v1,
+        data_fetch_audio_user) + sizeof(void *);
 }
 
 static bool compile_options_has_state_tail(
     const vxml_quickjs_compile_options_v1 *options) {
     return options != NULL &&
-        options->struct_size >= sizeof(*options);
+        options->struct_size >= compile_options_state_tail_size();
+}
+
+static bool compile_options_has_data_tail(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return options != NULL &&
+        options->struct_size >= compile_options_data_tail_size();
+}
+
+static bool compile_options_data_enabled(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return compile_options_has_data_tail(options) &&
+        options->max_data_rows != 0u &&
+        options->max_data_uri_bytes != 0u &&
+        options->max_data_namelist_fields != 0u;
+}
+
+static bool session_options_has_state_tail(
+    const vxml_quickjs_session_options_v1 *options) {
+    return options != NULL &&
+        options->struct_size >= session_options_state_tail_size();
+}
+
+static bool session_options_has_data_tail(
+    const vxml_quickjs_session_options_v1 *options) {
+    return options != NULL &&
+        options->struct_size >= session_options_data_tail_size();
 }
 
 static bool compile_options_state_enabled(
@@ -98,25 +169,41 @@ static bool compile_options_valid(
         options->max_stack_bytes == 0u ||
         options->max_eval_milliseconds == 0u)
         return false;
-    if (!compile_options_has_state_tail(options))
-        return true;
-    if (options->max_resolved_script_uri_bytes == 0u ||
-        options->max_resolved_script_uri_bytes == SIZE_MAX ||
-        options->max_script_source_bytes == 0u)
-        return false;
-    if (options->root == NULL)
-        return true;
-    return options->max_conversion_depth != 0u &&
-        options->max_properties != 0u &&
-        options->max_array_items != 0u &&
-        options->max_snapshot_bytes != 0u &&
-        options->max_state_string_bytes != 0u &&
-        quickjs_cmeta_limits_valid(&(quickjs_cmeta_limits){
-            options->max_conversion_depth,
-            options->max_properties,
-            options->max_array_items,
-            options->max_snapshot_bytes,
-            options->max_state_string_bytes});
+
+    if (compile_options_has_state_tail(options)) {
+        if (options->max_resolved_script_uri_bytes == 0u ||
+            options->max_resolved_script_uri_bytes == SIZE_MAX ||
+            options->max_script_source_bytes == 0u)
+            return false;
+        if (options->root != NULL &&
+            (options->max_conversion_depth == 0u ||
+             options->max_properties == 0u ||
+             options->max_array_items == 0u ||
+             options->max_snapshot_bytes == 0u ||
+             options->max_state_string_bytes == 0u ||
+             !quickjs_cmeta_limits_valid(&(quickjs_cmeta_limits){
+                 options->max_conversion_depth,
+                 options->max_properties,
+                 options->max_array_items,
+                 options->max_snapshot_bytes,
+                 options->max_state_string_bytes})))
+            return false;
+    }
+
+    if (compile_options_has_data_tail(options)) {
+        const bool any =
+            options->max_data_rows != 0u ||
+            options->max_data_uri_bytes != 0u ||
+            options->max_data_namelist_fields != 0u;
+        const bool all =
+            options->max_data_rows != 0u &&
+            options->max_data_uri_bytes != 0u &&
+            options->max_data_namelist_fields != 0u;
+        if (any != all ||
+            (all && options->max_data_uri_bytes == SIZE_MAX))
+            return false;
+    }
+    return true;
 }
 
 static bool session_options_valid(
@@ -128,9 +215,58 @@ static bool session_options_valid(
 
 static const void *session_initial_state(
     const vxml_quickjs_session_options_v1 *options) {
-    return options != NULL &&
-        options->struct_size >= sizeof(*options)
+    return session_options_has_state_tail(options)
         ? options->initial_state : NULL;
+}
+
+
+static bool data_resource_adapter_v3_valid(
+    const vxml_cmeta_data_resource_adapter_v1 *adapter) {
+    const size_t prefix =
+        offsetof(vxml_cmeta_data_resource_adapter_v1, open_v3) +
+        sizeof(adapter->open_v3);
+    return adapter != NULL &&
+        adapter->abi_version ==
+            VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= prefix &&
+        adapter->close != NULL &&
+        adapter->open_v3 != NULL;
+}
+
+static bool fetch_audio_adapter_valid(
+    const vxml_fetch_audio_adapter_v1 *adapter) {
+    const size_t prefix =
+        offsetof(vxml_fetch_audio_adapter_v1, begin) +
+        sizeof(adapter->begin);
+    return adapter != NULL &&
+        adapter->abi_version == VXML_FETCH_AUDIO_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= prefix &&
+        adapter->begin != NULL;
+}
+
+static bool program_requires_data_fetch_audio(
+    const vxml_program_impl *program) {
+    size_t index;
+    if (program == NULL || program->data_row_count == 0u)
+        return false;
+    if (program->data_rows == NULL)
+        return true;
+    for (index = 0u; index < program->data_row_count; ++index)
+        if (program->data_rows[index].fetch_policy.fetchaudio_uri != NULL)
+            return true;
+    return false;
+}
+
+static size_t program_max_data_fields(
+    const vxml_program_impl *program) {
+    size_t result = 0u;
+    size_t index;
+    if (program == NULL || program->data_rows == NULL)
+        return 0u;
+    for (index = 0u; index < program->data_row_count; ++index)
+        if (program->data_rows[index].namelist_count > result)
+            result = program->data_rows[index].namelist_count;
+    return result;
 }
 
 static quickjs_sandbox_options sandbox_options(
@@ -140,17 +276,23 @@ static quickjs_sandbox_options sandbox_options(
     if (compile_options_has_state_tail(options) &&
         options->max_script_source_bytes > max_source_bytes)
         max_source_bytes = options->max_script_source_bytes;
-    return (quickjs_sandbox_options){
-        .max_source_bytes = max_source_bytes,
-        .max_string_bytes =
+    {
+        size_t max_string_bytes =
             options != NULL
-                ? options->max_dynamic_script_uri_bytes : 0u,
+                ? options->max_dynamic_script_uri_bytes : 0u;
+        if (compile_options_data_enabled(options) &&
+            options->max_data_uri_bytes > max_string_bytes)
+            max_string_bytes = options->max_data_uri_bytes;
+        return (quickjs_sandbox_options){
+        .max_source_bytes = max_source_bytes,
+        .max_string_bytes = max_string_bytes,
         .max_heap_bytes =
             options != NULL ? options->max_heap_bytes : 0u,
         .max_stack_bytes =
             options != NULL ? options->max_stack_bytes : 0u,
         .max_eval_milliseconds =
             options != NULL ? options->max_eval_milliseconds : 0u};
+    }
 }
 
 static vxml_status sandbox_status_to_vxml(
@@ -219,6 +361,38 @@ static bool program_view_valid(
         size == (size_t)(end - value))
         return false;
     return data[size] == '\0';
+}
+
+
+static bool quickjs_xml_space(unsigned char value) {
+    return value == (unsigned char)' ' ||
+        value == (unsigned char)'\t' ||
+        value == (unsigned char)'\r' ||
+        value == (unsigned char)'\n';
+}
+
+static bool quickjs_next_namelist_token(
+    const char *data, size_t size, size_t *cursor,
+    const char **out_data, size_t *out_size) {
+    size_t start;
+    if (data == NULL || cursor == NULL ||
+        out_data == NULL || out_size == NULL)
+        return false;
+    while (*cursor < size &&
+           quickjs_xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    if (*cursor == size) {
+        *out_data = NULL;
+        *out_size = 0u;
+        return true;
+    }
+    start = *cursor;
+    while (*cursor < size &&
+           !quickjs_xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    *out_data = data + start;
+    *out_size = *cursor - start;
+    return true;
 }
 
 static vxml_status validate_dynamic_scripts(
@@ -291,6 +465,244 @@ static vxml_status validate_dynamic_scripts(
                     : "VoiceXML script srcexpr validation failed");
         }
         return status;
+    }
+    return VXML_OK;
+}
+
+
+static void quickjs_compile_diagnostic(
+    vxml_diagnostic *diagnostic,
+    vxml_status status,
+    salts_xml_location location,
+    const char *message) {
+    if (diagnostic == NULL) return;
+    memset(diagnostic, 0, sizeof(*diagnostic));
+    diagnostic->status = status;
+    diagnostic->location = location;
+    (void)snprintf(
+        diagnostic->message,
+        sizeof(diagnostic->message),
+        "%s", message != NULL ? message : "VoiceXML QuickJS compile error");
+}
+
+static vxml_status validate_data_rows(
+    const vxml_program *program,
+    const vxml_quickjs_compile_options_v1 *options,
+    vxml_diagnostic *diagnostic) {
+    const vxml_program_impl *impl;
+    quickjs_sandbox_options sandbox;
+    size_t index;
+
+    if (program == NULL || program->impl == NULL ||
+        !compile_options_valid(options))
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_program_impl *)program->impl;
+    if (!compile_options_data_enabled(options))
+        return impl->data_row_count == 0u
+            ? VXML_OK : VXML_INVALID_CONTRACT;
+    if (impl->data_row_count > options->max_data_rows) {
+        const salts_xml_location location =
+            impl->data_row_count != 0u && impl->data_rows != NULL
+                ? impl->data_rows[options->max_data_rows].location
+                : (salts_xml_location){0};
+        quickjs_compile_diagnostic(
+            diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML data row count exceeds max_data_rows");
+        return VXML_LIMIT_EXCEEDED;
+    }
+    if (impl->data_row_count != 0u && impl->data_rows == NULL)
+        return VXML_INVALID_CONTRACT;
+    sandbox = sandbox_options(options);
+
+    for (index = 0u; index < impl->data_row_count; ++index) {
+        const vxml_data_row *row = &impl->data_rows[index];
+        const bool has_uri =
+            row->uri != NULL || row->uri_size != 0u;
+        const bool has_expression =
+            row->uri_expression != NULL ||
+            row->uri_expression_size != 0u;
+        char message[VXML_DIAGNOSTIC_CAPACITY] = {0};
+        quickjs_sandbox_status sandbox_status;
+        vxml_status status;
+
+        if ((row->placement != VXML_DATA_DOCUMENT &&
+             row->placement != VXML_DATA_FORM &&
+             row->placement != VXML_DATA_EXECUTABLE) ||
+            (row->placement == VXML_DATA_DOCUMENT &&
+             row->owner_form != SIZE_MAX) ||
+            (row->placement != VXML_DATA_DOCUMENT &&
+             row->owner_form >= impl->form_count) ||
+            has_uri == has_expression ||
+            (row->name == NULL) != (row->name_size == 0u) ||
+            (row->namelist == NULL) != (row->namelist_size == 0u) ||
+            (row->fetch_policy.fetchaudio_uri == NULL) !=
+                (row->fetch_policy.fetchaudio_uri_size == 0u) ||
+            (row->method != VXML_SUBMIT_METHOD_GET &&
+             row->method != VXML_SUBMIT_METHOD_POST) ||
+            (row->enctype != VXML_SUBMIT_ENCTYPE_URLENCODED &&
+             row->enctype != VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA) ||
+            (row->fetch_policy.fetch_hint !=
+                 VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED &&
+             row->fetch_policy.fetch_hint !=
+                 VXML_CMETA_DATA_FETCH_HINT_PREFETCH &&
+             row->fetch_policy.fetch_hint !=
+                 VXML_CMETA_DATA_FETCH_HINT_SAFE)) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_STRUCTURE, row->location,
+                "VoiceXML data descriptor is invalid");
+            return VXML_INVALID_STRUCTURE;
+        }
+        if (row->name != NULL &&
+            !program_view_valid(impl, row->name, row->name_size)) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_STRUCTURE, row->location,
+                "VoiceXML data name view is invalid");
+            return VXML_INVALID_STRUCTURE;
+        }
+        if (row->uri != NULL) {
+            if (!program_view_valid(impl, row->uri, row->uri_size) ||
+                row->uri_size > options->max_data_uri_bytes) {
+                status = row->uri_size > options->max_data_uri_bytes
+                    ? VXML_LIMIT_EXCEEDED : VXML_INVALID_STRUCTURE;
+                quickjs_compile_diagnostic(
+                    diagnostic, status, row->location,
+                    status == VXML_LIMIT_EXCEEDED
+                        ? "VoiceXML data src exceeds max_data_uri_bytes"
+                        : "VoiceXML data src view is invalid");
+                return status;
+            }
+        } else {
+            if (!program_view_valid(
+                    impl, row->uri_expression,
+                    row->uri_expression_size) ||
+                row->uri_expression_size >
+                    options->max_expression_bytes) {
+                status =
+                    row->uri_expression_size >
+                        options->max_expression_bytes
+                    ? VXML_LIMIT_EXCEEDED
+                    : VXML_INVALID_STRUCTURE;
+                quickjs_compile_diagnostic(
+                    diagnostic, status, row->location,
+                    status == VXML_LIMIT_EXCEEDED
+                        ? "VoiceXML data srcexpr exceeds max_expression_bytes"
+                        : "VoiceXML data srcexpr view is invalid");
+                return status;
+            }
+            sandbox_status = quickjs_sandbox_validate_expression(
+                &sandbox,
+                row->uri_expression,
+                row->uri_expression_size,
+                "<voicexml-data-srcexpr>",
+                message, sizeof(message));
+            if (sandbox_status != QUICKJS_SANDBOX_OK) {
+                status = sandbox_status_to_vxml(sandbox_status);
+                quickjs_compile_diagnostic(
+                    diagnostic, status, row->location,
+                    message[0] != '\0'
+                        ? message
+                        : "VoiceXML data srcexpr validation failed");
+                return status;
+            }
+        }
+        if (row->namelist_count != 0u &&
+            !compile_options_state_enabled(options)) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_CONTRACT,
+                row->location,
+                "VoiceXML QuickJS data namelist requires typed committed state");
+            return VXML_INVALID_CONTRACT;
+        }
+        if (row->namelist_count >
+            options->max_data_namelist_fields) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_LIMIT_EXCEEDED, row->location,
+                "VoiceXML data namelist exceeds max_data_namelist_fields");
+            return VXML_LIMIT_EXCEEDED;
+        }
+        if (row->namelist_count == 0u) {
+            if (row->namelist != NULL || row->namelist_size != 0u) {
+                quickjs_compile_diagnostic(
+                    diagnostic, VXML_INVALID_STRUCTURE, row->location,
+                    "VoiceXML data namelist descriptor is invalid");
+                return VXML_INVALID_STRUCTURE;
+            }
+        } else {
+            size_t cursor = 0u;
+            size_t field = 0u;
+            if (!program_view_valid(
+                    impl, row->namelist, row->namelist_size)) {
+                quickjs_compile_diagnostic(
+                    diagnostic, VXML_INVALID_STRUCTURE, row->location,
+                    "VoiceXML data namelist view is invalid");
+                return VXML_INVALID_STRUCTURE;
+            }
+            while (field < row->namelist_count) {
+                const char *name = NULL;
+                size_t name_size = 0u;
+                if (!quickjs_next_namelist_token(
+                        row->namelist, row->namelist_size,
+                        &cursor, &name, &name_size) ||
+                    name == NULL || name_size == 0u) {
+                    quickjs_compile_diagnostic(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        row->location,
+                        "VoiceXML QuickJS data namelist token is invalid");
+                    return VXML_INVALID_STRUCTURE;
+                }
+                ++field;
+            }
+            {
+                const char *extra = NULL;
+                size_t extra_size = 0u;
+                if (!quickjs_next_namelist_token(
+                        row->namelist, row->namelist_size,
+                        &cursor, &extra, &extra_size) ||
+                    extra != NULL) {
+                    quickjs_compile_diagnostic(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        row->location,
+                        "VoiceXML data namelist count is inconsistent");
+                    return VXML_INVALID_STRUCTURE;
+                }
+            }
+        }
+        if (row->fetch_policy.fetchaudio_uri != NULL &&
+            (!program_view_valid(
+                 impl,
+                 row->fetch_policy.fetchaudio_uri,
+                 row->fetch_policy.fetchaudio_uri_size) ||
+             row->fetch_policy.fetchaudio_uri_size >
+                 options->max_data_uri_bytes)) {
+            status =
+                row->fetch_policy.fetchaudio_uri_size >
+                    options->max_data_uri_bytes
+                ? VXML_LIMIT_EXCEEDED
+                : VXML_INVALID_STRUCTURE;
+            quickjs_compile_diagnostic(
+                diagnostic, status, row->location,
+                status == VXML_LIMIT_EXCEEDED
+                    ? "VoiceXML data fetchaudio exceeds max_data_uri_bytes"
+                    : "VoiceXML data fetchaudio view is invalid");
+            return status;
+        }
+    }
+
+    for (index = 0u; index < impl->action_count; ++index) {
+        const vxml_action_row *action = &impl->actions[index];
+        if (action->kind != VXML_ACTION_DATA)
+            continue;
+        if (action->data_index >= impl->data_row_count ||
+            impl->data_rows[action->data_index].placement !=
+                VXML_DATA_EXECUTABLE) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                action->data_index < impl->data_row_count
+                    ? impl->data_rows[action->data_index].location
+                    : (salts_xml_location){0},
+                "VoiceXML executable data action is invalid");
+            return VXML_INVALID_STRUCTURE;
+        }
     }
     return VXML_OK;
 }
@@ -375,6 +787,403 @@ static vxml_status quickjs_prepare_committed_context(
     if (!quickjs_cmeta_import_root(
             bridge, data->committed_root.value))
         return VXML_SEMANTIC_ERROR;
+    return VXML_OK;
+}
+
+
+static vxml_status quickjs_prepare_data_context(
+    vxml_session_impl *session) {
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    quickjs_sandbox_status sandbox_status;
+    if (session == NULL || session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    if (compile_options_state_enabled(&program_data->options)) {
+        quickjs_cmeta_bridge bridge = {0};
+        return quickjs_prepare_committed_context(
+            session, &bridge);
+    }
+    sandbox_status = quickjs_sandbox_context_recreate(
+        &data->runtime, NULL, 0u);
+    return sandbox_status_to_vxml(sandbox_status);
+}
+
+static vxml_status quickjs_prepare_data_request(
+    vxml_session_impl *session,
+    const vxml_data_row *row,
+    const char **out_uri,
+    size_t *out_uri_size,
+    const vxml_cmeta_data_field_v1 **out_fields,
+    size_t *out_field_count) {
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    const char *uri = NULL;
+    size_t uri_size = 0u;
+    size_t field_index = 0u;
+    size_t cursor = 0u;
+    size_t value_bytes_used = 0u;
+    bool context_ready = false;
+    vxml_status status;
+
+    if (out_uri != NULL) *out_uri = NULL;
+    if (out_uri_size != NULL) *out_uri_size = 0u;
+    if (out_fields != NULL) *out_fields = NULL;
+    if (out_field_count != NULL) *out_field_count = 0u;
+    if (session == NULL || row == NULL ||
+        out_uri == NULL || out_uri_size == NULL ||
+        out_fields == NULL || out_field_count == NULL ||
+        session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    if (!compile_options_data_enabled(&program_data->options) ||
+        !data->has_data_resources ||
+        row->namelist_count > data->data_field_capacity)
+        return VXML_INVALID_CONTRACT;
+
+    if (row->uri_expression != NULL ||
+        row->namelist_count != 0u) {
+        status = quickjs_prepare_data_context(session);
+        if (status != VXML_OK)
+            return status;
+        context_ready = true;
+    }
+
+    if (row->uri_expression != NULL) {
+        const char *value = NULL;
+        size_t value_size = 0u;
+        char diagnostic[VXML_DIAGNOSTIC_CAPACITY] = {0};
+        quickjs_sandbox_status sandbox_status;
+        if (!program_view_valid(
+                session->program,
+                row->uri_expression,
+                row->uri_expression_size))
+            return VXML_INVALID_STRUCTURE;
+        sandbox_status = quickjs_sandbox_eval_expression_string(
+            &data->runtime,
+            row->uri_expression,
+            row->uri_expression_size,
+            "<voicexml-data-srcexpr>",
+            program_data->options.max_eval_milliseconds,
+            &value, &value_size,
+            diagnostic, sizeof(diagnostic));
+        status = sandbox_status_to_vxml(sandbox_status);
+        if (status != VXML_OK)
+            return status;
+        if (value == NULL || value_size == 0u ||
+            value_size > program_data->options.max_data_uri_bytes ||
+            value_size >= data->dynamic_uri_capacity ||
+            memchr(value, '\0', value_size) != NULL)
+            return value_size >
+                    program_data->options.max_data_uri_bytes
+                ? VXML_LIMIT_EXCEEDED
+                : VXML_SEMANTIC_ERROR;
+        memcpy(data->dynamic_uri, value, value_size);
+        data->dynamic_uri[value_size] = '\0';
+        uri = data->dynamic_uri;
+        uri_size = value_size;
+    } else {
+        if (!program_view_valid(
+                session->program, row->uri, row->uri_size) ||
+            row->uri_size >
+                program_data->options.max_data_uri_bytes)
+            return row->uri_size >
+                    program_data->options.max_data_uri_bytes
+                ? VXML_LIMIT_EXCEEDED
+                : VXML_INVALID_STRUCTURE;
+        uri = row->uri;
+        uri_size = row->uri_size;
+    }
+
+    if (row->namelist_count != 0u && !context_ready)
+        return VXML_INVALID_CONTRACT;
+    while (field_index < row->namelist_count) {
+        const char *name = NULL;
+        size_t name_size = 0u;
+        const char *value = NULL;
+        size_t value_size = 0u;
+        char *owned_value;
+        char diagnostic[VXML_DIAGNOSTIC_CAPACITY] = {0};
+        quickjs_sandbox_status sandbox_status;
+        if (!quickjs_next_namelist_token(
+                row->namelist, row->namelist_size,
+                &cursor, &name, &name_size) ||
+            name == NULL || name_size == 0u)
+            return VXML_INVALID_STRUCTURE;
+        sandbox_status =
+            quickjs_sandbox_get_global_scalar_string(
+                &data->runtime,
+                name, name_size,
+                program_data->options.max_eval_milliseconds,
+                &value, &value_size,
+                diagnostic, sizeof(diagnostic));
+        status = sandbox_status_to_vxml(sandbox_status);
+        if (status != VXML_OK)
+            return status;
+        if (value == NULL ||
+            value_bytes_used > data->data_values_bytes ||
+            value_size >
+                data->data_values_bytes - value_bytes_used)
+            return value != NULL
+                ? VXML_LIMIT_EXCEEDED
+                : VXML_SEMANTIC_ERROR;
+        owned_value =
+            data->data_values + value_bytes_used;
+        if (value_size != 0u)
+            memcpy(owned_value, value, value_size);
+        data->data_fields[field_index] =
+            (vxml_cmeta_data_field_v1){
+                .name = name,
+                .name_size = name_size,
+                .value = owned_value,
+                .value_size = value_size};
+        value_bytes_used += value_size;
+        ++field_index;
+    }
+    if (row->namelist_count != 0u) {
+        const char *extra = NULL;
+        size_t extra_size = 0u;
+        if (!quickjs_next_namelist_token(
+                row->namelist, row->namelist_size,
+                &cursor, &extra, &extra_size) ||
+            extra != NULL)
+            return VXML_INVALID_STRUCTURE;
+    }
+
+    *out_uri = uri;
+    *out_uri_size = uri_size;
+    *out_fields =
+        field_index != 0u ? data->data_fields : NULL;
+    *out_field_count = field_index;
+    return VXML_OK;
+}
+
+static bool quickjs_data_resource_published(
+    const vxml_cmeta_data_resource_v1 *resource) {
+    return resource != NULL &&
+        (resource->lease != NULL ||
+         resource->data != NULL ||
+         resource->size != 0u);
+}
+
+static void quickjs_close_data_resource_if_published(
+    vxml_quickjs_session_data *data,
+    vxml_cmeta_data_resource_v1 *resource) {
+    if (data == NULL || resource == NULL ||
+        !data->has_data_resources ||
+        !quickjs_data_resource_published(resource))
+        return;
+    data->data_resources.close(
+        data->data_resource_user, resource);
+    *resource = (vxml_cmeta_data_resource_v1){0};
+}
+
+static void quickjs_finish_data_fetch_audio(
+    bool started,
+    vxml_fetch_audio_ticket_v1 *ticket) {
+    if (!started || ticket == NULL || ticket->finish == NULL)
+        return;
+    ticket->finish(ticket->user);
+    *ticket = (vxml_fetch_audio_ticket_v1){0};
+}
+
+static vxml_status quickjs_execute_data_row(
+    vxml_session_impl *session,
+    const vxml_data_row *row) {
+    static const char semantic_event[] = "error.semantic";
+    static const char badfetch_event[] = "error.badfetch";
+    static const char unsupported_name_event[] =
+        "error.unsupported.data.name";
+    vxml_quickjs_session_data *data;
+    const char *uri = NULL;
+    size_t uri_size = 0u;
+    const vxml_cmeta_data_field_v1 *fields = NULL;
+    size_t field_count = 0u;
+    vxml_cmeta_data_request_v3 request =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
+    vxml_cmeta_data_resource_v1 resource = {0};
+    vxml_fetch_audio_ticket_v1 audio_ticket = {0};
+    bool audio_started = false;
+    vxml_status status;
+
+    if (session == NULL || row == NULL ||
+        session->program == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    if (!data->has_data_resources ||
+        !data_resource_adapter_v3_valid(
+            &data->data_resources))
+        return session_fail(
+            session, VXML_INVALID_CONTRACT,
+            semantic_event, sizeof(semantic_event) - 1u);
+
+    if (row->name != NULL || row->name_size != 0u)
+        return session_fail(
+            session, VXML_UNSUPPORTED_FEATURE,
+            unsupported_name_event,
+            sizeof(unsupported_name_event) - 1u);
+
+    status = quickjs_prepare_data_request(
+        session, row,
+        &uri, &uri_size,
+        &fields, &field_count);
+    if (status != VXML_OK)
+        return session_fail(
+            session, status,
+            semantic_event, sizeof(semantic_event) - 1u);
+
+    if (row->fetch_policy.fetchaudio_uri != NULL) {
+        vxml_fetch_audio_request_v1 audio_request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size =
+                sizeof(vxml_fetch_audio_request_v1),
+            .uri = row->fetch_policy.fetchaudio_uri,
+            .uri_size =
+                row->fetch_policy.fetchaudio_uri_size,
+            .has_delay =
+                row->fetch_policy.has_fetchaudio_delay,
+            .delay_us =
+                row->fetch_policy.fetchaudio_delay_us,
+            .has_minimum =
+                row->fetch_policy.has_fetchaudio_minimum,
+            .minimum_us =
+                row->fetch_policy.fetchaudio_minimum_us};
+        vxml_fetch_audio_begin_result begin_result;
+        if (!data->has_data_fetch_audio ||
+            !fetch_audio_adapter_valid(
+                &data->data_fetch_audio))
+            return session_fail(
+                session, VXML_INVALID_CONTRACT,
+                badfetch_event, sizeof(badfetch_event) - 1u);
+        begin_result = data->data_fetch_audio.begin(
+            data->data_fetch_audio_user,
+            &audio_request, &audio_ticket);
+        if (begin_result == VXML_FETCH_AUDIO_STARTED) {
+            if (audio_ticket.finish == NULL)
+                return session_fail(
+                    session, VXML_INVALID_CONTRACT,
+                    badfetch_event, sizeof(badfetch_event) - 1u);
+            audio_started = true;
+        } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
+            if (audio_ticket.finish != NULL ||
+                audio_ticket.user != NULL) {
+                quickjs_finish_data_fetch_audio(
+                    audio_ticket.finish != NULL,
+                    &audio_ticket);
+                return session_fail(
+                    session, VXML_INVALID_CONTRACT,
+                    badfetch_event, sizeof(badfetch_event) - 1u);
+            }
+        } else {
+            quickjs_finish_data_fetch_audio(
+                audio_ticket.finish != NULL,
+                &audio_ticket);
+            return session_fail(
+                session, VXML_INVALID_CONTRACT,
+                badfetch_event, sizeof(badfetch_event) - 1u);
+        }
+    }
+
+    request.uri = uri;
+    request.uri_size = uri_size;
+    request.max_bytes = data->max_data_bytes;
+    request.has_timeout =
+        row->fetch_policy.has_timeout;
+    request.timeout_us =
+        row->fetch_policy.timeout_us;
+    request.fetch_hint =
+        row->fetch_policy.fetch_hint;
+    request.has_max_age =
+        row->fetch_policy.has_max_age;
+    request.max_age_seconds =
+        row->fetch_policy.max_age_seconds;
+    request.has_max_stale =
+        row->fetch_policy.has_max_stale;
+    request.max_stale_seconds =
+        row->fetch_policy.max_stale_seconds;
+    request.method = row->method;
+    request.enctype = row->enctype;
+    request.fields = fields;
+    request.field_count = field_count;
+
+    status = data->data_resources.open_v3(
+        data->data_resource_user,
+        &request, &resource);
+    if (status != VXML_OK) {
+        quickjs_close_data_resource_if_published(
+            data, &resource);
+        quickjs_finish_data_fetch_audio(
+            audio_started, &audio_ticket);
+        return session_fail(
+            session,
+            status == VXML_INVALID_ARGUMENT
+                ? VXML_INVALID_CONTRACT : status,
+            badfetch_event, sizeof(badfetch_event) - 1u);
+    }
+
+    if (resource.lease == NULL ||
+        resource.size > data->max_data_bytes ||
+        (resource.size != 0u &&
+         resource.data == NULL)) {
+        status = resource.size > data->max_data_bytes
+            ? VXML_LIMIT_EXCEEDED
+            : VXML_INVALID_CONTRACT;
+        quickjs_close_data_resource_if_published(
+            data, &resource);
+        quickjs_finish_data_fetch_audio(
+            audio_started, &audio_ticket);
+        return session_fail(
+            session, status,
+            badfetch_event, sizeof(badfetch_event) - 1u);
+    }
+
+    quickjs_close_data_resource_if_published(
+        data, &resource);
+    quickjs_finish_data_fetch_audio(
+        audio_started, &audio_ticket);
+    return VXML_OK;
+}
+
+static vxml_status quickjs_execute_data_initializers(
+    vxml_session_impl *session,
+    vxml_data_placement placement,
+    size_t form_index) {
+    const vxml_program_impl *program;
+    size_t index;
+    if (session == NULL || session->program == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program = session->program;
+    if (program->data_row_count == 0u)
+        return VXML_OK;
+    if (program->data_rows == NULL)
+        return VXML_INVALID_CONTRACT;
+    for (index = 0u; index < program->data_row_count; ++index) {
+        const vxml_data_row *row = &program->data_rows[index];
+        vxml_status status;
+        if (row->placement != placement)
+            continue;
+        if (placement == VXML_DATA_FORM &&
+            row->owner_form != form_index)
+            continue;
+        if (placement == VXML_DATA_DOCUMENT &&
+            row->owner_form != SIZE_MAX)
+            return VXML_INVALID_CONTRACT;
+        status = quickjs_execute_data_row(
+            session, row);
+        if (status != VXML_OK)
+            return status;
+    }
     return VXML_OK;
 }
 
@@ -558,6 +1367,7 @@ static vxml_status quickjs_run_from(
     vxml_quickjs_session_data *data;
     size_t transitions = 0u;
     size_t next_block = first_block;
+    vxml_status status;
     if (session == NULL || session->program == NULL ||
         session->profile_data == NULL)
         return VXML_INVALID_ARGUMENT;
@@ -566,6 +1376,17 @@ static vxml_status quickjs_run_from(
     if (program->forms == NULL || program->form_count == 0u)
         return session_fail(
             session, VXML_INVALID_STRUCTURE, NULL, 0u);
+    if (form_index >= program->form_count)
+        return session_fail(
+            session, VXML_INVALID_STRUCTURE, NULL, 0u);
+
+    if (!data->document_data_done) {
+        status = quickjs_execute_data_initializers(
+            session, VXML_DATA_DOCUMENT, SIZE_MAX);
+        if (status != VXML_OK)
+            return status;
+        data->document_data_done = true;
+    }
 
     for (;;) {
         const vxml_form_row *form;
@@ -584,8 +1405,13 @@ static vxml_status quickjs_run_from(
             return session_fail(
                 session, VXML_INVALID_STRUCTURE, NULL, 0u);
         form_end = form->first_block + form->block_count;
-        if (next_block == SIZE_MAX)
+        if (next_block == SIZE_MAX) {
+            status = quickjs_execute_data_initializers(
+                session, VXML_DATA_FORM, form_index);
+            if (status != VXML_OK)
+                return status;
             next_block = form->first_block;
+        }
         if (next_block < form->first_block ||
             next_block > form_end)
             return session_fail(
@@ -610,8 +1436,28 @@ static vxml_status quickjs_run_from(
                 continue;
             action = &program->actions[block->first_action];
 
+            if (action->kind == VXML_ACTION_DATA) {
+                if (action->data_index >=
+                        program->data_row_count ||
+                    program->data_rows == NULL ||
+                    program->data_rows[
+                        action->data_index].placement !=
+                        VXML_DATA_EXECUTABLE ||
+                    program->data_rows[
+                        action->data_index].owner_form !=
+                        form_index)
+                    return session_fail(
+                        session, VXML_INVALID_STRUCTURE,
+                        NULL, 0u);
+                status = quickjs_execute_data_row(
+                    session,
+                    &program->data_rows[action->data_index]);
+                if (status != VXML_OK)
+                    return status;
+                continue;
+            }
+
             if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
-                vxml_status status;
                 data->resume_form = form_index;
                 data->resume_block = block_index + 1u;
                 data->script_pending = true;
@@ -697,14 +1543,33 @@ static vxml_status quickjs_run_at(
     return quickjs_run_from(session, form_index, SIZE_MAX);
 }
 
+static void quickjs_session_data_release(
+    const vxml_quickjs_program_data *program_data,
+    vxml_quickjs_session_data *data) {
+    if (data == NULL) return;
+    if (program_data != NULL &&
+        compile_options_state_enabled(&program_data->options))
+        quickjs_cmeta_state_scratch_destroy(
+            &data->committed_root,
+            program_data->options.root);
+    quickjs_sandbox_runtime_destroy(&data->runtime);
+    vxml_free(data->data_values);
+    vxml_free(data->data_fields);
+    vxml_free(data->dynamic_uri);
+    vxml_free(data);
+}
+
 static vxml_status quickjs_profile_session_init(
     vxml_session_impl *session, const void *options_value) {
     const vxml_quickjs_session_options_v1 *options =
         (const vxml_quickjs_session_options_v1 *)options_value;
     const vxml_quickjs_program_data *program_data;
-    vxml_quickjs_session_data *data;
+    vxml_quickjs_session_data *data = NULL;
     quickjs_sandbox_options sandbox;
     quickjs_sandbox_status sandbox_status;
+    size_t dynamic_uri_bytes;
+    size_t max_fields = 0u;
+    bool has_data;
 
     if (session == NULL || session->program == NULL ||
         session->program->profile_data == NULL ||
@@ -718,21 +1583,87 @@ static vxml_status quickjs_profile_session_init(
         (session_initial_state(options) != NULL))
         return VXML_INVALID_ARGUMENT;
 
+    has_data = session->program->data_row_count != 0u;
+    if (has_data) {
+        if (!compile_options_data_enabled(&program_data->options) ||
+            session->program->data_rows == NULL ||
+            !session_options_has_data_tail(options) ||
+            !data_resource_adapter_v3_valid(options->data_resources) ||
+            options->max_data_bytes == 0u ||
+            options->max_data_bytes == SIZE_MAX ||
+            options->max_data_request_value_bytes == 0u ||
+            options->max_data_request_value_bytes == SIZE_MAX)
+            return VXML_INVALID_ARGUMENT;
+        if (program_requires_data_fetch_audio(session->program) &&
+            !fetch_audio_adapter_valid(options->data_fetch_audio))
+            return VXML_INVALID_ARGUMENT;
+        max_fields = program_max_data_fields(session->program);
+        if (max_fields >
+            program_data->options.max_data_namelist_fields)
+            return VXML_INVALID_CONTRACT;
+    }
+
+    dynamic_uri_bytes =
+        program_data->options.max_dynamic_script_uri_bytes;
+    if (compile_options_data_enabled(&program_data->options) &&
+        program_data->options.max_data_uri_bytes > dynamic_uri_bytes)
+        dynamic_uri_bytes =
+            program_data->options.max_data_uri_bytes;
+    if (dynamic_uri_bytes == SIZE_MAX)
+        return VXML_INVALID_CONTRACT;
+
     data = (vxml_quickjs_session_data *)vxml_calloc(1u, sizeof(*data));
     if (data == NULL)
         return VXML_ALLOCATION_FAILED;
     data->dynamic_uri =
-        (char *)vxml_malloc(
-            program_data->options.max_dynamic_script_uri_bytes + 1u);
+        (char *)vxml_malloc(dynamic_uri_bytes + 1u);
     if (data->dynamic_uri == NULL) {
-        vxml_free(data);
+        quickjs_session_data_release(program_data, data);
         return VXML_ALLOCATION_FAILED;
     }
-    data->dynamic_uri_capacity =
-        program_data->options.max_dynamic_script_uri_bytes + 1u;
+    data->dynamic_uri_capacity = dynamic_uri_bytes + 1u;
     data->resume_form = SIZE_MAX;
     data->resume_block = SIZE_MAX;
     data->script_pending = false;
+    data->document_data_done = false;
+
+    if (has_data) {
+        data->data_resources = *options->data_resources;
+        data->data_resource_user = options->data_resource_user;
+        data->has_data_resources = true;
+        data->max_data_bytes = options->max_data_bytes;
+        data->max_data_request_value_bytes =
+            options->max_data_request_value_bytes;
+        data->data_field_capacity = max_fields;
+        if (max_fields != 0u) {
+            data->data_fields =
+                (vxml_cmeta_data_field_v1 *)vxml_calloc(
+                    max_fields, sizeof(*data->data_fields));
+            data->data_values_bytes =
+                options->max_data_request_value_bytes;
+            data->data_values =
+                (char *)vxml_malloc(data->data_values_bytes);
+            if (data->data_fields == NULL ||
+                data->data_values == NULL) {
+                quickjs_session_data_release(
+                    program_data, data);
+                return VXML_ALLOCATION_FAILED;
+            }
+        }
+        if (options->data_fetch_audio != NULL) {
+            if (!fetch_audio_adapter_valid(
+                    options->data_fetch_audio)) {
+                quickjs_session_data_release(
+                    program_data, data);
+                return VXML_INVALID_ARGUMENT;
+            }
+            data->data_fetch_audio =
+                *options->data_fetch_audio;
+            data->data_fetch_audio_user =
+                options->data_fetch_audio_user;
+            data->has_data_fetch_audio = true;
+        }
+    }
 
     if (compile_options_state_enabled(&program_data->options) &&
         !quickjs_cmeta_state_snapshot(
@@ -740,22 +1671,22 @@ static vxml_status quickjs_profile_session_init(
             program_data->options.root,
             session_initial_state(options),
             program_data->options.max_snapshot_bytes)) {
-        vxml_free(data->dynamic_uri);
-        vxml_free(data);
+        quickjs_session_data_release(program_data, data);
         return VXML_ALLOCATION_FAILED;
     }
 
     sandbox = sandbox_options(&program_data->options);
+    if (has_data &&
+        data->max_data_request_value_bytes >
+            sandbox.max_string_bytes)
+        sandbox.max_string_bytes =
+            data->max_data_request_value_bytes;
     sandbox_status = quickjs_sandbox_runtime_init(
         &data->runtime, &sandbox, NULL, 0u);
     if (sandbox_status != QUICKJS_SANDBOX_OK) {
-        vxml_status status = sandbox_status_to_vxml(sandbox_status);
-        if (compile_options_state_enabled(&program_data->options))
-            quickjs_cmeta_state_scratch_destroy(
-                &data->committed_root,
-                program_data->options.root);
-        vxml_free(data->dynamic_uri);
-        vxml_free(data);
+        const vxml_status status =
+            sandbox_status_to_vxml(sandbox_status);
+        quickjs_session_data_release(program_data, data);
         return status;
     }
     session->profile_data = data;
@@ -784,23 +1715,17 @@ static vxml_status quickjs_profile_session_start_at(
 
 static void quickjs_profile_session_destroy(
     vxml_session_impl *session) {
+    const vxml_quickjs_program_data *program_data = NULL;
     vxml_quickjs_session_data *data;
     if (session == NULL || session->profile_data == NULL)
         return;
     data = (vxml_quickjs_session_data *)session->profile_data;
     if (session->program != NULL &&
-        session->program->profile_data != NULL) {
-        const vxml_quickjs_program_data *program_data =
+        session->program->profile_data != NULL)
+        program_data =
             (const vxml_quickjs_program_data *)
                 session->program->profile_data;
-        if (compile_options_state_enabled(&program_data->options))
-            quickjs_cmeta_state_scratch_destroy(
-                &data->committed_root,
-                program_data->options.root);
-    }
-    quickjs_sandbox_runtime_destroy(&data->runtime);
-    vxml_free(data->dynamic_uri);
-    vxml_free(data);
+    quickjs_session_data_release(program_data, data);
     session->profile_data = NULL;
 }
 
@@ -836,7 +1761,13 @@ vxml_quickjs_default_compile_options(void) {
         .max_resolved_script_uri_bytes =
             VXML_QUICKJS_DEFAULT_URI_BYTES,
         .max_script_source_bytes =
-            VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES};
+            VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES,
+        .max_data_rows =
+            VXML_QUICKJS_DEFAULT_DATA_ROWS,
+        .max_data_uri_bytes =
+            VXML_QUICKJS_DEFAULT_URI_BYTES,
+        .max_data_namelist_fields =
+            VXML_QUICKJS_DEFAULT_DATA_NAMELIST_FIELDS};
 }
 
 vxml_quickjs_session_options_v1
@@ -844,7 +1775,14 @@ vxml_quickjs_default_session_options(void) {
     return (vxml_quickjs_session_options_v1){
         .abi_version = VXML_QUICKJS_SESSION_OPTIONS_ABI_V1,
         .struct_size = sizeof(vxml_quickjs_session_options_v1),
-        .initial_state = NULL};
+        .initial_state = NULL,
+        .data_resources = NULL,
+        .data_resource_user = NULL,
+        .max_data_bytes = VXML_QUICKJS_DEFAULT_DATA_BYTES,
+        .max_data_request_value_bytes =
+            VXML_QUICKJS_DEFAULT_DATA_VALUE_BYTES,
+        .data_fetch_audio = NULL,
+        .data_fetch_audio_user = NULL};
 }
 
 vxml_status vxml_compile_quickjs_script_profile(
@@ -875,14 +1813,26 @@ vxml_status vxml_compile_quickjs_script_profile(
     if (!compile_options_valid(&active))
         return VXML_INVALID_ARGUMENT;
 
-    status = vxml_compile_with_features(
-        bytes, size, limits,
-        VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT |
-            VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR,
-        out, diagnostic);
+    {
+        uint64_t features =
+            VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT |
+            VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR;
+        if (compile_options_data_enabled(&active))
+            features |= VXML_COMPILE_FEATURE_DATA_REQUEST;
+        status = vxml_compile_with_features(
+            bytes, size, limits,
+            features,
+            out, diagnostic);
+    }
     if (status != VXML_OK)
         return status;
     status = validate_dynamic_scripts(
+        out, &active, diagnostic);
+    if (status != VXML_OK) {
+        vxml_program_destroy(out);
+        return status;
+    }
+    status = validate_data_rows(
         out, &active, diagnostic);
     if (status != VXML_OK) {
         vxml_program_destroy(out);

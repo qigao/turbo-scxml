@@ -43,10 +43,17 @@ int main(void) {
            compile.max_state_string_bytes != 0u &&
            compile.max_resolved_script_uri_bytes != 0u &&
            compile.max_script_source_bytes != 0u &&
+           compile.max_data_rows != 0u &&
+           compile.max_data_uri_bytes != 0u &&
+           compile.max_data_namelist_fields != 0u &&
            session.abi_version ==
                VXML_QUICKJS_SESSION_OPTIONS_ABI_V1 &&
            session.struct_size == sizeof(session) &&
            session.initial_state == 0 &&
+           session.data_resources == 0 &&
+           session.max_data_bytes != 0u &&
+           session.max_data_request_value_bytes != 0u &&
+           session.data_fetch_audio == 0 &&
            execution.abi_version ==
                VXML_QUICKJS_SCRIPT_EXECUTION_ABI_V1 &&
            execution.struct_size == sizeof(execution) &&

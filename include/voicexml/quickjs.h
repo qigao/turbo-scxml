@@ -3,6 +3,7 @@
 
 #include <voicexml/voicexml.h>
 #include <voicexml/data_resource.h>
+#include <voicexml/resource.h>
 #include <voicexml/script_resource.h>
 #include <cmeta/data.h>
 
@@ -53,13 +54,25 @@ typedef struct vxml_quickjs_compile_options_v1 {
     /* External source acquisition bounds used by #235 execution. */
     size_t max_resolved_script_uri_bytes;
     size_t max_script_source_bytes;
+
+    /*
+     * Optional append-only VoiceXML 2.1 no-DOM <data> compiler tail.
+     *
+     * A complete nonzero tail enables profile-neutral data metadata and
+     * QuickJS request execution. Older struct prefixes keep <data>
+     * fail-closed.
+     */
+    size_t max_data_rows;
+    size_t max_data_uri_bytes;
+    size_t max_data_namelist_fields;
 } vxml_quickjs_compile_options_v1;
 
 /**
- * Append-only runtime options for one VoiceXML QuickJS target session.
+ * Append-only runtime options for one VoiceXML QuickJS session.
  *
- * This first slice has no resource/provider fields: it stops at
- * VXML_SESSION_SCRIPTING and reuses vxml_session_script() as the handoff.
+ * External-script execution remains an explicit handoff API. The optional
+ * no-DOM <data> tail supplies only the neutral V3 resource provider and hard
+ * request bounds; response bytes are discarded after exact settlement.
  */
 typedef struct vxml_quickjs_session_options_v1 {
     uint32_t abi_version;
@@ -71,6 +84,21 @@ typedef struct vxml_quickjs_session_options_v1 {
      * transactionally into Session-owned storage during init.
      */
     const void *initial_state;
+
+    /*
+     * Optional append-only no-DOM <data> runtime tail.
+     *
+     * The Session copies the provider operation table and borrows only the
+     * user pointer. Response bytes are never decoded or exposed to JavaScript.
+     */
+    const vxml_cmeta_data_resource_adapter_v1 *data_resources;
+    void *data_resource_user;
+    size_t max_data_bytes;
+    size_t max_data_request_value_bytes;
+
+    /* Optional fetch-audio handoff around one real data provider attempt. */
+    const vxml_fetch_audio_adapter_v1 *data_fetch_audio;
+    void *data_fetch_audio_user;
 } vxml_quickjs_session_options_v1;
 
 /**
@@ -104,10 +132,12 @@ vxml_quickjs_default_session_options(void);
 /**
  * Compile the explicit VoiceXML QuickJS script-target profile.
  *
- * Accepts static script@src plus VoiceXML 2.1 script@srcexpr. Dynamic
- * expressions are retained in Program-owned storage and validated once.
- * Base vxml_compile() and vxml_compile_external_script_profile() remain
- * fail-closed for srcexpr.
+ * Accepts static script@src plus VoiceXML 2.1 script@srcexpr and the bounded
+ * no-DOM <data> request profile when the append-only data compile tail is
+ * enabled. Dynamic expressions are retained in Program-owned storage and
+ * validated once. Base vxml_compile() and
+ * vxml_compile_external_script_profile() remain fail-closed for these
+ * QuickJS-only additions.
  */
 vxml_status vxml_compile_quickjs_script_profile(
     const void *bytes, size_t size,
@@ -116,7 +146,13 @@ vxml_status vxml_compile_quickjs_script_profile(
     vxml_program *out,
     vxml_diagnostic *diagnostic);
 
-/** Initialize one Session for a program compiled by this profile. */
+/**
+ * Initialize one Session for a program compiled by this profile.
+ *
+ * A Program containing <data> requires the complete data runtime tail and a
+ * V3-capable neutral data-resource adapter. The Session copies adapter
+ * operations and owns request scratch; provider user pointers remain borrowed.
+ */
 vxml_status vxml_session_init_quickjs(
     vxml_session *session,
     const vxml_program *program,

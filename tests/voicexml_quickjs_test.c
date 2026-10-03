@@ -138,6 +138,206 @@ quickjs_script_adapter = {
     .close = quickjs_script_close
 };
 
+
+#define QUICKJS_DATA_PROBE_CALLS 8u
+#define QUICKJS_DATA_PROBE_FIELDS 8u
+
+typedef struct quickjs_data_probe {
+    size_t open_calls;
+    size_t close_calls;
+    vxml_status open_status;
+    bool publish_on_failure;
+    bool ignore_max_bytes;
+    const void *body;
+    size_t body_size;
+
+    char uris[QUICKJS_DATA_PROBE_CALLS][256];
+    size_t uri_sizes[QUICKJS_DATA_PROBE_CALLS];
+    vxml_submit_method methods[QUICKJS_DATA_PROBE_CALLS];
+    vxml_submit_enctype enctypes[QUICKJS_DATA_PROBE_CALLS];
+
+    bool last_has_timeout;
+    uint64_t last_timeout_us;
+    vxml_cmeta_data_fetch_hint last_fetch_hint;
+    bool last_has_max_age;
+    uint64_t last_max_age_seconds;
+    bool last_has_max_stale;
+    uint64_t last_max_stale_seconds;
+
+    size_t last_field_count;
+    char field_names[QUICKJS_DATA_PROBE_FIELDS][64];
+    char field_values[QUICKJS_DATA_PROBE_FIELDS][128];
+} quickjs_data_probe;
+
+static vxml_status quickjs_data_open_v3(
+    void *user,
+    const vxml_cmeta_data_request_v3 *request,
+    vxml_cmeta_data_resource_v1 *out) {
+    quickjs_data_probe *probe =
+        (quickjs_data_probe *)user;
+    size_t call_index;
+    size_t field;
+    if (probe == NULL || request == NULL ||
+        request->abi_version !=
+            VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        request->struct_size <
+            sizeof(vxml_cmeta_data_request_v3) ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >=
+            sizeof(probe->uris[0]) ||
+        request->field_count >
+            QUICKJS_DATA_PROBE_FIELDS ||
+        (request->field_count != 0u &&
+         request->fields == NULL) ||
+        out == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    call_index = probe->open_calls;
+    ++probe->open_calls;
+    if (call_index < QUICKJS_DATA_PROBE_CALLS) {
+        memcpy(
+            probe->uris[call_index],
+            request->uri,
+            request->uri_size);
+        probe->uris[call_index][request->uri_size] = '\0';
+        probe->uri_sizes[call_index] = request->uri_size;
+        probe->methods[call_index] = request->method;
+        probe->enctypes[call_index] = request->enctype;
+    }
+    probe->last_has_timeout = request->has_timeout;
+    probe->last_timeout_us = request->timeout_us;
+    probe->last_fetch_hint = request->fetch_hint;
+    probe->last_has_max_age = request->has_max_age;
+    probe->last_max_age_seconds =
+        request->max_age_seconds;
+    probe->last_has_max_stale = request->has_max_stale;
+    probe->last_max_stale_seconds =
+        request->max_stale_seconds;
+    probe->last_field_count = request->field_count;
+    for (field = 0u; field < request->field_count; ++field) {
+        const vxml_cmeta_data_field_v1 *source =
+            &request->fields[field];
+        if (source->name == NULL ||
+            source->name_size == 0u ||
+            source->name_size >=
+                sizeof(probe->field_names[field]) ||
+            source->value == NULL ||
+            source->value_size >=
+                sizeof(probe->field_values[field]))
+            return VXML_INVALID_ARGUMENT;
+        memcpy(
+            probe->field_names[field],
+            source->name, source->name_size);
+        probe->field_names[field][source->name_size] = '\0';
+        memcpy(
+            probe->field_values[field],
+            source->value, source->value_size);
+        probe->field_values[field][source->value_size] = '\0';
+    }
+
+    if (!probe->ignore_max_bytes &&
+        probe->body_size > request->max_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    if (probe->open_status != VXML_OK) {
+        if (probe->publish_on_failure) {
+            *out = (vxml_cmeta_data_resource_v1){
+                .data = probe->body,
+                .size = probe->body_size,
+                .format = VXML_CMETA_DATA_JSON,
+                .lease = probe};
+        }
+        return probe->open_status;
+    }
+    *out = (vxml_cmeta_data_resource_v1){
+        .data = probe->body,
+        .size = probe->body_size,
+        .format = VXML_CMETA_DATA_JSON,
+        .lease = probe};
+    return VXML_OK;
+}
+
+static void quickjs_data_close(
+    void *user,
+    vxml_cmeta_data_resource_v1 *resource) {
+    quickjs_data_probe *probe =
+        (quickjs_data_probe *)user;
+    if (probe != NULL && resource != NULL &&
+        resource->lease == probe)
+        ++probe->close_calls;
+    if (resource != NULL)
+        *resource = (vxml_cmeta_data_resource_v1){0};
+}
+
+static const vxml_cmeta_data_resource_adapter_v1
+quickjs_data_adapter = {
+    .abi_version =
+        VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size =
+        sizeof(vxml_cmeta_data_resource_adapter_v1),
+    .open = NULL,
+    .close = quickjs_data_close,
+    .open_v2 = NULL,
+    .open_v3 = quickjs_data_open_v3
+};
+
+typedef struct quickjs_fetch_audio_probe {
+    size_t begin_calls;
+    size_t finish_calls;
+    vxml_fetch_audio_begin_result result;
+    char uri[256];
+    size_t uri_size;
+    bool has_delay;
+    uint64_t delay_us;
+    bool has_minimum;
+    uint64_t minimum_us;
+} quickjs_fetch_audio_probe;
+
+static void quickjs_fetch_audio_finish(void *user) {
+    quickjs_fetch_audio_probe *probe =
+        (quickjs_fetch_audio_probe *)user;
+    if (probe != NULL)
+        ++probe->finish_calls;
+}
+
+static vxml_fetch_audio_begin_result
+quickjs_fetch_audio_begin(
+    void *user,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_ticket_v1 *out_ticket) {
+    quickjs_fetch_audio_probe *probe =
+        (quickjs_fetch_audio_probe *)user;
+    if (probe == NULL || request == NULL ||
+        out_ticket == NULL ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >= sizeof(probe->uri))
+        return VXML_FETCH_AUDIO_SKIPPED;
+    ++probe->begin_calls;
+    memcpy(probe->uri, request->uri, request->uri_size);
+    probe->uri[request->uri_size] = '\0';
+    probe->uri_size = request->uri_size;
+    probe->has_delay = request->has_delay;
+    probe->delay_us = request->delay_us;
+    probe->has_minimum = request->has_minimum;
+    probe->minimum_us = request->minimum_us;
+    if (probe->result == VXML_FETCH_AUDIO_STARTED) {
+        *out_ticket = (vxml_fetch_audio_ticket_v1){
+            .finish = quickjs_fetch_audio_finish,
+            .user = probe};
+    } else {
+        *out_ticket = (vxml_fetch_audio_ticket_v1){0};
+    }
+    return probe->result;
+}
+
+static const vxml_fetch_audio_adapter_v1
+quickjs_fetch_audio_adapter = {
+    .abi_version = VXML_FETCH_AUDIO_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_fetch_audio_adapter_v1),
+    .begin = quickjs_fetch_audio_begin
+};
+
 static vxml_dialog_manager_status quickjs_unused_document_open(
     void *user,
     const char *source, size_t source_size,
@@ -207,6 +407,27 @@ typed_session_options(
     vxml_quickjs_session_options_v1 options =
         vxml_quickjs_default_session_options();
     options.initial_state = initial;
+    return options;
+}
+
+
+static vxml_quickjs_session_options_v1
+data_session_options(quickjs_data_probe *probe) {
+    vxml_quickjs_session_options_v1 options =
+        vxml_quickjs_default_session_options();
+    options.data_resources = &quickjs_data_adapter;
+    options.data_resource_user = probe;
+    return options;
+}
+
+static vxml_quickjs_session_options_v1
+typed_data_session_options(
+    const voice_quickjs_state *initial,
+    quickjs_data_probe *probe) {
+    vxml_quickjs_session_options_v1 options =
+        typed_session_options(initial);
+    options.data_resources = &quickjs_data_adapter;
+    options.data_resource_user = probe;
     return options;
 }
 
@@ -712,6 +933,429 @@ spec("VoiceXML QuickJS script target profile") {
         check_equal(
             vxml_document_store_destroy(&store),
             VXML_DOCUMENT_STORE_OK);
+    }
+
+
+    it("executes document form and executable data rows once in phase order") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<data src='doc.json'/>"
+            "<form id='main'>"
+            "<data src='form.json'/>"
+            "<block><data src='action.json'/></block>"
+            "<block><exit/></block>"
+            "</form></vxml>";
+        static const char body[] = "{}";
+        vxml_quickjs_compile_options_v1 compile =
+            vxml_quickjs_default_compile_options();
+        quickjs_data_probe probe = {
+            .open_status = VXML_OK,
+            .body = body,
+            .body_size = sizeof(body) - 1u};
+        vxml_quickjs_session_options_v1 options =
+            data_session_options(&probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(probe.open_calls, (size_t)3u);
+        check_equal(probe.close_calls, (size_t)3u);
+        check_equal(probe.uris[0], "doc.json");
+        check_equal(probe.uris[1], "form.json");
+        check_equal(probe.uris[2], "action.json");
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("projects dynamic data URI namelist and fetch policy into one V3 attempt") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<property name='datafetchhint' value='safe'/>"
+            "<property name='datamaxstale' value='9'/>"
+            "<property name='fetchaudiodelay' value='250ms'/>"
+            "<property name='fetchaudiominimum' value='1s'/>"
+            "<form><block>"
+            "<data srcexpr=\"'dynamic/' + value + '.json'\" "
+            "method='post' "
+            "enctype='application/x-www-form-urlencoded' "
+            "namelist='value' "
+            "fetchaudio='wait.wav' "
+            "fetchtimeout='1.5s' maxage='3'/>"
+            "</block><block><exit/></block></form></vxml>";
+        static const char body[] = "discarded";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {7};
+        quickjs_data_probe probe = {
+            .open_status = VXML_OK,
+            .body = body,
+            .body_size = sizeof(body) - 1u};
+        quickjs_fetch_audio_probe audio = {
+            .result = VXML_FETCH_AUDIO_STARTED};
+        vxml_quickjs_session_options_v1 options =
+            typed_data_session_options(&initial, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.data_fetch_audio =
+            &quickjs_fetch_audio_adapter;
+        options.data_fetch_audio_user = &audio;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(probe.uris[0], "dynamic/7.json");
+        check_equal(
+            probe.methods[0], VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            probe.enctypes[0],
+            VXML_SUBMIT_ENCTYPE_URLENCODED);
+        check_equal(probe.last_field_count, (size_t)1u);
+        check_equal(probe.field_names[0], "value");
+        check_equal(probe.field_values[0], "7");
+        check_true(probe.last_has_timeout);
+        check_equal(
+            probe.last_timeout_us, UINT64_C(1500000));
+        check_equal(
+            probe.last_fetch_hint,
+            VXML_CMETA_DATA_FETCH_HINT_SAFE);
+        check_true(probe.last_has_max_age);
+        check_equal(
+            probe.last_max_age_seconds, UINT64_C(3));
+        check_true(probe.last_has_max_stale);
+        check_equal(
+            probe.last_max_stale_seconds, UINT64_C(9));
+
+        check_equal(audio.begin_calls, (size_t)1u);
+        check_equal(audio.finish_calls, (size_t)1u);
+        check_equal(audio.uri, "wait.wav");
+        check_true(audio.has_delay);
+        check_equal(audio.delay_us, UINT64_C(250000));
+        check_true(audio.has_minimum);
+        check_equal(audio.minimum_us, UINT64_C(1000000));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects named data before provider admission with the exact Event") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><data name='result' src='x.json'/></block>"
+            "</form></vxml>";
+        static const char body[] = "{}";
+        vxml_quickjs_compile_options_v1 compile =
+            vxml_quickjs_default_compile_options();
+        quickjs_data_probe probe = {
+            .open_status = VXML_OK,
+            .body = body,
+            .body_size = sizeof(body) - 1u};
+        vxml_quickjs_session_options_v1 options =
+            data_session_options(&probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const char *event = NULL;
+        size_t event_size = 0u;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)0u);
+        check_equal(
+            vxml_quickjs_session_last_event(
+                &session, &event, &event_size),
+            VXML_OK);
+        check_equal(
+            event_size,
+            sizeof("error.unsupported.data.name") - 1u);
+        check_equal(
+            memcmp(
+                event, "error.unsupported.data.name",
+                event_size),
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("closes provider output published on failure and never retries") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><data src='fail.json' method='post'/></block>"
+            "</form></vxml>";
+        static const char body[] = "partial";
+        vxml_quickjs_compile_options_v1 compile =
+            vxml_quickjs_default_compile_options();
+        quickjs_data_probe probe = {
+            .open_status = VXML_SEMANTIC_ERROR,
+            .publish_on_failure = true,
+            .body = body,
+            .body_size = sizeof(body) - 1u};
+        vxml_quickjs_session_options_v1 options =
+            data_session_options(&probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        const char *event = NULL;
+        size_t event_size = 0u;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_SEMANTIC_ERROR);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            vxml_quickjs_session_last_event(
+                &session, &event, &event_size),
+            VXML_OK);
+        check_equal(
+            event_size, sizeof("error.badfetch") - 1u);
+        check_equal(
+            memcmp(event, "error.badfetch", event_size),
+            0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("does not replay document or form data after external script resume") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<data src='doc.json'/>"
+            "<form>"
+            "<data src='form.json'/>"
+            "<block><script src='scripts/set.js'/></block>"
+            "<block><data src='after.json'/></block>"
+            "<block><exit/></block>"
+            "</form></vxml>";
+        static const char data_body[] = "{}";
+        static const char script_body[] = "value = 2;";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {1};
+        quickjs_data_probe data_probe = {
+            .open_status = VXML_OK,
+            .body = data_body,
+            .body_size = sizeof(data_body) - 1u};
+        quickjs_script_probe script_probe = {
+            .open_status = VXML_SCRIPT_RESOURCE_OK,
+            .first_body = script_body,
+            .first_body_size = sizeof(script_body) - 1u};
+        vxml_quickjs_session_options_v1 options =
+            typed_data_session_options(
+                &initial, &data_probe);
+        vxml_document_store store = {0};
+        vxml_quickjs_script_execution_v1 execution;
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        quickjs_init_resolver(&store);
+        execution = script_execution(&store);
+        execution.script_resource_user = &script_probe;
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SCRIPTING);
+        check_equal(data_probe.open_calls, (size_t)2u);
+        check_equal(data_probe.close_calls, (size_t)2u);
+
+        check_equal(
+            vxml_quickjs_session_execute_script(
+                &session, &execution),
+            VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_EXITED);
+        check_equal(script_probe.open_calls, (size_t)1u);
+        check_equal(script_probe.close_calls, (size_t)1u);
+        check_equal(data_probe.open_calls, (size_t)3u);
+        check_equal(data_probe.close_calls, (size_t)3u);
+        check_equal(data_probe.uris[0], "doc.json");
+        check_equal(data_probe.uris[1], "form.json");
+        check_equal(data_probe.uris[2], "after.json");
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("fails unsupported namelist values and byte overflow before provider admission") {
+        static const char function_document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><data src='x.json' namelist='Object'/></block>"
+            "</form></vxml>";
+        static const char value_document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><data src='x.json' namelist='value'/></block>"
+            "</form></vxml>";
+        static const char body[] = "{}";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {123};
+        size_t case_index;
+
+        for (case_index = 0u; case_index < 2u; ++case_index) {
+            quickjs_data_probe probe = {
+                .open_status = VXML_OK,
+                .body = body,
+                .body_size = sizeof(body) - 1u};
+            vxml_quickjs_session_options_v1 options =
+                typed_data_session_options(
+                    &initial, &probe);
+            vxml_program program = {0};
+            vxml_session session = {0};
+            const char *event = NULL;
+            size_t event_size = 0u;
+            const char *document =
+                case_index == 0u
+                    ? function_document : value_document;
+            const vxml_status expected =
+                case_index == 0u
+                    ? VXML_SEMANTIC_ERROR
+                    : VXML_LIMIT_EXCEEDED;
+
+            if (case_index == 1u)
+                options.max_data_request_value_bytes = 2u;
+
+            check_equal(
+                vxml_compile_quickjs_script_profile(
+                    document, strlen(document),
+                    NULL, &compile, &program, NULL),
+                VXML_OK);
+            check_equal(
+                vxml_session_init_quickjs(
+                    &session, &program, &options),
+                VXML_OK);
+            check_equal(
+                vxml_session_start(&session),
+                expected);
+            check_equal(probe.open_calls, (size_t)0u);
+            check_equal(probe.close_calls, (size_t)0u);
+            check_equal(
+                vxml_quickjs_session_last_event(
+                    &session, &event, &event_size),
+                VXML_OK);
+            check_equal(
+                event_size, sizeof("error.semantic") - 1u);
+            check_equal(
+                memcmp(
+                    event, "error.semantic",
+                    event_size),
+                0);
+
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+
+    it("preserves pre-data QuickJS option prefixes and keeps data fail-closed") {
+        static const char script_document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script srcexpr=\"'scripts/main.js'\"/></block>"
+            "</form></vxml>";
+        static const char data_document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><data src='x.json'/></block></form></vxml>";
+        vxml_quickjs_compile_options_v1 compile =
+            typed_compile_options();
+        const voice_quickjs_state initial = {5};
+        vxml_quickjs_session_options_v1 options =
+            typed_session_options(&initial);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        compile.struct_size =
+            offsetof(
+                vxml_quickjs_compile_options_v1,
+                max_data_rows);
+        options.struct_size =
+            offsetof(
+                vxml_quickjs_session_options_v1,
+                data_resources);
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                script_document,
+                sizeof(script_document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_quickjs(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SCRIPTING);
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+
+        check_equal(
+            vxml_compile_quickjs_script_profile(
+                data_document,
+                sizeof(data_document) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_UNSUPPORTED_FEATURE);
+        check_null(program.impl);
     }
 
     it("keeps base and static script profiles fail-closed for srcexpr") {
