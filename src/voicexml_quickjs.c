@@ -135,12 +135,22 @@ static const void *session_initial_state(
 
 static quickjs_sandbox_options sandbox_options(
     const vxml_quickjs_compile_options_v1 *options) {
+    size_t max_source_bytes =
+        options != NULL ? options->max_expression_bytes : 0u;
+    if (compile_options_has_state_tail(options) &&
+        options->max_script_source_bytes > max_source_bytes)
+        max_source_bytes = options->max_script_source_bytes;
     return (quickjs_sandbox_options){
-        .max_source_bytes = options->max_expression_bytes,
-        .max_string_bytes = options->max_dynamic_script_uri_bytes,
-        .max_heap_bytes = options->max_heap_bytes,
-        .max_stack_bytes = options->max_stack_bytes,
-        .max_eval_milliseconds = options->max_eval_milliseconds};
+        .max_source_bytes = max_source_bytes,
+        .max_string_bytes =
+            options != NULL
+                ? options->max_dynamic_script_uri_bytes : 0u,
+        .max_heap_bytes =
+            options != NULL ? options->max_heap_bytes : 0u,
+        .max_stack_bytes =
+            options != NULL ? options->max_stack_bytes : 0u,
+        .max_eval_milliseconds =
+            options != NULL ? options->max_eval_milliseconds : 0u};
 }
 
 static vxml_status sandbox_status_to_vxml(
@@ -285,6 +295,162 @@ static vxml_status validate_dynamic_scripts(
     return VXML_OK;
 }
 
+static bool execution_request_valid(
+    const vxml_quickjs_script_execution_v1 *execution) {
+    const size_t prefix =
+        offsetof(vxml_quickjs_script_execution_v1,
+                 base_document_uri_size) +
+        sizeof(execution->base_document_uri_size);
+    return execution != NULL &&
+        execution->abi_version ==
+            VXML_QUICKJS_SCRIPT_EXECUTION_ABI_V1 &&
+        execution->struct_size >= prefix &&
+        execution->resolver != NULL &&
+        execution->script_resources != NULL &&
+        execution->script_resources->abi_version ==
+            VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1 &&
+        execution->script_resources->struct_size >=
+            offsetof(vxml_script_resource_adapter_v1, close) +
+                sizeof(execution->script_resources->close) &&
+        execution->script_resources->open != NULL &&
+        execution->script_resources->close != NULL &&
+        (execution->base_document_uri_size == 0u ||
+         (execution->base_document_uri != NULL &&
+          memchr(
+              execution->base_document_uri, '\0',
+              execution->base_document_uri_size) == NULL));
+}
+
+static vxml_status script_resource_status_to_vxml(
+    vxml_script_resource_status status) {
+    switch (status) {
+    case VXML_SCRIPT_RESOURCE_OK:
+        return VXML_OK;
+    case VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED:
+        return VXML_ALLOCATION_FAILED;
+    case VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED:
+        return VXML_LIMIT_EXCEEDED;
+    case VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT:
+        return VXML_INVALID_ARGUMENT;
+    case VXML_SCRIPT_RESOURCE_INVALID_URI:
+    case VXML_SCRIPT_RESOURCE_UNSUPPORTED_CHARSET:
+    case VXML_SCRIPT_RESOURCE_PROVIDER_ERROR:
+    case VXML_SCRIPT_RESOURCE_INVALID_DATA:
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+}
+
+static vxml_status quickjs_prepare_committed_context(
+    vxml_session_impl *session,
+    quickjs_cmeta_bridge *bridge) {
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    quickjs_cmeta_limits limits;
+    quickjs_sandbox_status sandbox_status;
+    if (session == NULL || bridge == NULL ||
+        session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    if (!compile_options_state_enabled(&program_data->options) ||
+        !data->committed_root.live ||
+        data->committed_root.value == NULL)
+        return VXML_INVALID_CONTRACT;
+    sandbox_status = quickjs_sandbox_context_recreate(
+        &data->runtime, NULL, 0u);
+    if (sandbox_status != QUICKJS_SANDBOX_OK)
+        return sandbox_status_to_vxml(sandbox_status);
+    limits = cmeta_limits(&program_data->options);
+    if (!quickjs_cmeta_bridge_init(
+            bridge, &data->runtime,
+            program_data->options.root,
+            &limits, NULL, NULL))
+        return VXML_INVALID_CONTRACT;
+    bridge->properties = 0u;
+    if (!quickjs_cmeta_import_root(
+            bridge, data->committed_root.value))
+        return VXML_SEMANTIC_ERROR;
+    return VXML_OK;
+}
+
+static vxml_status quickjs_prepare_script_transaction(
+    vxml_session_impl *session,
+    const vxml_script_source *source,
+    quickjs_cmeta_state_scratch *scratch) {
+    static const char semantic_event[] = "error.semantic";
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    quickjs_cmeta_bridge bridge = {0};
+    quickjs_sandbox_status sandbox_status;
+    vxml_status status;
+    if (session == NULL || source == NULL || scratch == NULL ||
+        session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    status = quickjs_prepare_committed_context(
+        session, &bridge);
+    if (status != VXML_OK)
+        return session_fail(
+            session, status,
+            semantic_event, sizeof(semantic_event) - 1u);
+    if (!quickjs_cmeta_state_snapshot(
+            scratch,
+            program_data->options.root,
+            data->committed_root.value,
+            program_data->options.max_snapshot_bytes))
+        return session_fail(
+            session, VXML_ALLOCATION_FAILED,
+            semantic_event, sizeof(semantic_event) - 1u);
+
+    if (source->size != 0u) {
+        if (source->data == NULL ||
+            source->size >
+                program_data->options.max_script_source_bytes) {
+            quickjs_cmeta_state_scratch_destroy(
+                scratch, program_data->options.root);
+            return session_fail(
+                session, VXML_LIMIT_EXCEEDED,
+                semantic_event, sizeof(semantic_event) - 1u);
+        }
+        sandbox_status = quickjs_sandbox_runtime_eval(
+            &data->runtime,
+            (const char *)source->data,
+            source->size,
+            "<voicexml-external-script>",
+            program_data->options.max_eval_milliseconds,
+            NULL, 0u);
+        status = sandbox_status_to_vxml(sandbox_status);
+        if (status != VXML_OK) {
+            quickjs_cmeta_state_scratch_destroy(
+                scratch, program_data->options.root);
+            return session_fail(
+                session, status,
+                semantic_event, sizeof(semantic_event) - 1u);
+        }
+    }
+
+    bridge.properties = 0u;
+    if (!quickjs_cmeta_export_root(
+            &bridge, scratch->value)) {
+        quickjs_cmeta_state_scratch_destroy(
+            scratch, program_data->options.root);
+        return session_fail(
+            session, VXML_SEMANTIC_ERROR,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+    return VXML_OK;
+}
+
 static vxml_status project_script_target(
     vxml_session_impl *session,
     const vxml_action_row *action) {
@@ -320,6 +486,16 @@ static vxml_status project_script_target(
     if (action->script_srcexpr != NULL) {
         const char *value = NULL;
         size_t value_size = 0u;
+        if (compile_options_state_enabled(&program_data->options)) {
+            quickjs_cmeta_bridge bridge = {0};
+            status = quickjs_prepare_committed_context(
+                session, &bridge);
+            if (status != VXML_OK)
+                return session_fail(
+                    session, status,
+                    semantic_event,
+                    sizeof(semantic_event) - 1u);
+        }
         if (!program_view_valid(
                 program, action->script_srcexpr,
                 action->script_srcexpr_size))
