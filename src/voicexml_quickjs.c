@@ -507,6 +507,7 @@ static vxml_status quickjs_profile_session_init(
     vxml_session_impl *session, const void *options_value) {
     const vxml_quickjs_session_options_v1 *options =
         (const vxml_quickjs_session_options_v1 *)options_value;
+    vxml_quickjs_session_options_v1 active_options;
     const vxml_quickjs_program_data *program_data;
     vxml_quickjs_session_data *data;
     quickjs_sandbox_options sandbox;
@@ -516,14 +517,22 @@ static vxml_status quickjs_profile_session_init(
         session->program->profile_data == NULL ||
         !session_options_valid(options))
         return VXML_INVALID_ARGUMENT;
+    copy_session_options(&active_options, options);
     program_data =
         (const vxml_quickjs_program_data *)session->program->profile_data;
     if (!compile_options_valid(&program_data->options))
         return VXML_INVALID_CONTRACT;
+    if (execution_state_enabled(&program_data->options) &&
+        (active_options.struct_size <
+             VXML_QUICKJS_SESSION_OPTIONS_STATE_SIZE ||
+         active_options.initial_root == NULL))
+        return VXML_INVALID_ARGUMENT;
 
     data = (vxml_quickjs_session_data *)vxml_calloc(1u, sizeof(*data));
     if (data == NULL)
         return VXML_ALLOCATION_FAILED;
+    data->resume_form = SIZE_MAX;
+    data->resume_block = SIZE_MAX;
     data->dynamic_uri =
         (char *)vxml_malloc(
             program_data->options.max_dynamic_script_uri_bytes + 1u);
@@ -542,6 +551,17 @@ static vxml_status quickjs_profile_session_init(
         vxml_free(data->dynamic_uri);
         vxml_free(data);
         return status;
+    }
+    if (execution_state_enabled(&program_data->options) &&
+        !quickjs_cmeta_state_snapshot(
+            &data->committed_root,
+            program_data->options.root,
+            active_options.initial_root,
+            program_data->options.max_snapshot_bytes)) {
+        quickjs_sandbox_runtime_destroy(&data->runtime);
+        vxml_free(data->dynamic_uri);
+        vxml_free(data);
+        return VXML_INVALID_CONTRACT;
     }
     session->profile_data = data;
     return VXML_OK;
@@ -569,10 +589,20 @@ static vxml_status quickjs_profile_session_start_at(
 
 static void quickjs_profile_session_destroy(
     vxml_session_impl *session) {
+    const vxml_quickjs_program_data *program_data;
     vxml_quickjs_session_data *data;
     if (session == NULL || session->profile_data == NULL)
         return;
     data = (vxml_quickjs_session_data *)session->profile_data;
+    program_data = session->program != NULL
+        ? (const vxml_quickjs_program_data *)
+            session->program->profile_data
+        : NULL;
+    if (program_data != NULL &&
+        execution_state_enabled(&program_data->options))
+        quickjs_cmeta_state_scratch_destroy(
+            &data->committed_root,
+            program_data->options.root);
     quickjs_sandbox_runtime_destroy(&data->runtime);
     vxml_free(data->dynamic_uri);
     vxml_free(data);
@@ -596,14 +626,23 @@ vxml_quickjs_default_compile_options(void) {
         .max_heap_bytes = VXML_QUICKJS_DEFAULT_HEAP_BYTES,
         .max_stack_bytes = VXML_QUICKJS_DEFAULT_STACK_BYTES,
         .max_eval_milliseconds =
-            VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS};
+            VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS,
+        .root = NULL,
+        .max_string_bytes = VXML_QUICKJS_DEFAULT_STRING_BYTES,
+        .max_conversion_depth =
+            VXML_QUICKJS_DEFAULT_CONVERSION_DEPTH,
+        .max_properties = VXML_QUICKJS_DEFAULT_PROPERTIES,
+        .max_array_items = VXML_QUICKJS_DEFAULT_ARRAY_ITEMS,
+        .max_snapshot_bytes =
+            VXML_QUICKJS_DEFAULT_SNAPSHOT_BYTES};
 }
 
 vxml_quickjs_session_options_v1
 vxml_quickjs_default_session_options(void) {
     return (vxml_quickjs_session_options_v1){
         .abi_version = VXML_QUICKJS_SESSION_OPTIONS_ABI_V1,
-        .struct_size = sizeof(vxml_quickjs_session_options_v1)};
+        .struct_size = sizeof(vxml_quickjs_session_options_v1),
+        .initial_root = NULL};
 }
 
 vxml_status vxml_compile_quickjs_script_profile(
@@ -620,9 +659,7 @@ vxml_status vxml_compile_quickjs_script_profile(
     if (out != NULL) out->impl = NULL;
     if (diagnostic != NULL)
         memset(diagnostic, 0, sizeof(*diagnostic));
-    active = options != NULL
-        ? *options
-        : vxml_quickjs_default_compile_options();
+    copy_compile_options(&active, options);
     if (!compile_options_valid(&active))
         return VXML_INVALID_ARGUMENT;
 
@@ -673,6 +710,34 @@ vxml_status vxml_session_init_quickjs(
         impl->profile_session_init != quickjs_profile_session_init)
         return VXML_INVALID_CONTRACT;
     return vxml_session_init_profile(session, program, options);
+}
+
+vxml_status vxml_quickjs_session_root(
+    const vxml_session *session,
+    const void **out_root) {
+    const vxml_session_impl *impl;
+    const vxml_quickjs_program_data *program_data;
+    const vxml_quickjs_session_data *data;
+    if (out_root != NULL) *out_root = NULL;
+    if (session == NULL || out_root == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_QUICKJS ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program_data = (const vxml_quickjs_program_data *)
+        impl->program->profile_data;
+    data = (const vxml_quickjs_session_data *)impl->profile_data;
+    if (!execution_state_enabled(&program_data->options) ||
+        data->committed_root.value == NULL ||
+        !data->committed_root.live)
+        return VXML_INVALID_STATE;
+    *out_root = data->committed_root.value;
+    return VXML_OK;
 }
 
 vxml_status vxml_quickjs_session_last_event(
