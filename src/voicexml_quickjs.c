@@ -387,10 +387,13 @@ static vxml_status project_script_target(
     return VXML_OK;
 }
 
-static vxml_status quickjs_run_at(
-    vxml_session_impl *session, size_t form_index) {
+static vxml_status quickjs_run_from(
+    vxml_session_impl *session,
+    size_t form_index,
+    size_t first_block_index) {
     const vxml_program_impl *program;
     size_t transitions = 0u;
+    bool first_form = true;
     if (session == NULL || session->program == NULL)
         return VXML_INVALID_ARGUMENT;
     program = session->program;
@@ -414,7 +417,14 @@ static vxml_status quickjs_run_at(
             return session_fail(
                 session, VXML_INVALID_STRUCTURE, NULL, 0u);
 
-        for (block_index = form->first_block;
+        block_index = first_form && first_block_index != SIZE_MAX
+            ? first_block_index : form->first_block;
+        if (block_index < form->first_block ||
+            block_index > form->first_block + form->block_count)
+            return session_fail(
+                session, VXML_INVALID_STRUCTURE, NULL, 0u);
+        first_form = false;
+        for (;
              block_index < form->first_block + form->block_count;
              ++block_index) {
             const vxml_block_row *block =
@@ -433,8 +443,21 @@ static vxml_status quickjs_run_at(
                 continue;
             action = &program->actions[block->first_action];
 
-            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL)
-                return project_script_target(session, action);
+            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
+                vxml_quickjs_session_data *data =
+                    (vxml_quickjs_session_data *)session->profile_data;
+                vxml_status status;
+                if (data == NULL)
+                    return session_fail(
+                        session, VXML_INVALID_STRUCTURE, NULL, 0u);
+                data->resume_form = form_index;
+                data->resume_block = block_index + 1u;
+                data->resume_valid = true;
+                status = project_script_target(session, action);
+                if (status != VXML_OK)
+                    data->resume_valid = false;
+                return status;
+            }
 
             if (action->kind == VXML_ACTION_EXIT) {
                 session->state = VXML_SESSION_EXITED;
@@ -492,6 +515,7 @@ static vxml_status quickjs_run_at(
                     session, VXML_INVALID_STRUCTURE, NULL, 0u);
             ++transitions;
             form_index = action->target_form;
+            first_block_index = SIZE_MAX;
             jumped = true;
             break;
         }
@@ -501,6 +525,11 @@ static vxml_status quickjs_run_at(
             return VXML_OK;
         }
     }
+}
+
+static vxml_status quickjs_run_at(
+    vxml_session_impl *session, size_t form_index) {
+    return quickjs_run_from(session, form_index, SIZE_MAX);
 }
 
 static vxml_status quickjs_profile_session_init(
@@ -571,9 +600,14 @@ static vxml_status quickjs_profile_session_start(
     vxml_session_impl *session) {
     if (session == NULL || session->profile_data == NULL)
         return VXML_INVALID_STATE;
-    session_set_event(
-        (vxml_quickjs_session_data *)session->profile_data,
-        NULL, 0u);
+    {
+        vxml_quickjs_session_data *data =
+            (vxml_quickjs_session_data *)session->profile_data;
+        session_set_event(data, NULL, 0u);
+        data->resume_valid = false;
+        data->resume_form = SIZE_MAX;
+        data->resume_block = SIZE_MAX;
+    }
     return quickjs_run_at(session, 0u);
 }
 
@@ -581,9 +615,14 @@ static vxml_status quickjs_profile_session_start_at(
     vxml_session_impl *session, size_t form_index) {
     if (session == NULL || session->profile_data == NULL)
         return VXML_INVALID_STATE;
-    session_set_event(
-        (vxml_quickjs_session_data *)session->profile_data,
-        NULL, 0u);
+    {
+        vxml_quickjs_session_data *data =
+            (vxml_quickjs_session_data *)session->profile_data;
+        session_set_event(data, NULL, 0u);
+        data->resume_valid = false;
+        data->resume_form = SIZE_MAX;
+        data->resume_block = SIZE_MAX;
+    }
     return quickjs_run_at(session, form_index);
 }
 
