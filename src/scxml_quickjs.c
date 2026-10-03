@@ -76,99 +76,33 @@ static scxml_quickjs_status quickjs_sandbox_status_to_scxml(
     }
 }
 
-static bool quickjs_schema_supported(
+static bool scxml_quickjs_legacy_collection_schema_supported(
     const cmeta_data_desc *root,
     const cmeta_data_desc *descriptor,
     const cmeta_declared_type *declared_type,
-    size_t depth, size_t max_depth,
-    size_t max_properties, bool inside_sequence,
-    size_t *static_properties) {
-    if (!cmeta_data_desc_valid(descriptor) || depth > max_depth ||
-        (descriptor->kind != CMETA_DATA_SEQUENCE &&
-         descriptor->storage_type == NULL))
-        return false;
-    switch (descriptor->kind) {
-        case CMETA_DATA_BOOL:
-            return descriptor->storage_type->size == sizeof(bool);
-        case CMETA_DATA_SINT:
-        case CMETA_DATA_UINT:
-            return descriptor->storage_type->size == sizeof(uint8_t) ||
-                descriptor->storage_type->size == sizeof(uint16_t) ||
-                descriptor->storage_type->size == sizeof(uint32_t) ||
-                descriptor->storage_type->size == sizeof(uint64_t);
-        case CMETA_DATA_FLOAT:
-            return descriptor->storage_type->size == sizeof(float) ||
-                descriptor->storage_type->size == sizeof(double);
-        case CMETA_DATA_STRING:
-            return cmeta_data_buffer_ops_of(descriptor) != NULL;
-        case CMETA_DATA_ENUM:
-            return cmeta_data_enum_ops_of(descriptor) != NULL;
-        case CMETA_DATA_STRUCT: {
-            const cmeta_data_struct_shape *shape =
-                (const cmeta_data_struct_shape *)descriptor->shape;
-            size_t index;
-            if (shape == NULL || shape->layout == NULL ||
-                shape->fields == NULL ||
-                shape->field_count != shape->layout->field_count ||
-                shape->field_count > max_properties)
-                return false;
-            for (index = 0u; index < shape->field_count; ++index) {
-                const cmeta_data_field_desc *field = &shape->fields[index];
-                const cmeta_field_desc *layout_field;
-                if (field->name == NULL || field->value == NULL ||
-                    (!inside_sequence &&
-                     (*static_properties >= max_properties ||
-                      ++*static_properties > max_properties)) ||
-                    (inside_sequence &&
-                     field->value->kind == CMETA_DATA_SEQUENCE))
-                    return false;
-                layout_field = cmeta_struct_find_field(
-                    shape->layout, field->name);
-                if (layout_field == NULL ||
-                    layout_field->offset != field->offset ||
-                    !quickjs_schema_supported(
-                        root, field->value, layout_field->declared_type,
-                        depth + 1u, max_depth, max_properties,
-                        inside_sequence, static_properties))
-                    return false;
-            }
-            return true;
-        }
-        case CMETA_DATA_SEQUENCE: {
-            const cmeta_type_desc *element_type;
-            const cmeta_data_desc *element_data;
-            if (!cmeta_declared_type_valid(declared_type) ||
-                declared_type->arity != 1u ||
-                (descriptor->storage_type != NULL &&
-                 !cmeta_type_equal(
-                     declared_type->storage_type,
-                     descriptor->storage_type)))
-                return false;
-            element_type = cmeta_declared_type_argument(declared_type, 0u);
-            element_data = scxml_scope_find_data_for_type(
-                root, element_type, max_depth);
-            /* CMeta's element descriptor does not retain nested generic type
-             * arguments, so that shape cannot be rebuilt transactionally. */
-            return element_data != NULL &&
-                element_data->kind != CMETA_DATA_SEQUENCE &&
-                quickjs_schema_supported(
-                    root, element_data, NULL, depth + 1u, max_depth,
-                    max_properties, true, static_properties);
-        }
-        default:
-            return false;
-    }
-}
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    size_t *properties,
+    void *user);
+
+static const quickjs_cmeta_collection_adapter
+scxml_quickjs_legacy_schema_adapter = {
+    .schema_supported =
+        scxml_quickjs_legacy_collection_schema_supported
+};
 
 bool scxml_quickjs_static_property_budget_valid(
     const scxml_quickjs_compile_options_v1 *options,
     size_t supplemental_properties) {
-    size_t static_properties = supplemental_properties;
-    return options != NULL && supplemental_properties <= options->max_properties &&
-        quickjs_schema_supported(
-            options->root, options->root, NULL, 0u,
-            options->max_conversion_depth, options->max_properties, false,
-            &static_properties);
+    const quickjs_cmeta_limits limits =
+        quickjs_cmeta_limits_from_scxml(options);
+    return options != NULL &&
+        supplemental_properties <=
+            options->max_properties &&
+        quickjs_cmeta_schema_supported(
+            options->root, &limits,
+            &scxml_quickjs_legacy_schema_adapter,
+            NULL, supplemental_properties);
 }
 
 bool scxml_quickjs_limits_valid(
@@ -657,15 +591,6 @@ static quickjs_cmeta_limits quickjs_cmeta_limits_from_scxml(
         .max_string_bytes =
             options != NULL ? options->max_string_bytes : 0u};
 }
-
-static bool scxml_quickjs_legacy_collection_schema_supported(
-    const cmeta_data_desc *root,
-    const cmeta_data_desc *descriptor,
-    const cmeta_declared_type *declared_type,
-    size_t depth,
-    const quickjs_cmeta_limits *limits,
-    size_t *properties,
-    void *user);
 
 static JSValue scxml_quickjs_legacy_import_collection(
     quickjs_cmeta_bridge *bridge,
