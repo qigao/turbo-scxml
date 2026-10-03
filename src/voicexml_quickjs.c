@@ -1434,7 +1434,10 @@ static vxml_status quickjs_run_from(
                     program->data_rows == NULL ||
                     program->data_rows[
                         action->data_index].placement !=
-                        VXML_DATA_EXECUTABLE)
+                        VXML_DATA_EXECUTABLE ||
+                    program->data_rows[
+                        action->data_index].owner_form !=
+                        form_index)
                     return session_fail(
                         session, VXML_INVALID_STRUCTURE,
                         NULL, 0u);
