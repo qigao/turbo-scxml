@@ -211,6 +211,16 @@ typedef struct vxml_cmeta_compile_options_v1 {
      */
     size_t max_data_namelist_fields;
     size_t max_data_request_value_bytes;
+
+    /*
+     * Optional append-only static typed-submit bounds.
+     *
+     * A complete nonzero tail enables executable GET/POST urlencoded
+     * <submit>. Zero/incomplete tails keep typed submit fail-closed.
+     */
+    size_t max_submit_fields;
+    size_t max_submit_value_bytes;
+    size_t max_submit_uri_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
