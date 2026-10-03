@@ -168,7 +168,7 @@ spec("VoiceXML QuickJS script profile") {
     it("keeps base and static script profiles fail-closed for srcexpr") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-            "<form><block><script srcexpr="'scripts/main.js'"/>"
+            "<form><block><script srcexpr=\"'scripts/main.js'\"/>"
             "</block></form></vxml>";
         vxml_program program = {0};
 
@@ -190,7 +190,7 @@ spec("VoiceXML QuickJS script profile") {
         char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form><block><script "
-            "srcexpr="'scripts/' + 'main.js'" charset='utf-8'/>"
+            "srcexpr=\"'scripts/' + 'main.js'\" charset='utf-8'/>"
             "</block></form></vxml>";
         const vxml_quickjs_compile_options_v1 options =
             vxml_quickjs_default_compile_options();
@@ -270,7 +270,7 @@ spec("VoiceXML QuickJS script profile") {
     it("rejects invalid dynamic script language and syntax before session init") {
         static const char *const documents[] = {
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-            "<form><block><script src='a.js' srcexpr="'b.js'"/>"
+            "<form><block><script src='a.js' srcexpr=\"'b.js'\"/>"
             "</block></form></vxml>",
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form><block><script srcexpr='('/>"
@@ -302,7 +302,7 @@ spec("VoiceXML QuickJS script profile") {
     it("rejects srcexpr source overflow after bounded immutable compilation") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
-            "<form><block><script srcexpr="'scripts/main.js'"/>"
+            "<form><block><script srcexpr=\"'scripts/main.js'\"/>"
             "</block></form></vxml>";
         vxml_quickjs_compile_options_v1 options =
             vxml_quickjs_default_compile_options();
