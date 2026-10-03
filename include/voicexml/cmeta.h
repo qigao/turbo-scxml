@@ -205,6 +205,14 @@ typedef struct vxml_cmeta_compile_options_v1 {
      * Zero preserves the single-level #226 profile.
      */
     size_t max_prompt_foreach_depth;
+
+    /*
+     * Optional append-only VoiceXML 2.1 dynamic <data> request bounds.
+     * Zero keeps method/namelist/enctype/srcexpr and non-document placement
+     * disabled while preserving the earlier static document-level profile.
+     */
+    size_t max_data_namelist_fields;
+    size_t max_data_request_value_bytes;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
