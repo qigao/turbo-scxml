@@ -9761,6 +9761,98 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("keeps explicit GET data requests on the V3 provider surface") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json' method='get'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(probe.open_v3_calls, (size_t)0u);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(
+            probe.last_request_v3.method,
+            VXML_SUBMIT_METHOD_GET);
+        check_equal(
+            probe.last_request_v3.field_count,
+            (size_t)0u);
+        check_equal(probe.close_calls, (size_t)1u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("rejects invalid dynamic data request language contracts") {
+        static const char *const documents[] = {
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><data name='value' src='a.json' "
+            "srcexpr='&quot;b.json&quot;'/><form><block/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
+            "datamodel='cmeta'><data name='value' "
+            "srcexpr='&quot;a.json&quot;'/><form><block/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><data name='value' src='a.json' "
+            "enctype='multipart/form-data'/><form><block/></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<var name='value' expr='1'/>"
+            "<data name='other' src='a.json' method='post' "
+            "namelist='value value'/></block></form></vxml>",
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><data name='other' src='a.json' "
+            "method='post' namelist='ratio'/>"
+            "<form><block/></form></vxml>"
+        };
+        static const vxml_status expected[] = {
+            VXML_INVALID_STRUCTURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_SEMANTIC_ERROR
+        };
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(documents) / sizeof(documents[0]);
+             ++index) {
+            vxml_program program = {0};
+            check_equal(
+                vxml_compile_cmeta(
+                    documents[index], strlen(documents[index]),
+                    NULL, &compile, &program, NULL),
+                expected[index]);
+            check_null(program.impl);
+            vxml_program_destroy(&program);
+        }
+    }
+
     it("keeps fetchaudio SKIPPED independent from legacy V1 data fetch") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
