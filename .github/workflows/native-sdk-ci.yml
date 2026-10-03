@@ -167,6 +167,8 @@ jobs:
           cmake --build build/consumer-chttp --parallel 2
           cmake -S tests/install_consumer -B build/consumer-wide -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
           cmake --build build/consumer-wide --parallel 2
+          cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
+          cmake --build build/consumer-voicexml-quickjs --parallel 2
 
 
   linux-sanitizers:
@@ -380,6 +382,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wide consumer configure failed" }
           cmake --build build/consumer-wide --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "wide consumer build failed" }
+          cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
+          if ($LASTEXITCODE -ne 0) { throw "VoiceXMLQuickJS consumer configure failed" }
+          cmake --build build/consumer-voicexml-quickjs --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "VoiceXMLQuickJS consumer build failed" }
 
   macos:
     name: macOS released SDK
@@ -491,6 +497,8 @@ jobs:
           export DYLD_LIBRARY_PATH="$TURBOSCXML_ROOT/lib:$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
           cmake -S tests/install_consumer -B build/consumer-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
           cmake --build build/consumer-macos --parallel 2
+          cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
+          cmake --build build/consumer-voicexml-quickjs-macos --parallel 2
 
   android:
     name: Android arm64-v8a released SDK
