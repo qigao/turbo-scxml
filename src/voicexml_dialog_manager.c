@@ -926,7 +926,7 @@ static vxml_dialog_manager_status follow_one_submit(
     static const char urlencoded[] =
         "application/x-www-form-urlencoded";
     vxml_dialog_manager_impl *impl;
-    vxml_submit_target_v1 submit = {0};
+    vxml_submit_target_v2 submit = {0};
     vxml_submit_request_v1 request = VXML_SUBMIT_REQUEST_V1_INIT;
     vxml_submit_response response = {0};
     vxml_resolved_uri_v1 target_resolved;
@@ -957,7 +957,7 @@ static vxml_dialog_manager_status follow_one_submit(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_LIMIT_EXCEEDED);
 
-    voice_status = vxml_session_submit(
+    voice_status = vxml_session_submit_v2(
         &row->session, &submit);
     if (voice_status != VXML_OK)
         return queue_event(
@@ -992,6 +992,8 @@ static vxml_dialog_manager_status follow_one_submit(
     request.target = submit.uri;
     request.target_size = submit.uri_size;
     request.method = submit.method;
+    request.fields = submit.fields;
+    request.field_count = submit.field_count;
     if (submit.method == VXML_SUBMIT_METHOD_POST) {
         request.enctype = urlencoded;
         request.enctype_size = sizeof(urlencoded) - 1u;

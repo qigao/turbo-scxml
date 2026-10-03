@@ -5988,6 +5988,8 @@ vxml_status vxml_session_cmeta_start_child(
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->submit_fields = NULL;
+    impl->submit_field_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;

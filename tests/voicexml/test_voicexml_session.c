@@ -326,9 +326,13 @@ spec("VoiceXML session") {
                 "enctype='application/x-www-form-urlencoded'/>"
                 "</block></form></vxml>";
             static const char expected[] = "result.vxml#done";
+            static const vxml_submit_field_v1 fields[] = {
+                {"alpha", sizeof("alpha") - 1u,
+                 "one", sizeof("one") - 1u}};
             vxml_program program = {0};
             vxml_session session = {0};
             vxml_submit_target_v1 submit = {0};
+            vxml_submit_target_v2 submit_v2 = {0};
 
             check_equal(compile_program(source, &program), VXML_OK);
             check_equal(vxml_session_init(&session, &program), VXML_OK);
@@ -349,12 +353,45 @@ spec("VoiceXML session") {
             check_equal(
                 submit.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
             check_equal(
+                vxml_session_submit_v2(&session, &submit_v2),
+                VXML_OK);
+            check_equal(
+                submit_v2.abi_version, VXML_SUBMIT_TARGET_ABI_V2);
+            check_equal(
+                submit_v2.struct_size, sizeof(vxml_submit_target_v2));
+            check_equal(submit_v2.uri, expected);
+            check_equal(submit_v2.uri_size, sizeof(expected) - 1u);
+            check_equal(
+                submit_v2.method, VXML_SUBMIT_METHOD_POST);
+            check_equal(
+                submit_v2.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
+            check_null(submit_v2.fields);
+            check_equal(submit_v2.field_count, (size_t)0u);
+            {
+                vxml_session_impl *impl =
+                    (vxml_session_impl *)session.impl;
+                check_not_null(impl);
+                impl->submit_fields = fields;
+                impl->submit_field_count = 1u;
+                check_equal(
+                    vxml_session_submit(&session, &submit),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit_v2(&session, &submit_v2),
+                    VXML_OK);
+                check_true(submit_v2.fields == fields);
+                check_equal(submit_v2.field_count, (size_t)1u);
+            }
+            check_equal(
                 vxml_session_navigation(
                     &session, &(vxml_navigation_target){0}),
                 VXML_INVALID_STATE);
             check_equal(vxml_session_close(&session), VXML_OK);
             check_equal(
                 vxml_session_submit(&session, &submit), VXML_CLOSED);
+            check_equal(
+                vxml_session_submit_v2(&session, &submit_v2),
+                VXML_CLOSED);
 
             vxml_session_destroy(&session);
             vxml_program_destroy(&program);

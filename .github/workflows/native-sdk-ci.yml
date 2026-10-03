@@ -353,7 +353,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\stage\turboscxml"
+          cmake -S . -B build/ci -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE\stage\turboscxml"
           if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
       - name: Build and test
@@ -374,15 +374,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "install failed" }
           $env:TURBOSCXML_ROOT = "$env:GITHUB_WORKSPACE\stage\turboscxml"
           $env:PATH = "$env:TURBOSCXML_ROOT\bin;$env:SALTS_ROOT\bin;$env:SALTS_UTILS_ROOT\bin;$env:CHTTP_ROOT\bin;$env:GITHUB_WORKSPACE\vcpkg_installed\x64-windows\bin;$env:PATH"
-          cmake -S tests/install_consumer -B build/consumer-chttp -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
+          cmake -S tests/install_consumer -B build/consumer-chttp -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
           if ($LASTEXITCODE -ne 0) { throw "CHTTP consumer configure failed" }
           cmake --build build/consumer-chttp --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "CHTTP consumer build failed" }
-          cmake -S tests/install_consumer -B build/consumer-wide -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
+          cmake -S tests/install_consumer -B build/consumer-wide -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DTURBOSCXML_INSTALL_CONSUMER_NO_COMPONENTS=ON
           if ($LASTEXITCODE -ne 0) { throw "wide consumer configure failed" }
           cmake --build build/consumer-wide --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "wide consumer build failed" }
-          cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
+          cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR="$env:GITHUB_WORKSPACE\vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_APPLOCAL_DEPS=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
           if ($LASTEXITCODE -ne 0) { throw "VoiceXMLQuickJS consumer configure failed" }
           cmake --build build/consumer-voicexml-quickjs --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "VoiceXMLQuickJS consumer build failed" }
