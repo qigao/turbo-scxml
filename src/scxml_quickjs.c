@@ -1913,6 +1913,10 @@ cleanup:
         quickjs_aligned_storage_destroy(
             &state_scratch, type, scratch_live);
         if (*out_error != NULL) {
+#if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
+            (void)fprintf(
+                stderr, "[scxml-quickjs] %s\n", *out_error);
+#endif
             scxml_quickjs_runtime_destroy(runtime);
             if (scxml_quickjs_runtime_init(
                     runtime, &program->quickjs_options,
