@@ -941,6 +941,7 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_expr_runtime_scope *runtime_scopes;
     size_t runtime_scope_capacity;
     vxml_cmeta_exec_frame *exec_frames;
+    bool document_initialized;
     size_t exec_frame_capacity;
     vxml_cmeta_exit_snapshot pending_exit;
     vxml_cmeta_exit_snapshot terminal_exit;
