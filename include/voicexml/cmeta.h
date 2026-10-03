@@ -197,6 +197,12 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_prompt_foreach_items;
     size_t max_prompt_foreach_snapshot_bytes;
     size_t max_prompt_expanded_segments;
+
+    /*
+     * Optional append-only recursive prompt foreach depth.
+     * Zero preserves the single-level #226 profile.
+     */
+    size_t max_prompt_foreach_depth;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {
