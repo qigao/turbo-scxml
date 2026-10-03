@@ -145,6 +145,30 @@ static bool quickjs_cmeta_schema_supported_impl(
     }
 }
 
+bool quickjs_cmeta_value_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    const quickjs_cmeta_collection_adapter *collections,
+    void *collection_user,
+    bool inside_collection,
+    size_t *properties) {
+    if (!quickjs_cmeta_limits_valid(limits) ||
+        !cmeta_data_desc_valid(root) ||
+        descriptor == NULL || properties == NULL)
+        return false;
+    if (collections == NULL)
+        collections =
+            quickjs_cmeta_default_collection_adapter();
+    return quickjs_cmeta_schema_supported_impl(
+        root, descriptor, declared_type,
+        depth, limits, collections,
+        collection_user, inside_collection,
+        properties);
+}
+
 bool quickjs_cmeta_schema_supported(
     const cmeta_data_desc *root,
     const quickjs_cmeta_limits *limits,
