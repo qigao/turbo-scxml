@@ -34,6 +34,8 @@ typedef struct vxml_decoded_submit {
 typedef struct vxml_decoded_script {
     char *src;
     size_t src_size;
+    char *srcexpr;
+    size_t srcexpr_size;
     char *charset;
     size_t charset_size;
     salts_xml_location location;
@@ -555,6 +557,7 @@ static void measurement_destroy(vxml_measurement *measurement) {
         vxml_free(measurement->submits[index].target);
     for (index = 0u; index < measurement->script_count; ++index) {
         vxml_free(measurement->scripts[index].src);
+        vxml_free(measurement->scripts[index].srcexpr);
         vxml_free(measurement->scripts[index].charset);
     }
     vxml_free(measurement->ids);
@@ -1001,24 +1004,27 @@ static vxml_status measure_submit(
 
 static vxml_status append_external_script(
     vxml_measurement *measurement,
-    salts_xml_attribute src_attribute,
+    salts_xml_attribute reference_attribute,
+    bool dynamic_reference,
     salts_xml_attribute charset_attribute,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     static const char utf8[] = "UTF-8";
     vxml_decoded_script entry = {0};
-    const salts_xml_string_view raw_src =
-        salts_xml_attribute_value(src_attribute);
-    size_t src_size = 0u;
-    size_t src_retained;
+    const salts_xml_string_view raw_reference =
+        salts_xml_attribute_value(reference_attribute);
+    size_t reference_size = 0u;
+    size_t reference_retained;
     size_t charset_retained = sizeof(utf8);
     size_t allocation_size;
+    char **destination;
+    size_t *destination_size;
 
-    if (src_attribute.impl == NULL)
+    if (reference_attribute.impl == NULL)
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             (salts_xml_location){0},
-            "VoiceXML external script requires src");
+            "VoiceXML external script requires src or srcexpr");
     if (charset_attribute.impl != NULL &&
         !ascii_case_view_equal(
             salts_xml_attribute_value(charset_attribute), utf8))
@@ -1026,15 +1032,19 @@ static vxml_status append_external_script(
             diagnostic, VXML_UNSUPPORTED_FEATURE,
             salts_xml_attribute_location(charset_attribute),
             "VoiceXML external script supports UTF-8 charset only");
-    if (!decode_entities(raw_src, NULL, 0u, &src_size) ||
-        src_size == 0u ||
-        !checked_add(src_size, 1u, &src_retained))
+    if (!decode_entities(
+            raw_reference, NULL, 0u, &reference_size) ||
+        reference_size == 0u ||
+        !checked_add(
+            reference_size, 1u, &reference_retained))
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(src_attribute),
-            "VoiceXML script src must be one nonempty URI");
+            salts_xml_attribute_location(reference_attribute),
+            dynamic_reference
+                ? "VoiceXML script srcexpr must be nonempty"
+                : "VoiceXML script src must be one nonempty URI");
     if (!checked_add(
-            measurement->name_bytes, src_retained,
+            measurement->name_bytes, reference_retained,
             &measurement->name_bytes) ||
         !checked_add(
             measurement->name_bytes, charset_retained,
@@ -1042,45 +1052,57 @@ static vxml_status append_external_script(
         measurement->name_bytes > limits->max_name_bytes)
         return fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
-            salts_xml_attribute_location(src_attribute),
+            salts_xml_attribute_location(reference_attribute),
             "VoiceXML retained script metadata exceeds max_name_bytes");
 
-    entry.src = (char *)vxml_malloc(src_retained);
+    destination =
+        dynamic_reference ? &entry.srcexpr : &entry.src;
+    destination_size =
+        dynamic_reference
+            ? &entry.srcexpr_size : &entry.src_size;
+    *destination = (char *)vxml_malloc(reference_retained);
     entry.charset = (char *)vxml_malloc(charset_retained);
-    if (entry.src == NULL || entry.charset == NULL) {
+    if (*destination == NULL || entry.charset == NULL) {
         vxml_free(entry.charset);
-        vxml_free(entry.src);
+        vxml_free(*destination);
         return fail(
             diagnostic, VXML_ALLOCATION_FAILED,
-            salts_xml_attribute_location(src_attribute),
+            salts_xml_attribute_location(reference_attribute),
             "VoiceXML script metadata allocation failed");
     }
     if (!decode_entities(
-            raw_src, entry.src, src_size, &src_size)) {
+            raw_reference, *destination,
+            reference_size, &reference_size)) {
         vxml_free(entry.charset);
-        vxml_free(entry.src);
+        vxml_free(*destination);
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(src_attribute),
-            "VoiceXML script src decoding changed between passes");
+            salts_xml_attribute_location(reference_attribute),
+            "VoiceXML script reference decoding changed between passes");
     }
-    entry.src[src_size] = '\0';
-    entry.src_size = src_size;
+    (*destination)[reference_size] = '\0';
+    *destination_size = reference_size;
     memcpy(entry.charset, utf8, sizeof(utf8));
     entry.charset_size = sizeof(utf8) - 1u;
-    entry.location = salts_xml_attribute_location(src_attribute);
+    entry.location =
+        salts_xml_attribute_location(reference_attribute);
 
-    if (measurement->script_count == measurement->script_capacity) {
-        size_t capacity = measurement->script_capacity == 0u
-            ? 4u : measurement->script_capacity * 2u;
+    if (measurement->script_count ==
+        measurement->script_capacity) {
+        size_t capacity =
+            measurement->script_capacity == 0u
+                ? 4u
+                : measurement->script_capacity * 2u;
         vxml_decoded_script *rows;
         if (capacity < measurement->script_capacity ||
             capacity > limits->max_actions)
             capacity = limits->max_actions;
         if (capacity <= measurement->script_capacity ||
             !checked_multiply(
-                capacity, sizeof(*rows), &allocation_size)) {
+                capacity, sizeof(*rows),
+                &allocation_size)) {
             vxml_free(entry.charset);
+            vxml_free(entry.srcexpr);
             vxml_free(entry.src);
             return fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -1091,6 +1113,7 @@ static vxml_status append_external_script(
             measurement->scripts, allocation_size);
         if (rows == NULL) {
             vxml_free(entry.charset);
+            vxml_free(entry.srcexpr);
             vxml_free(entry.src);
             return fail(
                 diagnostic, VXML_ALLOCATION_FAILED,
@@ -1100,7 +1123,8 @@ static vxml_status append_external_script(
         measurement->scripts = rows;
         measurement->script_capacity = capacity;
     }
-    measurement->scripts[measurement->script_count++] = entry;
+    measurement->scripts[
+        measurement->script_count++] = entry;
     return VXML_OK;
 }
 
@@ -1110,6 +1134,7 @@ static vxml_status measure_external_script(
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     salts_xml_attribute src = {0};
+    salts_xml_attribute srcexpr = {0};
     salts_xml_attribute charset = {0};
     size_t index;
     bool has_inline = false;
@@ -1140,6 +1165,19 @@ static vxml_status measure_external_script(
                     salts_xml_attribute_location(attribute),
                     "duplicate VoiceXML script src");
             src = attribute;
+        } else if (view_equal(local, "srcexpr")) {
+            if ((measurement->features &
+                 VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR) == 0u)
+                return fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML script srcexpr requires the QuickJS profile");
+            if (srcexpr.impl != NULL)
+                return fail(
+                    diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_attribute_location(attribute),
+                    "duplicate VoiceXML script srcexpr");
+            srcexpr = attribute;
         } else if (view_equal(local, "charset")) {
             if (charset.impl != NULL)
                 return fail(
@@ -1165,20 +1203,26 @@ static vxml_status measure_external_script(
             break;
         }
     }
-    if (src.impl == NULL)
+
+    if (src.impl != NULL && srcexpr.impl != NULL)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML script requires exactly one of src or srcexpr");
+    if (src.impl == NULL && srcexpr.impl == NULL)
         return fail(
             diagnostic,
             has_inline ? VXML_UNSUPPORTED_FEATURE
                        : VXML_INVALID_STRUCTURE,
             salts_xml_node_location(node),
             has_inline
-                ? "inline VoiceXML script execution is outside the external-script profile"
-                : "VoiceXML script requires src or inline content");
+                ? "inline VoiceXML script execution is outside this profile"
+                : "VoiceXML script requires src, srcexpr, or inline content");
     if (has_inline)
         return fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(node),
-            "VoiceXML script cannot combine src with inline content");
+            "VoiceXML script cannot combine external reference with inline content");
     if (measurement->action_count >= limits->max_actions ||
         !checked_add(
             measurement->action_count, 1u,
@@ -1188,7 +1232,10 @@ static vxml_status measure_external_script(
             salts_xml_node_location(node),
             "VoiceXML action count exceeds max_actions");
     return append_external_script(
-        measurement, src, charset, limits, diagnostic);
+        measurement,
+        srcexpr.impl != NULL ? srcexpr : src,
+        srcexpr.impl != NULL,
+        charset, limits, diagnostic);
 }
 
 static vxml_status resolve_gotos(
@@ -1514,13 +1561,28 @@ static void write_external_script(vxml_writer *writer) {
     action->fetchaudio_uri_size = 0u;
     action->submit_method = 0;
     action->submit_enctype = 0;
-    action->script_src =
-        writer->impl->storage + writer->storage_index;
-    action->script_src_size = script.src_size;
-    memcpy(
-        writer->impl->storage + writer->storage_index,
-        script.src, script.src_size + 1u);
-    writer->storage_index += script.src_size + 1u;
+    action->script_src = NULL;
+    action->script_src_size = 0u;
+    action->script_srcexpr = NULL;
+    action->script_srcexpr_size = 0u;
+    if (script.srcexpr != NULL) {
+        action->script_srcexpr =
+            writer->impl->storage + writer->storage_index;
+        action->script_srcexpr_size = script.srcexpr_size;
+        memcpy(
+            writer->impl->storage + writer->storage_index,
+            script.srcexpr, script.srcexpr_size + 1u);
+        writer->storage_index += script.srcexpr_size + 1u;
+    } else {
+        action->script_src =
+            writer->impl->storage + writer->storage_index;
+        action->script_src_size = script.src_size;
+        memcpy(
+            writer->impl->storage + writer->storage_index,
+            script.src, script.src_size + 1u);
+        writer->storage_index += script.src_size + 1u;
+    }
+    action->script_location = script.location;
     action->script_charset =
         writer->impl->storage + writer->storage_index;
     action->script_charset_size = script.charset_size;
@@ -1763,7 +1825,9 @@ vxml_status vxml_compile_with_features(
     size_t allocation_size;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
     if (out != NULL) out->impl = NULL;
-    if ((features & ~VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT) != 0u)
+    if ((features &
+         ~(VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT |
+           VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR)) != 0u)
         return fail(
             diagnostic, VXML_INVALID_ARGUMENT,
             (salts_xml_location){0},
