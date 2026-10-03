@@ -1887,7 +1887,9 @@ static vxml_status cmeta_measure_prompt(
     const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     vxml_diagnostic *diagnostic,
+    size_t foreach_depth,
     size_t *out_segment_count,
+    size_t *out_expanded_segment_count,
     size_t *out_content_bytes) {
     static const char *const allowed[] = {
         "count", "cond", "bargein", "bargeintype", "timeout"};
@@ -1937,6 +1939,29 @@ static vxml_status cmeta_measure_prompt(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt foreach requires version 2.1");
+        if (foreach_depth == 0u)
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(prompt),
+                "VoiceXML foreach compiler depth is invalid");
+        if (foreach_depth > 1u) {
+            const size_t depth_tail =
+                offsetof(
+                    vxml_cmeta_compile_options_v1,
+                    max_prompt_foreach_depth) +
+                sizeof(options->max_prompt_foreach_depth);
+            if (options->struct_size < depth_tail ||
+                options->max_prompt_foreach_depth == 0u)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_CONTRACT,
+                    salts_xml_node_location(prompt),
+                    "nested VoiceXML prompt foreach requires an explicit depth bound");
+            if (foreach_depth > options->max_prompt_foreach_depth)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(prompt),
+                    "VoiceXML prompt foreach exceeds max_prompt_foreach_depth");
+        }
         if (foreach_array.impl == NULL || foreach_item.impl == NULL)
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
@@ -2027,35 +2052,34 @@ static vxml_status cmeta_measure_prompt(
             continue;
         if (cmeta_node_named(child, "foreach")) {
             size_t child_segments = 0u;
+            size_t child_expanded_segments = 0u;
             size_t child_bytes = 0u;
-            size_t expanded = 0u;
-            if (is_foreach)
-                return cmeta_program_fail(
-                    diagnostic, VXML_UNSUPPORTED_FEATURE,
-                    salts_xml_node_location(child),
-                    "nested VoiceXML prompt foreach is not supported");
-            status = cmeta_measure_prompt(
-                child, options, measurement, diagnostic,
-                &child_segments, &child_bytes);
-            if (status != VXML_OK) return status;
-            if (child_segments == 0u ||
-                child_segments >
-                    SIZE_MAX / options->max_prompt_foreach_items)
+            const size_t child_depth =
+                is_foreach ? foreach_depth + 1u : 1u;
+            if (is_foreach && foreach_depth == SIZE_MAX)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML foreach expansion bounds overflow");
-            expanded =
-                child_segments * options->max_prompt_foreach_items;
-            if (nested_segment_count > SIZE_MAX - child_segments ||
-                nested_expanded_segment_count > SIZE_MAX - expanded ||
+                    "VoiceXML foreach depth overflow");
+            status = cmeta_measure_prompt(
+                child, options, measurement, diagnostic,
+                child_depth,
+                &child_segments, &child_expanded_segments,
+                &child_bytes);
+            if (status != VXML_OK) return status;
+            if (child_segments == 0u ||
+                child_expanded_segments == 0u ||
+                nested_segment_count > SIZE_MAX - child_segments ||
+                nested_expanded_segment_count >
+                    SIZE_MAX - child_expanded_segments ||
                 nested_prompt_bytes > SIZE_MAX - child_bytes)
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
                     "VoiceXML foreach expansion bounds overflow");
             nested_segment_count += child_segments;
-            nested_expanded_segment_count += expanded;
+            nested_expanded_segment_count +=
+                child_expanded_segments;
             nested_prompt_bytes += child_bytes;
             continue;
         }
@@ -2346,6 +2370,16 @@ static vxml_status cmeta_measure_prompt(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt requires literal text, audio, or mark");
+        if (is_foreach) {
+            if (expanded_segment_count >
+                    SIZE_MAX / options->max_prompt_foreach_items)
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(prompt),
+                    "VoiceXML foreach expanded segment count overflow");
+            expanded_segment_count *=
+                options->max_prompt_foreach_items;
+        }
         if (total_prompt_bytes > SIZE_MAX - nested_prompt_bytes)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -2365,7 +2399,7 @@ static vxml_status cmeta_measure_prompt(
                 diagnostic, VXML_LIMIT_EXCEEDED,
                 salts_xml_node_location(prompt),
                 "mixed VoiceXML prompt exceeds max_prompt_segments");
-        if (!is_foreach && nested_segment_count != 0u &&
+        if ((is_foreach || nested_segment_count != 0u) &&
             expanded_segment_count > options->max_prompt_expanded_segments)
             return cmeta_program_fail(
                 diagnostic, VXML_LIMIT_EXCEEDED,
@@ -2378,8 +2412,12 @@ static vxml_status cmeta_measure_prompt(
                 salts_xml_node_location(prompt),
                 "VoiceXML prompt segment table overflow");
         measurement->prompt_segment_count += direct_segment_count;
-        if (out_segment_count != NULL) *out_segment_count = segment_count;
-        if (out_content_bytes != NULL) *out_content_bytes = total_prompt_bytes;
+        if (out_segment_count != NULL)
+            *out_segment_count = segment_count;
+        if (out_expanded_segment_count != NULL)
+            *out_expanded_segment_count = expanded_segment_count;
+        if (out_content_bytes != NULL)
+            *out_content_bytes = total_prompt_bytes;
     }
 
     if (audio_count == 0u && nested_segment_count == 0u &&
@@ -3142,7 +3180,8 @@ static vxml_status cmeta_measure_field(
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "prompt")) {
             status = cmeta_measure_prompt(
-                child, options, measurement, diagnostic, NULL, NULL);
+                child, options, measurement, diagnostic,
+                0u, NULL, NULL, NULL);
             if (status != VXML_OK) return status;
             continue;
         }
