@@ -528,6 +528,10 @@ int main() {
     compile_options.max_conditional_depth = 8u;
     compile_options.max_subdialogs = 1u;
     compile_options.max_subdialog_uri_bytes = 128u;
+    compile_options.max_prompt_foreach = 2u;
+    compile_options.max_prompt_foreach_items = 4u;
+    compile_options.max_prompt_foreach_snapshot_bytes = 1024u;
+    compile_options.max_prompt_expanded_segments = 16u;
     compile_options.max_event_handlers = 4u;
     compile_options.max_event_name_bytes = 64u;
     session_options.abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1;
