@@ -138,6 +138,206 @@ quickjs_script_adapter = {
     .close = quickjs_script_close
 };
 
+
+#define QUICKJS_DATA_PROBE_CALLS 8u
+#define QUICKJS_DATA_PROBE_FIELDS 8u
+
+typedef struct quickjs_data_probe {
+    size_t open_calls;
+    size_t close_calls;
+    vxml_status open_status;
+    bool publish_on_failure;
+    bool ignore_max_bytes;
+    const void *body;
+    size_t body_size;
+
+    char uris[QUICKJS_DATA_PROBE_CALLS][256];
+    size_t uri_sizes[QUICKJS_DATA_PROBE_CALLS];
+    vxml_submit_method methods[QUICKJS_DATA_PROBE_CALLS];
+    vxml_submit_enctype enctypes[QUICKJS_DATA_PROBE_CALLS];
+
+    bool last_has_timeout;
+    uint64_t last_timeout_us;
+    vxml_cmeta_data_fetch_hint last_fetch_hint;
+    bool last_has_max_age;
+    uint64_t last_max_age_seconds;
+    bool last_has_max_stale;
+    uint64_t last_max_stale_seconds;
+
+    size_t last_field_count;
+    char field_names[QUICKJS_DATA_PROBE_FIELDS][64];
+    char field_values[QUICKJS_DATA_PROBE_FIELDS][128];
+} quickjs_data_probe;
+
+static vxml_status quickjs_data_open_v3(
+    void *user,
+    const vxml_cmeta_data_request_v3 *request,
+    vxml_cmeta_data_resource_v1 *out) {
+    quickjs_data_probe *probe =
+        (quickjs_data_probe *)user;
+    size_t call_index;
+    size_t field;
+    if (probe == NULL || request == NULL ||
+        request->abi_version !=
+            VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        request->struct_size <
+            sizeof(vxml_cmeta_data_request_v3) ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >=
+            sizeof(probe->uris[0]) ||
+        request->field_count >
+            QUICKJS_DATA_PROBE_FIELDS ||
+        (request->field_count != 0u &&
+         request->fields == NULL) ||
+        out == NULL)
+        return VXML_INVALID_ARGUMENT;
+
+    call_index = probe->open_calls;
+    ++probe->open_calls;
+    if (call_index < QUICKJS_DATA_PROBE_CALLS) {
+        memcpy(
+            probe->uris[call_index],
+            request->uri,
+            request->uri_size);
+        probe->uris[call_index][request->uri_size] = '\0';
+        probe->uri_sizes[call_index] = request->uri_size;
+        probe->methods[call_index] = request->method;
+        probe->enctypes[call_index] = request->enctype;
+    }
+    probe->last_has_timeout = request->has_timeout;
+    probe->last_timeout_us = request->timeout_us;
+    probe->last_fetch_hint = request->fetch_hint;
+    probe->last_has_max_age = request->has_max_age;
+    probe->last_max_age_seconds =
+        request->max_age_seconds;
+    probe->last_has_max_stale = request->has_max_stale;
+    probe->last_max_stale_seconds =
+        request->max_stale_seconds;
+    probe->last_field_count = request->field_count;
+    for (field = 0u; field < request->field_count; ++field) {
+        const vxml_cmeta_data_field_v1 *source =
+            &request->fields[field];
+        if (source->name == NULL ||
+            source->name_size == 0u ||
+            source->name_size >=
+                sizeof(probe->field_names[field]) ||
+            source->value == NULL ||
+            source->value_size >=
+                sizeof(probe->field_values[field]))
+            return VXML_INVALID_ARGUMENT;
+        memcpy(
+            probe->field_names[field],
+            source->name, source->name_size);
+        probe->field_names[field][source->name_size] = '\0';
+        memcpy(
+            probe->field_values[field],
+            source->value, source->value_size);
+        probe->field_values[field][source->value_size] = '\0';
+    }
+
+    if (!probe->ignore_max_bytes &&
+        probe->body_size > request->max_bytes)
+        return VXML_LIMIT_EXCEEDED;
+    if (probe->open_status != VXML_OK) {
+        if (probe->publish_on_failure) {
+            *out = (vxml_cmeta_data_resource_v1){
+                .data = probe->body,
+                .size = probe->body_size,
+                .format = VXML_CMETA_DATA_JSON,
+                .lease = probe};
+        }
+        return probe->open_status;
+    }
+    *out = (vxml_cmeta_data_resource_v1){
+        .data = probe->body,
+        .size = probe->body_size,
+        .format = VXML_CMETA_DATA_JSON,
+        .lease = probe};
+    return VXML_OK;
+}
+
+static void quickjs_data_close(
+    void *user,
+    vxml_cmeta_data_resource_v1 *resource) {
+    quickjs_data_probe *probe =
+        (quickjs_data_probe *)user;
+    if (probe != NULL && resource != NULL &&
+        resource->lease == probe)
+        ++probe->close_calls;
+    if (resource != NULL)
+        *resource = (vxml_cmeta_data_resource_v1){0};
+}
+
+static const vxml_cmeta_data_resource_adapter_v1
+quickjs_data_adapter = {
+    .abi_version =
+        VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1,
+    .struct_size =
+        sizeof(vxml_cmeta_data_resource_adapter_v1),
+    .open = NULL,
+    .close = quickjs_data_close,
+    .open_v2 = NULL,
+    .open_v3 = quickjs_data_open_v3
+};
+
+typedef struct quickjs_fetch_audio_probe {
+    size_t begin_calls;
+    size_t finish_calls;
+    vxml_fetch_audio_begin_result result;
+    char uri[256];
+    size_t uri_size;
+    bool has_delay;
+    uint64_t delay_us;
+    bool has_minimum;
+    uint64_t minimum_us;
+} quickjs_fetch_audio_probe;
+
+static void quickjs_fetch_audio_finish(void *user) {
+    quickjs_fetch_audio_probe *probe =
+        (quickjs_fetch_audio_probe *)user;
+    if (probe != NULL)
+        ++probe->finish_calls;
+}
+
+static vxml_fetch_audio_begin_result
+quickjs_fetch_audio_begin(
+    void *user,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_ticket_v1 *out_ticket) {
+    quickjs_fetch_audio_probe *probe =
+        (quickjs_fetch_audio_probe *)user;
+    if (probe == NULL || request == NULL ||
+        out_ticket == NULL ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >= sizeof(probe->uri))
+        return VXML_FETCH_AUDIO_SKIPPED;
+    ++probe->begin_calls;
+    memcpy(probe->uri, request->uri, request->uri_size);
+    probe->uri[request->uri_size] = '\0';
+    probe->uri_size = request->uri_size;
+    probe->has_delay = request->has_delay;
+    probe->delay_us = request->delay_us;
+    probe->has_minimum = request->has_minimum;
+    probe->minimum_us = request->minimum_us;
+    if (probe->result == VXML_FETCH_AUDIO_STARTED) {
+        *out_ticket = (vxml_fetch_audio_ticket_v1){
+            .finish = quickjs_fetch_audio_finish,
+            .user = probe};
+    } else {
+        *out_ticket = (vxml_fetch_audio_ticket_v1){0};
+    }
+    return probe->result;
+}
+
+static const vxml_fetch_audio_adapter_v1
+quickjs_fetch_audio_adapter = {
+    .abi_version = VXML_FETCH_AUDIO_ADAPTER_ABI_V1,
+    .struct_size = sizeof(vxml_fetch_audio_adapter_v1),
+    .begin = quickjs_fetch_audio_begin
+};
+
 static vxml_dialog_manager_status quickjs_unused_document_open(
     void *user,
     const char *source, size_t source_size,
@@ -207,6 +407,27 @@ typed_session_options(
     vxml_quickjs_session_options_v1 options =
         vxml_quickjs_default_session_options();
     options.initial_state = initial;
+    return options;
+}
+
+
+static vxml_quickjs_session_options_v1
+data_session_options(quickjs_data_probe *probe) {
+    vxml_quickjs_session_options_v1 options =
+        vxml_quickjs_default_session_options();
+    options.data_resources = &quickjs_data_adapter;
+    options.data_resource_user = probe;
+    return options;
+}
+
+static vxml_quickjs_session_options_v1
+typed_data_session_options(
+    const voice_quickjs_state *initial,
+    quickjs_data_probe *probe) {
+    vxml_quickjs_session_options_v1 options =
+        typed_session_options(initial);
+    options.data_resources = &quickjs_data_adapter;
+    options.data_resource_user = probe;
     return options;
 }
 
