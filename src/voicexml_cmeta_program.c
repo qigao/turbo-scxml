@@ -4969,6 +4969,13 @@ static bool cmeta_allocate_rows(
             options->max_prompt_foreach_snapshot_bytes;
         profile->max_prompt_expanded_segments =
             options->max_prompt_expanded_segments;
+        profile->max_prompt_foreach_depth =
+            options->struct_size >=
+                offsetof(
+                    vxml_cmeta_compile_options_v1,
+                    max_prompt_foreach_depth) +
+                sizeof(options->max_prompt_foreach_depth)
+                ? options->max_prompt_foreach_depth : 0u;
     }
     profile->prompt_fallback_count = measurement->prompt_fallback_count;
     profile->filled_count = measurement->filled_count;
