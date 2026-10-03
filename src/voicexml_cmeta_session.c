@@ -6136,6 +6136,13 @@ static vxml_status cmeta_session_start_profile_at_entry(
             }
         }
         transaction_commit(profile, program);
+        if (profile->pending_submit_uri != NULL) {
+            status = publish_pending_submit(
+                session, profile);
+            exit_snapshot_destroy(&profile->pending_exit);
+            return status != VXML_OK
+                ? session_fail(session, status) : VXML_OK;
+        }
         if (profile->pending_navigation_uri != NULL) {
             status = publish_pending_navigation(
                 session, profile);
@@ -10545,6 +10552,20 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
 
+        if (profile->pending_submit_uri != NULL) {
+            status = publish_pending_submit(
+                impl, profile);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            return VXML_OK;
+        }
+        if (profile->pending_submit_uri != NULL) {
+            status = publish_pending_submit(
+                impl, profile);
+            if (status != VXML_OK)
+                return session_fail(impl, status);
+            return VXML_OK;
+        }
         if (profile->pending_navigation_uri != NULL) {
             status = publish_pending_navigation(
                 impl, profile);
@@ -10836,6 +10857,13 @@ static vxml_status execute_event_handler(
         return status;
     }
     transaction_commit(profile, program);
+    if (profile->pending_submit_uri != NULL) {
+        status = publish_pending_submit(
+            impl, profile);
+        profile->handler_reprompt_requested = false;
+        exit_snapshot_destroy(&profile->pending_exit);
+        return status;
+    }
     if (profile->pending_navigation_uri != NULL) {
         status = publish_pending_navigation(
             impl, profile);
@@ -11426,6 +11454,13 @@ vxml_status vxml_session_cmeta_record_run_ready(
         memory_order_release);
     profile->active_record = VXML_CMETA_NO_INDEX;
 
+    if (profile->pending_submit_uri != NULL) {
+        status = publish_pending_submit(
+            impl, profile);
+        if (status != VXML_OK)
+            return session_fail(impl, status);
+        return VXML_OK;
+    }
     if (profile->pending_navigation_uri != NULL) {
         status = publish_pending_navigation(
             impl, profile);
@@ -11729,6 +11764,12 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
      */
     if (impl->state != VXML_SESSION_RUNNING)
         return VXML_OK;
+    if (profile->pending_submit_uri != NULL) {
+        status = publish_pending_submit(impl, profile);
+        if (status != VXML_OK)
+            return session_fail(impl, status);
+        return VXML_OK;
+    }
     if (profile->pending_navigation_uri != NULL) {
         status = publish_pending_navigation(impl, profile);
         if (status != VXML_OK)
