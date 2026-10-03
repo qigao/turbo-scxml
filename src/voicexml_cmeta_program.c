@@ -3409,7 +3409,8 @@ static vxml_status cmeta_measure_initial(
             }
             if (cmeta_node_named(child, "prompt")) {
                 status = cmeta_measure_prompt(
-                    child, options, measurement, diagnostic, NULL, NULL);
+                    child, options, measurement, diagnostic,
+                    0u, NULL, NULL, NULL);
                 if (status != VXML_OK) return status;
                 continue;
             }
