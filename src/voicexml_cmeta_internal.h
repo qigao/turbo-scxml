@@ -165,6 +165,8 @@ typedef struct vxml_cmeta_form_row {
     size_t declaration_count;
     size_t first_data;
     size_t data_count;
+    size_t first_initializer;
+    size_t initializer_count;
     size_t first_field;
     size_t field_count;
     size_t first_initial;
@@ -327,6 +329,16 @@ typedef struct vxml_cmeta_declaration_row {
     size_t expression;
     salts_xml_location location;
 } vxml_cmeta_declaration_row;
+
+typedef enum vxml_cmeta_initializer_kind {
+    VXML_CMETA_INITIALIZER_DECLARATION = 0,
+    VXML_CMETA_INITIALIZER_DATA
+} vxml_cmeta_initializer_kind;
+
+typedef struct vxml_cmeta_initializer_row {
+    vxml_cmeta_initializer_kind kind;
+    size_t index;
+} vxml_cmeta_initializer_row;
 
 typedef enum vxml_cmeta_expression_source_kind {
     VXML_CMETA_EXPRESSION_GENERIC = 0,
@@ -550,6 +562,10 @@ typedef struct vxml_cmeta_program_data {
     size_t block_count;
     vxml_cmeta_declaration_row *declarations;
     size_t declaration_count;
+    vxml_cmeta_initializer_row *initializers;
+    size_t initializer_count;
+    size_t first_document_initializer;
+    size_t document_initializer_count;
     size_t first_document_declaration;
     size_t document_declaration_count;
     vxml_cmeta_external_data_row *external_data;
