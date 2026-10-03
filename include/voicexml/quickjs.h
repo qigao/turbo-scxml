@@ -2,6 +2,7 @@
 #define TURBO_VOICEXML_QUICKJS_H
 
 #include <voicexml/voicexml.h>
+#include <cmeta/data.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -27,6 +28,24 @@ typedef struct vxml_quickjs_compile_options_v1 {
     size_t max_heap_bytes;
     size_t max_stack_bytes;
     uint64_t max_eval_milliseconds;
+
+    /*
+     * Optional append-only transactional CMeta state profile.
+     *
+     * root is borrowed by the compiled Program and must outlive it. A NULL
+     * root preserves the target-only #231 profile and ignores the conversion
+     * fields below.
+     */
+    const cmeta_data_desc *root;
+    size_t max_conversion_depth;
+    size_t max_properties;
+    size_t max_array_items;
+    size_t max_snapshot_bytes;
+    size_t max_state_string_bytes;
+
+    /* External source acquisition bounds used by #235 execution. */
+    size_t max_resolved_script_uri_bytes;
+    size_t max_script_source_bytes;
 } vxml_quickjs_compile_options_v1;
 
 /**
@@ -38,6 +57,13 @@ typedef struct vxml_quickjs_compile_options_v1 {
 typedef struct vxml_quickjs_session_options_v1 {
     uint32_t abi_version;
     size_t struct_size;
+
+    /*
+     * Optional append-only initial committed CMeta root.
+     * Required when the Program was compiled with a non-NULL root and copied
+     * transactionally into Session-owned storage during init.
+     */
+    const void *initial_state;
 } vxml_quickjs_session_options_v1;
 
 vxml_quickjs_compile_options_v1
