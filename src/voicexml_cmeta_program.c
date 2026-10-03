@@ -6561,12 +6561,24 @@ static vxml_status cmeta_compile_external_data(
     cmeta_program_builder *builder,
     salts_xml_node root,
     salts_xml_node node,
+    const vxml_cmeta_data_fetch_policy *inherited_policy,
+    vxml_cmeta_data_destination_kind destination_kind,
+    size_t destination_scope,
+    size_t destination_slot,
+    bool legacy_preload,
     vxml_cmeta_external_data_row *out) {
-    const salts_xml_attribute name_attribute = cmeta_attribute(node, "name");
-    const salts_xml_attribute src_attribute = cmeta_attribute(node, "src");
+    const salts_xml_attribute name_attribute =
+        cmeta_attribute(node, "name");
+    const salts_xml_attribute src_attribute =
+        cmeta_attribute(node, "src");
+    const salts_xml_attribute method_attribute =
+        cmeta_attribute(node, "method");
+    const salts_xml_attribute enctype_attribute =
+        cmeta_attribute(node, "enctype");
     cmeta_decoded_value decoded_name = {0};
-    size_t field_index = 0u;
-    const cmeta_data_field_desc *field;
+    size_t field_index = VXML_CMETA_NO_INDEX;
+    size_t field_offset = 0u;
+    const cmeta_data_desc *field_data = NULL;
     DataBindNativeOptions bind_options = DATA_BIND_NATIVE_OPTIONS_INIT;
     DataBindNativeDiagnostic bind_diagnostic =
         DATA_BIND_NATIVE_DIAGNOSTIC_INIT;
@@ -6576,9 +6588,20 @@ static vxml_status cmeta_compile_external_data(
     const DataBindNativeRequirements *requirements;
     vxml_status status;
 
+    if (builder == NULL || out == NULL || inherited_policy == NULL)
+        return VXML_INVALID_ARGUMENT;
     memset(out, 0, sizeof(*out));
-    out->fetch_policy =
-        builder->profile->document_data_fetch;
+    out->uri_expression = VXML_CMETA_NO_INDEX;
+    out->first_location = VXML_CMETA_NO_INDEX;
+    out->scope = VXML_CMETA_NO_INDEX;
+    out->slot = VXML_CMETA_NO_INDEX;
+    out->field_index = VXML_CMETA_NO_INDEX;
+    out->method = VXML_SUBMIT_METHOD_GET;
+    out->enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+    out->fetch_policy = *inherited_policy;
+    out->destination_kind = destination_kind;
+    out->legacy_preload = legacy_preload;
+
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
@@ -6590,23 +6613,56 @@ static vxml_status cmeta_compile_external_data(
             "VoiceXML data name must be a decoded XML NCName");
         goto done;
     }
-    if (cmeta_document_name_conflict(root, node, decoded_name.view)) {
-        status = cmeta_program_fail(
-            builder->diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(name_attribute),
-            "VoiceXML document data/var names must be unique");
+
+    if (destination_kind == VXML_CMETA_DATA_DESTINATION_ROOT) {
+        const cmeta_data_field_desc *field;
+        if (cmeta_document_name_conflict(root, node, decoded_name.view)) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML document data/var names must be unique");
+            goto done;
+        }
+        field = cmeta_root_field(
+            builder->profile->root, decoded_name.view, &field_index);
+        if (field == NULL) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_SEMANTIC_ERROR,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data name has no matching application-root field");
+            goto done;
+        }
+        field_offset = field->offset;
+        field_data = field->value;
+    } else if (destination_kind == VXML_CMETA_DATA_DESTINATION_SCOPE) {
+        const cmeta_scope_schema *schema;
+        const cmeta_scope_slot *slot;
+        size_t resolved_slot = VXML_CMETA_NO_INDEX;
+        if (destination_scope >= builder->profile->scope_count ||
+            destination_slot == VXML_CMETA_NO_INDEX) {
+            status = VXML_INVALID_STRUCTURE;
+            goto done;
+        }
+        schema = &builder->profile->scopes[destination_scope].schema;
+        slot = cmeta_scope_find(
+            schema, decoded_name.view.data,
+            decoded_name.view.size, &resolved_slot);
+        if (slot == NULL || resolved_slot != destination_slot) {
+            status = cmeta_program_fail(
+                builder->diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML data lexical destination changed between passes");
+            goto done;
+        }
+        out->scope = destination_scope;
+        out->slot = destination_slot;
+        field_data = slot->value;
+    } else {
+        status = VXML_INVALID_STRUCTURE;
         goto done;
     }
-    field = cmeta_root_field(
-        builder->profile->root, decoded_name.view, &field_index);
-    if (field == NULL) {
-        status = cmeta_program_fail(
-            builder->diagnostic, VXML_SEMANTIC_ERROR,
-            salts_xml_attribute_location(name_attribute),
-            "VoiceXML data name has no matching application-root field");
-        goto done;
-    }
-    if (!cmeta_data_value_move_supported(field->value)) {
+
+    if (!cmeta_data_value_move_supported(field_data)) {
         status = cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_CONTRACT,
             salts_xml_attribute_location(name_attribute),
@@ -6619,11 +6675,22 @@ static vxml_status cmeta_compile_external_data(
         salts_xml_attribute_location(name_attribute),
         &out->name, &out->name_size);
     if (status != VXML_OK) goto done;
-    status = cmeta_retain_decoded_view(
-        builder, salts_xml_attribute_value(src_attribute),
-        salts_xml_attribute_location(src_attribute),
-        &out->uri, &out->uri_size);
-    if (status != VXML_OK) goto done;
+    if (src_attribute.impl != NULL) {
+        status = cmeta_retain_decoded_view(
+            builder, salts_xml_attribute_value(src_attribute),
+            salts_xml_attribute_location(src_attribute),
+            &out->uri, &out->uri_size);
+        if (status != VXML_OK) goto done;
+    }
+    if (method_attribute.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(method_attribute), "post"))
+        out->method = VXML_SUBMIT_METHOD_POST;
+    if (enctype_attribute.impl != NULL &&
+        cmeta_decoded_equal(
+            salts_xml_attribute_value(enctype_attribute),
+            "multipart/form-data"))
+        out->enctype = VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
     status = cmeta_apply_data_fetch_attributes(
         builder, node, &out->fetch_policy);
     if (status != VXML_OK) goto done;
@@ -6652,7 +6719,7 @@ static vxml_status cmeta_compile_external_data(
     bind_options.max_items = builder->options->max_data_bind_items;
     bind_options.max_owned_bytes = 0u;
     bind_status = data_bind_native_plan_compile(
-        &bind_options, field->value, &out->plan, &bind_diagnostic);
+        &bind_options, field_data, &out->plan, &bind_diagnostic);
     if (bind_status != DATA_BIND_OK || out->plan == NULL) {
         status = cmeta_program_fail(
             builder->diagnostic,
@@ -6671,8 +6738,8 @@ static vxml_status cmeta_compile_external_data(
         goto done;
     }
     out->field_index = field_index;
-    out->field_offset = field->offset;
-    out->field_data = field->value;
+    out->field_offset = field_offset;
+    out->field_data = field_data;
     out->decode_workspace_bytes = requirements->decode_bytes;
     out->workspace_alignment = requirements->workspace_alignment;
     status = VXML_OK;
