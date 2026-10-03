@@ -5551,17 +5551,23 @@ static vxml_status cmeta_apply_data_fetch_attributes(
                 salts_xml_attribute_location(fetchhint),
                 "VoiceXML data fetchhint must be prefetch or safe");
     }
-    status = cmeta_parse_prompt_timeout(
-        fetchtimeout, &policy->has_timeout,
-        &policy->timeout_us, builder->diagnostic);
-    if (status != VXML_OK) return status;
-    status = cmeta_parse_nonnegative_seconds(
-        maxage, &policy->has_max_age,
-        &policy->max_age_seconds, builder->diagnostic);
-    if (status != VXML_OK) return status;
-    return cmeta_parse_nonnegative_seconds(
-        maxstale, &policy->has_max_stale,
-        &policy->max_stale_seconds, builder->diagnostic);
+    if (fetchtimeout.impl != NULL) {
+        status = cmeta_parse_prompt_timeout(
+            fetchtimeout, &policy->has_timeout,
+            &policy->timeout_us, builder->diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (maxage.impl != NULL) {
+        status = cmeta_parse_nonnegative_seconds(
+            maxage, &policy->has_max_age,
+            &policy->max_age_seconds, builder->diagnostic);
+        if (status != VXML_OK) return status;
+    }
+    if (maxstale.impl != NULL)
+        return cmeta_parse_nonnegative_seconds(
+            maxstale, &policy->has_max_stale,
+            &policy->max_stale_seconds, builder->diagnostic);
+    return VXML_OK;
 }
 
 typedef struct cmeta_decoded_value {
