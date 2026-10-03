@@ -1840,6 +1840,73 @@ done:
     return status;
 }
 
+static vxml_status cmeta_parse_nonnegative_seconds(
+    salts_xml_attribute attribute,
+    bool *out_has_value,
+    uint64_t *out_seconds,
+    vxml_diagnostic *diagnostic) {
+    salts_xml_string_view raw;
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t index;
+    uint64_t value = UINT64_C(0);
+    vxml_status status = VXML_OK;
+
+    if (out_has_value == NULL || out_seconds == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_has_value = false;
+    *out_seconds = UINT64_C(0);
+    if (attribute.impl == NULL)
+        return VXML_OK;
+    raw = salts_xml_attribute_value(attribute);
+    if (!cmeta_decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size == 0u)
+        return cmeta_program_fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age must be a non-negative integer");
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return cmeta_program_fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age decoding allocation failed");
+    if (!cmeta_decode_entities(
+            raw, decoded, decoded_size, &decoded_size)) {
+        status = cmeta_program_fail(
+            diagnostic, VXML_XML_ERROR,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age decoding changed between passes");
+        goto done;
+    }
+    decoded[decoded_size] = '\0';
+    for (index = 0u; index < decoded_size; ++index) {
+        const unsigned char ch = (unsigned char)decoded[index];
+        uint64_t digit;
+        if (ch < (unsigned char)'0' || ch > (unsigned char)'9') {
+            status = cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age must be a non-negative integer");
+            goto done;
+        }
+        digit = (uint64_t)(ch - (unsigned char)'0');
+        if (value > (UINT64_MAX - digit) / UINT64_C(10)) {
+            status = cmeta_program_fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age exceeds uint64 seconds");
+            goto done;
+        }
+        value = value * UINT64_C(10) + digit;
+    }
+    *out_has_value = true;
+    *out_seconds = value;
+done:
+    vxml_free(decoded);
+    return status;
+}
+
 static vxml_status cmeta_parse_prompt_count(
     salts_xml_attribute attribute,
     unsigned *out_count,
