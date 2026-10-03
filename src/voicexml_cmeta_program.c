@@ -6458,6 +6458,8 @@ static vxml_status cmeta_compile_external_data(
     vxml_status status;
 
     memset(out, 0, sizeof(*out));
+    out->fetch_policy =
+        builder->profile->document_data_fetch;
     status = cmeta_decode_temporary(
         builder, salts_xml_attribute_value(name_attribute),
         salts_xml_attribute_location(name_attribute), &decoded_name);
@@ -6502,6 +6504,9 @@ static vxml_status cmeta_compile_external_data(
         builder, salts_xml_attribute_value(src_attribute),
         salts_xml_attribute_location(src_attribute),
         &out->uri, &out->uri_size);
+    if (status != VXML_OK) goto done;
+    status = cmeta_apply_data_fetch_attributes(
+        builder, node, &out->fetch_policy);
     if (status != VXML_OK) goto done;
 
     bind_status = data_bind_native_probe_workspace_size(
@@ -8082,6 +8087,7 @@ static vxml_status cmeta_build_schemas(
     size_t root_child;
     size_t scope_index;
     cmeta_fetch_property_seen document_fetch_seen = {0};
+    cmeta_data_fetch_property_seen document_data_seen = {0};
     vxml_status status;
     if (capacity > SIZE_MAX - measurement->action_count)
         return cmeta_program_fail(
@@ -8150,6 +8156,17 @@ static vxml_status cmeta_build_schemas(
                 builder, child,
                 &builder->profile->document_fetchaudio,
                 &document_fetch_seen);
+            if (status == VXML_OK) {
+                builder->profile->document_data_fetch.fetchaudio =
+                    builder->profile->document_fetchaudio;
+                continue;
+            }
+            if (status != VXML_UNSUPPORTED_FEATURE)
+                return status;
+            status = cmeta_apply_data_fetch_property(
+                builder, child,
+                &builder->profile->document_data_fetch,
+                &document_data_seen);
             if (status != VXML_OK) return status;
             continue;
         }
@@ -8225,6 +8242,8 @@ static vxml_status cmeta_build_schemas(
             form->grammar_expression = VXML_CMETA_NO_INDEX;
             form->fetchaudio =
                 builder->profile->document_fetchaudio;
+            form->data_fetch =
+                builder->profile->document_data_fetch;
             builder->profile->scopes[form_scope].owner = form_index;
             base_form->first_block = builder->block_index;
             base_form->block_count = 0u;
@@ -8242,6 +8261,7 @@ static vxml_status cmeta_build_schemas(
             vxml_cmeta_form_row *form = &builder->profile->forms[form_index];
             vxml_form_row *base_form = &builder->impl->forms[form_index];
             cmeta_fetch_property_seen form_fetch_seen = {0};
+            cmeta_data_fetch_property_seen form_data_seen = {0};
             size_t form_child;
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
@@ -8287,6 +8307,26 @@ static vxml_status cmeta_build_schemas(
                             builder, item,
                             &form->fetchaudio,
                             &form_fetch_seen);
+                        if (status != VXML_OK) return status;
+                        form->data_fetch.fetchaudio =
+                            form->fetchaudio;
+                        fetch_recognized = true;
+                    } else if (cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "fetchtimeout") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datafetchhint") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datamaxage") ||
+                               cmeta_decoded_equal(
+                                   salts_xml_attribute_value(name_attribute),
+                                   "datamaxstale")) {
+                        status = cmeta_apply_data_fetch_property(
+                            builder, item,
+                            &form->data_fetch,
+                            &form_data_seen);
                         if (status != VXML_OK) return status;
                         fetch_recognized = true;
                     }
