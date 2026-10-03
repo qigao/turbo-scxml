@@ -96,6 +96,12 @@ typedef struct scxml_cmeta_compile_options_v1 {
     size_t struct_size;
     const cmeta_data_desc *root;
     size_t max_source_bytes;
+    /*
+     * TurboSCXML expression/compiler IR instruction budget.
+     * This is NOT a QuickJS runtime bytecode/execution-instruction quota.
+     * QuickJS runtime safety is bounded independently by heap, stack,
+     * conversion/snapshot limits, and max_eval_milliseconds.
+     */
     size_t max_instructions;
     size_t max_operands;
     size_t max_expression_depth;
