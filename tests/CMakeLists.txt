@@ -386,6 +386,22 @@ if(TURBOSCXML_ENABLE_QUICKJS)
     TurboSCXML::_QuickJSSandbox
     Salts::TinyTest)
   add_test(NAME quickjs_sandbox_test COMMAND quickjs_sandbox_test)
+
+  add_executable(
+    quickjs_cmeta_bridge_test
+    quickjs_cmeta_bridge_test.c)
+  target_compile_features(quickjs_cmeta_bridge_test PRIVATE c_std_11)
+  set_target_properties(quickjs_cmeta_bridge_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_include_directories(quickjs_cmeta_bridge_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(quickjs_cmeta_bridge_test PRIVATE
+    TurboSCXML::_QuickJSCMetaBridge
+    TurboSCXML::_QuickJSSandbox
+    Salts::TinyTest)
+  add_test(NAME quickjs_cmeta_bridge_test COMMAND quickjs_cmeta_bridge_test)
 endif()
 
 if(TURBOSCXML_ENABLE_CHTTP_RESOURCE)

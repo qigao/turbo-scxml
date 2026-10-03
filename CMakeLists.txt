@@ -210,9 +210,35 @@ if(TURBOSCXML_ENABLE_QUICKJS)
   target_link_libraries(turbo_quickjs_sandbox
     PUBLIC qjs
     PRIVATE Salts::Core)
+endif()
+
+add_library(turbo_quickjs_cmeta_bridge STATIC
+  src/quickjs_cmeta_bridge.c)
+add_library(TurboSCXML::_QuickJSCMetaBridge ALIAS
+  turbo_quickjs_cmeta_bridge)
+set_target_properties(turbo_quickjs_cmeta_bridge PROPERTIES
+  EXPORT_NAME _QuickJSCMetaBridge
+  VERSION ${PROJECT_VERSION}
+  SOVERSION ${PROJECT_VERSION_MAJOR})
+target_compile_features(turbo_quickjs_cmeta_bridge PUBLIC c_std_11)
+target_include_directories(turbo_quickjs_cmeta_bridge
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>)
+target_compile_definitions(turbo_quickjs_cmeta_bridge
+  PUBLIC
+    TURBOSCXML_HAS_QUICKJS=$<BOOL:${TURBOSCXML_ENABLE_QUICKJS}>)
+target_link_libraries(turbo_quickjs_cmeta_bridge
+  PRIVATE
+    TurboSCXML::_CMetaRuntime
+    Salts::CMeta)
+if(TURBOSCXML_ENABLE_QUICKJS)
+  target_link_libraries(turbo_quickjs_cmeta_bridge
+    PRIVATE TurboSCXML::_QuickJSSandbox)
   target_link_libraries(turbo_scxml
     PRIVATE TurboSCXML::_QuickJSSandbox)
 endif()
+target_link_libraries(turbo_scxml
+  PRIVATE TurboSCXML::_QuickJSCMetaBridge)
 
 if(TURBOSCXML_ENABLE_PLUGIN)
   add_library(turbo_scxml_plugin STATIC
@@ -540,6 +566,22 @@ if(BUILD_TESTING)
         "TurboSCXML::_QuickJSSandbox dependency contract changed")
     endif()
   endif()
+  string(APPEND TURBOSCXML_EXPECTED_LINKS
+    ";$<LINK_ONLY:TurboSCXML::_QuickJSCMetaBridge>")
+  get_target_property(
+    TURBOSCXML_QUICKJS_CMETA_BRIDGE_LINKS
+    turbo_quickjs_cmeta_bridge INTERFACE_LINK_LIBRARIES)
+  set(TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED
+    "$<LINK_ONLY:TurboSCXML::_CMetaRuntime>;$<LINK_ONLY:Salts::CMeta>")
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    string(APPEND TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED
+      ";$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
+  endif()
+  if(NOT TURBOSCXML_QUICKJS_CMETA_BRIDGE_LINKS STREQUAL
+     TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED)
+    message(FATAL_ERROR
+      "TurboSCXML::_QuickJSCMetaBridge dependency contract changed")
+  endif()
   if(NOT TURBOSCXML_PUBLIC_LINKS STREQUAL TURBOSCXML_EXPECTED_LINKS)
     message(FATAL_ERROR
       "TurboSCXML::SCXML dependency contract changed")
@@ -691,6 +733,11 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS turbo_scxml_cmeta_runtime
+  EXPORT TurboSCXMLTargets
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS turbo_quickjs_cmeta_bridge
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
