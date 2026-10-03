@@ -565,6 +565,7 @@ typedef struct cmeta_program_measurement {
     size_t block_count;
     size_t scope_count;
     size_t declaration_count;
+    size_t initializer_count;
     size_t action_count;
     size_t branch_count;
     size_t expression_count;
@@ -4579,6 +4580,12 @@ static vxml_status cmeta_measure_form(
             data_status = cmeta_measure_data(
                 child, options, measurement, limits, diagnostic);
             if (data_status != VXML_OK) return data_status;
+            if (!cmeta_measure_increment(
+                    &measurement->initializer_count))
+                return cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML initializer count overflow");
             continue;
         }
 
@@ -4597,13 +4604,17 @@ static vxml_status cmeta_measure_form(
                     diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "form variables must precede form items");
-            if (!cmeta_measure_increment(&measurement->declaration_count) ||
+            if (!cmeta_measure_increment(
+                    &measurement->declaration_count) ||
+                !cmeta_measure_increment(
+                    &measurement->initializer_count) ||
                 (expression.impl != NULL &&
-                 !cmeta_measure_increment(&measurement->expression_count)))
+                 !cmeta_measure_increment(
+                     &measurement->expression_count)))
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML declaration count overflow");
+                    "VoiceXML declaration/initializer count overflow");
             continue;
         }
 
@@ -5081,6 +5092,14 @@ static vxml_status cmeta_measure_program(
             status = cmeta_measure_data(
                 child, options, measurement, limits, diagnostic);
             if (status != VXML_OK) break;
+            if (!cmeta_measure_increment(
+                    &measurement->initializer_count)) {
+                status = cmeta_program_fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML initializer count overflow");
+                break;
+            }
             continue;
         }
         if (cmeta_node_named(child, "catch") ||
@@ -5115,13 +5134,17 @@ static vxml_status cmeta_measure_program(
                     "document variables must precede forms");
                 break;
             }
-            if (!cmeta_measure_increment(&measurement->declaration_count) ||
+            if (!cmeta_measure_increment(
+                    &measurement->declaration_count) ||
+                !cmeta_measure_increment(
+                    &measurement->initializer_count) ||
                 (expression.impl != NULL &&
-                 !cmeta_measure_increment(&measurement->expression_count))) {
+                 !cmeta_measure_increment(
+                     &measurement->expression_count))) {
                 status = cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "VoiceXML declaration count overflow");
+                    "VoiceXML declaration/initializer count overflow");
                 break;
             }
             continue;
@@ -5170,6 +5193,7 @@ typedef struct cmeta_program_builder {
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
     size_t data_lower_index;
+    size_t initializer_index;
     size_t form_index;
     size_t menu_index;
     size_t menu_choice_index;
@@ -5248,6 +5272,7 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
     vxml_free(profile->expressions);
     vxml_free(profile->branches);
     vxml_free(profile->actions);
+    vxml_free(profile->initializers);
     vxml_free(profile->declarations);
     vxml_free(profile->event_handlers);
     vxml_free(profile->filled_transfer_targets);
@@ -5347,6 +5372,7 @@ static bool cmeta_allocate_rows(
     profile->event_handler_count = measurement->event_handler_count;
     profile->block_count = measurement->block_count;
     profile->declaration_count = measurement->declaration_count;
+    profile->initializer_count = measurement->initializer_count;
     profile->action_count = measurement->action_count;
     profile->branch_count = measurement->branch_count;
     profile->expression_count = measurement->expression_count;
@@ -5411,6 +5437,7 @@ static bool cmeta_allocate_rows(
     CMETA_ALLOC_ROWS(event_handlers, measurement->event_handler_count);
     CMETA_ALLOC_ROWS(blocks, measurement->block_count);
     CMETA_ALLOC_ROWS(declarations, measurement->declaration_count);
+    CMETA_ALLOC_ROWS(initializers, measurement->initializer_count);
     CMETA_ALLOC_ROWS(actions, measurement->action_count);
     CMETA_ALLOC_ROWS(branches, measurement->branch_count);
     CMETA_ALLOC_ROWS(expressions, measurement->expression_count);
@@ -11900,6 +11927,7 @@ static vxml_status cmeta_write_program(
          builder.event_handler_index != measurement->event_handler_count ||
          builder.block_index != measurement->block_count ||
          builder.declaration_index != measurement->declaration_count ||
+         builder.initializer_index != measurement->initializer_count ||
          builder.action_index != measurement->action_count ||
          builder.branch_index != measurement->branch_count ||
          builder.expression_index != measurement->expression_count ||
