@@ -3974,8 +3974,8 @@ vxml_status vxml_cmeta_session_init_profile(
                 program->max_prompt_foreach_snapshot_bytes +
                 program->max_prompt_foreach_element_alignment - 1u;
             profile->prompt_foreach_snapshot_allocation =
-                (unsigned char *)vxml_malloc(
-                    snapshot_allocation_bytes);
+                (unsigned char *)vxml_calloc(
+                    1u, snapshot_allocation_bytes);
             if (profile->prompt_media_projected_source_segments == NULL ||
                 profile->prompt_media_projected_fallbacks == NULL ||
                 profile->prompt_foreach_snapshot_allocation == NULL ||
