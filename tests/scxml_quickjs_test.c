@@ -138,6 +138,23 @@ static void quickjs_slow_text_restore_zero(void *object) {
     if (object != NULL) memset(object, 0, sizeof(quickjs_slow_text));
 }
 
+static cmeta_status quickjs_slow_text_init_zero(void *object) {
+    if (object == NULL) return CMETA_INVALID_ARGUMENT;
+    quickjs_slow_text_restore_zero(object);
+    return CMETA_OK;
+}
+
+static void quickjs_slow_text_move(
+    void *destination, void *source) {
+    quickjs_slow_text *out =
+        (quickjs_slow_text *)destination;
+    quickjs_slow_text *in =
+        (quickjs_slow_text *)source;
+    if (out == NULL || in == NULL) return;
+    *out = *in;
+    memset(in, 0, sizeof(*in));
+}
+
 static cmeta_status quickjs_slow_text_read(
     const void *object, const unsigned char **out_data, size_t *out_size) {
     const quickjs_slow_text *text = (const quickjs_slow_text *)object;
@@ -159,7 +176,9 @@ static const cmeta_data_buffer_ops quickjs_slow_text_ops = {
     .is_zero = quickjs_slow_text_is_zero,
     .assign = quickjs_slow_text_assign,
     .restore_zero = quickjs_slow_text_restore_zero,
-    .read = quickjs_slow_text_read};
+    .read = quickjs_slow_text_read,
+    .init_zero = quickjs_slow_text_init_zero,
+    .move = quickjs_slow_text_move};
 static const cmeta_data_desc quickjs_slow_text_data = {
     .struct_size = sizeof(cmeta_data_desc),
     .abi_version = CMETA_DATA_DESC_ABI_VERSION,
