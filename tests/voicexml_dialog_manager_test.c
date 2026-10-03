@@ -15,6 +15,11 @@ typedef struct fake_profile_probe {
     size_t raise_calls;
     size_t destroy_calls;
     vxml_status raise_status;
+    bool submit_on_start;
+    const char *submit_uri;
+    size_t submit_uri_size;
+    const vxml_submit_field_v1 *submit_fields;
+    size_t submit_field_count;
     char event[96];
 } fake_profile_probe;
 
@@ -37,6 +42,20 @@ static vxml_status fake_profile_start(vxml_session_impl *session) {
     if (probe == NULL)
         return VXML_INVALID_CONTRACT;
     probe->start_sequence = ++probe->sequence;
+    if (probe->submit_on_start) {
+        if (probe->submit_uri == NULL ||
+            probe->submit_uri_size == 0u)
+            return VXML_INVALID_CONTRACT;
+        session->submit_uri = probe->submit_uri;
+        session->submit_uri_size = probe->submit_uri_size;
+        session->submit_method = VXML_SUBMIT_METHOD_POST;
+        session->submit_enctype =
+            VXML_SUBMIT_ENCTYPE_URLENCODED;
+        session->submit_fields = probe->submit_fields;
+        session->submit_field_count =
+            probe->submit_field_count;
+        session->state = VXML_SESSION_SUBMITTING;
+    }
     return VXML_OK;
 }
 
@@ -1513,6 +1532,122 @@ spec("VoiceXML dialog manager") {
         check_equal(stats.misses, UINT64_C(2));
         check_equal(stats.active_borrows, (size_t)0u);
 
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V4 forwards generic submit V2 fields in order without profile coupling") {
+        static const char source[] = "dialogs/submit-fields.vxml";
+        static const char absolute[] =
+            "https://voice.example/app/dialogs/submit-fields.vxml";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-submit-fields";
+        static const char response_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><exit/></block></form></vxml>";
+        static const vxml_submit_field_v1 fields[] = {
+            {"alpha", sizeof("alpha") - 1u,
+             "one", sizeof("one") - 1u},
+            {"beta", sizeof("beta") - 1u,
+             "two", sizeof("two") - 1u}};
+        upstream_probe upstream = {0};
+        document_probe documents = {
+            .status = VXML_DIALOG_MANAGER_OK,
+            .expected_source = absolute,
+            .expected_source_size = sizeof(absolute) - 1u};
+        event_probe events = {0};
+        fake_profile_probe profile_probe = {
+            .submit_on_start = true,
+            .submit_uri = "../submit",
+            .submit_uri_size = sizeof("../submit") - 1u,
+            .submit_fields = fields,
+            .submit_field_count =
+                sizeof(fields) / sizeof(fields[0])};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK,
+            .response_body = response_body,
+            .effective_uri =
+                "https://voice.example/app/result/response.vxml"};
+        vxml_document_store store = {0};
+        vxml_document_ref preload = {0};
+        vxml_document_view view = {0};
+        vxml_document_store_error store_error = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request start = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(
+            store_init(&store, &documents, 1u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store, absolute, sizeof(absolute) - 1u,
+                &preload, &store_error),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_view(
+                &store, preload, &view),
+            VXML_DOCUMENT_STORE_OK);
+        check_not_null(view.program);
+        if (view.program != NULL) {
+            vxml_program_impl *impl =
+                (vxml_program_impl *)view.program->impl;
+            check_not_null(impl);
+            impl->profile_session_init = fake_profile_init;
+            impl->profile_session_start = fake_profile_start;
+            impl->profile_session_destroy = fake_profile_destroy;
+        }
+        check_equal(
+            vxml_document_store_release(&store, &preload),
+            VXML_DOCUMENT_STORE_OK);
+
+        active_fake_profile = &profile_probe;
+        check_equal(
+            manager_init_v4(
+                &manager, 1u, 4u, &upstream, &store,
+                &submit, &events),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &start, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(submit.execute_calls, (size_t)1u);
+        check_equal(submit.close_calls, (size_t)1u);
+        check_equal(submit.method, VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            strcmp(
+                submit.uri,
+                "https://voice.example/app/submit"), 0);
+        check_equal(
+            strcmp(
+                submit.content_type,
+                "application/x-www-form-urlencoded"), 0);
+        check_equal(
+            strcmp(submit.body, "alpha=one&beta=two"), 0);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        active_fake_profile = NULL;
         manager_close_destroy(&manager, &upstream);
         check_equal(
             vxml_document_store_destroy(&store),
