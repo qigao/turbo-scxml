@@ -4569,6 +4569,19 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "data")) {
+            vxml_status data_status;
+            if (saw_block || saw_directed || saw_filled)
+                return cmeta_program_fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "form data must precede form items");
+            data_status = cmeta_measure_data(
+                child, options, measurement, limits, diagnostic);
+            if (data_status != VXML_OK) return data_status;
+            continue;
+        }
+
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
