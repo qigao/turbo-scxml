@@ -1,6 +1,7 @@
 #include <voicexml/quickjs.h>
 
 #include "quickjs_sandbox.h"
+#include "quickjs_cmeta_bridge.h"
 #include "voicexml_allocator.h"
 #include "voicexml_internal.h"
 
@@ -14,7 +15,13 @@ enum {
     VXML_QUICKJS_DEFAULT_URI_BYTES = 4096u,
     VXML_QUICKJS_DEFAULT_HEAP_BYTES = 8u * 1024u * 1024u,
     VXML_QUICKJS_DEFAULT_STACK_BYTES = 256u * 1024u,
-    VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS = 50u
+    VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS = 50u,
+    VXML_QUICKJS_DEFAULT_CONVERSION_DEPTH = 32u,
+    VXML_QUICKJS_DEFAULT_PROPERTIES = 4096u,
+    VXML_QUICKJS_DEFAULT_ARRAY_ITEMS = 4096u,
+    VXML_QUICKJS_DEFAULT_SNAPSHOT_BYTES = 4u * 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_STATE_STRING_BYTES = 1024u * 1024u,
+    VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES = 1024u * 1024u
 };
 
 typedef struct vxml_quickjs_program_data {
@@ -23,8 +30,12 @@ typedef struct vxml_quickjs_program_data {
 
 typedef struct vxml_quickjs_session_data {
     quickjs_sandbox_runtime runtime;
+    quickjs_cmeta_state_scratch committed_root;
     char *dynamic_uri;
     size_t dynamic_uri_capacity;
+    size_t resume_form;
+    size_t resume_block;
+    bool script_pending;
     const char *last_event;
     size_t last_event_size;
 } vxml_quickjs_session_data;
@@ -40,34 +51,106 @@ static void quickjs_profile_session_destroy(
 static void quickjs_profile_program_destroy(
     vxml_program_impl *program);
 
-static bool compile_options_valid(
+static size_t compile_options_v1_prefix_size(void) {
+    return offsetof(vxml_quickjs_compile_options_v1, root);
+}
+
+static size_t session_options_v1_prefix_size(void) {
+    return offsetof(vxml_quickjs_session_options_v1, initial_state);
+}
+
+static bool compile_options_has_state_tail(
     const vxml_quickjs_compile_options_v1 *options) {
     return options != NULL &&
-        options->abi_version == VXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options) &&
-        options->max_expression_bytes != 0u &&
-        options->max_dynamic_script_uri_bytes != 0u &&
-        options->max_dynamic_script_uri_bytes != SIZE_MAX &&
-        options->max_heap_bytes != 0u &&
-        options->max_stack_bytes != 0u &&
-        options->max_eval_milliseconds != 0u;
+        options->struct_size >= sizeof(*options);
+}
+
+static bool compile_options_state_enabled(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return compile_options_has_state_tail(options) &&
+        options->root != NULL;
+}
+
+static quickjs_cmeta_limits cmeta_limits(
+    const vxml_quickjs_compile_options_v1 *options) {
+    return (quickjs_cmeta_limits){
+        .max_conversion_depth =
+            options != NULL ? options->max_conversion_depth : 0u,
+        .max_properties =
+            options != NULL ? options->max_properties : 0u,
+        .max_array_items =
+            options != NULL ? options->max_array_items : 0u,
+        .max_snapshot_bytes =
+            options != NULL ? options->max_snapshot_bytes : 0u,
+        .max_string_bytes =
+            options != NULL ? options->max_state_string_bytes : 0u};
+}
+
+static bool compile_options_valid(
+    const vxml_quickjs_compile_options_v1 *options) {
+    if (options == NULL ||
+        options->abi_version != VXML_QUICKJS_COMPILE_OPTIONS_ABI_V1 ||
+        options->struct_size < compile_options_v1_prefix_size() ||
+        options->max_expression_bytes == 0u ||
+        options->max_dynamic_script_uri_bytes == 0u ||
+        options->max_dynamic_script_uri_bytes == SIZE_MAX ||
+        options->max_heap_bytes == 0u ||
+        options->max_stack_bytes == 0u ||
+        options->max_eval_milliseconds == 0u)
+        return false;
+    if (!compile_options_has_state_tail(options))
+        return true;
+    if (options->max_resolved_script_uri_bytes == 0u ||
+        options->max_resolved_script_uri_bytes == SIZE_MAX ||
+        options->max_script_source_bytes == 0u)
+        return false;
+    if (options->root == NULL)
+        return true;
+    return options->max_conversion_depth != 0u &&
+        options->max_properties != 0u &&
+        options->max_array_items != 0u &&
+        options->max_snapshot_bytes != 0u &&
+        options->max_state_string_bytes != 0u &&
+        quickjs_cmeta_limits_valid(&(quickjs_cmeta_limits){
+            options->max_conversion_depth,
+            options->max_properties,
+            options->max_array_items,
+            options->max_snapshot_bytes,
+            options->max_state_string_bytes});
 }
 
 static bool session_options_valid(
     const vxml_quickjs_session_options_v1 *options) {
     return options != NULL &&
         options->abi_version == VXML_QUICKJS_SESSION_OPTIONS_ABI_V1 &&
-        options->struct_size >= sizeof(*options);
+        options->struct_size >= session_options_v1_prefix_size();
+}
+
+static const void *session_initial_state(
+    const vxml_quickjs_session_options_v1 *options) {
+    return options != NULL &&
+        options->struct_size >= sizeof(*options)
+        ? options->initial_state : NULL;
 }
 
 static quickjs_sandbox_options sandbox_options(
     const vxml_quickjs_compile_options_v1 *options) {
+    size_t max_source_bytes =
+        options != NULL ? options->max_expression_bytes : 0u;
+    if (compile_options_has_state_tail(options) &&
+        options->max_script_source_bytes > max_source_bytes)
+        max_source_bytes = options->max_script_source_bytes;
     return (quickjs_sandbox_options){
-        .max_source_bytes = options->max_expression_bytes,
-        .max_string_bytes = options->max_dynamic_script_uri_bytes,
-        .max_heap_bytes = options->max_heap_bytes,
-        .max_stack_bytes = options->max_stack_bytes,
-        .max_eval_milliseconds = options->max_eval_milliseconds};
+        .max_source_bytes = max_source_bytes,
+        .max_string_bytes =
+            options != NULL
+                ? options->max_dynamic_script_uri_bytes : 0u,
+        .max_heap_bytes =
+            options != NULL ? options->max_heap_bytes : 0u,
+        .max_stack_bytes =
+            options != NULL ? options->max_stack_bytes : 0u,
+        .max_eval_milliseconds =
+            options != NULL ? options->max_eval_milliseconds : 0u};
 }
 
 static vxml_status sandbox_status_to_vxml(
@@ -212,6 +295,162 @@ static vxml_status validate_dynamic_scripts(
     return VXML_OK;
 }
 
+static bool execution_request_valid(
+    const vxml_quickjs_script_execution_v1 *execution) {
+    const size_t prefix =
+        offsetof(vxml_quickjs_script_execution_v1,
+                 base_document_uri_size) +
+        sizeof(execution->base_document_uri_size);
+    return execution != NULL &&
+        execution->abi_version ==
+            VXML_QUICKJS_SCRIPT_EXECUTION_ABI_V1 &&
+        execution->struct_size >= prefix &&
+        execution->resolver != NULL &&
+        execution->script_resources != NULL &&
+        execution->script_resources->abi_version ==
+            VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1 &&
+        execution->script_resources->struct_size >=
+            offsetof(vxml_script_resource_adapter_v1, close) +
+                sizeof(execution->script_resources->close) &&
+        execution->script_resources->open != NULL &&
+        execution->script_resources->close != NULL &&
+        (execution->base_document_uri_size == 0u ||
+         (execution->base_document_uri != NULL &&
+          memchr(
+              execution->base_document_uri, '\0',
+              execution->base_document_uri_size) == NULL));
+}
+
+static vxml_status script_resource_status_to_vxml(
+    vxml_script_resource_status status) {
+    switch (status) {
+    case VXML_SCRIPT_RESOURCE_OK:
+        return VXML_OK;
+    case VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED:
+        return VXML_ALLOCATION_FAILED;
+    case VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED:
+        return VXML_LIMIT_EXCEEDED;
+    case VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT:
+        return VXML_INVALID_ARGUMENT;
+    case VXML_SCRIPT_RESOURCE_INVALID_URI:
+    case VXML_SCRIPT_RESOURCE_UNSUPPORTED_CHARSET:
+    case VXML_SCRIPT_RESOURCE_PROVIDER_ERROR:
+    case VXML_SCRIPT_RESOURCE_INVALID_DATA:
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+}
+
+static vxml_status quickjs_prepare_committed_context(
+    vxml_session_impl *session,
+    quickjs_cmeta_bridge *bridge) {
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    quickjs_cmeta_limits limits;
+    quickjs_sandbox_status sandbox_status;
+    if (session == NULL || bridge == NULL ||
+        session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    if (!compile_options_state_enabled(&program_data->options) ||
+        !data->committed_root.live ||
+        data->committed_root.value == NULL)
+        return VXML_INVALID_CONTRACT;
+    sandbox_status = quickjs_sandbox_context_recreate(
+        &data->runtime, NULL, 0u);
+    if (sandbox_status != QUICKJS_SANDBOX_OK)
+        return sandbox_status_to_vxml(sandbox_status);
+    limits = cmeta_limits(&program_data->options);
+    if (!quickjs_cmeta_bridge_init(
+            bridge, &data->runtime,
+            program_data->options.root,
+            &limits, NULL, NULL))
+        return VXML_INVALID_CONTRACT;
+    bridge->properties = 0u;
+    if (!quickjs_cmeta_import_root(
+            bridge, data->committed_root.value))
+        return VXML_SEMANTIC_ERROR;
+    return VXML_OK;
+}
+
+static vxml_status quickjs_prepare_script_transaction(
+    vxml_session_impl *session,
+    const vxml_script_source *source,
+    quickjs_cmeta_state_scratch *scratch) {
+    static const char semantic_event[] = "error.semantic";
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    quickjs_cmeta_bridge bridge = {0};
+    quickjs_sandbox_status sandbox_status;
+    vxml_status status;
+    if (session == NULL || source == NULL || scratch == NULL ||
+        session->program == NULL ||
+        session->program->profile_data == NULL ||
+        session->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            session->program->profile_data;
+    data = (vxml_quickjs_session_data *)session->profile_data;
+    status = quickjs_prepare_committed_context(
+        session, &bridge);
+    if (status != VXML_OK)
+        return session_fail(
+            session, status,
+            semantic_event, sizeof(semantic_event) - 1u);
+    if (!quickjs_cmeta_state_snapshot(
+            scratch,
+            program_data->options.root,
+            data->committed_root.value,
+            program_data->options.max_snapshot_bytes))
+        return session_fail(
+            session, VXML_ALLOCATION_FAILED,
+            semantic_event, sizeof(semantic_event) - 1u);
+
+    if (source->size != 0u) {
+        if (source->data == NULL ||
+            source->size >
+                program_data->options.max_script_source_bytes) {
+            quickjs_cmeta_state_scratch_destroy(
+                scratch, program_data->options.root);
+            return session_fail(
+                session, VXML_LIMIT_EXCEEDED,
+                semantic_event, sizeof(semantic_event) - 1u);
+        }
+        sandbox_status = quickjs_sandbox_runtime_eval(
+            &data->runtime,
+            (const char *)source->data,
+            source->size,
+            "<voicexml-external-script>",
+            program_data->options.max_eval_milliseconds,
+            NULL, 0u);
+        status = sandbox_status_to_vxml(sandbox_status);
+        if (status != VXML_OK) {
+            quickjs_cmeta_state_scratch_destroy(
+                scratch, program_data->options.root);
+            return session_fail(
+                session, status,
+                semantic_event, sizeof(semantic_event) - 1u);
+        }
+    }
+
+    bridge.properties = 0u;
+    if (!quickjs_cmeta_export_root(
+            &bridge, scratch->value)) {
+        quickjs_cmeta_state_scratch_destroy(
+            scratch, program_data->options.root);
+        return session_fail(
+            session, VXML_SEMANTIC_ERROR,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+    return VXML_OK;
+}
+
 static vxml_status project_script_target(
     vxml_session_impl *session,
     const vxml_action_row *action) {
@@ -247,6 +486,16 @@ static vxml_status project_script_target(
     if (action->script_srcexpr != NULL) {
         const char *value = NULL;
         size_t value_size = 0u;
+        if (compile_options_state_enabled(&program_data->options)) {
+            quickjs_cmeta_bridge bridge = {0};
+            status = quickjs_prepare_committed_context(
+                session, &bridge);
+            if (status != VXML_OK)
+                return session_fail(
+                    session, status,
+                    semantic_event,
+                    sizeof(semantic_event) - 1u);
+        }
         if (!program_view_valid(
                 program, action->script_srcexpr,
                 action->script_srcexpr_size))
@@ -301,13 +550,19 @@ static vxml_status project_script_target(
     return VXML_OK;
 }
 
-static vxml_status quickjs_run_at(
-    vxml_session_impl *session, size_t form_index) {
+static vxml_status quickjs_run_from(
+    vxml_session_impl *session,
+    size_t form_index,
+    size_t first_block) {
     const vxml_program_impl *program;
+    vxml_quickjs_session_data *data;
     size_t transitions = 0u;
-    if (session == NULL || session->program == NULL)
+    size_t next_block = first_block;
+    if (session == NULL || session->program == NULL ||
+        session->profile_data == NULL)
         return VXML_INVALID_ARGUMENT;
     program = session->program;
+    data = (vxml_quickjs_session_data *)session->profile_data;
     if (program->forms == NULL || program->form_count == 0u)
         return session_fail(
             session, VXML_INVALID_STRUCTURE, NULL, 0u);
@@ -315,6 +570,7 @@ static vxml_status quickjs_run_at(
     for (;;) {
         const vxml_form_row *form;
         size_t block_index;
+        size_t form_end;
         bool jumped = false;
         if (form_index >= program->form_count)
             return session_fail(
@@ -327,9 +583,16 @@ static vxml_status quickjs_run_at(
                 program->block_count))
             return session_fail(
                 session, VXML_INVALID_STRUCTURE, NULL, 0u);
+        form_end = form->first_block + form->block_count;
+        if (next_block == SIZE_MAX)
+            next_block = form->first_block;
+        if (next_block < form->first_block ||
+            next_block > form_end)
+            return session_fail(
+                session, VXML_INVALID_STRUCTURE, NULL, 0u);
 
-        for (block_index = form->first_block;
-             block_index < form->first_block + form->block_count;
+        for (block_index = next_block;
+             block_index < form_end;
              ++block_index) {
             const vxml_block_row *block =
                 &program->blocks[block_index];
@@ -347,8 +610,19 @@ static vxml_status quickjs_run_at(
                 continue;
             action = &program->actions[block->first_action];
 
-            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL)
-                return project_script_target(session, action);
+            if (action->kind == VXML_ACTION_SCRIPT_EXTERNAL) {
+                vxml_status status;
+                data->resume_form = form_index;
+                data->resume_block = block_index + 1u;
+                data->script_pending = true;
+                status = project_script_target(session, action);
+                if (status != VXML_OK) {
+                    data->resume_form = SIZE_MAX;
+                    data->resume_block = SIZE_MAX;
+                    data->script_pending = false;
+                }
+                return status;
+            }
 
             if (action->kind == VXML_ACTION_EXIT) {
                 session->state = VXML_SESSION_EXITED;
@@ -406,6 +680,7 @@ static vxml_status quickjs_run_at(
                     session, VXML_INVALID_STRUCTURE, NULL, 0u);
             ++transitions;
             form_index = action->target_form;
+            next_block = SIZE_MAX;
             jumped = true;
             break;
         }
@@ -415,6 +690,11 @@ static vxml_status quickjs_run_at(
             return VXML_OK;
         }
     }
+}
+
+static vxml_status quickjs_run_at(
+    vxml_session_impl *session, size_t form_index) {
+    return quickjs_run_from(session, form_index, SIZE_MAX);
 }
 
 static vxml_status quickjs_profile_session_init(
@@ -434,6 +714,9 @@ static vxml_status quickjs_profile_session_init(
         (const vxml_quickjs_program_data *)session->program->profile_data;
     if (!compile_options_valid(&program_data->options))
         return VXML_INVALID_CONTRACT;
+    if (compile_options_state_enabled(&program_data->options) !=
+        (session_initial_state(options) != NULL))
+        return VXML_INVALID_ARGUMENT;
 
     data = (vxml_quickjs_session_data *)vxml_calloc(1u, sizeof(*data));
     if (data == NULL)
@@ -447,12 +730,30 @@ static vxml_status quickjs_profile_session_init(
     }
     data->dynamic_uri_capacity =
         program_data->options.max_dynamic_script_uri_bytes + 1u;
+    data->resume_form = SIZE_MAX;
+    data->resume_block = SIZE_MAX;
+    data->script_pending = false;
+
+    if (compile_options_state_enabled(&program_data->options) &&
+        !quickjs_cmeta_state_snapshot(
+            &data->committed_root,
+            program_data->options.root,
+            session_initial_state(options),
+            program_data->options.max_snapshot_bytes)) {
+        vxml_free(data->dynamic_uri);
+        vxml_free(data);
+        return VXML_ALLOCATION_FAILED;
+    }
 
     sandbox = sandbox_options(&program_data->options);
     sandbox_status = quickjs_sandbox_runtime_init(
         &data->runtime, &sandbox, NULL, 0u);
     if (sandbox_status != QUICKJS_SANDBOX_OK) {
         vxml_status status = sandbox_status_to_vxml(sandbox_status);
+        if (compile_options_state_enabled(&program_data->options))
+            quickjs_cmeta_state_scratch_destroy(
+                &data->committed_root,
+                program_data->options.root);
         vxml_free(data->dynamic_uri);
         vxml_free(data);
         return status;
@@ -487,6 +788,16 @@ static void quickjs_profile_session_destroy(
     if (session == NULL || session->profile_data == NULL)
         return;
     data = (vxml_quickjs_session_data *)session->profile_data;
+    if (session->program != NULL &&
+        session->program->profile_data != NULL) {
+        const vxml_quickjs_program_data *program_data =
+            (const vxml_quickjs_program_data *)
+                session->program->profile_data;
+        if (compile_options_state_enabled(&program_data->options))
+            quickjs_cmeta_state_scratch_destroy(
+                &data->committed_root,
+                program_data->options.root);
+    }
     quickjs_sandbox_runtime_destroy(&data->runtime);
     vxml_free(data->dynamic_uri);
     vxml_free(data);
@@ -510,14 +821,30 @@ vxml_quickjs_default_compile_options(void) {
         .max_heap_bytes = VXML_QUICKJS_DEFAULT_HEAP_BYTES,
         .max_stack_bytes = VXML_QUICKJS_DEFAULT_STACK_BYTES,
         .max_eval_milliseconds =
-            VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS};
+            VXML_QUICKJS_DEFAULT_EVAL_MILLISECONDS,
+        .root = NULL,
+        .max_conversion_depth =
+            VXML_QUICKJS_DEFAULT_CONVERSION_DEPTH,
+        .max_properties =
+            VXML_QUICKJS_DEFAULT_PROPERTIES,
+        .max_array_items =
+            VXML_QUICKJS_DEFAULT_ARRAY_ITEMS,
+        .max_snapshot_bytes =
+            VXML_QUICKJS_DEFAULT_SNAPSHOT_BYTES,
+        .max_state_string_bytes =
+            VXML_QUICKJS_DEFAULT_STATE_STRING_BYTES,
+        .max_resolved_script_uri_bytes =
+            VXML_QUICKJS_DEFAULT_URI_BYTES,
+        .max_script_source_bytes =
+            VXML_QUICKJS_DEFAULT_SCRIPT_SOURCE_BYTES};
 }
 
 vxml_quickjs_session_options_v1
 vxml_quickjs_default_session_options(void) {
     return (vxml_quickjs_session_options_v1){
         .abi_version = VXML_QUICKJS_SESSION_OPTIONS_ABI_V1,
-        .struct_size = sizeof(vxml_quickjs_session_options_v1)};
+        .struct_size = sizeof(vxml_quickjs_session_options_v1),
+        .initial_state = NULL};
 }
 
 vxml_status vxml_compile_quickjs_script_profile(
@@ -534,9 +861,17 @@ vxml_status vxml_compile_quickjs_script_profile(
     if (out != NULL) out->impl = NULL;
     if (diagnostic != NULL)
         memset(diagnostic, 0, sizeof(*diagnostic));
-    active = options != NULL
-        ? *options
-        : vxml_quickjs_default_compile_options();
+    if (options == NULL) {
+        active = vxml_quickjs_default_compile_options();
+    } else {
+        size_t copy_size;
+        memset(&active, 0, sizeof(active));
+        if (options->struct_size < compile_options_v1_prefix_size())
+            return VXML_INVALID_ARGUMENT;
+        copy_size = options->struct_size < sizeof(active)
+            ? options->struct_size : sizeof(active);
+        memcpy(&active, options, copy_size);
+    }
     if (!compile_options_valid(&active))
         return VXML_INVALID_ARGUMENT;
 
@@ -552,6 +887,23 @@ vxml_status vxml_compile_quickjs_script_profile(
     if (status != VXML_OK) {
         vxml_program_destroy(out);
         return status;
+    }
+    if (compile_options_state_enabled(&active)) {
+        const quickjs_cmeta_limits limits = cmeta_limits(&active);
+        if (!quickjs_cmeta_schema_supported(
+                active.root, &limits, NULL, NULL, 0u)) {
+            if (diagnostic != NULL) {
+                memset(diagnostic, 0, sizeof(*diagnostic));
+                diagnostic->status = VXML_INVALID_CONTRACT;
+                (void)snprintf(
+                    diagnostic->message,
+                    sizeof(diagnostic->message),
+                    "%s",
+                    "VoiceXML QuickJS CMeta root is outside the bounded bridge contract");
+            }
+            vxml_program_destroy(out);
+            return VXML_INVALID_CONTRACT;
+        }
     }
 
     profile = (vxml_quickjs_program_data *)vxml_malloc(sizeof(*profile));
@@ -587,6 +939,165 @@ vxml_status vxml_session_init_quickjs(
         impl->profile_session_init != quickjs_profile_session_init)
         return VXML_INVALID_CONTRACT;
     return vxml_session_init_profile(session, program, options);
+}
+
+vxml_status vxml_quickjs_session_execute_script(
+    vxml_session *session,
+    const vxml_quickjs_script_execution_v1 *execution) {
+    static const char semantic_event[] = "error.semantic";
+    vxml_session_impl *impl;
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    vxml_script_request_v1 request =
+        VXML_SCRIPT_REQUEST_V1_INIT;
+    vxml_script_source source = {0};
+    quickjs_cmeta_state_scratch scratch = {0};
+    vxml_script_resource_status resource_status;
+    vxml_script_resource_status close_status;
+    vxml_status status;
+    const char *event = NULL;
+    size_t event_size = 0u;
+    size_t resume_form;
+    size_t resume_block;
+
+    if (session == NULL ||
+        !execution_request_valid(execution))
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->state != VXML_SESSION_SCRIPTING)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_QUICKJS ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            impl->program->profile_data;
+    data = (vxml_quickjs_session_data *)impl->profile_data;
+    if (!compile_options_state_enabled(&program_data->options) ||
+        !data->script_pending ||
+        data->resume_form == SIZE_MAX ||
+        data->resume_block == SIZE_MAX ||
+        impl->script_src == NULL ||
+        impl->script_src_size == 0u ||
+        impl->script_charset == NULL ||
+        impl->script_charset_size == 0u)
+        return VXML_INVALID_CONTRACT;
+
+    request.base_document_uri =
+        execution->base_document_uri;
+    request.base_document_uri_size =
+        execution->base_document_uri_size;
+    request.reference = impl->script_src;
+    request.reference_size = impl->script_src_size;
+    request.charset = impl->script_charset;
+    request.charset_size = impl->script_charset_size;
+    request.max_uri_bytes =
+        program_data->options.max_resolved_script_uri_bytes;
+    request.max_source_bytes =
+        program_data->options.max_script_source_bytes;
+
+    resource_status = vxml_script_resource_acquire(
+        execution->resolver,
+        execution->script_resources,
+        execution->script_resource_user,
+        &request, &source);
+    if (resource_status != VXML_SCRIPT_RESOURCE_OK) {
+        status = script_resource_status_to_vxml(
+            resource_status);
+        if (resource_status ==
+            VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT)
+            return VXML_INVALID_ARGUMENT;
+        event = vxml_script_resource_failure_event(
+            resource_status, &event_size);
+        return session_fail(
+            impl, status, event, event_size);
+    }
+
+    status = quickjs_prepare_script_transaction(
+        impl, &source, &scratch);
+
+    close_status = vxml_script_resource_close(
+        execution->script_resources,
+        execution->script_resource_user,
+        &source);
+    if (status != VXML_OK) {
+        if (source.lease != NULL)
+            (void)vxml_script_resource_close(
+                execution->script_resources,
+                execution->script_resource_user,
+                &source);
+        return status;
+    }
+    if (close_status != VXML_SCRIPT_RESOURCE_OK) {
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, program_data->options.root);
+        return session_fail(
+            impl, VXML_INVALID_CONTRACT,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+
+    if (!quickjs_cmeta_state_publish(
+            program_data->options.root,
+            data->committed_root.value,
+            &scratch)) {
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, program_data->options.root);
+        return session_fail(
+            impl, VXML_INVALID_CONTRACT,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+    quickjs_cmeta_state_scratch_destroy(
+        &scratch, program_data->options.root);
+
+    resume_form = data->resume_form;
+    resume_block = data->resume_block;
+    data->resume_form = SIZE_MAX;
+    data->resume_block = SIZE_MAX;
+    data->script_pending = false;
+    session_set_event(data, NULL, 0u);
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
+    impl->state = VXML_SESSION_RUNNING;
+    impl->error = VXML_OK;
+    return quickjs_run_from(
+        impl, resume_form, resume_block);
+}
+
+vxml_status vxml_quickjs_session_state(
+    const vxml_session *session,
+    const void **out_state) {
+    const vxml_session_impl *impl;
+    const vxml_quickjs_program_data *program_data;
+    const vxml_quickjs_session_data *data;
+    if (out_state != NULL) *out_state = NULL;
+    if (session == NULL || out_state == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_QUICKJS ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            impl->program->profile_data;
+    data = (const vxml_quickjs_session_data *)
+        impl->profile_data;
+    if (!compile_options_state_enabled(
+            &program_data->options) ||
+        !data->committed_root.live ||
+        data->committed_root.value == NULL)
+        return VXML_INVALID_CONTRACT;
+    *out_state = data->committed_root.value;
+    return VXML_OK;
 }
 
 vxml_status vxml_quickjs_session_last_event(
