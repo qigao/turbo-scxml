@@ -1165,14 +1165,23 @@ static vxml_status cmeta_measure_repeated_vars(
     return VXML_OK;
 }
 
+static vxml_status cmeta_measure_data(
+    salts_xml_node node,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic);
+
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
     bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic);
 
 static vxml_status cmeta_measure_conditional(
     salts_xml_node node, bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const salts_xml_attribute condition = cmeta_attribute(node, "cond");
@@ -1233,7 +1242,7 @@ static vxml_status cmeta_measure_conditional(
         {
             const vxml_status status = cmeta_measure_executable(
                 child, node, index, event_handler,
-                measurement, limits, diagnostic);
+                options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
@@ -1243,6 +1252,7 @@ static vxml_status cmeta_measure_conditional(
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
     bool event_handler,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement, const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
     salts_xml_attribute expression;
@@ -1268,7 +1278,8 @@ static vxml_status cmeta_measure_executable(
          !cmeta_node_named(node, "throw") &&
          !cmeta_node_named(node, "rethrow") &&
          !cmeta_node_named(node, "reprompt") &&
-         !cmeta_node_named(node, "goto")))
+         !cmeta_node_named(node, "goto") &&
+         !cmeta_node_named(node, "data")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -1277,7 +1288,10 @@ static vxml_status cmeta_measure_executable(
             cmeta_known_profile_element(node)
                 ? "VoiceXML element is invalid in executable content"
                 : "unsupported VoiceXML executable element");
-    if (cmeta_node_named(node, "var")) {
+    if (cmeta_node_named(node, "data")) {
+        status = cmeta_measure_data(
+            node, options, measurement, limits, diagnostic);
+    } else if (cmeta_node_named(node, "var")) {
         status = cmeta_validate_variable_element(node, diagnostic);
     } else if (cmeta_node_named(node, "assign")) {
         static const char *const allowed[] = {"name", "expr"};
@@ -1455,13 +1469,15 @@ static vxml_status cmeta_measure_executable(
     }
     if (cmeta_node_named(node, "if"))
         return cmeta_measure_conditional(
-            node, event_handler, measurement, limits, diagnostic);
+            node, event_handler, options,
+            measurement, limits, diagnostic);
     return VXML_OK;
 }
 
 static bool cmeta_tree_contains_var(salts_xml_node node) {
     size_t index;
-    if (cmeta_node_named(node, "var")) return true;
+    if (cmeta_node_named(node, "var") ||
+        cmeta_node_named(node, "data")) return true;
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child =
             salts_xml_node_child_at(node, index);
@@ -1545,7 +1561,7 @@ static vxml_status cmeta_measure_catch(
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
             child, node, index, true,
-            measurement, limits, diagnostic);
+            options, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1607,6 +1623,7 @@ static vxml_status cmeta_measure_filled_content(
     salts_xml_node filled,
     bool form_level,
     size_t default_target_count,
+    const vxml_cmeta_compile_options_v1 *options,
     cmeta_program_measurement *measurement,
     const vxml_limits *limits,
     vxml_diagnostic *diagnostic) {
@@ -1650,14 +1667,16 @@ static vxml_status cmeta_measure_filled_content(
         if (cmeta_node_ignorable(child)) continue;
         status = cmeta_measure_executable(
             child, filled, index, false,
-            measurement, limits, diagnostic);
+            options, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
 }
 
 static vxml_status cmeta_measure_block(
-    salts_xml_node block, cmeta_program_measurement *measurement,
+    salts_xml_node block,
+    const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     size_t index;
     const salts_xml_attribute block_cond = cmeta_attribute(block, "cond");
@@ -1693,7 +1712,7 @@ static vxml_status cmeta_measure_block(
         {
             const vxml_status status = cmeta_measure_executable(
                 child, block, index, false,
-                measurement, limits, diagnostic);
+                options, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
         }
     }
