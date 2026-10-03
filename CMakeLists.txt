@@ -553,7 +553,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>;$<LINK_ONLY:TurboSCXML::_QuickJSCMetaBridge>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS
       ";$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
@@ -565,6 +565,22 @@ if(BUILD_TESTING)
       message(FATAL_ERROR
         "TurboSCXML::_QuickJSSandbox dependency contract changed")
     endif()
+  endif()
+  string(APPEND TURBOSCXML_EXPECTED_LINKS
+    ";$<LINK_ONLY:TurboSCXML::_QuickJSCMetaBridge>")
+  get_target_property(
+    TURBOSCXML_QUICKJS_CMETA_BRIDGE_LINKS
+    turbo_quickjs_cmeta_bridge INTERFACE_LINK_LIBRARIES)
+  set(TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED
+    "$<LINK_ONLY:TurboSCXML::_CMetaRuntime>;$<LINK_ONLY:Salts::CMeta>")
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    string(APPEND TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED
+      ";$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
+  endif()
+  if(NOT TURBOSCXML_QUICKJS_CMETA_BRIDGE_LINKS STREQUAL
+     TURBOSCXML_QUICKJS_CMETA_BRIDGE_EXPECTED)
+    message(FATAL_ERROR
+      "TurboSCXML::_QuickJSCMetaBridge dependency contract changed")
   endif()
   if(NOT TURBOSCXML_PUBLIC_LINKS STREQUAL TURBOSCXML_EXPECTED_LINKS)
     message(FATAL_ERROR
