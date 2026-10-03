@@ -941,6 +941,134 @@ vxml_status vxml_session_init_quickjs(
     return vxml_session_init_profile(session, program, options);
 }
 
+vxml_status vxml_quickjs_session_execute_script(
+    vxml_session *session,
+    const vxml_quickjs_script_execution_v1 *execution) {
+    static const char semantic_event[] = "error.semantic";
+    vxml_session_impl *impl;
+    const vxml_quickjs_program_data *program_data;
+    vxml_quickjs_session_data *data;
+    vxml_script_request_v1 request =
+        VXML_SCRIPT_REQUEST_V1_INIT;
+    vxml_script_source source = {0};
+    quickjs_cmeta_state_scratch scratch = {0};
+    vxml_script_resource_status resource_status;
+    vxml_script_resource_status close_status;
+    vxml_status status;
+    const char *event = NULL;
+    size_t event_size = 0u;
+    size_t resume_form;
+    size_t resume_block;
+
+    if (session == NULL ||
+        !execution_request_valid(execution))
+        return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->state != VXML_SESSION_SCRIPTING)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_QUICKJS ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            impl->program->profile_data;
+    data = (vxml_quickjs_session_data *)impl->profile_data;
+    if (!compile_options_state_enabled(&program_data->options) ||
+        !data->script_pending ||
+        data->resume_form == SIZE_MAX ||
+        data->resume_block == SIZE_MAX ||
+        impl->script_src == NULL ||
+        impl->script_src_size == 0u ||
+        impl->script_charset == NULL ||
+        impl->script_charset_size == 0u)
+        return VXML_INVALID_CONTRACT;
+
+    request.base_document_uri =
+        execution->base_document_uri;
+    request.base_document_uri_size =
+        execution->base_document_uri_size;
+    request.reference = impl->script_src;
+    request.reference_size = impl->script_src_size;
+    request.charset = impl->script_charset;
+    request.charset_size = impl->script_charset_size;
+    request.max_uri_bytes =
+        program_data->options.max_resolved_script_uri_bytes;
+    request.max_source_bytes =
+        program_data->options.max_script_source_bytes;
+
+    resource_status = vxml_script_resource_acquire(
+        execution->resolver,
+        execution->script_resources,
+        execution->script_resource_user,
+        &request, &source);
+    if (resource_status != VXML_SCRIPT_RESOURCE_OK) {
+        status = script_resource_status_to_vxml(
+            resource_status);
+        if (resource_status ==
+            VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT)
+            return VXML_INVALID_ARGUMENT;
+        event = vxml_script_resource_failure_event(
+            resource_status, &event_size);
+        return session_fail(
+            impl, status, event, event_size);
+    }
+
+    status = quickjs_prepare_script_transaction(
+        impl, &source, &scratch);
+
+    close_status = vxml_script_resource_close(
+        execution->script_resources,
+        execution->script_resource_user,
+        &source);
+    if (status != VXML_OK) {
+        if (source.lease != NULL)
+            (void)vxml_script_resource_close(
+                execution->script_resources,
+                execution->script_resource_user,
+                &source);
+        return status;
+    }
+    if (close_status != VXML_SCRIPT_RESOURCE_OK) {
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, program_data->options.root);
+        return session_fail(
+            impl, VXML_INVALID_CONTRACT,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+
+    if (!quickjs_cmeta_state_publish(
+            program_data->options.root,
+            data->committed_root.value,
+            &scratch)) {
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, program_data->options.root);
+        return session_fail(
+            impl, VXML_INVALID_CONTRACT,
+            semantic_event, sizeof(semantic_event) - 1u);
+    }
+    quickjs_cmeta_state_scratch_destroy(
+        &scratch, program_data->options.root);
+
+    resume_form = data->resume_form;
+    resume_block = data->resume_block;
+    data->resume_form = SIZE_MAX;
+    data->resume_block = SIZE_MAX;
+    data->script_pending = false;
+    session_set_event(data, NULL, 0u);
+    impl->script_src = NULL;
+    impl->script_src_size = 0u;
+    impl->script_charset = NULL;
+    impl->script_charset_size = 0u;
+    impl->state = VXML_SESSION_RUNNING;
+    impl->error = VXML_OK;
+    return quickjs_run_from(
+        impl, resume_form, resume_block);
+}
+
 vxml_status vxml_quickjs_session_last_event(
     const vxml_session *session,
     const char **out_event,
