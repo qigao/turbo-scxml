@@ -1943,6 +1943,11 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     options.max_prompt_bytes = 256u;
     options.max_prompt_segments = 8u;
     options.max_dynamic_mark_name_bytes = 64u;
+    options.max_prompt_foreach = 4u;
+    options.max_prompt_foreach_items = 4u;
+    options.max_prompt_foreach_snapshot_bytes =
+        sizeof(vxml_cmeta_session_text) * 4u;
+    options.max_prompt_expanded_segments = 16u;
     return options;
 }
 
