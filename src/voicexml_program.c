@@ -41,8 +41,53 @@ typedef struct vxml_decoded_script {
     salts_xml_location location;
 } vxml_decoded_script;
 
+typedef struct vxml_decoded_data_policy {
+    char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
+    bool has_timeout;
+    uint64_t timeout_us;
+    vxml_cmeta_data_fetch_hint fetch_hint;
+    bool has_max_age;
+    uint64_t max_age_seconds;
+    bool has_max_stale;
+    uint64_t max_stale_seconds;
+} vxml_decoded_data_policy;
+
+typedef struct vxml_data_property_seen {
+    bool fetchaudio;
+    bool fetchaudio_delay;
+    bool fetchaudio_minimum;
+    bool timeout;
+    bool hint;
+    bool max_age;
+    bool max_stale;
+} vxml_data_property_seen;
+
+typedef struct vxml_decoded_data {
+    vxml_data_placement placement;
+    size_t owner_form;
+    char *name;
+    size_t name_size;
+    char *uri;
+    size_t uri_size;
+    char *uri_expression;
+    size_t uri_expression_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    char *namelist;
+    size_t namelist_size;
+    size_t namelist_count;
+    vxml_decoded_data_policy fetch_policy;
+    salts_xml_location location;
+} vxml_decoded_data;
+
 typedef struct vxml_measurement {
     uint64_t features;
+    bool version_21;
     size_t form_count;
     size_t block_count;
     size_t action_count;
@@ -59,6 +104,9 @@ typedef struct vxml_measurement {
     vxml_decoded_script *scripts;
     size_t script_count;
     size_t script_capacity;
+    vxml_decoded_data *data_rows;
+    size_t data_count;
+    size_t data_capacity;
 } vxml_measurement;
 
 typedef struct vxml_writer {
@@ -70,6 +118,7 @@ typedef struct vxml_writer {
     size_t goto_index;
     size_t submit_index;
     size_t script_index;
+    size_t data_index;
     size_t storage_index;
 } vxml_writer;
 
@@ -544,6 +593,887 @@ static vxml_status validate_goto_attributes(
     return VXML_OK;
 }
 
+
+static bool data_feature_enabled(const vxml_measurement *measurement) {
+    return measurement != NULL &&
+        (measurement->features & VXML_COMPILE_FEATURE_DATA_REQUEST) != 0u;
+}
+
+static bool xml_space(unsigned char value) {
+    return value == (unsigned char)' ' ||
+        value == (unsigned char)'\t' ||
+        value == (unsigned char)'\r' ||
+        value == (unsigned char)'\n';
+}
+
+static void decoded_data_policy_destroy(
+    vxml_decoded_data_policy *policy) {
+    if (policy == NULL) return;
+    vxml_free(policy->fetchaudio_uri);
+    memset(policy, 0, sizeof(*policy));
+}
+
+static void decoded_data_destroy(vxml_decoded_data *row) {
+    if (row == NULL) return;
+    vxml_free(row->name);
+    vxml_free(row->uri);
+    vxml_free(row->uri_expression);
+    vxml_free(row->namelist);
+    decoded_data_policy_destroy(&row->fetch_policy);
+    memset(row, 0, sizeof(*row));
+}
+
+static vxml_status decode_attribute_owned(
+    salts_xml_attribute attribute,
+    char **out_data, size_t *out_size,
+    vxml_diagnostic *diagnostic,
+    const char *message) {
+    const salts_xml_string_view raw =
+        salts_xml_attribute_value(attribute);
+    size_t decoded_size = 0u;
+    char *decoded;
+    if (out_data == NULL || out_size == NULL ||
+        attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_data = NULL;
+    *out_size = 0u;
+    if (!decode_entities(raw, NULL, 0u, &decoded_size) ||
+        decoded_size == SIZE_MAX)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute), message);
+    decoded = (char *)vxml_malloc(decoded_size + 1u);
+    if (decoded == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML attribute decoding allocation failed");
+    if (!decode_entities(
+            raw, decoded, decoded_size, &decoded_size)) {
+        vxml_free(decoded);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML attribute decoding changed between passes");
+    }
+    decoded[decoded_size] = '\0';
+    *out_data = decoded;
+    *out_size = decoded_size;
+    return VXML_OK;
+}
+
+static vxml_status retain_attribute_owned(
+    vxml_measurement *measurement,
+    salts_xml_attribute attribute,
+    const vxml_limits *limits,
+    char **out_data, size_t *out_size,
+    vxml_diagnostic *diagnostic,
+    const char *message) {
+    vxml_status status;
+    size_t retained;
+    status = decode_attribute_owned(
+        attribute, out_data, out_size, diagnostic, message);
+    if (status != VXML_OK) return status;
+    if (!checked_add(*out_size, 1u, &retained) ||
+        !checked_add(
+            measurement->name_bytes, retained,
+            &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes) {
+        vxml_free(*out_data);
+        *out_data = NULL;
+        *out_size = 0u;
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML retained data metadata exceeds max_name_bytes");
+    }
+    return VXML_OK;
+}
+
+static vxml_status retain_policy_uri_copy(
+    vxml_measurement *measurement,
+    const vxml_limits *limits,
+    const vxml_decoded_data_policy *source,
+    vxml_decoded_data_policy *destination,
+    salts_xml_location location,
+    vxml_diagnostic *diagnostic) {
+    size_t retained;
+    *destination = *source;
+    destination->fetchaudio_uri = NULL;
+    if (source->fetchaudio_uri_size == 0u)
+        return VXML_OK;
+    if (source->fetchaudio_uri == NULL ||
+        !checked_add(source->fetchaudio_uri_size, 1u, &retained) ||
+        !checked_add(
+            measurement->name_bytes, retained,
+            &measurement->name_bytes) ||
+        measurement->name_bytes > limits->max_name_bytes)
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML retained data fetchaudio exceeds max_name_bytes");
+    destination->fetchaudio_uri =
+        (char *)vxml_malloc(retained);
+    if (destination->fetchaudio_uri == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED, location,
+            "VoiceXML data fetchaudio allocation failed");
+    memcpy(
+        destination->fetchaudio_uri,
+        source->fetchaudio_uri, retained);
+    return VXML_OK;
+}
+
+static vxml_status clone_policy_scope(
+    const vxml_decoded_data_policy *source,
+    vxml_decoded_data_policy *destination,
+    salts_xml_location location,
+    vxml_diagnostic *diagnostic) {
+    size_t retained;
+    if (source == NULL || destination == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *destination = *source;
+    destination->fetchaudio_uri = NULL;
+    if (source->fetchaudio_uri_size == 0u)
+        return VXML_OK;
+    if (source->fetchaudio_uri == NULL ||
+        !checked_add(source->fetchaudio_uri_size, 1u, &retained))
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED, location,
+            "VoiceXML data property URI size overflow");
+    destination->fetchaudio_uri =
+        (char *)vxml_malloc(retained);
+    if (destination->fetchaudio_uri == NULL)
+        return fail(
+            diagnostic, VXML_ALLOCATION_FAILED, location,
+            "VoiceXML data property URI allocation failed");
+    memcpy(
+        destination->fetchaudio_uri,
+        source->fetchaudio_uri, retained);
+    return VXML_OK;
+}
+
+static vxml_status parse_time_designation(
+    salts_xml_attribute attribute,
+    bool *out_has_value, uint64_t *out_value_us,
+    vxml_diagnostic *diagnostic) {
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t number_size;
+    size_t cursor = 0u;
+    size_t fractional_digits = 0u;
+    size_t fractional_limit;
+    uint64_t unit_us;
+    uint64_t integer_part = UINT64_C(0);
+    uint64_t fractional_part = UINT64_C(0);
+    bool saw_digit = false;
+    bool saw_decimal = false;
+    vxml_status status;
+    if (out_has_value == NULL || out_value_us == NULL ||
+        attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_has_value = false;
+    *out_value_us = UINT64_C(0);
+    status = decode_attribute_owned(
+        attribute, &decoded, &decoded_size, diagnostic,
+        "VoiceXML time designation is invalid");
+    if (status != VXML_OK) return status;
+    if (decoded_size >= 2u &&
+        decoded[decoded_size - 2u] == 'm' &&
+        decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000);
+        fractional_limit = 3u;
+        number_size = decoded_size - 2u;
+    } else if (decoded_size >= 1u &&
+               decoded[decoded_size - 1u] == 's') {
+        unit_us = UINT64_C(1000000);
+        fractional_limit = 6u;
+        number_size = decoded_size - 1u;
+    } else {
+        vxml_free(decoded);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation requires ms or s units");
+    }
+    if (number_size == 0u) {
+        vxml_free(decoded);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation is missing its numeric value");
+    }
+    while (cursor < number_size) {
+        const unsigned char ch = (unsigned char)decoded[cursor++];
+        if (ch == (unsigned char)'.') {
+            if (saw_decimal || !saw_digit || cursor == number_size) {
+                vxml_free(decoded);
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation has an invalid decimal form");
+            }
+            saw_decimal = true;
+            continue;
+        }
+        if (ch < (unsigned char)'0' || ch > (unsigned char)'9') {
+            vxml_free(decoded);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML time designation must be non-negative");
+        }
+        saw_digit = true;
+        if (!saw_decimal) {
+            const uint64_t digit = (uint64_t)(ch - (unsigned char)'0');
+            if (integer_part >
+                (UINT64_MAX - digit) / UINT64_C(10)) {
+                vxml_free(decoded);
+                return fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation overflows");
+            }
+            integer_part = integer_part * UINT64_C(10) + digit;
+        } else {
+            if (fractional_digits >= fractional_limit) {
+                vxml_free(decoded);
+                return fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_attribute_location(attribute),
+                    "VoiceXML time designation exceeds microsecond precision");
+            }
+            fractional_part =
+                fractional_part * UINT64_C(10) +
+                (uint64_t)(ch - (unsigned char)'0');
+            ++fractional_digits;
+        }
+    }
+    if (!saw_digit || integer_part > UINT64_MAX / unit_us) {
+        vxml_free(decoded);
+        return fail(
+            diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML time designation exceeds uint64 microseconds");
+    }
+    *out_value_us = integer_part * unit_us;
+    if (fractional_digits != 0u) {
+        uint64_t scale = unit_us;
+        size_t index;
+        for (index = 0u; index < fractional_digits; ++index)
+            scale /= UINT64_C(10);
+        if (fractional_part >
+            (UINT64_MAX - *out_value_us) / scale) {
+            vxml_free(decoded);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML time designation exceeds uint64 microseconds");
+        }
+        *out_value_us += fractional_part * scale;
+    }
+    *out_has_value = true;
+    vxml_free(decoded);
+    return VXML_OK;
+}
+
+static vxml_status parse_nonnegative_seconds(
+    salts_xml_attribute attribute,
+    bool *out_has_value, uint64_t *out_seconds,
+    vxml_diagnostic *diagnostic) {
+    char *decoded = NULL;
+    size_t decoded_size = 0u;
+    size_t index;
+    uint64_t value = UINT64_C(0);
+    vxml_status status;
+    if (out_has_value == NULL || out_seconds == NULL ||
+        attribute.impl == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_has_value = false;
+    *out_seconds = UINT64_C(0);
+    status = decode_attribute_owned(
+        attribute, &decoded, &decoded_size, diagnostic,
+        "VoiceXML cache age must be a non-negative integer");
+    if (status != VXML_OK) return status;
+    if (decoded_size == 0u) {
+        vxml_free(decoded);
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_attribute_location(attribute),
+            "VoiceXML cache age must be a non-negative integer");
+    }
+    for (index = 0u; index < decoded_size; ++index) {
+        const unsigned char ch = (unsigned char)decoded[index];
+        const uint64_t digit =
+            ch >= (unsigned char)'0' && ch <= (unsigned char)'9'
+                ? (uint64_t)(ch - (unsigned char)'0')
+                : UINT64_MAX;
+        if (digit == UINT64_MAX) {
+            vxml_free(decoded);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age must be a non-negative integer");
+        }
+        if (value > (UINT64_MAX - digit) / UINT64_C(10)) {
+            vxml_free(decoded);
+            return fail(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                salts_xml_attribute_location(attribute),
+                "VoiceXML cache age exceeds uint64 seconds");
+        }
+        value = value * UINT64_C(10) + digit;
+    }
+    *out_has_value = true;
+    *out_seconds = value;
+    vxml_free(decoded);
+    return VXML_OK;
+}
+
+static vxml_status validate_property_attributes(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    bool seen_name = false;
+    bool seen_value = false;
+    size_t index;
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        bool *seen = NULL;
+        if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+            view_equal(local, "name"))
+            seen = &seen_name;
+        else if (salts_xml_attribute_namespace_uri(attribute).size == 0u &&
+                 view_equal(local, "value"))
+            seen = &seen_value;
+        if (seen == NULL || *seen)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML property attribute");
+        *seen = true;
+    }
+    if (!seen_name || !seen_value)
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node),
+            "VoiceXML property requires name and value");
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index)
+        if (!node_is_ignorable(salts_xml_node_child_at(node, index)))
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML property must be empty");
+    return VXML_OK;
+}
+
+static vxml_status apply_data_property(
+    salts_xml_node node, bool version_21,
+    vxml_decoded_data_policy *policy,
+    vxml_data_property_seen *seen,
+    vxml_diagnostic *diagnostic) {
+    const salts_xml_attribute name =
+        unqualified_attribute(node, "name");
+    const salts_xml_attribute value =
+        unqualified_attribute(node, "value");
+    const salts_xml_string_view raw_name =
+        salts_xml_attribute_value(name);
+    vxml_status status = validate_property_attributes(node, diagnostic);
+    if (status != VXML_OK) return status;
+
+    if (normalized_view_equal(raw_name, "fetchaudio")) {
+        char *decoded = NULL;
+        size_t decoded_size = 0u;
+        if (seen->fetchaudio)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudio property");
+        status = decode_attribute_owned(
+            value, &decoded, &decoded_size, diagnostic,
+            "VoiceXML fetchaudio property is invalid");
+        if (status != VXML_OK) return status;
+        if (decoded_size == 0u) {
+            vxml_free(decoded);
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML fetchaudio property must be nonempty");
+        }
+        vxml_free(policy->fetchaudio_uri);
+        policy->fetchaudio_uri = decoded;
+        policy->fetchaudio_uri_size = decoded_size;
+        seen->fetchaudio = true;
+        return VXML_OK;
+    }
+    if (normalized_view_equal(raw_name, "fetchaudiodelay")) {
+        if (seen->fetchaudio_delay)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiodelay property");
+        seen->fetchaudio_delay = true;
+        return parse_time_designation(
+            value, &policy->has_fetchaudio_delay,
+            &policy->fetchaudio_delay_us, diagnostic);
+    }
+    if (normalized_view_equal(raw_name, "fetchaudiominimum")) {
+        if (seen->fetchaudio_minimum)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchaudiominimum property");
+        seen->fetchaudio_minimum = true;
+        return parse_time_designation(
+            value, &policy->has_fetchaudio_minimum,
+            &policy->fetchaudio_minimum_us, diagnostic);
+    }
+    if (normalized_view_equal(raw_name, "fetchtimeout")) {
+        if (seen->timeout)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML fetchtimeout property");
+        seen->timeout = true;
+        return parse_time_designation(
+            value, &policy->has_timeout,
+            &policy->timeout_us, diagnostic);
+    }
+    if (normalized_view_equal(raw_name, "datafetchhint")) {
+        if (!version_21)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML datafetchhint requires version 2.1");
+        if (seen->hint)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datafetchhint property");
+        if (normalized_view_equal(
+                salts_xml_attribute_value(value), "prefetch"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_PREFETCH;
+        else if (normalized_view_equal(
+                     salts_xml_attribute_value(value), "safe"))
+            policy->fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_SAFE;
+        else
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(value),
+                "VoiceXML datafetchhint must be prefetch or safe");
+        seen->hint = true;
+        return VXML_OK;
+    }
+    if (normalized_view_equal(raw_name, "datamaxage")) {
+        if (!version_21)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML datamaxage requires version 2.1");
+        if (seen->max_age)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datamaxage property");
+        seen->max_age = true;
+        return parse_nonnegative_seconds(
+            value, &policy->has_max_age,
+            &policy->max_age_seconds, diagnostic);
+    }
+    if (normalized_view_equal(raw_name, "datamaxstale")) {
+        if (!version_21)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML datamaxstale requires version 2.1");
+        if (seen->max_stale)
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "duplicate VoiceXML datamaxstale property");
+        seen->max_stale = true;
+        return parse_nonnegative_seconds(
+            value, &policy->has_max_stale,
+            &policy->max_stale_seconds, diagnostic);
+    }
+    return fail(
+        diagnostic, VXML_UNSUPPORTED_FEATURE,
+        salts_xml_attribute_location(name),
+        "unsupported VoiceXML property in QuickJS data profile");
+}
+
+static vxml_status validate_data_attributes(
+    salts_xml_node node, vxml_diagnostic *diagnostic) {
+    static const char *const allowed[] = {
+        "name", "src", "srcexpr", "method", "namelist", "enctype",
+        "fetchaudio", "fetchhint", "fetchtimeout", "maxage", "maxstale"};
+    bool seen[11] = {false};
+    size_t index;
+    for (index = 0u; index < salts_xml_node_attribute_count(node); ++index) {
+        const salts_xml_attribute attribute =
+            salts_xml_node_attribute_at(node, index);
+        const salts_xml_string_view local =
+            salts_xml_attribute_local_name(attribute);
+        size_t allowed_index;
+        if (salts_xml_attribute_namespace_uri(attribute).size != 0u)
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported VoiceXML data attribute");
+        for (allowed_index = 0u;
+             allowed_index < sizeof(allowed) / sizeof(allowed[0]);
+             ++allowed_index)
+            if (view_equal(local, allowed[allowed_index]))
+                break;
+        if (allowed_index == sizeof(allowed) / sizeof(allowed[0]) ||
+            seen[allowed_index])
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_attribute_location(attribute),
+                "unsupported or duplicate VoiceXML data attribute");
+        seen[allowed_index] = true;
+    }
+    for (index = 0u; index < salts_xml_node_child_count(node); ++index)
+        if (!node_is_ignorable(salts_xml_node_child_at(node, index)))
+            return fail(
+                diagnostic, VXML_UNSUPPORTED_FEATURE,
+                salts_xml_node_location(node),
+                "QuickJS no-DOM data profile does not admit inline data content");
+    return VXML_OK;
+}
+
+static bool next_namelist_token(
+    const char *data, size_t size, size_t *cursor,
+    const char **out_data, size_t *out_size) {
+    size_t start;
+    if (cursor == NULL || out_data == NULL || out_size == NULL)
+        return false;
+    while (*cursor < size &&
+           xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    if (*cursor == size) {
+        *out_data = NULL;
+        *out_size = 0u;
+        return true;
+    }
+    start = *cursor;
+    while (*cursor < size &&
+           !xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    *out_data = data + start;
+    *out_size = *cursor - start;
+    return true;
+}
+
+static vxml_status validate_namelist(
+    const char *data, size_t size,
+    size_t *out_count, salts_xml_location location,
+    vxml_diagnostic *diagnostic) {
+    size_t cursor = 0u;
+    size_t count = 0u;
+    const char *token;
+    size_t token_size;
+    while (cursor < size) {
+        size_t previous_cursor = 0u;
+        size_t previous_index = 0u;
+        if (!next_namelist_token(
+                data, size, &cursor, &token, &token_size))
+            return VXML_INVALID_STRUCTURE;
+        if (token == NULL) break;
+        if (!is_ncname(token, token_size))
+            return fail(
+                diagnostic, VXML_INVALID_STRUCTURE, location,
+                "VoiceXML data namelist entries must be XML NCNames");
+        while (previous_index < count) {
+            const char *previous;
+            size_t previous_size;
+            if (!next_namelist_token(
+                    data, size, &previous_cursor,
+                    &previous, &previous_size) ||
+                previous == NULL)
+                return VXML_INVALID_STRUCTURE;
+            if (previous_size == token_size &&
+                memcmp(previous, token, token_size) == 0)
+                return fail(
+                    diagnostic, VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML data namelist contains a duplicate name");
+            ++previous_index;
+        }
+        ++count;
+    }
+    if (out_count != NULL) *out_count = count;
+    return VXML_OK;
+}
+
+static vxml_status append_data_row(
+    vxml_measurement *measurement,
+    salts_xml_node node,
+    vxml_data_placement placement,
+    size_t owner_form,
+    const vxml_decoded_data_policy *inherited_policy,
+    const vxml_limits *limits,
+    vxml_diagnostic *diagnostic) {
+    vxml_decoded_data row;
+    const salts_xml_attribute name =
+        unqualified_attribute(node, "name");
+    const salts_xml_attribute src =
+        unqualified_attribute(node, "src");
+    const salts_xml_attribute srcexpr =
+        unqualified_attribute(node, "srcexpr");
+    const salts_xml_attribute method =
+        unqualified_attribute(node, "method");
+    const salts_xml_attribute namelist =
+        unqualified_attribute(node, "namelist");
+    const salts_xml_attribute enctype =
+        unqualified_attribute(node, "enctype");
+    const salts_xml_attribute fetchaudio =
+        unqualified_attribute(node, "fetchaudio");
+    const salts_xml_attribute fetchhint =
+        unqualified_attribute(node, "fetchhint");
+    const salts_xml_attribute fetchtimeout =
+        unqualified_attribute(node, "fetchtimeout");
+    const salts_xml_attribute maxage =
+        unqualified_attribute(node, "maxage");
+    const salts_xml_attribute maxstale =
+        unqualified_attribute(node, "maxstale");
+    size_t allocation_size;
+    vxml_status status;
+    memset(&row, 0, sizeof(row));
+    row.placement = placement;
+    row.owner_form = owner_form;
+    row.method = VXML_SUBMIT_METHOD_GET;
+    row.enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+    row.location = salts_xml_node_location(node);
+
+    if (!measurement->version_21)
+        return fail(
+            diagnostic, VXML_UNSUPPORTED_FEATURE, row.location,
+            "VoiceXML data requires version 2.1");
+    status = validate_data_attributes(node, diagnostic);
+    if (status != VXML_OK) return status;
+    if ((src.impl == NULL) == (srcexpr.impl == NULL))
+        return fail(
+            diagnostic, VXML_INVALID_STRUCTURE, row.location,
+            "VoiceXML data requires exactly one of src or srcexpr");
+    status = retain_policy_uri_copy(
+        measurement, limits, inherited_policy,
+        &row.fetch_policy, row.location, diagnostic);
+    if (status != VXML_OK) goto fail_row;
+
+    if (name.impl != NULL) {
+        status = retain_attribute_owned(
+            measurement, name, limits,
+            &row.name, &row.name_size,
+            diagnostic, "VoiceXML data name is invalid");
+        if (status != VXML_OK) goto fail_row;
+        if (!is_ncname(row.name, row.name_size)) {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name),
+                "VoiceXML data name must be a nonempty XML NCName");
+            goto fail_row;
+        }
+    }
+    if (src.impl != NULL) {
+        status = retain_attribute_owned(
+            measurement, src, limits,
+            &row.uri, &row.uri_size,
+            diagnostic, "VoiceXML data src is invalid");
+        if (status != VXML_OK) goto fail_row;
+        if (row.uri_size == 0u) {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(src),
+                "VoiceXML data src must be nonempty");
+            goto fail_row;
+        }
+    } else {
+        status = retain_attribute_owned(
+            measurement, srcexpr, limits,
+            &row.uri_expression, &row.uri_expression_size,
+            diagnostic, "VoiceXML data srcexpr is invalid");
+        if (status != VXML_OK) goto fail_row;
+        if (row.uri_expression_size == 0u) {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(srcexpr),
+                "VoiceXML data srcexpr must be nonempty");
+            goto fail_row;
+        }
+    }
+
+    if (method.impl != NULL) {
+        if (normalized_view_equal(
+                salts_xml_attribute_value(method), "get"))
+            row.method = VXML_SUBMIT_METHOD_GET;
+        else if (normalized_view_equal(
+                     salts_xml_attribute_value(method), "post"))
+            row.method = VXML_SUBMIT_METHOD_POST;
+        else {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(method),
+                "VoiceXML data method must be get or post");
+            goto fail_row;
+        }
+    }
+    if (enctype.impl != NULL) {
+        if (normalized_view_equal(
+                salts_xml_attribute_value(enctype),
+                "application/x-www-form-urlencoded"))
+            row.enctype = VXML_SUBMIT_ENCTYPE_URLENCODED;
+        else if (normalized_view_equal(
+                     salts_xml_attribute_value(enctype),
+                     "multipart/form-data"))
+            row.enctype =
+                VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
+        else {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(enctype),
+                "VoiceXML data enctype is unsupported");
+            goto fail_row;
+        }
+        if (row.method != VXML_SUBMIT_METHOD_POST) {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(enctype),
+                "VoiceXML data enctype requires method=post");
+            goto fail_row;
+        }
+    }
+    if (namelist.impl != NULL) {
+        status = retain_attribute_owned(
+            measurement, namelist, limits,
+            &row.namelist, &row.namelist_size,
+            diagnostic, "VoiceXML data namelist is invalid");
+        if (status != VXML_OK) goto fail_row;
+        status = validate_namelist(
+            row.namelist, row.namelist_size,
+            &row.namelist_count,
+            salts_xml_attribute_location(namelist),
+            diagnostic);
+        if (status != VXML_OK) goto fail_row;
+        if (row.namelist_count == 0u) {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(namelist),
+                "VoiceXML data namelist must not be empty");
+            goto fail_row;
+        }
+    }
+
+    if (fetchaudio.impl != NULL) {
+        char *decoded = NULL;
+        size_t decoded_size = 0u;
+        status = retain_attribute_owned(
+            measurement, fetchaudio, limits,
+            &decoded, &decoded_size,
+            diagnostic, "VoiceXML data fetchaudio is invalid");
+        if (status != VXML_OK) goto fail_row;
+        if (decoded_size == 0u) {
+            vxml_free(decoded);
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchaudio),
+                "VoiceXML data fetchaudio must be nonempty");
+            goto fail_row;
+        }
+        if (row.fetch_policy.fetchaudio_uri != NULL) {
+            const size_t old_bytes =
+                row.fetch_policy.fetchaudio_uri_size + 1u;
+            if (measurement->name_bytes >= old_bytes)
+                measurement->name_bytes -= old_bytes;
+            vxml_free(row.fetch_policy.fetchaudio_uri);
+        }
+        row.fetch_policy.fetchaudio_uri = decoded;
+        row.fetch_policy.fetchaudio_uri_size = decoded_size;
+    }
+    if (fetchhint.impl != NULL) {
+        if (normalized_view_equal(
+                salts_xml_attribute_value(fetchhint), "prefetch"))
+            row.fetch_policy.fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_PREFETCH;
+        else if (normalized_view_equal(
+                     salts_xml_attribute_value(fetchhint), "safe"))
+            row.fetch_policy.fetch_hint =
+                VXML_CMETA_DATA_FETCH_HINT_SAFE;
+        else {
+            status = fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(fetchhint),
+                "VoiceXML data fetchhint must be prefetch or safe");
+            goto fail_row;
+        }
+    }
+    if (fetchtimeout.impl != NULL) {
+        status = parse_time_designation(
+            fetchtimeout,
+            &row.fetch_policy.has_timeout,
+            &row.fetch_policy.timeout_us, diagnostic);
+        if (status != VXML_OK) goto fail_row;
+    }
+    if (maxage.impl != NULL) {
+        status = parse_nonnegative_seconds(
+            maxage,
+            &row.fetch_policy.has_max_age,
+            &row.fetch_policy.max_age_seconds,
+            diagnostic);
+        if (status != VXML_OK) goto fail_row;
+    }
+    if (maxstale.impl != NULL) {
+        status = parse_nonnegative_seconds(
+            maxstale,
+            &row.fetch_policy.has_max_stale,
+            &row.fetch_policy.max_stale_seconds,
+            diagnostic);
+        if (status != VXML_OK) goto fail_row;
+    }
+
+    if (measurement->data_count >= limits->max_actions) {
+        status = fail(
+            diagnostic, VXML_LIMIT_EXCEEDED, row.location,
+            "VoiceXML data row count exceeds max_actions");
+        goto fail_row;
+    }
+    if (measurement->data_count == measurement->data_capacity) {
+        size_t capacity = measurement->data_capacity == 0u
+            ? 4u : measurement->data_capacity * 2u;
+        vxml_decoded_data *rows;
+        if (capacity < measurement->data_capacity ||
+            capacity > limits->max_actions)
+            capacity = limits->max_actions;
+        if (capacity <= measurement->data_capacity ||
+            !checked_multiply(
+                capacity, sizeof(*rows),
+                &allocation_size)) {
+            status = fail(
+                diagnostic, VXML_LIMIT_EXCEEDED, row.location,
+                "VoiceXML temporary data table size overflow");
+            goto fail_row;
+        }
+        rows = (vxml_decoded_data *)vxml_realloc(
+            measurement->data_rows, allocation_size);
+        if (rows == NULL) {
+            status = fail(
+                diagnostic, VXML_ALLOCATION_FAILED, row.location,
+                "VoiceXML temporary data table allocation failed");
+            goto fail_row;
+        }
+        measurement->data_rows = rows;
+        measurement->data_capacity = capacity;
+    }
+    measurement->data_rows[measurement->data_count++] = row;
+    return VXML_OK;
+
+fail_row:
+    decoded_data_destroy(&row);
+    return status;
+}
+
+
 static void measurement_destroy(vxml_measurement *measurement) {
     size_t index;
     if (measurement == NULL) return;
@@ -560,10 +1490,13 @@ static void measurement_destroy(vxml_measurement *measurement) {
         vxml_free(measurement->scripts[index].srcexpr);
         vxml_free(measurement->scripts[index].charset);
     }
+    for (index = 0u; index < measurement->data_count; ++index)
+        decoded_data_destroy(&measurement->data_rows[index]);
     vxml_free(measurement->ids);
     vxml_free(measurement->gotos);
     vxml_free(measurement->submits);
     vxml_free(measurement->scripts);
+    vxml_free(measurement->data_rows);
     memset(measurement, 0, sizeof(*measurement));
 }
 
@@ -1364,7 +2297,9 @@ static vxml_status measure_goto(
 
 static vxml_status measure_block(
     salts_xml_node node, vxml_measurement *measurement,
-    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    const vxml_limits *limits, vxml_diagnostic *diagnostic,
+    const vxml_decoded_data_policy *data_policy,
+    size_t owner_form) {
     size_t index;
     size_t actions = 0u;
     vxml_status status = validate_attributes(node, NULL, diagnostic);
@@ -1389,7 +2324,9 @@ static vxml_status measure_block(
             (!view_equal(local_name, "exit") &&
              !view_equal(local_name, "goto") &&
              !view_equal(local_name, "submit") &&
-             !view_equal(local_name, "script")))
+             !view_equal(local_name, "script") &&
+             !(data_feature_enabled(measurement) &&
+               view_equal(local_name, "data"))))
             return reject_unexpected_element(
                 child, diagnostic, "unsupported VoiceXML block child element");
         if (actions != 0u)
@@ -1398,16 +2335,32 @@ static vxml_status measure_block(
                 salts_xml_node_location(child),
                 "VoiceXML literal block accepts at most one transfer action");
         ++actions;
-        status = view_equal(local_name, "goto")
-            ? measure_goto(child, measurement, limits, diagnostic)
-            : view_equal(local_name, "submit")
-                ? measure_submit(
-                    child, measurement, limits, diagnostic)
-                : view_equal(local_name, "script")
-                    ? measure_external_script(
-                        child, measurement, limits, diagnostic)
-                    : measure_exit(
-                        child, measurement, limits, diagnostic);
+        if (view_equal(local_name, "goto"))
+            status = measure_goto(
+                child, measurement, limits, diagnostic);
+        else if (view_equal(local_name, "submit"))
+            status = measure_submit(
+                child, measurement, limits, diagnostic);
+        else if (view_equal(local_name, "script"))
+            status = measure_external_script(
+                child, measurement, limits, diagnostic);
+        else if (view_equal(local_name, "data")) {
+            if (measurement->action_count >= limits->max_actions ||
+                !checked_add(
+                    measurement->action_count, 1u,
+                    &measurement->action_count))
+                return fail(
+                    diagnostic, VXML_LIMIT_EXCEEDED,
+                    salts_xml_node_location(child),
+                    "VoiceXML action count exceeds max_actions");
+            status = append_data_row(
+                measurement, child,
+                VXML_DATA_EXECUTABLE, owner_form,
+                data_policy, limits, diagnostic);
+        } else {
+            status = measure_exit(
+                child, measurement, limits, diagnostic);
+        }
         if (status != VXML_OK) return status;
     }
     return VXML_OK;
@@ -1415,15 +2368,24 @@ static vxml_status measure_block(
 
 static vxml_status measure_form(
     salts_xml_node node, vxml_measurement *measurement,
-    const vxml_limits *limits, vxml_diagnostic *diagnostic) {
+    const vxml_limits *limits, vxml_diagnostic *diagnostic,
+    const vxml_decoded_data_policy *document_data_policy) {
     const size_t first_block = measurement->block_count;
+    const size_t form_index = measurement->form_count;
+    vxml_decoded_data_policy data_policy = {0};
+    vxml_data_property_seen data_seen = {0};
     salts_xml_attribute id_attribute;
     size_t index;
     vxml_status status = validate_attributes(node, "id", diagnostic);
     if (status != VXML_OK) return status;
+    status = clone_policy_scope(
+        document_data_policy, &data_policy,
+        salts_xml_node_location(node), diagnostic);
+    if (status != VXML_OK) return status;
     if (measurement->form_count >= limits->max_forms ||
         !checked_add(measurement->form_count, 1u,
                      &measurement->form_count)) {
+        decoded_data_policy_destroy(&data_policy);
         return fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(node),
@@ -1431,34 +2393,65 @@ static vxml_status measure_form(
     }
     id_attribute = unqualified_attribute(node, "id");
     status = append_id(measurement, id_attribute, limits, diagnostic);
-    if (status != VXML_OK) return status;
+    if (status != VXML_OK) goto done;
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
+        const salts_xml_string_view local_name =
+            salts_xml_node_local_name(child);
         if (node_is_ignorable(child)) continue;
-        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
-            return reject_non_element(child, diagnostic);
-        if (!normalized_view_equal(
-                salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "block")) {
-            return reject_unexpected_element(
-                child, diagnostic, "unsupported VoiceXML form child element");
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT) {
+            status = reject_non_element(child, diagnostic);
+            goto done;
         }
-        status = measure_block(child, measurement, limits, diagnostic);
-        if (status != VXML_OK) return status;
+        if (!normalized_view_equal(
+                salts_xml_node_namespace_uri(child), VXML_NAMESPACE)) {
+            status = reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML form child element");
+            goto done;
+        }
+        if (data_feature_enabled(measurement) &&
+            view_equal(local_name, "property")) {
+            status = apply_data_property(
+                child, measurement->version_21,
+                &data_policy, &data_seen, diagnostic);
+        } else if (data_feature_enabled(measurement) &&
+                   view_equal(local_name, "data")) {
+            status = append_data_row(
+                measurement, child,
+                VXML_DATA_FORM, form_index,
+                &data_policy, limits, diagnostic);
+        } else if (view_equal(local_name, "block")) {
+            status = measure_block(
+                child, measurement, limits, diagnostic,
+                &data_policy, form_index);
+        } else {
+            status = reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML form child element");
+        }
+        if (status != VXML_OK) goto done;
     }
     if (measurement->block_count == first_block) {
-        return fail(
+        status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(node),
             "VoiceXML form requires at least one block");
+        goto done;
     }
-    return VXML_OK;
+    status = VXML_OK;
+
+done:
+    decoded_data_policy_destroy(&data_policy);
+    return status;
 }
 
 static vxml_status measure_document(
     salts_xml_node root, vxml_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic) {
     const salts_xml_attribute version = unqualified_attribute(root, "version");
+    vxml_decoded_data_policy data_policy = {0};
+    vxml_data_property_seen data_seen = {0};
     size_t index;
     vxml_status status;
     if (salts_xml_node_type(root) != SALTS_XML_ELEMENT ||
@@ -1484,33 +2477,66 @@ static vxml_status measure_document(
                 : salts_xml_node_location(root),
             "VoiceXML version must be 2.0 or 2.1");
     }
+    measurement->version_21 = normalized_view_equal(
+        salts_xml_attribute_value(version), "2.1");
+
     for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(root, index);
+        const salts_xml_string_view local_name =
+            salts_xml_node_local_name(child);
         if (node_is_ignorable(child)) continue;
-        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
-            return reject_non_element(child, diagnostic);
-        if (!normalized_view_equal(
-                salts_xml_node_namespace_uri(child), VXML_NAMESPACE) ||
-            !view_equal(salts_xml_node_local_name(child), "form")) {
-            return reject_unexpected_element(
-                child, diagnostic, "unsupported VoiceXML root child element");
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT) {
+            status = reject_non_element(child, diagnostic);
+            goto done;
         }
-        status = measure_form(child, measurement, limits, diagnostic);
-        if (status != VXML_OK) return status;
+        if (!normalized_view_equal(
+                salts_xml_node_namespace_uri(child), VXML_NAMESPACE)) {
+            status = reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML root child element");
+            goto done;
+        }
+        if (data_feature_enabled(measurement) &&
+            view_equal(local_name, "property")) {
+            status = apply_data_property(
+                child, measurement->version_21,
+                &data_policy, &data_seen, diagnostic);
+        } else if (data_feature_enabled(measurement) &&
+                   view_equal(local_name, "data")) {
+            status = append_data_row(
+                measurement, child,
+                VXML_DATA_DOCUMENT, SIZE_MAX,
+                &data_policy, limits, diagnostic);
+        } else if (view_equal(local_name, "form")) {
+            status = measure_form(
+                child, measurement, limits, diagnostic,
+                &data_policy);
+        } else {
+            status = reject_unexpected_element(
+                child, diagnostic,
+                "unsupported VoiceXML root child element");
+        }
+        if (status != VXML_OK) goto done;
     }
     if (measurement->form_count == 0u) {
-        return fail(
+        status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(root),
             "VoiceXML document requires at least one form");
+        goto done;
     }
-    return VXML_OK;
+    status = VXML_OK;
+
+done:
+    decoded_data_policy_destroy(&data_policy);
+    return status;
 }
 
 static bool measure_allocation(
     const vxml_measurement *measurement, size_t *forms_offset,
     size_t *blocks_offset, size_t *actions_offset,
-    size_t *storage_offset, size_t *allocation_size) {
+    size_t *data_offset, size_t *storage_offset,
+    size_t *allocation_size) {
     size_t cursor = sizeof(vxml_program_impl);
     size_t bytes;
     if (!checked_align(cursor, _Alignof(vxml_form_row), &cursor)) return false;
@@ -1529,6 +2555,12 @@ static bool measure_allocation(
     *actions_offset = cursor;
     if (!checked_multiply(
             measurement->action_count, sizeof(vxml_action_row), &bytes) ||
+        !checked_add(cursor, bytes, &cursor) ||
+        !checked_align(cursor, _Alignof(vxml_data_row), &cursor))
+        return false;
+    *data_offset = cursor;
+    if (!checked_multiply(
+            measurement->data_count, sizeof(vxml_data_row), &bytes) ||
         !checked_add(cursor, bytes, &cursor))
         return false;
     *storage_offset = cursor;
@@ -1546,6 +2578,7 @@ static void write_exit(vxml_writer *writer) {
     action->target_uri_size = 0u;
     action->fetchaudio_uri = NULL;
     action->fetchaudio_uri_size = 0u;
+    action->data_index = SIZE_MAX;
 }
 
 static void write_external_script(vxml_writer *writer) {
@@ -1586,6 +2619,7 @@ static void write_external_script(vxml_writer *writer) {
     action->script_charset =
         writer->impl->storage + writer->storage_index;
     action->script_charset_size = script.charset_size;
+    action->data_index = SIZE_MAX;
     memcpy(
         writer->impl->storage + writer->storage_index,
         script.charset, script.charset_size + 1u);
@@ -1606,6 +2640,7 @@ static void write_submit(vxml_writer *writer) {
     action->fetchaudio_uri_size = 0u;
     action->submit_method = submit.method;
     action->submit_enctype = submit.enctype;
+    action->data_index = SIZE_MAX;
     memcpy(
         writer->impl->storage + writer->storage_index,
         submit.target, submit.target_size + 1u);
@@ -1621,6 +2656,7 @@ static void write_goto(vxml_writer *writer) {
     action->target_uri_size = 0u;
     action->fetchaudio_uri = NULL;
     action->fetchaudio_uri_size = 0u;
+    action->data_index = SIZE_MAX;
     if (target.external) {
         action->kind = VXML_ACTION_GOTO_EXTERNAL;
         action->target_form = SIZE_MAX;
@@ -1649,6 +2685,82 @@ static void write_goto(vxml_writer *writer) {
     }
 }
 
+static void write_data_descriptor(vxml_writer *writer) {
+    const vxml_decoded_data source =
+        writer->measurement->data_rows[writer->data_index];
+    vxml_data_row *row =
+        &writer->impl->data_rows[writer->data_index++];
+#define VXML_COPY_DATA_STRING(FIELD) do { \
+    row->FIELD = NULL; \
+    row->FIELD##_size = source.FIELD##_size; \
+    if (source.FIELD != NULL) { \
+        row->FIELD = writer->impl->storage + writer->storage_index; \
+        memcpy( \
+            writer->impl->storage + writer->storage_index, \
+            source.FIELD, source.FIELD##_size + 1u); \
+        writer->storage_index += source.FIELD##_size + 1u; \
+    } \
+} while (0)
+    memset(row, 0, sizeof(*row));
+    row->placement = source.placement;
+    row->owner_form = source.owner_form;
+    row->method = source.method;
+    row->enctype = source.enctype;
+    row->namelist_count = source.namelist_count;
+    row->location = source.location;
+    row->fetch_policy.has_fetchaudio_delay =
+        source.fetch_policy.has_fetchaudio_delay;
+    row->fetch_policy.fetchaudio_delay_us =
+        source.fetch_policy.fetchaudio_delay_us;
+    row->fetch_policy.has_fetchaudio_minimum =
+        source.fetch_policy.has_fetchaudio_minimum;
+    row->fetch_policy.fetchaudio_minimum_us =
+        source.fetch_policy.fetchaudio_minimum_us;
+    row->fetch_policy.has_timeout =
+        source.fetch_policy.has_timeout;
+    row->fetch_policy.timeout_us =
+        source.fetch_policy.timeout_us;
+    row->fetch_policy.fetch_hint =
+        source.fetch_policy.fetch_hint;
+    row->fetch_policy.has_max_age =
+        source.fetch_policy.has_max_age;
+    row->fetch_policy.max_age_seconds =
+        source.fetch_policy.max_age_seconds;
+    row->fetch_policy.has_max_stale =
+        source.fetch_policy.has_max_stale;
+    row->fetch_policy.max_stale_seconds =
+        source.fetch_policy.max_stale_seconds;
+    VXML_COPY_DATA_STRING(name);
+    VXML_COPY_DATA_STRING(uri);
+    VXML_COPY_DATA_STRING(uri_expression);
+    VXML_COPY_DATA_STRING(namelist);
+    row->fetch_policy.fetchaudio_uri = NULL;
+    row->fetch_policy.fetchaudio_uri_size =
+        source.fetch_policy.fetchaudio_uri_size;
+    if (source.fetch_policy.fetchaudio_uri != NULL) {
+        row->fetch_policy.fetchaudio_uri =
+            writer->impl->storage + writer->storage_index;
+        memcpy(
+            writer->impl->storage + writer->storage_index,
+            source.fetch_policy.fetchaudio_uri,
+            source.fetch_policy.fetchaudio_uri_size + 1u);
+        writer->storage_index +=
+            source.fetch_policy.fetchaudio_uri_size + 1u;
+    }
+#undef VXML_COPY_DATA_STRING
+}
+
+static void write_data_action(vxml_writer *writer) {
+    const size_t data_index = writer->data_index;
+    vxml_action_row *action =
+        &writer->impl->actions[writer->action_index++];
+    memset(action, 0, sizeof(*action));
+    action->kind = VXML_ACTION_DATA;
+    action->target_form = SIZE_MAX;
+    action->data_index = data_index;
+    write_data_descriptor(writer);
+}
+
 static void write_block(vxml_writer *writer, salts_xml_node node) {
     vxml_block_row *row = &writer->impl->blocks[writer->block_index++];
     size_t index;
@@ -1664,6 +2776,9 @@ static void write_block(vxml_writer *writer, salts_xml_node node) {
             else if (view_equal(
                          salts_xml_node_local_name(child), "script"))
                 write_external_script(writer);
+            else if (view_equal(
+                         salts_xml_node_local_name(child), "data"))
+                write_data_action(writer);
             else
                 write_exit(writer);
         }
@@ -1686,7 +2801,15 @@ static void write_form(vxml_writer *writer, salts_xml_node node) {
     }
     for (index = 0u; index < salts_xml_node_child_count(node); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(node, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+        const salts_xml_string_view local =
+            salts_xml_node_local_name(child);
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
+            continue;
+        if (view_equal(local, "property"))
+            continue;
+        if (view_equal(local, "data"))
+            write_data_descriptor(writer);
+        else
             write_block(writer, child);
     }
     row->block_count = writer->block_index - row->first_block;
@@ -1696,7 +2819,15 @@ static void write_document(vxml_writer *writer, salts_xml_node root) {
     size_t index;
     for (index = 0u; index < salts_xml_node_child_count(root); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(root, index);
-        if (salts_xml_node_type(child) == SALTS_XML_ELEMENT)
+        const salts_xml_string_view local =
+            salts_xml_node_local_name(child);
+        if (salts_xml_node_type(child) != SALTS_XML_ELEMENT)
+            continue;
+        if (view_equal(local, "property"))
+            continue;
+        if (view_equal(local, "data"))
+            write_data_descriptor(writer);
+        else
             write_form(writer, child);
     }
 }
@@ -1726,7 +2857,11 @@ static bool form_first_action(
                 impl->action_count - block->first_action)
             return false;
         if (block->action_count != 0u) {
-            *out_action = &impl->actions[block->first_action];
+            const vxml_action_row *action =
+                &impl->actions[block->first_action];
+            if (action->kind == VXML_ACTION_DATA)
+                continue;
+            *out_action = action;
             return true;
         }
     }
@@ -1821,13 +2956,15 @@ vxml_status vxml_compile_with_features(
     size_t forms_offset;
     size_t blocks_offset;
     size_t actions_offset;
+    size_t data_offset;
     size_t storage_offset;
     size_t allocation_size;
     if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));
     if (out != NULL) out->impl = NULL;
     if ((features &
          ~(VXML_COMPILE_FEATURE_EXTERNAL_SCRIPT |
-           VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR)) != 0u)
+           VXML_COMPILE_FEATURE_SCRIPT_SRCEXPR |
+           VXML_COMPILE_FEATURE_DATA_REQUEST)) != 0u)
         return fail(
             diagnostic, VXML_INVALID_ARGUMENT,
             (salts_xml_location){0},
@@ -1872,7 +3009,7 @@ vxml_status vxml_compile_with_features(
     if (status != VXML_OK) goto cleanup;
     if (!measure_allocation(
             &measurement, &forms_offset, &blocks_offset, &actions_offset,
-            &storage_offset, &allocation_size)) {
+            &data_offset, &storage_offset, &allocation_size)) {
         status = fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(salts_xml_document_root(&document)),
@@ -1890,10 +3027,12 @@ vxml_status vxml_compile_with_features(
     impl->forms = (vxml_form_row *)((char *)impl + forms_offset);
     impl->blocks = (vxml_block_row *)((char *)impl + blocks_offset);
     impl->actions = (vxml_action_row *)((char *)impl + actions_offset);
+    impl->data_rows = (vxml_data_row *)((char *)impl + data_offset);
     impl->storage = (char *)impl + storage_offset;
     impl->form_count = measurement.form_count;
     impl->block_count = measurement.block_count;
     impl->action_count = measurement.action_count;
+    impl->data_row_count = measurement.data_count;
     impl->storage_size = measurement.name_bytes;
     impl->allocation_size = allocation_size;
     writer.impl = impl;
@@ -1905,6 +3044,7 @@ vxml_status vxml_compile_with_features(
         writer.goto_index != measurement.goto_count ||
         writer.submit_index != measurement.submit_count ||
         writer.script_index != measurement.script_count ||
+        writer.data_index != measurement.data_count ||
         writer.storage_index != measurement.name_bytes) {
         status = fail(
             diagnostic, VXML_INVALID_STRUCTURE,
