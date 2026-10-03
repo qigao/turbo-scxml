@@ -298,6 +298,122 @@ spec("private QuickJS CMeta bridge") {
         quickjs_sandbox_runtime_destroy(&runtime);
     }
 
+    it("fails property and snapshot bounds before committed-state mutation") {
+        quickjs_cmeta_limits limits = bridge_limits();
+        quickjs_cmeta_state_scratch scratch = {0};
+        bridge_state committed = {
+            .marker = 5,
+            .values = {{1, 2}, 2u}};
+
+        limits.max_properties = 1u;
+        check_false(quickjs_cmeta_schema_supported(
+            &bridge_state_data, &limits, NULL, NULL, 0u));
+
+        limits = bridge_limits();
+        check_false(quickjs_cmeta_state_snapshot(
+            &scratch, &bridge_state_data, &committed,
+            sizeof(bridge_state) - 1u));
+        check_null(scratch.allocation);
+        check_null(scratch.value);
+        check_equal(committed.marker, 5);
+        check_equal(committed.values.count, (size_t)2u);
+        check_equal(committed.values.values[0], 1);
+        check_equal(committed.values.values[1], 2);
+    }
+
+    it("rejects canonical array overflow without publishing partial state") {
+        static const char script[] =
+            "marker = 8; values = [4, 5, 6];";
+        quickjs_sandbox_options sandbox = sandbox_options();
+        quickjs_cmeta_limits limits = bridge_limits();
+        quickjs_sandbox_runtime runtime = {0};
+        quickjs_cmeta_bridge bridge = {0};
+        quickjs_cmeta_state_scratch scratch = {0};
+        bridge_state committed = {
+            .marker = 2,
+            .values = {{9}, 1u}};
+        char diagnostic[256] = {0};
+
+        limits.max_array_items = 2u;
+        check_equal(
+            quickjs_sandbox_runtime_init(
+                &runtime, &sandbox,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_true(quickjs_cmeta_bridge_init(
+            &bridge, &runtime, &bridge_state_data,
+            &limits, NULL, NULL));
+        check_true(quickjs_cmeta_import_root(
+            &bridge, &committed));
+        check_equal(
+            quickjs_sandbox_runtime_eval(
+                &runtime, script, sizeof(script) - 1u,
+                "<bridge-array-overflow>",
+                sandbox.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_true(quickjs_cmeta_state_snapshot(
+            &scratch, &bridge_state_data,
+            &committed, limits.max_snapshot_bytes));
+        bridge.properties = 0u;
+        check_false(quickjs_cmeta_export_root(
+            &bridge, scratch.value));
+
+        check_equal(committed.marker, 2);
+        check_equal(committed.values.count, (size_t)1u);
+        check_equal(committed.values.values[0], 9);
+
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, &bridge_state_data);
+        quickjs_sandbox_runtime_destroy(&runtime);
+    }
+
+    it("rejects non-exact integer export transactionally") {
+        static const char script[] =
+            "marker = 9007199254740992;";
+        quickjs_sandbox_options sandbox = sandbox_options();
+        quickjs_cmeta_limits limits = bridge_limits();
+        quickjs_sandbox_runtime runtime = {0};
+        quickjs_cmeta_bridge bridge = {0};
+        quickjs_cmeta_state_scratch scratch = {0};
+        bridge_state committed = {
+            .marker = 11,
+            .values = {{3}, 1u}};
+        char diagnostic[256] = {0};
+
+        check_equal(
+            quickjs_sandbox_runtime_init(
+                &runtime, &sandbox,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_true(quickjs_cmeta_bridge_init(
+            &bridge, &runtime, &bridge_state_data,
+            &limits, NULL, NULL));
+        check_true(quickjs_cmeta_import_root(
+            &bridge, &committed));
+        check_equal(
+            quickjs_sandbox_runtime_eval(
+                &runtime, script, sizeof(script) - 1u,
+                "<bridge-exact-integer>",
+                sandbox.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_true(quickjs_cmeta_state_snapshot(
+            &scratch, &bridge_state_data,
+            &committed, limits.max_snapshot_bytes));
+        bridge.properties = 0u;
+        check_false(quickjs_cmeta_export_root(
+            &bridge, scratch.value));
+
+        check_equal(committed.marker, 11);
+        check_equal(committed.values.count, (size_t)1u);
+        check_equal(committed.values.values[0], 3);
+
+        quickjs_cmeta_state_scratch_destroy(
+            &scratch, &bridge_state_data);
+        quickjs_sandbox_runtime_destroy(&runtime);
+    }
+
     it("rolls back type-invalid JavaScript export without mutating committed state") {
         static const char script[] =
             "marker = 9; values = ['bad'];";
