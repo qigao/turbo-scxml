@@ -85,6 +85,17 @@ bool quickjs_cmeta_schema_supported(
     void *collection_user,
     size_t supplemental_properties);
 
+bool quickjs_cmeta_value_schema_supported(
+    const cmeta_data_desc *root,
+    const cmeta_data_desc *descriptor,
+    const cmeta_declared_type *declared_type,
+    size_t depth,
+    const quickjs_cmeta_limits *limits,
+    const quickjs_cmeta_collection_adapter *collections,
+    void *collection_user,
+    bool inside_collection,
+    size_t *properties);
+
 bool quickjs_cmeta_bridge_init(
     quickjs_cmeta_bridge *bridge,
     quickjs_sandbox_runtime *runtime,
