@@ -1,4 +1,5 @@
 #include <voicexml/voicexml.h>
+#include <voicexml/data_resource.h>
 
 #include <cstring>
 #include <type_traits>
@@ -9,6 +10,15 @@ static_assert(
 static_assert(
     std::is_standard_layout<vxml_submit_target_v1>::value,
     "submit target must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_request_v2>::value,
+    "data request V2 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_request_v3>::value,
+    "data request V3 must remain C-compatible");
+static_assert(
+    std::is_standard_layout<vxml_cmeta_data_resource_adapter_v1>::value,
+    "data resource adapter must remain C-compatible");
 
 int main() {
     static constexpr char document[] =
@@ -23,6 +33,10 @@ int main() {
     vxml_navigation_target target{};
     vxml_navigation_request_v1 navigation{};
     vxml_submit_target_v1 submit{};
+    vxml_cmeta_data_request_v2 data_v2 =
+        VXML_CMETA_DATA_REQUEST_V2_INIT;
+    vxml_cmeta_data_request_v3 data_v3 =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
     auto submit_fn = &vxml_session_submit;
     auto raise_event = &vxml_session_raise_event;
     int result = 1;
@@ -30,7 +44,13 @@ int main() {
     if (raise_event == nullptr || submit_fn == nullptr ||
         VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
         VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
-        submit.abi_version != 0u)
+        submit.abi_version != 0u ||
+        data_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
+        data_v2.struct_size != sizeof(data_v2) ||
+        data_v3.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        data_v3.struct_size != sizeof(data_v3) ||
+        data_v3.method != VXML_SUBMIT_METHOD_GET ||
+        data_v3.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
         return 2;
 
     if (vxml_compile(document, std::strlen(document), nullptr, &program,
