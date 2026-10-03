@@ -10,7 +10,8 @@ typedef enum quickjs_sandbox_status {
     QUICKJS_SANDBOX_INVALID_ARGUMENT,
     QUICKJS_SANDBOX_ALLOCATION_FAILED,
     QUICKJS_SANDBOX_LIMIT_EXCEEDED,
-    QUICKJS_SANDBOX_EXCEPTION
+    QUICKJS_SANDBOX_EXCEPTION,
+    QUICKJS_SANDBOX_TYPE_MISMATCH
 } quickjs_sandbox_status;
 
 typedef struct quickjs_sandbox_options {
@@ -63,6 +64,13 @@ quickjs_sandbox_status quickjs_sandbox_runtime_eval(
     const char *source, size_t source_size,
     const char *filename,
     uint64_t max_eval_milliseconds,
+    char *diagnostic, size_t diagnostic_capacity);
+quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size,
+    const char *filename,
+    uint64_t max_eval_milliseconds,
+    const char **out_string, size_t *out_size,
     char *diagnostic, size_t diagnostic_capacity);
 void quickjs_sandbox_runtime_destroy(
     quickjs_sandbox_runtime *runtime);
