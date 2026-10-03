@@ -2006,6 +2006,12 @@ static vxml_cmeta_compile_options_v1 prompt_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 prompt_foreach_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = prompt_compile_options();
+    options.root = &session_foreach_root_data;
+    return options;
+}
+
 static vxml_cmeta_session_options_v1 event_session_options(
     const vxml_cmeta_session_root *root,
     const vxml_cmeta_collect_adapter_v1 *adapter,
@@ -13191,7 +13197,7 @@ spec("VoiceXML CMeta session execution") {
             VXML_UNSUPPORTED_FEATURE
         };
         const vxml_cmeta_compile_options_v1 compile =
-            prompt_compile_options();
+            prompt_foreach_compile_options();
         size_t index;
 
         for (index = 0u;
@@ -13220,7 +13226,7 @@ spec("VoiceXML CMeta session execution") {
         const vxml_cmeta_name_view undefined = {
             "value", sizeof("value") - 1u};
         const vxml_cmeta_compile_options_v1 compile =
-            prompt_compile_options();
+            prompt_foreach_compile_options();
         vxml_cmeta_session_text items[2] = {{0}, {0}};
         vxml_cmeta_session_root root = {0};
         cmeta_collect_probe collect_probe = {
@@ -13434,7 +13440,7 @@ spec("VoiceXML CMeta session execution") {
         const vxml_cmeta_name_view undefined = {
             "value", sizeof("value") - 1u};
         const vxml_cmeta_compile_options_v1 compile =
-            prompt_compile_options();
+            prompt_foreach_compile_options();
         vxml_cmeta_session_root root = {0};
         cmeta_collect_probe collect_probe = {
             .prepare_status = VXML_OK};
