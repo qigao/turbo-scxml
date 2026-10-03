@@ -3,6 +3,7 @@
 
 #include <voicexml/voicexml.h>
 #include <voicexml/script_resource.h>
+#include <voicexml/data_resource.h>
 #include <cmeta/data.h>
 
 #include <stddef.h>
