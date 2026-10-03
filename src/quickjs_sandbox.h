@@ -72,6 +72,21 @@ quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
     uint64_t max_eval_milliseconds,
     const char **out_string, size_t *out_size,
     char *diagnostic, size_t diagnostic_capacity);
+
+/*
+ * Evaluate one expression and stringify only deterministic primitive values.
+ *
+ * Accepted result kinds: string, boolean, finite number.
+ * undefined/null/object/function/symbol and non-finite numbers fail closed.
+ * The returned bytes borrow runtime-owned scratch until the next evaluation.
+ */
+quickjs_sandbox_status quickjs_sandbox_eval_expression_scalar_string(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size,
+    const char *filename,
+    uint64_t max_eval_milliseconds,
+    const char **out_string, size_t *out_size,
+    char *diagnostic, size_t diagnostic_capacity);
 void quickjs_sandbox_runtime_destroy(
     quickjs_sandbox_runtime *runtime);
 
