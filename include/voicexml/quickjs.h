@@ -68,10 +68,11 @@ typedef struct vxml_quickjs_compile_options_v1 {
 } vxml_quickjs_compile_options_v1;
 
 /**
- * Append-only runtime options for one VoiceXML QuickJS target session.
+ * Append-only runtime options for one VoiceXML QuickJS session.
  *
- * This first slice has no resource/provider fields: it stops at
- * VXML_SESSION_SCRIPTING and reuses vxml_session_script() as the handoff.
+ * External-script execution remains an explicit handoff API. The optional
+ * no-DOM <data> tail supplies only the neutral V3 resource provider and hard
+ * request bounds; response bytes are discarded after exact settlement.
  */
 typedef struct vxml_quickjs_session_options_v1 {
     uint32_t abi_version;
@@ -131,10 +132,12 @@ vxml_quickjs_default_session_options(void);
 /**
  * Compile the explicit VoiceXML QuickJS script-target profile.
  *
- * Accepts static script@src plus VoiceXML 2.1 script@srcexpr. Dynamic
- * expressions are retained in Program-owned storage and validated once.
- * Base vxml_compile() and vxml_compile_external_script_profile() remain
- * fail-closed for srcexpr.
+ * Accepts static script@src plus VoiceXML 2.1 script@srcexpr and the bounded
+ * no-DOM <data> request profile when the append-only data compile tail is
+ * enabled. Dynamic expressions are retained in Program-owned storage and
+ * validated once. Base vxml_compile() and
+ * vxml_compile_external_script_profile() remain fail-closed for these
+ * QuickJS-only additions.
  */
 vxml_status vxml_compile_quickjs_script_profile(
     const void *bytes, size_t size,
@@ -143,7 +146,13 @@ vxml_status vxml_compile_quickjs_script_profile(
     vxml_program *out,
     vxml_diagnostic *diagnostic);
 
-/** Initialize one Session for a program compiled by this profile. */
+/**
+ * Initialize one Session for a program compiled by this profile.
+ *
+ * A Program containing <data> requires the complete data runtime tail and a
+ * V3-capable neutral data-resource adapter. The Session copies adapter
+ * operations and owns request scratch; provider user pointers remain borrowed.
+ */
 vxml_status vxml_session_init_quickjs(
     vxml_session *session,
     const vxml_program *program,
