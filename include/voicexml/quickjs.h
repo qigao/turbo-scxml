@@ -53,16 +53,6 @@ typedef struct vxml_quickjs_compile_options_v1 {
     /* External source acquisition bounds used by #235 execution. */
     size_t max_resolved_script_uri_bytes;
     size_t max_script_source_bytes;
-
-    /*
-     * Optional append-only no-DOM <data> compiler bounds.
-     *
-     * A complete nonzero tail enables the #252 profile-neutral data metadata
-     * feature. Older prefixes keep <data> fail-closed.
-     */
-    size_t max_data_rows;
-    size_t max_data_uri_bytes;
-    size_t max_data_namelist_fields;
 } vxml_quickjs_compile_options_v1;
 
 /**
