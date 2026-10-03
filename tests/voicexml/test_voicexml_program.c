@@ -14,6 +14,15 @@ static vxml_status compile_text(
         source, strlen(source), limits, program, diagnostic);
 }
 
+static vxml_status compile_text_with_data(
+    const char *source, const vxml_limits *limits,
+    vxml_program *program, vxml_diagnostic *diagnostic) {
+    return vxml_compile_with_features(
+        source, strlen(source), limits,
+        VXML_COMPILE_FEATURE_DATA_REQUEST,
+        program, diagnostic);
+}
+
 static void check_empty_failure(
     const char *source, vxml_status expected,
     const vxml_limits *limits, uint32_t expected_line) {
@@ -223,6 +232,193 @@ spec("VoiceXML program compiler") {
                 check_equal(impl->action_count, (size_t)1u);
             }
             vxml_program_destroy(&program);
+        }
+    }
+
+    group("profile-neutral data metadata") {
+        it("keeps the public base compiler fail-closed for data") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='doc.json'/>"
+                "<form><block/></form></vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_text(source, NULL, &program, &diagnostic),
+                VXML_UNSUPPORTED_FEATURE);
+            check_null(program.impl);
+        }
+
+        it("retains document form and executable request metadata in source order") {
+            char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<property name='datafetchhint' value='safe'/>"
+                "<property name='datamaxage' value='7'/>"
+                "<data src='doc.json'/>"
+                "<form id='main'>"
+                "<property name='datamaxstale' value='9'/>"
+                "<data src='form.json' method='post' "
+                "namelist='alpha beta' enctype='multipart/form-data' "
+                "fetchtimeout='1.5s'/>"
+                "<block><data name='result' srcexpr='&quot;dynamic.json&quot;' "
+                "method='post' namelist='beta' fetchhint='prefetch' "
+                "maxage='3'/></block>"
+                "</form></vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            vxml_program_impl *impl;
+
+            check_equal(
+                compile_text_with_data(
+                    source, NULL, &program, &diagnostic),
+                VXML_OK);
+            check_not_null(program.impl);
+            if (program.impl != NULL) {
+                impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->data_row_count, (size_t)3u);
+                check_not_null(impl->data_rows);
+                check_equal(
+                    impl->data_rows[0].placement,
+                    VXML_DATA_DOCUMENT);
+                check_equal(
+                    impl->data_rows[0].owner_form, SIZE_MAX);
+                check_equal(impl->data_rows[0].uri, "doc.json");
+                check_equal(
+                    impl->data_rows[0].fetch_policy.fetch_hint,
+                    VXML_CMETA_DATA_FETCH_HINT_SAFE);
+                check_true(
+                    impl->data_rows[0].fetch_policy.has_max_age);
+                check_equal(
+                    impl->data_rows[0].fetch_policy.max_age_seconds,
+                    (uint64_t)7u);
+
+                check_equal(
+                    impl->data_rows[1].placement,
+                    VXML_DATA_FORM);
+                check_equal(
+                    impl->data_rows[1].owner_form, (size_t)0u);
+                check_equal(impl->data_rows[1].uri, "form.json");
+                check_equal(
+                    impl->data_rows[1].method,
+                    VXML_SUBMIT_METHOD_POST);
+                check_equal(
+                    impl->data_rows[1].enctype,
+                    VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA);
+                check_equal(
+                    impl->data_rows[1].namelist, "alpha beta");
+                check_equal(
+                    impl->data_rows[1].namelist_count, (size_t)2u);
+                check_true(
+                    impl->data_rows[1].fetch_policy.has_timeout);
+                check_equal(
+                    impl->data_rows[1].fetch_policy.timeout_us,
+                    UINT64_C(1500000));
+                check_true(
+                    impl->data_rows[1].fetch_policy.has_max_stale);
+                check_equal(
+                    impl->data_rows[1].fetch_policy.max_stale_seconds,
+                    (uint64_t)9u);
+
+                check_equal(
+                    impl->data_rows[2].placement,
+                    VXML_DATA_EXECUTABLE);
+                check_equal(
+                    impl->data_rows[2].owner_form, (size_t)0u);
+                check_equal(impl->data_rows[2].name, "result");
+                check_null(impl->data_rows[2].uri);
+                check_equal(
+                    impl->data_rows[2].uri_expression,
+                    "\"dynamic.json\"");
+                check_equal(
+                    impl->data_rows[2].fetch_policy.fetch_hint,
+                    VXML_CMETA_DATA_FETCH_HINT_PREFETCH);
+                check_equal(
+                    impl->data_rows[2].fetch_policy.max_age_seconds,
+                    (uint64_t)3u);
+                check_equal(impl->action_count, (size_t)1u);
+                check_equal(
+                    impl->actions[0].kind, VXML_ACTION_DATA);
+                check_equal(
+                    impl->actions[0].data_index, (size_t)2u);
+
+                memset(source, 'x', sizeof(source) - 1u);
+                check_equal(impl->data_rows[0].uri, "doc.json");
+                check_equal(impl->data_rows[1].namelist, "alpha beta");
+                check_equal(
+                    impl->data_rows[2].uri_expression,
+                    "\"dynamic.json\"");
+            }
+            vxml_program_destroy(&program);
+        }
+
+        it("rejects invalid data request shapes before publication") {
+            const char *sources[] = {
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0'>"
+                "<data src='x'/><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='x' srcexpr='y'/><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='x' namelist='a a'/><form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='x' enctype='multipart/form-data'/>"
+                "<form><block/></form></vxml>",
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='x'>payload</data><form><block/></form></vxml>"};
+            const vxml_status expected[] = {
+                VXML_UNSUPPORTED_FEATURE,
+                VXML_INVALID_STRUCTURE,
+                VXML_INVALID_STRUCTURE,
+                VXML_INVALID_STRUCTURE,
+                VXML_UNSUPPORTED_FEATURE};
+            size_t index;
+
+            for (index = 0u;
+                 index < sizeof(sources) / sizeof(sources[0]);
+                 ++index) {
+                vxml_program program = {0};
+                vxml_diagnostic diagnostic = {0};
+                check_equal(
+                    compile_text_with_data(
+                        sources[index], NULL,
+                        &program, &diagnostic),
+                    expected[index]);
+                check_null(program.impl);
+            }
+        }
+
+        it("keeps goto-cycle validation across executable data side effects") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form id='a'>"
+                "<block><data src='x'/></block>"
+                "<block><goto next='#a'/></block>"
+                "</form></vxml>";
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+
+            check_equal(
+                compile_text_with_data(
+                    source, NULL, &program, &diagnostic),
+                VXML_INVALID_STRUCTURE);
+            check_null(program.impl);
+        }
+
+        it("bounds retained data rows through the core action ceiling") {
+            static const char source[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<data src='a'/><data src='b'/>"
+                "<form><block/></form></vxml>";
+            vxml_limits limits = vxml_default_limits();
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            limits.max_actions = 1u;
+
+            check_equal(
+                compile_text_with_data(
+                    source, &limits, &program, &diagnostic),
+                VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
         }
     }
 
