@@ -36,8 +36,7 @@ bool quickjs_sandbox_limits_valid(
         options->max_string_bytes != 0u &&
         options->max_heap_bytes != 0u &&
         options->max_stack_bytes != 0u &&
-        options->max_eval_milliseconds != 0u &&
-        options->max_string_bytes != SIZE_MAX;
+        options->max_eval_milliseconds != 0u;
 }
 
 void quickjs_sandbox_diagnostic(
@@ -196,8 +195,11 @@ quickjs_sandbox_status quickjs_sandbox_runtime_init(
     return QUICKJS_SANDBOX_INVALID_ARGUMENT;
 #else
     {
-        JSRuntime *js_runtime = JS_NewRuntime();
+        JSRuntime *js_runtime;
         quickjs_sandbox_status status;
+        if (options->max_string_bytes == SIZE_MAX)
+            return QUICKJS_SANDBOX_LIMIT_EXCEEDED;
+        js_runtime = JS_NewRuntime();
         if (js_runtime == NULL)
             return QUICKJS_SANDBOX_ALLOCATION_FAILED;
         JS_SetMemoryLimit(js_runtime, options->max_heap_bytes);
@@ -312,7 +314,7 @@ quickjs_sandbox_status quickjs_sandbox_validate_source(
     const char *filename,
     char *diagnostic, size_t diagnostic_capacity) {
     if (!quickjs_sandbox_limits_valid(options) ||
-        source == NULL || source_size == 0u ||
+        source == NULL ||
         source_size > options->max_source_bytes ||
         filename == NULL) {
         quickjs_sandbox_diagnostic(
