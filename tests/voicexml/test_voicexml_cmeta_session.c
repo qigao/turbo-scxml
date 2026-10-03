@@ -1,4 +1,5 @@
 #include <voicexml/cmeta.h>
+#include <voicexml/resource.h>
 
 #include "tinytest.h"
 #include "voicexml_cmeta_internal.h"
@@ -8952,6 +8953,180 @@ spec("VoiceXML CMeta session execution") {
                         &session, NULL),
                     VXML_UNSUPPORTED_FEATURE);
         check_equal(probe.prepare_calls, (size_t)0u);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("applies effective data fetch policy through V2 and brackets fetchaudio") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<property name='fetchaudio' value='wait.wav'/>"
+            "<property name='fetchaudiodelay' value='10ms'/>"
+            "<property name='fetchaudiominimum' value='20ms'/>"
+            "<property name='fetchtimeout' value='3s'/>"
+            "<property name='datafetchhint' value='safe'/>"
+            "<property name='datamaxage' value='12'/>"
+            "<property name='datamaxstale' value='4'/>"
+            "<data name='value' src='config.json' "
+            "fetchaudio='data-wait.wav' fetchhint='prefetch' maxstale='9'/>"
+            "<form><block><exit expr='value'/></block></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        cmeta_data_fetch_audio_probe audio = {0};
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        options.data_fetch_audio =
+            &cmeta_data_fetch_audio_adapter;
+        options.data_fetch_audio_user = &audio;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)1u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_true(probe.last_request.has_timeout);
+        check_equal(
+            probe.last_request.timeout_us, UINT64_C(3000000));
+        check_equal(
+            probe.last_request.fetch_hint,
+            VXML_CMETA_DATA_FETCH_HINT_PREFETCH);
+        check_true(probe.last_request.has_max_age);
+        check_equal(
+            probe.last_request.max_age_seconds, UINT64_C(12));
+        check_true(probe.last_request.has_max_stale);
+        check_equal(
+            probe.last_request.max_stale_seconds, UINT64_C(9));
+
+        check_equal(audio.begin_calls, (size_t)1u);
+        check_equal(audio.finish_calls, (size_t)1u);
+        check_equal(
+            audio.request.uri_size,
+            sizeof("data-wait.wav") - 1u);
+        check_equal(
+            memcmp(
+                audio.request.uri, "data-wait.wav",
+                audio.request.uri_size),
+            0);
+        check_true(audio.request.has_delay);
+        check_equal(audio.request.delay_us, UINT64_C(10000));
+        check_true(audio.request.has_minimum);
+        check_equal(audio.request.minimum_us, UINT64_C(20000));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails closed when effective data policy has no V2 provider entry") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json' fetchtimeout='1s'/>"
+            "<form><block/></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 3};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        vxml_cmeta_data_resource_adapter_v1 legacy =
+            cmeta_data_resource_adapter;
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {(void *)(uintptr_t)1u};
+
+        legacy.struct_size =
+            offsetof(vxml_cmeta_data_resource_adapter_v1, close) +
+            sizeof(legacy.close);
+        legacy.open_v2 = NULL;
+        options.data_resources = &legacy;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_UNSUPPORTED_FEATURE);
+        check_null(session.impl);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)0u);
+        check_equal(root.value, 3);
+
+        vxml_program_destroy(&program);
+    }
+
+    it("keeps fetchaudio SKIPPED independent from legacy V1 data fetch") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'>"
+            "<data name='value' src='config.json' fetchaudio='wait.wav'/>"
+            "<form><block/></form></vxml>";
+        static const char payload[] = "7";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        cmeta_data_fetch_audio_probe audio = {.skip = true};
+        vxml_cmeta_data_resource_adapter_v1 legacy =
+            cmeta_data_resource_adapter;
+        vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        legacy.struct_size =
+            offsetof(vxml_cmeta_data_resource_adapter_v1, close) +
+            sizeof(legacy.close);
+        legacy.open_v2 = NULL;
+        options.data_resources = &legacy;
+        options.data_fetch_audio =
+            &cmeta_data_fetch_audio_adapter;
+        options.data_fetch_audio_user = &audio;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(audio.begin_calls, (size_t)1u);
+        check_equal(audio.finish_calls, (size_t)0u);
+        check_equal(probe.open_calls, (size_t)1u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)1u);
 
         vxml_session_destroy(&session);
         vxml_program_destroy(&program);
