@@ -490,6 +490,10 @@ if(TURBOSCXML_ENABLE_CHTTP_EVENT_IO)
 endif()
 
 if(BUILD_TESTING)
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    target_compile_definitions(turbo_scxml PRIVATE
+      TURBOSCXML_QUICKJS_TRACE_FAILURES=1)
+  endif()
   get_target_property(
     CFLOW_PUBLIC_LINKS Salts::CFlow INTERFACE_LINK_LIBRARIES)
   if(CFLOW_PUBLIC_LINKS MATCHES "XmlParser|cxml|CSerde|SCXML")
