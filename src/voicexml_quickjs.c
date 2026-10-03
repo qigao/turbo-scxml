@@ -992,6 +992,26 @@ static vxml_status quickjs_prepare_data_request(
     return VXML_OK;
 }
 
+static bool quickjs_data_resource_published(
+    const vxml_cmeta_data_resource_v1 *resource) {
+    return resource != NULL &&
+        (resource->lease != NULL ||
+         resource->data != NULL ||
+         resource->size != 0u);
+}
+
+static void quickjs_close_data_resource_if_published(
+    vxml_quickjs_session_data *data,
+    vxml_cmeta_data_resource_v1 *resource) {
+    if (data == NULL || resource == NULL ||
+        !data->has_data_resources ||
+        !quickjs_data_resource_published(resource))
+        return;
+    data->data_resources.close(
+        data->data_resource_user, resource);
+    *resource = (vxml_cmeta_data_resource_v1){0};
+}
+
 static void quickjs_finish_data_fetch_audio(
     bool started,
     vxml_fetch_audio_ticket_v1 *ticket) {
@@ -1118,9 +1138,8 @@ static vxml_status quickjs_execute_data_row(
         data->data_resource_user,
         &request, &resource);
     if (status != VXML_OK) {
-        if (resource.lease != NULL)
-            data->data_resources.close(
-                data->data_resource_user, &resource);
+        quickjs_close_data_resource_if_published(
+            data, &resource);
         quickjs_finish_data_fetch_audio(
             audio_started, &audio_ticket);
         return session_fail(
@@ -1137,9 +1156,8 @@ static vxml_status quickjs_execute_data_row(
         status = resource.size > data->max_data_bytes
             ? VXML_LIMIT_EXCEEDED
             : VXML_INVALID_CONTRACT;
-        if (resource.lease != NULL)
-            data->data_resources.close(
-                data->data_resource_user, &resource);
+        quickjs_close_data_resource_if_published(
+            data, &resource);
         quickjs_finish_data_fetch_audio(
             audio_started, &audio_ticket);
         return session_fail(
@@ -1147,8 +1165,8 @@ static vxml_status quickjs_execute_data_row(
             badfetch_event, sizeof(badfetch_event) - 1u);
     }
 
-    data->data_resources.close(
-        data->data_resource_user, &resource);
+    quickjs_close_data_resource_if_published(
+        data, &resource);
     quickjs_finish_data_fetch_audio(
         audio_started, &audio_ticket);
     return VXML_OK;
