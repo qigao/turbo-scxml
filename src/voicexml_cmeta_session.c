@@ -3826,10 +3826,7 @@ static bool data_adapter_has_open_v3(
 
 static bool data_row_requires_v3(
     const vxml_cmeta_external_data_row *row) {
-    return row != NULL &&
-        (row->uri_expression != VXML_CMETA_NO_INDEX ||
-         row->method != VXML_SUBMIT_METHOD_GET ||
-         row->location_count != 0u);
+    return row != NULL && row->request_v3;
 }
 
 static bool data_fetch_audio_adapter_valid(
