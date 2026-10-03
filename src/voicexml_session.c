@@ -105,6 +105,8 @@ vxml_status vxml_session_start_literal_at(
                 impl->submit_uri_size = action->target_uri_size;
                 impl->submit_method = action->submit_method;
                 impl->submit_enctype = action->submit_enctype;
+                impl->submit_fields = NULL;
+                impl->submit_field_count = 0u;
                 impl->state = VXML_SESSION_SUBMITTING;
                 return VXML_OK;
             }
@@ -194,6 +196,8 @@ vxml_status vxml_session_init_profile(
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->submit_fields = NULL;
+    impl->submit_field_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -231,6 +235,8 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->submit_fields = NULL;
+    impl->submit_field_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -279,6 +285,8 @@ vxml_status vxml_session_start_at_form(
     impl->submit_uri_size = 0u;
     impl->submit_method = 0;
     impl->submit_enctype = 0;
+    impl->submit_fields = NULL;
+    impl->submit_field_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -343,13 +351,27 @@ vxml_status vxml_session_navigation(
     return VXML_OK;
 }
 
-vxml_status vxml_session_submit(
+static bool submit_field_view_valid(
+    const vxml_submit_field_v1 *field) {
+    if (field == NULL ||
+        field->name == NULL ||
+        field->name_size == 0u ||
+        memchr(field->name, '\0', field->name_size) != NULL ||
+        (field->value_size != 0u && field->value == NULL) ||
+        (field->value_size != 0u &&
+         memchr(field->value, '\0', field->value_size) != NULL))
+        return false;
+    return true;
+}
+
+vxml_status vxml_session_submit_v2(
     const vxml_session *session,
-    vxml_submit_target_v1 *out_target) {
+    vxml_submit_target_v2 *out_target) {
     const vxml_session_impl *impl;
+    size_t index;
     if (session == NULL || out_target == NULL)
         return VXML_INVALID_ARGUMENT;
-    *out_target = (vxml_submit_target_v1){0};
+    *out_target = (vxml_submit_target_v2){0};
     impl = (const vxml_session_impl *)session->impl;
     if (impl == NULL) return VXML_INVALID_STATE;
     if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
@@ -357,18 +379,53 @@ vxml_status vxml_session_submit(
         return VXML_INVALID_STATE;
     if (impl->submit_uri == NULL ||
         impl->submit_uri_size == 0u ||
+        memchr(impl->submit_uri, '\0', impl->submit_uri_size) != NULL ||
         (impl->submit_method != VXML_SUBMIT_METHOD_GET &&
          impl->submit_method != VXML_SUBMIT_METHOD_POST) ||
-        impl->submit_enctype !=
-            VXML_SUBMIT_ENCTYPE_URLENCODED)
+        (impl->submit_enctype != VXML_SUBMIT_ENCTYPE_URLENCODED &&
+         impl->submit_enctype !=
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA) ||
+        ((impl->submit_fields == NULL) !=
+         (impl->submit_field_count == 0u)))
         return VXML_INVALID_CONTRACT;
-    *out_target = (vxml_submit_target_v1){
-        .abi_version = VXML_SUBMIT_TARGET_ABI_V1,
-        .struct_size = sizeof(vxml_submit_target_v1),
+    for (index = 0u; index < impl->submit_field_count; ++index)
+        if (!submit_field_view_valid(
+                &impl->submit_fields[index]))
+            return VXML_INVALID_CONTRACT;
+    *out_target = (vxml_submit_target_v2){
+        .abi_version = VXML_SUBMIT_TARGET_ABI_V2,
+        .struct_size = sizeof(vxml_submit_target_v2),
         .uri = impl->submit_uri,
         .uri_size = impl->submit_uri_size,
         .method = impl->submit_method,
-        .enctype = impl->submit_enctype};
+        .enctype = impl->submit_enctype,
+        .fields = impl->submit_fields,
+        .field_count = impl->submit_field_count};
+    return VXML_OK;
+}
+
+vxml_status vxml_session_submit(
+    const vxml_session *session,
+    vxml_submit_target_v1 *out_target) {
+    vxml_submit_target_v2 submit = {0};
+    vxml_status status;
+    if (out_target == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_target = (vxml_submit_target_v1){0};
+    status = vxml_session_submit_v2(
+        session, &submit);
+    if (status != VXML_OK)
+        return status;
+    if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        submit.field_count != 0u)
+        return VXML_UNSUPPORTED_FEATURE;
+    *out_target = (vxml_submit_target_v1){
+        .abi_version = VXML_SUBMIT_TARGET_ABI_V1,
+        .struct_size = sizeof(vxml_submit_target_v1),
+        .uri = submit.uri,
+        .uri_size = submit.uri_size,
+        .method = submit.method,
+        .enctype = submit.enctype};
     return VXML_OK;
 }
 
