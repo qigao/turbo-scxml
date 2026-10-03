@@ -69,8 +69,13 @@ static int quickjs_sandbox_interrupt(
 bool quickjs_sandbox_deadline_begin(
     quickjs_sandbox_runtime *runtime, uint64_t milliseconds) {
     uint64_t now;
-    if (runtime == NULL || milliseconds == 0u ||
-        runtime->deadline_ms != 0u)
+    if (runtime == NULL || milliseconds == 0u)
+        return false;
+#if TURBOSCXML_HAS_QUICKJS
+    if (runtime->runtime != NULL)
+        JS_UpdateStackTop((JSRuntime *)runtime->runtime);
+#endif
+    if (runtime->deadline_ms != 0u)
         return false;
     now = salts_monotonic_ms();
     runtime->deadline_ms =
@@ -352,6 +357,7 @@ quickjs_sandbox_status quickjs_sandbox_validate_source(
         memcpy(terminated_source, source, source_size);
         terminated_source[source_size] = '\0';
         context = (JSContext *)runtime.context;
+        JS_UpdateStackTop((JSRuntime *)runtime.runtime);
         compiled = JS_Eval(
             context, terminated_source, source_size,
             filename,
@@ -419,7 +425,9 @@ quickjs_sandbox_status quickjs_sandbox_validate_expression(
         &runtime, options,
         diagnostic, diagnostic_capacity);
     if (status == QUICKJS_SANDBOX_OK) {
-        JSValue compiled = JS_Eval(
+        JSValue compiled;
+        JS_UpdateStackTop((JSRuntime *)runtime.runtime);
+        compiled = JS_Eval(
             (JSContext *)runtime.context,
             wrapped, wrapped_size,
             filename,
