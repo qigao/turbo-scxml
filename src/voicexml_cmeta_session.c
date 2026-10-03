@@ -11536,6 +11536,691 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     return VXML_OK;
 }
 
+static const vxml_cmeta_prompt_mark_expr_row *
+prompt_dynamic_mark_row(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t absolute_segment) {
+    size_t index;
+    size_t matched = 0u;
+    if (program == NULL || prompt == NULL ||
+        prompt->dynamic_mark_count == 0u ||
+        program->prompt_mark_exprs == NULL)
+        return NULL;
+    for (index = 0u; index < program->prompt_mark_expr_count; ++index) {
+        const vxml_cmeta_prompt_mark_expr_row *row =
+            &program->prompt_mark_exprs[index];
+        if (row->segment_index < prompt->first_segment)
+            continue;
+        if (row->segment_index >=
+            prompt->first_segment + prompt->segment_count)
+            break;
+        ++matched;
+        if (row->segment_index == absolute_segment)
+            return row;
+        if (matched >= prompt->dynamic_mark_count)
+            break;
+    }
+    return NULL;
+}
+
+static vxml_status prompt_media_owner_scopes(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t scopes[2]) {
+    size_t form_index;
+    if (program == NULL || prompt == NULL || scopes == NULL ||
+        program->forms == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (prompt->owner_kind == VXML_CMETA_PROMPT_OWNER_FIELD) {
+        if (prompt->owner >= program->field_count ||
+            program->fields == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = program->fields[prompt->owner].form;
+    } else if (prompt->owner_kind == VXML_CMETA_PROMPT_OWNER_INITIAL) {
+        if (prompt->owner >= program->initial_count ||
+            program->initials == NULL)
+            return VXML_INVALID_STRUCTURE;
+        form_index = program->initials[prompt->owner].form;
+    } else {
+        return VXML_INVALID_STRUCTURE;
+    }
+    if (form_index >= program->form_count)
+        return VXML_INVALID_STRUCTURE;
+    scopes[0] = program->forms[form_index].scope;
+    scopes[1] = program->document_scope;
+    if (scopes[0] >= program->scope_count ||
+        scopes[1] >= program->scope_count)
+        return VXML_INVALID_STRUCTURE;
+    return VXML_OK;
+}
+
+static uint64_t prompt_media_segment_capability(
+    vxml_cmeta_prompt_media_segment_kind kind) {
+    switch (kind) {
+    case VXML_CMETA_PROMPT_MEDIA_TEXT:
+        return VXML_CMETA_PROMPT_MEDIA_CAP_TEXT;
+    case VXML_CMETA_PROMPT_MEDIA_SSML:
+        return VXML_CMETA_PROMPT_MEDIA_CAP_SSML;
+    case VXML_CMETA_PROMPT_MEDIA_AUDIO:
+        return VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO;
+    case VXML_CMETA_PROMPT_MEDIA_MARK:
+        return VXML_CMETA_PROMPT_MEDIA_CAP_MARK;
+    default:
+        return UINT64_C(0);
+    }
+}
+
+static vxml_status prompt_media_project_mark(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t absolute_segment,
+    const size_t scopes[2],
+    bool staged,
+    vxml_cmeta_prompt_media_segment_v1 *segment,
+    size_t *storage_used) {
+    const vxml_cmeta_prompt_mark_expr_row *dynamic;
+    vxml_cmeta_value_view value = {0};
+    char *destination;
+    vxml_status status;
+    if (segment == NULL || storage_used == NULL ||
+        segment->kind != VXML_CMETA_PROMPT_MEDIA_MARK)
+        return VXML_INVALID_ARGUMENT;
+    if (!prompt_media_unresolved_dynamic_mark(segment))
+        return VXML_OK;
+    dynamic = prompt_dynamic_mark_row(
+        program, prompt, absolute_segment);
+    if (dynamic == NULL ||
+        dynamic->expression == VXML_CMETA_NO_INDEX ||
+        dynamic->expression >= program->expression_count ||
+        profile->prompt_media_dynamic_mark_storage == NULL ||
+        program->max_dynamic_mark_name_bytes == 0u)
+        return VXML_INVALID_STRUCTURE;
+    status = evaluate_expression(
+        profile, program, staged,
+        dynamic->expression, scopes, 2u, &value);
+    if (status != VXML_OK)
+        return VXML_SEMANTIC_ERROR;
+    if (value.kind != VXML_CMETA_VALUE_STRING ||
+        value.data.string.data == NULL ||
+        value.data.string.size == 0u ||
+        value.data.string.size > program->max_dynamic_mark_name_bytes ||
+        *storage_used >
+            profile->prompt_media_dynamic_mark_storage_capacity ||
+        value.data.string.size >
+            profile->prompt_media_dynamic_mark_storage_capacity -
+                *storage_used)
+        return VXML_SEMANTIC_ERROR;
+    destination =
+        profile->prompt_media_dynamic_mark_storage + *storage_used;
+    memcpy(destination, value.data.string.data, value.data.string.size);
+    segment->payload =
+        (vxml_cmeta_name_view){destination, value.data.string.size};
+    *storage_used += value.data.string.size;
+    return VXML_OK;
+}
+
+typedef struct prompt_foreach_snapshot_context {
+    unsigned char *storage;
+    size_t capacity;
+    size_t stride;
+    size_t count;
+    size_t max_items;
+    const cmeta_data_desc *element;
+} prompt_foreach_snapshot_context;
+
+static cmeta_status prompt_foreach_snapshot_visit(
+    void *context, const void *element) {
+    prompt_foreach_snapshot_context *snapshot =
+        (prompt_foreach_snapshot_context *)context;
+    unsigned char *destination;
+    cmeta_status status;
+    if (snapshot == NULL || element == NULL ||
+        snapshot->storage == NULL || snapshot->element == NULL ||
+        snapshot->stride == 0u)
+        return CMETA_INVALID_ARGUMENT;
+    if (snapshot->count >= snapshot->max_items ||
+        snapshot->count > SIZE_MAX / snapshot->stride)
+        return CMETA_CAPACITY_EXCEEDED;
+    if ((snapshot->count + 1u) >
+        snapshot->capacity / snapshot->stride)
+        return CMETA_CAPACITY_EXCEEDED;
+    destination =
+        snapshot->storage + snapshot->count * snapshot->stride;
+    status = cmeta_data_value_init_zero(snapshot->element, destination);
+    if (status != CMETA_OK) return status;
+    status = cmeta_data_value_copy(
+        snapshot->element, destination, element);
+    if (status != CMETA_OK) {
+        (void)cmeta_data_value_restore_zero(
+            snapshot->element, destination);
+        return status;
+    }
+    ++snapshot->count;
+    return CMETA_OK;
+}
+
+static vxml_status prompt_foreach_snapshot_clear(
+    const cmeta_data_desc *element,
+    unsigned char *storage,
+    size_t count,
+    size_t stride) {
+    size_t index;
+    if (count == 0u) return VXML_OK;
+    if (element == NULL || storage == NULL || stride == 0u)
+        return VXML_INVALID_STRUCTURE;
+    for (index = 0u; index < count; ++index)
+        if (cmeta_data_value_restore_zero(
+                element, storage + index * stride) != CMETA_OK)
+            return VXML_INVALID_CONTRACT;
+    return VXML_OK;
+}
+
+static vxml_status prompt_foreach_meta_status(cmeta_status status) {
+    switch (status) {
+    case CMETA_OK:
+        return VXML_OK;
+    case CMETA_OUT_OF_MEMORY:
+        return VXML_ALLOCATION_FAILED;
+    case CMETA_CAPACITY_EXCEEDED:
+        return VXML_LIMIT_EXCEEDED;
+    case CMETA_INVALID_ARGUMENT:
+    case CMETA_TRAIT_MISSING:
+        return VXML_INVALID_CONTRACT;
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+}
+
+static vxml_status prompt_foreach_snapshot_collection(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_foreach_row *foreach_row,
+    size_t *out_count,
+    size_t *out_stride) {
+    const vxml_cmeta_location_row *location;
+    const cmeta_data_desc *collection = NULL;
+    const cmeta_data_desc *static_element;
+    const void *object = NULL;
+    prompt_foreach_snapshot_context snapshot = {0};
+    cmeta_status meta_status;
+    size_t stride;
+    vxml_status status;
+    if (out_count != NULL) *out_count = 0u;
+    if (out_stride != NULL) *out_stride = 0u;
+    if (profile == NULL || program == NULL || foreach_row == NULL ||
+        out_count == NULL || out_stride == NULL ||
+        foreach_row->collection_location >= program->location_count ||
+        program->locations == NULL ||
+        foreach_row->element == NULL ||
+        foreach_row->element->storage_type == NULL ||
+        profile->prompt_foreach_snapshot == NULL)
+        return VXML_INVALID_STRUCTURE;
+    location =
+        &program->locations[foreach_row->collection_location];
+    status = read_location_object(
+        profile, program, location, true, &collection, &object);
+    if (status != VXML_OK) return status;
+    if (collection != location->value || object == NULL)
+        return VXML_SEMANTIC_ERROR;
+    static_element = cmeta_data_collection_element_data(collection);
+    if (static_element == NULL ||
+        !cmeta_data_desc_equal(static_element, foreach_row->element) ||
+        cmeta_data_collection_ops_of(collection) == NULL)
+        return VXML_INVALID_STRUCTURE;
+    if (!valid_alignment(foreach_row->element->storage_type->align) ||
+        foreach_row->element->storage_type->size >
+            SIZE_MAX - (foreach_row->element->storage_type->align - 1u))
+        return VXML_INVALID_STRUCTURE;
+    stride =
+        (foreach_row->element->storage_type->size +
+         foreach_row->element->storage_type->align - 1u) &
+        ~(foreach_row->element->storage_type->align - 1u);
+    if (stride == 0u || stride > profile->prompt_foreach_snapshot_capacity)
+        return VXML_LIMIT_EXCEEDED;
+    snapshot.storage = profile->prompt_foreach_snapshot;
+    snapshot.capacity = profile->prompt_foreach_snapshot_capacity;
+    snapshot.stride = stride;
+    snapshot.max_items = program->max_prompt_foreach_items;
+    snapshot.element = foreach_row->element;
+    meta_status = cmeta_data_collection_foreach(
+        collection, object,
+        prompt_foreach_snapshot_visit, &snapshot,
+        program->max_prompt_foreach_items);
+    if (meta_status != CMETA_OK) {
+        status = prompt_foreach_snapshot_clear(
+            foreach_row->element,
+            snapshot.storage, snapshot.count, snapshot.stride);
+        return status != VXML_OK
+            ? status : prompt_foreach_meta_status(meta_status);
+    }
+    *out_count = snapshot.count;
+    *out_stride = stride;
+    return VXML_OK;
+}
+
+static vxml_status prompt_foreach_declare_item(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_foreach_row *foreach_row) {
+    unsigned char *declared;
+    cmeta_scope_view *view;
+    if (profile == NULL || program == NULL || foreach_row == NULL ||
+        foreach_row->scope >= program->scope_count ||
+        foreach_row->item_slot >=
+            program->scopes[foreach_row->scope].schema.slot_count ||
+        profile->staged_scopes == NULL)
+        return VXML_INVALID_STRUCTURE;
+    view = &profile->staged_scopes[foreach_row->scope].view;
+    declared = session_declared(
+        profile, program, true, foreach_row->scope);
+    if (declared == NULL || !cmeta_scope_view_valid(view) ||
+        view->schema != &program->scopes[foreach_row->scope].schema)
+        return VXML_INVALID_STRUCTURE;
+    declared[foreach_row->item_slot] = 1u;
+    return VXML_OK;
+}
+
+static vxml_status prompt_foreach_assign_item(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_foreach_row *foreach_row,
+    const void *element) {
+    cmeta_scope_view *view;
+    vxml_status status = prompt_foreach_declare_item(
+        profile, program, foreach_row);
+    if (status != VXML_OK) return status;
+    view = &profile->staged_scopes[foreach_row->scope].view;
+    if (!cmeta_scope_view_assign(
+            view, foreach_row->item_slot, element))
+        return VXML_SEMANTIC_ERROR;
+    return VXML_OK;
+}
+
+static vxml_status prompt_media_append_projected_segment(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t source_absolute,
+    const size_t scopes[2],
+    bool staged,
+    size_t *out_count,
+    size_t *storage_used,
+    uint64_t *required_capabilities) {
+    const vxml_cmeta_prompt_media_segment_v1 *source;
+    vxml_cmeta_prompt_media_segment_v1 *destination;
+    uint64_t capability;
+    vxml_status status;
+    if (profile == NULL || program == NULL || prompt == NULL ||
+        scopes == NULL || out_count == NULL || storage_used == NULL ||
+        required_capabilities == NULL ||
+        source_absolute >= program->prompt_segment_count ||
+        program->prompt_segments == NULL ||
+        profile->prompt_media_projected_segments == NULL ||
+        *out_count >= profile->prompt_media_projected_segment_capacity)
+        return VXML_INVALID_STRUCTURE;
+    source = &program->prompt_segments[source_absolute];
+    capability = prompt_media_segment_capability(source->kind);
+    if (capability == UINT64_C(0))
+        return VXML_INVALID_STRUCTURE;
+    destination =
+        &profile->prompt_media_projected_segments[*out_count];
+    *destination = *source;
+    if (profile->prompt_media_projected_source_segments != NULL)
+        profile->prompt_media_projected_source_segments[*out_count] =
+            source_absolute;
+    if (source->kind == VXML_CMETA_PROMPT_MEDIA_MARK &&
+        prompt_media_unresolved_dynamic_mark(source)) {
+        status = prompt_media_project_mark(
+            profile, program, prompt, source_absolute,
+            scopes, staged, destination, storage_used);
+        if (status != VXML_OK) return status;
+    } else if (source->payload.data == NULL ||
+               source->payload.size == 0u) {
+        return VXML_INVALID_STRUCTURE;
+    }
+    *required_capabilities |= capability;
+    ++*out_count;
+    return VXML_OK;
+}
+
+static const vxml_cmeta_prompt_foreach_row *
+prompt_foreach_for_source_segment(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t source_absolute) {
+    size_t offset;
+    if (program == NULL || prompt == NULL ||
+        prompt->foreach_count == 0u ||
+        program->prompt_foreach == NULL ||
+        !range_valid(
+            prompt->first_foreach, prompt->foreach_count,
+            program->prompt_foreach_count))
+        return NULL;
+    for (offset = 0u; offset < prompt->foreach_count; ++offset) {
+        const vxml_cmeta_prompt_foreach_row *row =
+            &program->prompt_foreach[
+                prompt->first_foreach + offset];
+        if (source_absolute >= row->first_segment &&
+            source_absolute - row->first_segment < row->segment_count)
+            return row;
+    }
+    return NULL;
+}
+
+static bool prompt_fallback_owned_by_foreach(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t fallback_absolute) {
+    size_t offset;
+    if (program == NULL || prompt == NULL ||
+        program->prompt_foreach == NULL)
+        return false;
+    for (offset = 0u; offset < prompt->foreach_count; ++offset) {
+        const vxml_cmeta_prompt_foreach_row *row =
+            &program->prompt_foreach[
+                prompt->first_foreach + offset];
+        if (fallback_absolute >= row->first_fallback &&
+            fallback_absolute - row->first_fallback <
+                row->fallback_count)
+            return true;
+    }
+    return false;
+}
+
+static vxml_status prompt_media_project_fallbacks(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_prompt_row *prompt,
+    size_t projected_segment_count,
+    size_t *out_fallback_count,
+    uint64_t *required_capabilities) {
+    size_t projected_index;
+    size_t fallback_count = 0u;
+    if (out_fallback_count != NULL) *out_fallback_count = 0u;
+    if (profile == NULL || program == NULL || prompt == NULL ||
+        out_fallback_count == NULL || required_capabilities == NULL ||
+        (projected_segment_count != 0u &&
+         (profile->prompt_media_projected_segments == NULL ||
+          profile->prompt_media_projected_source_segments == NULL)) ||
+        (prompt->fallback_count != 0u &&
+         (program->prompt_fallbacks == NULL ||
+          !range_valid(
+              prompt->first_fallback, prompt->fallback_count,
+              program->prompt_fallback_count))))
+        return VXML_INVALID_STRUCTURE;
+
+    for (projected_index = 0u;
+         projected_index < projected_segment_count;
+         ++projected_index) {
+        const vxml_cmeta_prompt_foreach_row *owner;
+        const size_t source_absolute =
+            profile->prompt_media_projected_source_segments[
+                projected_index];
+        size_t first_fallback;
+        size_t fallback_rows;
+        size_t source_base;
+        size_t offset;
+        if (profile->prompt_media_projected_segments[
+                projected_index].kind !=
+            VXML_CMETA_PROMPT_MEDIA_AUDIO)
+            continue;
+        owner = prompt_foreach_for_source_segment(
+            program, prompt, source_absolute);
+        if (owner != NULL) {
+            first_fallback = owner->first_fallback;
+            fallback_rows = owner->fallback_count;
+            source_base = owner->first_segment;
+        } else {
+            first_fallback = prompt->first_fallback;
+            fallback_rows = prompt->fallback_count;
+            source_base = prompt->first_segment;
+        }
+        for (offset = 0u; offset < fallback_rows; ++offset) {
+            const size_t fallback_absolute =
+                first_fallback + offset;
+            const vxml_cmeta_prompt_media_fallback_v1 *source;
+            vxml_cmeta_prompt_media_fallback_v1 *destination;
+            size_t delta;
+            size_t projected_first;
+            if (owner == NULL &&
+                prompt_fallback_owned_by_foreach(
+                    program, prompt, fallback_absolute))
+                continue;
+            if (fallback_absolute >= program->prompt_fallback_count)
+                return VXML_INVALID_STRUCTURE;
+            source = &program->prompt_fallbacks[fallback_absolute];
+            if (source->audio_segment_index >
+                    SIZE_MAX - source_base ||
+                source_base + source->audio_segment_index !=
+                    source_absolute)
+                continue;
+            if (source->first_fallback_segment <
+                    source->audio_segment_index)
+                return VXML_INVALID_STRUCTURE;
+            delta =
+                source->first_fallback_segment -
+                source->audio_segment_index;
+            if (projected_index > SIZE_MAX - delta)
+                return VXML_LIMIT_EXCEEDED;
+            projected_first = projected_index + delta;
+            if (source->fallback_segment_count == 0u ||
+                projected_first >= projected_segment_count ||
+                source->fallback_segment_count >
+                    projected_segment_count - projected_first ||
+                fallback_count >=
+                    profile->prompt_media_projected_fallback_capacity ||
+                profile->prompt_media_projected_fallbacks == NULL)
+                return VXML_INVALID_STRUCTURE;
+            destination =
+                &profile->prompt_media_projected_fallbacks[
+                    fallback_count++];
+            *destination =
+                (vxml_cmeta_prompt_media_fallback_v1){
+                    .audio_segment_index = projected_index,
+                    .first_fallback_segment = projected_first,
+                    .fallback_segment_count =
+                        source->fallback_segment_count};
+            *required_capabilities |=
+                VXML_CMETA_PROMPT_MEDIA_CAP_AUDIO_FALLBACK |
+                VXML_CMETA_PROMPT_MEDIA_CAP_BATCH;
+        }
+    }
+    *out_fallback_count = fallback_count;
+    return VXML_OK;
+}
+
+static void prompt_foreach_abort_transaction(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program) {
+    if (profile == NULL || program == NULL ||
+        !profile->prompt_foreach_transaction)
+        return;
+    transaction_reset(profile, program);
+    profile->prompt_foreach_transaction = false;
+}
+
+static vxml_status prompt_media_project_foreach(
+    vxml_session_impl *impl,
+    vxml_cmeta_prompt_media_batch_request_v1 *batch) {
+    vxml_cmeta_session_data *profile;
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_field_row *field = NULL;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    size_t prompt_index;
+    size_t scopes[2];
+    size_t source_absolute;
+    size_t source_end;
+    size_t foreach_offset = 0u;
+    size_t projected_count = 0u;
+    size_t dynamic_storage_used = 0u;
+    size_t projected_fallback_count = 0u;
+    uint64_t required_capabilities = UINT64_C(0);
+    unsigned prompt_count = 0u;
+    vxml_status status;
+
+    if (impl == NULL || batch == NULL ||
+        impl->program == NULL ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
+    if (status != VXML_OK) return status;
+    (void)field;
+    (void)prompt_count;
+    if (prompt == NULL || prompt->foreach_count == 0u)
+        return VXML_INVALID_ARGUMENT;
+    if (program->prompts == NULL ||
+        prompt < program->prompts ||
+        prompt >= program->prompts + program->prompt_count ||
+        !range_valid(
+            prompt->first_foreach, prompt->foreach_count,
+            program->prompt_foreach_count) ||
+        program->prompt_foreach == NULL ||
+        !range_valid(
+            prompt->first_segment, prompt->segment_count,
+            program->prompt_segment_count) ||
+        program->prompt_segments == NULL ||
+        profile->prompt_media_projected_segments == NULL ||
+        profile->prompt_media_projected_source_segments == NULL ||
+        batch->segment_count != prompt->segment_count)
+        return VXML_INVALID_STRUCTURE;
+    prompt_index = (size_t)(prompt - program->prompts);
+    status = prompt_media_owner_scopes(program, prompt, scopes);
+    if (status != VXML_OK) return status;
+
+    if (!transaction_begin(profile, program))
+        return VXML_ALLOCATION_FAILED;
+    profile->prompt_foreach_transaction = true;
+    profile->prompt_media_projected_generation = UINT64_C(0);
+    profile->prompt_media_projected_first_segment = SIZE_MAX;
+    profile->prompt_media_projected_segment_count = 0u;
+
+    source_absolute = prompt->first_segment;
+    source_end = prompt->first_segment + prompt->segment_count;
+    while (source_absolute < source_end) {
+        const vxml_cmeta_prompt_foreach_row *foreach_row = NULL;
+        if (foreach_offset < prompt->foreach_count)
+            foreach_row = &program->prompt_foreach[
+                prompt->first_foreach + foreach_offset];
+        if (foreach_row != NULL &&
+            foreach_row->first_segment < source_absolute) {
+            status = VXML_INVALID_STRUCTURE;
+            goto failure;
+        }
+        if (foreach_row != NULL &&
+            foreach_row->first_segment == source_absolute) {
+            size_t snapshot_count = 0u;
+            size_t snapshot_stride = 0u;
+            size_t item_index;
+            if (foreach_row->prompt != prompt_index ||
+                foreach_row->scope != scopes[0] ||
+                foreach_row->segment_count == 0u ||
+                foreach_row->segment_count >
+                    source_end - source_absolute ||
+                foreach_row->element == NULL) {
+                status = VXML_INVALID_STRUCTURE;
+                goto failure;
+            }
+            status = prompt_foreach_snapshot_collection(
+                profile, program, foreach_row,
+                &snapshot_count, &snapshot_stride);
+            if (status != VXML_OK) goto failure;
+            status = prompt_foreach_declare_item(
+                profile, program, foreach_row);
+            if (status != VXML_OK) {
+                (void)prompt_foreach_snapshot_clear(
+                    foreach_row->element,
+                    profile->prompt_foreach_snapshot,
+                    snapshot_count, snapshot_stride);
+                goto failure;
+            }
+            for (item_index = 0u;
+                 item_index < snapshot_count;
+                 ++item_index) {
+                size_t template_offset;
+                const void *item =
+                    profile->prompt_foreach_snapshot +
+                    item_index * snapshot_stride;
+                status = prompt_foreach_assign_item(
+                    profile, program, foreach_row, item);
+                if (status != VXML_OK) break;
+                for (template_offset = 0u;
+                     template_offset < foreach_row->segment_count;
+                     ++template_offset) {
+                    status = prompt_media_append_projected_segment(
+                        profile, program, prompt,
+                        foreach_row->first_segment + template_offset,
+                        scopes, true,
+                        &projected_count,
+                        &dynamic_storage_used,
+                        &required_capabilities);
+                    if (status != VXML_OK) break;
+                }
+                if (status != VXML_OK) break;
+            }
+            {
+                const vxml_status clear_status =
+                    prompt_foreach_snapshot_clear(
+                        foreach_row->element,
+                        profile->prompt_foreach_snapshot,
+                        snapshot_count, snapshot_stride);
+                if (status == VXML_OK)
+                    status = clear_status;
+            }
+            if (status != VXML_OK) goto failure;
+            source_absolute += foreach_row->segment_count;
+            ++foreach_offset;
+            continue;
+        }
+
+        status = prompt_media_append_projected_segment(
+            profile, program, prompt, source_absolute,
+            scopes, true,
+            &projected_count,
+            &dynamic_storage_used,
+            &required_capabilities);
+        if (status != VXML_OK) goto failure;
+        ++source_absolute;
+    }
+
+    if (foreach_offset != prompt->foreach_count) {
+        status = VXML_INVALID_STRUCTURE;
+        goto failure;
+    }
+    status = prompt_media_project_fallbacks(
+        profile, program, prompt, projected_count,
+        &projected_fallback_count, &required_capabilities);
+    if (status != VXML_OK) goto failure;
+    if (projected_count > 1u)
+        required_capabilities |= VXML_CMETA_PROMPT_MEDIA_CAP_BATCH;
+
+    batch->segments = profile->prompt_media_projected_segments;
+    batch->segment_count = projected_count;
+    batch->fallbacks = projected_fallback_count != 0u
+        ? profile->prompt_media_projected_fallbacks : NULL;
+    batch->fallback_count = projected_fallback_count;
+    batch->required_capabilities = required_capabilities;
+    profile->prompt_media_projected_generation = batch->generation;
+    profile->prompt_media_projected_first_segment =
+        prompt->first_segment;
+    profile->prompt_media_projected_segment_count =
+        projected_count;
+    return VXML_OK;
+
+failure:
+    prompt_foreach_abort_transaction(profile, program);
+    profile->prompt_media_projected_generation = UINT64_C(0);
+    profile->prompt_media_projected_first_segment = SIZE_MAX;
+    profile->prompt_media_projected_segment_count = 0u;
+    return status;
+}
+
 static vxml_status prompt_media_project_dynamic_marks(
     vxml_session_impl *impl,
     vxml_cmeta_prompt_media_batch_request_v1 *batch) {
@@ -11562,6 +12247,7 @@ static vxml_status prompt_media_project_dynamic_marks(
     status = selected_prompt_row(
         impl, &field, &prompt, &prompt_count);
     if (status != VXML_OK) return status;
+    (void)field;
     (void)prompt_count;
     profile->prompt_media_projected_generation = UINT64_C(0);
     profile->prompt_media_projected_first_segment = SIZE_MAX;
@@ -11584,36 +12270,15 @@ static vxml_status prompt_media_project_dynamic_marks(
         batch->segments,
         batch->segment_count *
             sizeof(*profile->prompt_media_projected_segments));
-
-    if (prompt->owner_kind == VXML_CMETA_PROMPT_OWNER_FIELD) {
-        const vxml_cmeta_field_row *owner;
-        const vxml_cmeta_form_row *form;
-        if (prompt->owner >= program->field_count ||
-            program->fields == NULL ||
-            program->forms == NULL)
-            return VXML_INVALID_STRUCTURE;
-        owner = &program->fields[prompt->owner];
-        if (owner->form >= program->form_count)
-            return VXML_INVALID_STRUCTURE;
-        form = &program->forms[owner->form];
-        scopes[0] = form->scope;
-    } else if (
-        prompt->owner_kind == VXML_CMETA_PROMPT_OWNER_INITIAL) {
-        const vxml_cmeta_initial_row *owner;
-        const vxml_cmeta_form_row *form;
-        if (prompt->owner >= program->initial_count ||
-            program->initials == NULL ||
-            program->forms == NULL)
-            return VXML_INVALID_STRUCTURE;
-        owner = &program->initials[prompt->owner];
-        if (owner->form >= program->form_count)
-            return VXML_INVALID_STRUCTURE;
-        form = &program->forms[owner->form];
-        scopes[0] = form->scope;
-    } else {
-        return VXML_INVALID_STRUCTURE;
+    if (profile->prompt_media_projected_source_segments != NULL) {
+        size_t index;
+        for (index = 0u; index < batch->segment_count; ++index)
+            profile->prompt_media_projected_source_segments[index] =
+                prompt->first_segment + index;
     }
-    scopes[1] = program->document_scope;
+
+    status = prompt_media_owner_scopes(program, prompt, scopes);
+    if (status != VXML_OK) return status;
 
     while (side_index < program->prompt_mark_expr_count &&
            program->prompt_mark_exprs[side_index].segment_index <
@@ -11625,14 +12290,11 @@ static vxml_status prompt_media_project_dynamic_marks(
          ++dynamic_offset) {
         const vxml_cmeta_prompt_mark_expr_row *dynamic;
         size_t absolute_segment;
+        size_t relative_segment;
         if (side_index >= program->prompt_mark_expr_count)
             return VXML_INVALID_STRUCTURE;
         dynamic = &program->prompt_mark_exprs[side_index++];
         absolute_segment = dynamic->segment_index;
-        size_t relative_segment;
-        vxml_cmeta_value_view value = {0};
-        char *destination;
-
         if (dynamic->expression == VXML_CMETA_NO_INDEX ||
             dynamic->expression >= program->expression_count ||
             absolute_segment < prompt->first_segment ||
@@ -11646,36 +12308,13 @@ static vxml_status prompt_media_project_dynamic_marks(
                 relative_segment].kind !=
                 VXML_CMETA_PROMPT_MEDIA_MARK)
             return VXML_INVALID_STRUCTURE;
-
-        status = evaluate_expression(
-            profile, program, false,
-            dynamic->expression, scopes, 2u, &value);
-        if (status != VXML_OK)
-            return VXML_SEMANTIC_ERROR;
-        if (value.kind != VXML_CMETA_VALUE_STRING ||
-            value.data.string.data == NULL ||
-            value.data.string.size == 0u ||
-            value.data.string.size >
-                program->max_dynamic_mark_name_bytes ||
-            storage_used >
-                profile->prompt_media_dynamic_mark_storage_capacity ||
-            value.data.string.size >
-                profile->prompt_media_dynamic_mark_storage_capacity -
-                    storage_used)
-            return VXML_SEMANTIC_ERROR;
-
-        destination =
-            profile->prompt_media_dynamic_mark_storage +
-            storage_used;
-        memcpy(
-            destination,
-            value.data.string.data,
-            value.data.string.size);
-        profile->prompt_media_projected_segments[
-            relative_segment].payload =
-            (vxml_cmeta_name_view){
-                destination, value.data.string.size};
-        storage_used += value.data.string.size;
+        status = prompt_media_project_mark(
+            profile, program, prompt, absolute_segment,
+            scopes, false,
+            &profile->prompt_media_projected_segments[
+                relative_segment],
+            &storage_used);
+        if (status != VXML_OK) return status;
     }
 
     batch->segments =
@@ -11687,6 +12326,31 @@ static vxml_status prompt_media_project_dynamic_marks(
     profile->prompt_media_projected_segment_count =
         prompt->segment_count;
     return VXML_OK;
+}
+
+static vxml_status prompt_media_project_batch(
+    vxml_session_impl *impl,
+    vxml_cmeta_prompt_media_batch_request_v1 *batch) {
+    const vxml_cmeta_program_data *program;
+    const vxml_cmeta_prompt_row *prompt = NULL;
+    const vxml_cmeta_field_row *field = NULL;
+    unsigned prompt_count = 0u;
+    vxml_status status;
+    if (impl == NULL || batch == NULL ||
+        impl->program == NULL ||
+        impl->program->profile_data == NULL)
+        return VXML_INVALID_ARGUMENT;
+    program = (const vxml_cmeta_program_data *)
+        impl->program->profile_data;
+    status = selected_prompt_row(
+        impl, &field, &prompt, &prompt_count);
+    if (status != VXML_OK) return status;
+    (void)program;
+    (void)field;
+    (void)prompt_count;
+    if (prompt != NULL && prompt->foreach_count != 0u)
+        return prompt_media_project_foreach(impl, batch);
+    return prompt_media_project_dynamic_marks(impl, batch);
 }
 
 static vxml_status prompt_media_raise_semantic(
