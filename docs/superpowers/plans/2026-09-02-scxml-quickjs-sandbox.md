@@ -15,6 +15,11 @@
 - `TURBOSCXML_ENABLE_QUICKJS` defaults OFF and disabled packages do not link the engine.
 - No `quickjs-libc`, module loader, native module, filesystem, network, process, environment, or credential surface.
 - Heap/stack/time/source/conversion limits are mandatory and positive.
+- `scxml_quickjs_compile_options_v1.max_instructions` bounds TurboSCXML's
+  expression/compiler IR only; it is not a QuickJS runtime bytecode instruction
+  counter. The pinned QuickJS public embedding ABI exposes no stable instruction
+  count primitive, so runtime safety relies on heap/stack bounds and the
+  independent monotonic evaluation deadline.
 - Existing null/CMeta behavior and package links remain unchanged when disabled.
 - Optional HTTP source acquisition uses `TurboSCXML::CHttpResource` during
   admission only; QuickJS never receives a CHTTP client or network API.
