@@ -326,6 +326,9 @@ spec("VoiceXML session") {
                 "enctype='application/x-www-form-urlencoded'/>"
                 "</block></form></vxml>";
             static const char expected[] = "result.vxml#done";
+            static const vxml_submit_field_v1 fields[] = {
+                {"alpha", sizeof("alpha") - 1u,
+                 "one", sizeof("one") - 1u}};
             vxml_program program = {0};
             vxml_session session = {0};
             vxml_submit_target_v1 submit = {0};
@@ -364,6 +367,21 @@ spec("VoiceXML session") {
                 submit_v2.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
             check_null(submit_v2.fields);
             check_equal(submit_v2.field_count, (size_t)0u);
+            {
+                vxml_session_impl *impl =
+                    (vxml_session_impl *)session.impl;
+                check_not_null(impl);
+                impl->submit_fields = fields;
+                impl->submit_field_count = 1u;
+                check_equal(
+                    vxml_session_submit(&session, &submit),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit_v2(&session, &submit_v2),
+                    VXML_OK);
+                check_equal(submit_v2.fields, fields);
+                check_equal(submit_v2.field_count, (size_t)1u);
+            }
             check_equal(
                 vxml_session_navigation(
                     &session, &(vxml_navigation_target){0}),
