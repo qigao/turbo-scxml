@@ -1069,6 +1069,37 @@ vxml_status vxml_quickjs_session_execute_script(
         impl, resume_form, resume_block);
 }
 
+vxml_status vxml_quickjs_session_state(
+    const vxml_session *session,
+    const void **out_state) {
+    const vxml_session_impl *impl;
+    const vxml_quickjs_program_data *program_data;
+    const vxml_quickjs_session_data *data;
+    if (out_state != NULL) *out_state = NULL;
+    if (session == NULL || out_state == NULL)
+        return VXML_INVALID_ARGUMENT;
+    impl = (const vxml_session_impl *)session->impl;
+    if (impl == NULL)
+        return VXML_INVALID_STATE;
+    if (impl->program == NULL ||
+        impl->program->profile_kind != VXML_PROFILE_QUICKJS ||
+        impl->program->profile_data == NULL ||
+        impl->profile_data == NULL)
+        return VXML_INVALID_CONTRACT;
+    program_data =
+        (const vxml_quickjs_program_data *)
+            impl->program->profile_data;
+    data = (const vxml_quickjs_session_data *)
+        impl->profile_data;
+    if (!compile_options_state_enabled(
+            &program_data->options) ||
+        !data->committed_root.live ||
+        data->committed_root.value == NULL)
+        return VXML_INVALID_CONTRACT;
+    *out_state = data->committed_root.value;
+    return VXML_OK;
+}
+
 vxml_status vxml_quickjs_session_last_event(
     const vxml_session *session,
     const char **out_event,
