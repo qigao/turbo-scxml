@@ -363,6 +363,65 @@ static bool program_view_valid(
     return data[size] == '\0';
 }
 
+
+static bool quickjs_xml_space(unsigned char value) {
+    return value == (unsigned char)' ' ||
+        value == (unsigned char)'\t' ||
+        value == (unsigned char)'\r' ||
+        value == (unsigned char)'\n';
+}
+
+static bool quickjs_next_namelist_token(
+    const char *data, size_t size, size_t *cursor,
+    const char **out_data, size_t *out_size) {
+    size_t start;
+    if (data == NULL || cursor == NULL ||
+        out_data == NULL || out_size == NULL)
+        return false;
+    while (*cursor < size &&
+           quickjs_xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    if (*cursor == size) {
+        *out_data = NULL;
+        *out_size = 0u;
+        return true;
+    }
+    start = *cursor;
+    while (*cursor < size &&
+           !quickjs_xml_space((unsigned char)data[*cursor]))
+        ++*cursor;
+    *out_data = data + start;
+    *out_size = *cursor - start;
+    return true;
+}
+
+static bool quickjs_data_identifier_supported(
+    const char *data, size_t size) {
+    size_t index;
+    unsigned char ch;
+    if (data == NULL || size == 0u)
+        return false;
+    ch = (unsigned char)data[0];
+    if (!((ch >= (unsigned char)'A' &&
+           ch <= (unsigned char)'Z') ||
+          (ch >= (unsigned char)'a' &&
+           ch <= (unsigned char)'z') ||
+          ch == (unsigned char)'_'))
+        return false;
+    for (index = 1u; index < size; ++index) {
+        ch = (unsigned char)data[index];
+        if (!((ch >= (unsigned char)'A' &&
+               ch <= (unsigned char)'Z') ||
+              (ch >= (unsigned char)'a' &&
+               ch <= (unsigned char)'z') ||
+              (ch >= (unsigned char)'0' &&
+               ch <= (unsigned char)'9') ||
+              ch == (unsigned char)'_'))
+            return false;
+    }
+    return true;
+}
+
 static vxml_status validate_dynamic_scripts(
     const vxml_program *program,
     const vxml_quickjs_compile_options_v1 *options,
@@ -587,12 +646,47 @@ static vxml_status validate_data_rows(
                     "VoiceXML data namelist descriptor is invalid");
                 return VXML_INVALID_STRUCTURE;
             }
-        } else if (!program_view_valid(
-                       impl, row->namelist, row->namelist_size)) {
-            quickjs_compile_diagnostic(
-                diagnostic, VXML_INVALID_STRUCTURE, row->location,
-                "VoiceXML data namelist view is invalid");
-            return VXML_INVALID_STRUCTURE;
+        } else {
+            size_t cursor = 0u;
+            size_t field = 0u;
+            if (!program_view_valid(
+                    impl, row->namelist, row->namelist_size)) {
+                quickjs_compile_diagnostic(
+                    diagnostic, VXML_INVALID_STRUCTURE, row->location,
+                    "VoiceXML data namelist view is invalid");
+                return VXML_INVALID_STRUCTURE;
+            }
+            while (field < row->namelist_count) {
+                const char *name = NULL;
+                size_t name_size = 0u;
+                if (!quickjs_next_namelist_token(
+                        row->namelist, row->namelist_size,
+                        &cursor, &name, &name_size) ||
+                    name == NULL ||
+                    !quickjs_data_identifier_supported(
+                        name, name_size)) {
+                    quickjs_compile_diagnostic(
+                        diagnostic, VXML_UNSUPPORTED_FEATURE,
+                        row->location,
+                        "VoiceXML QuickJS data namelist requires simple identifiers");
+                    return VXML_UNSUPPORTED_FEATURE;
+                }
+                ++field;
+            }
+            {
+                const char *extra = NULL;
+                size_t extra_size = 0u;
+                if (!quickjs_next_namelist_token(
+                        row->namelist, row->namelist_size,
+                        &cursor, &extra, &extra_size) ||
+                    extra != NULL) {
+                    quickjs_compile_diagnostic(
+                        diagnostic, VXML_INVALID_STRUCTURE,
+                        row->location,
+                        "VoiceXML data namelist count is inconsistent");
+                    return VXML_INVALID_STRUCTURE;
+                }
+            }
         }
         if (row->fetch_policy.fetchaudio_uri != NULL &&
             (!program_view_valid(
