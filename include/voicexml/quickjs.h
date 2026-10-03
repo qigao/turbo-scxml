@@ -21,6 +21,10 @@ extern "C" {
  *
  * No QuickJS ABI type crosses this boundary. These limits apply only to
  * script@srcexpr validation/evaluation and its Session-owned URI result.
+ *
+ * The profile does not expose or claim a deterministic QuickJS bytecode
+ * instruction-count quota. Runtime safety uses explicit heap/stack bounds,
+ * monotonic max_eval_milliseconds, and the conversion/snapshot limits below.
  */
 typedef struct vxml_quickjs_compile_options_v1 {
     uint32_t abi_version;
