@@ -605,6 +605,14 @@ static vxml_status validate_data_rows(
                 return status;
             }
         }
+        if (row->namelist_count != 0u &&
+            !compile_options_state_enabled(options)) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_CONTRACT,
+                row->location,
+                "VoiceXML QuickJS data namelist requires typed committed state");
+            return VXML_INVALID_CONTRACT;
+        }
         if (row->namelist_count >
             options->max_data_namelist_fields) {
             quickjs_compile_diagnostic(
