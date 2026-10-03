@@ -48,6 +48,8 @@ void quickjs_sandbox_deadline_end(
 quickjs_sandbox_status quickjs_sandbox_exception(
     quickjs_sandbox_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity);
+void quickjs_sandbox_context_destroy(
+    quickjs_sandbox_runtime *runtime);
 quickjs_sandbox_status quickjs_sandbox_context_recreate(
     quickjs_sandbox_runtime *runtime,
     char *diagnostic, size_t diagnostic_capacity);
