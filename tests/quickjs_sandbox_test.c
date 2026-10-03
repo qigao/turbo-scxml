@@ -316,7 +316,8 @@ spec("private QuickJS sandbox kernel") {
             "globalThis.count=42;"
             "globalThis.flag=true;"
             "globalThis['na-me']='dash';"
-            "globalThis.obj={};";
+            "globalThis.obj={};"
+            "globalThis.sym=Symbol('x');";
         static const char *const names[] = {
             "alpha", "count", "flag", "na-me"
         };
@@ -324,7 +325,7 @@ spec("private QuickJS sandbox kernel") {
             "A", "42", "true", "dash"
         };
         static const char *const rejected[] = {
-            "obj", "Object", "missing"
+            "obj", "sym", "Object", "missing"
         };
         quickjs_sandbox_options options = sandbox_options();
         quickjs_sandbox_runtime runtime = {0};
