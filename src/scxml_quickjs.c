@@ -1034,7 +1034,7 @@ bool scxml_quickjs_execute_script(
         quickjs_conversion conversion;
         quickjs_active_context active;
         const cmeta_type_desc *type = program->cmeta_root->storage_type;
-        quickjs_aligned_storage state_scratch = {0};
+        quickjs_cmeta_state_scratch state_scratch = {0};
         void *scope_scratch_allocation = NULL;
         scxml_scope_view scope_scratch = {0};
         size_t scope_scratch_bytes = 0u;
@@ -1042,8 +1042,6 @@ bool scxml_quickjs_execute_script(
         size_t scope_align;
         uintptr_t scope_address;
         uintptr_t scope_aligned;
-        bool managed;
-        bool scratch_live = false;
         bool owns_deadline = false;
         char diagnostic[SCXML_DIAGNOSTIC_CAPACITY] = {0};
         scxml_quickjs_status status;
@@ -1135,24 +1133,12 @@ bool scxml_quickjs_execute_script(
                 ? "QuickJS script limit exceeded" : "QuickJS script exception";
             goto cleanup;
         }
-        if (!quickjs_aligned_storage_init(&state_scratch, type)) {
-            *out_error = "QuickJS state scratch allocation failed";
+        if (!quickjs_cmeta_state_snapshot(
+                &state_scratch,
+                program->cmeta_root, state,
+                program->quickjs_options.max_snapshot_bytes)) {
+            *out_error = "QuickJS state snapshot failed";
             goto cleanup;
-        }
-        managed = cmeta_type_require_traits(
-                      type, CMETA_TRAIT_TRIVIAL_COPY |
-                                CMETA_TRAIT_TRIVIAL_DESTROY) != CMETA_OK;
-        if (managed) {
-            if (cmeta_type_require_traits(
-                    type, CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE |
-                              CMETA_TRAIT_DESTROY) != CMETA_OK ||
-                !type->traits->copy_construct(state_scratch.value, state)) {
-                *out_error = "QuickJS state snapshot failed";
-                goto cleanup;
-            }
-            scratch_live = true;
-        } else {
-            memcpy(state_scratch.value, state, type->size);
         }
         conversion.properties = 0u;
         if (!quickjs_export_root(
@@ -1170,12 +1156,11 @@ bool scxml_quickjs_execute_script(
             *out_error = "QuickJS scope publication failed";
             goto cleanup;
         }
-        if (managed) {
-            type->traits->destroy(state);
-            type->traits->move_construct(state, state_scratch.value);
-            scratch_live = false;
-        } else {
-            memcpy(state, state_scratch.value, type->size);
+        if (!quickjs_cmeta_state_publish(
+                program->cmeta_root, state,
+                &state_scratch)) {
+            *out_error = "QuickJS state publication failed";
+            goto cleanup;
         }
 cleanup:
         if (runtime->core.interrupted && *out_error != NULL)
@@ -1187,8 +1172,8 @@ cleanup:
         }
         scxml_scope_view_clear(&scope_scratch);
         free(scope_scratch_allocation);
-        quickjs_aligned_storage_destroy(
-            &state_scratch, type, scratch_live);
+        quickjs_cmeta_state_scratch_destroy(
+            &state_scratch, program->cmeta_root);
         if (*out_error != NULL) {
 #if defined(TURBOSCXML_QUICKJS_TRACE_FAILURES)
             (void)fprintf(
