@@ -9016,121 +9016,171 @@ static vxml_status cmeta_compile_declaration_expression(
     return VXML_OK;
 }
 
-static vxml_status cmeta_lower_prompt_mark_nameexprs(
+static vxml_status cmeta_lower_prompt_mark_nameexprs_recursive(
     cmeta_program_builder *builder,
-    salts_xml_node prompt_node,
-    vxml_cmeta_prompt_row *prompt,
+    salts_xml_node node,
+    size_t prompt_index,
+    size_t range_first_segment,
+    size_t range_segment_count,
+    size_t parent_foreach,
     const vxml_cmeta_expr_compile_scope *scopes,
-    size_t scope_count) {
+    size_t scope_count,
+    size_t foreach_end,
+    size_t *foreach_cursor,
+    size_t *mark_cursor,
+    size_t *dynamic_count) {
     size_t child_index;
-    size_t side_index = 0u;
-    size_t dynamic_offset = 0u;
-    size_t foreach_offset = 0u;
-    if (builder == NULL || prompt == NULL)
+    const size_t range_end =
+        range_first_segment + range_segment_count;
+    if (builder == NULL || foreach_cursor == NULL ||
+        mark_cursor == NULL || dynamic_count == NULL ||
+        range_first_segment > SIZE_MAX - range_segment_count)
         return VXML_INVALID_ARGUMENT;
-    if (prompt->dynamic_mark_count == 0u)
-        return VXML_OK;
-    if (builder->profile->prompt_mark_exprs == NULL ||
-        builder->profile->prompt_mark_expr_count == 0u)
-        return cmeta_program_fail(
-            builder->diagnostic, VXML_INVALID_STRUCTURE,
-            salts_xml_node_location(prompt_node),
-            "VoiceXML dynamic mark rows are missing");
-
-    while (side_index < builder->profile->prompt_mark_expr_count &&
-           builder->profile->prompt_mark_exprs[side_index].segment_index <
-               prompt->first_segment)
-        ++side_index;
 
     for (child_index = 0u;
-         child_index < salts_xml_node_child_count(prompt_node);
+         child_index < salts_xml_node_child_count(node);
          ++child_index) {
         const salts_xml_node child =
-            salts_xml_node_child_at(prompt_node, child_index);
+            salts_xml_node_child_at(node, child_index);
         const salts_xml_attribute nameexpr =
             cmeta_attribute(child, "nameexpr");
-        vxml_cmeta_prompt_mark_expr_row *row;
         vxml_status status;
+
         if (cmeta_node_named(child, "foreach")) {
+            size_t row_index;
             const vxml_cmeta_prompt_foreach_row *foreach_row;
-            vxml_cmeta_prompt_row nested = {0};
-            if (foreach_offset >= prompt->foreach_count ||
-                prompt->first_foreach + foreach_offset >=
+            if (*foreach_cursor >= foreach_end ||
+                *foreach_cursor >=
                     builder->profile->prompt_foreach_count ||
                 builder->profile->prompt_foreach == NULL)
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "VoiceXML foreach rows changed between lowering passes");
-            foreach_row = &builder->profile->prompt_foreach[
-                prompt->first_foreach + foreach_offset++];
-            nested.first_segment = foreach_row->first_segment;
-            nested.segment_count = foreach_row->segment_count;
-            nested.first_fallback = foreach_row->first_fallback;
-            nested.fallback_count = foreach_row->fallback_count;
-            nested.dynamic_mark_count = foreach_row->dynamic_mark_count;
-            nested.first_foreach =
-                prompt->first_foreach + foreach_offset;
-            nested.foreach_count = 0u;
-            status = cmeta_lower_prompt_mark_nameexprs(
-                builder, child, &nested, scopes, scope_count);
-            if (status != VXML_OK) return status;
-            if (dynamic_offset > prompt->dynamic_mark_count ||
-                side_index > builder->profile->prompt_mark_expr_count ||
-                foreach_row->dynamic_mark_count >
-                    prompt->dynamic_mark_count - dynamic_offset ||
-                foreach_row->dynamic_mark_count >
-                    builder->profile->prompt_mark_expr_count - side_index)
+            row_index = (*foreach_cursor)++;
+            foreach_row =
+                &builder->profile->prompt_foreach[row_index];
+            if (foreach_row->prompt != prompt_index ||
+                foreach_row->parent_foreach != parent_foreach ||
+                foreach_row->segment_count == 0u ||
+                foreach_row->first_segment < range_first_segment ||
+                foreach_row->first_segment >= range_end ||
+                foreach_row->segment_count >
+                    range_end - foreach_row->first_segment)
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
-                    "VoiceXML foreach dynamic mark rows are inconsistent");
-            dynamic_offset += foreach_row->dynamic_mark_count;
-            side_index += foreach_row->dynamic_mark_count;
+                    "VoiceXML nested foreach ownership changed between lowering passes");
+            status = cmeta_lower_prompt_mark_nameexprs_recursive(
+                builder, child, prompt_index,
+                foreach_row->first_segment,
+                foreach_row->segment_count,
+                row_index,
+                scopes, scope_count,
+                foreach_end, foreach_cursor,
+                mark_cursor, dynamic_count);
+            if (status != VXML_OK) return status;
             continue;
         }
+
         if (!cmeta_node_named(child, "mark") ||
             nameexpr.impl == NULL)
             continue;
-        if (dynamic_offset >= prompt->dynamic_mark_count ||
-            side_index >= builder->profile->prompt_mark_expr_count)
+
+        if (*mark_cursor >=
+                builder->profile->prompt_mark_expr_count ||
+            builder->profile->prompt_mark_exprs == NULL)
             return cmeta_program_fail(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(child),
-                "VoiceXML dynamic mark count changed between passes");
-        row = &builder->profile->prompt_mark_exprs[side_index++];
-        if (row->segment_index < prompt->first_segment ||
-            row->segment_index >=
-                prompt->first_segment + prompt->segment_count ||
-            row->expression != VXML_CMETA_NO_INDEX)
-            return cmeta_program_fail(
-                builder->diagnostic, VXML_INVALID_STRUCTURE,
-                salts_xml_node_location(child),
-                "VoiceXML dynamic mark row is invalid");
-        status = cmeta_append_expression(
-            builder, nameexpr, scopes, scope_count,
-            false, &row->expression);
-        if (status != VXML_OK) return status;
-        if (cmeta_expression_value_kind(
-                &builder->profile->expressions[
-                    row->expression]) !=
-                VXML_CMETA_VALUE_STRING)
-            return cmeta_program_fail(
-                builder->diagnostic, VXML_SEMANTIC_ERROR,
-                salts_xml_attribute_location(nameexpr),
-                "VoiceXML mark nameexpr must produce STRING");
-        ++dynamic_offset;
+                "VoiceXML dynamic mark count changed between lowering passes");
+        {
+            vxml_cmeta_prompt_mark_expr_row *row =
+                &builder->profile->prompt_mark_exprs[
+                    (*mark_cursor)++];
+            if (row->segment_index < range_first_segment ||
+                row->segment_index >= range_end ||
+                row->expression != VXML_CMETA_NO_INDEX)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML dynamic mark row is invalid");
+            status = cmeta_append_expression(
+                builder, nameexpr, scopes, scope_count,
+                false, &row->expression);
+            if (status != VXML_OK) return status;
+            if (cmeta_expression_value_kind(
+                    &builder->profile->expressions[
+                        row->expression]) !=
+                    VXML_CMETA_VALUE_STRING)
+                return cmeta_program_fail(
+                    builder->diagnostic, VXML_SEMANTIC_ERROR,
+                    salts_xml_attribute_location(nameexpr),
+                    "VoiceXML mark nameexpr must produce STRING");
+        }
+        ++*dynamic_count;
     }
-    if (foreach_offset != prompt->foreach_count)
+    return VXML_OK;
+}
+
+static vxml_status cmeta_lower_prompt_mark_nameexprs(
+    cmeta_program_builder *builder,
+    salts_xml_node prompt_node,
+    vxml_cmeta_prompt_row *prompt,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count) {
+    size_t prompt_index;
+    size_t foreach_cursor;
+    size_t foreach_end;
+    size_t mark_cursor = 0u;
+    size_t dynamic_count = 0u;
+    vxml_status status;
+    if (builder == NULL || prompt == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (prompt->dynamic_mark_count == 0u)
+        return VXML_OK;
+    if (builder->profile->prompts == NULL ||
+        prompt < builder->profile->prompts ||
+        prompt >=
+            builder->profile->prompts +
+                builder->profile->prompt_count ||
+        builder->profile->prompt_mark_exprs == NULL ||
+        builder->profile->prompt_mark_expr_count == 0u ||
+        prompt->first_segment >
+            SIZE_MAX - prompt->segment_count ||
+        prompt->first_foreach >
+            SIZE_MAX - prompt->foreach_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(prompt_node),
-            "VoiceXML foreach rows disappeared between lowering passes");
-    if (dynamic_offset != prompt->dynamic_mark_count)
+            "VoiceXML prompt lowering rows are invalid");
+    prompt_index =
+        (size_t)(prompt - builder->profile->prompts);
+    foreach_cursor = prompt->first_foreach;
+    foreach_end =
+        prompt->first_foreach + prompt->foreach_count;
+
+    while (mark_cursor <
+               builder->profile->prompt_mark_expr_count &&
+           builder->profile->prompt_mark_exprs[
+               mark_cursor].segment_index <
+               prompt->first_segment)
+        ++mark_cursor;
+
+    status = cmeta_lower_prompt_mark_nameexprs_recursive(
+        builder, prompt_node, prompt_index,
+        prompt->first_segment, prompt->segment_count,
+        VXML_CMETA_NO_INDEX,
+        scopes, scope_count,
+        foreach_end, &foreach_cursor,
+        &mark_cursor, &dynamic_count);
+    if (status != VXML_OK) return status;
+    if (foreach_cursor != foreach_end ||
+        dynamic_count != prompt->dynamic_mark_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_INVALID_STRUCTURE,
             salts_xml_node_location(prompt_node),
-            "VoiceXML dynamic mark rows disappeared between passes");
+            "VoiceXML recursive prompt lowering rows disappeared");
     return VXML_OK;
 }
 
