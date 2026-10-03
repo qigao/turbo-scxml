@@ -33,6 +33,8 @@ typedef struct vxml_action_row {
     size_t fetchaudio_uri_size;
     vxml_submit_method submit_method;
     vxml_submit_enctype submit_enctype;
+    const vxml_submit_field_v1 *submit_fields;
+    size_t submit_field_count;
     const char *script_src;
     size_t script_src_size;
     const char *script_srcexpr;
