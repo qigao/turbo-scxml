@@ -395,33 +395,6 @@ static bool quickjs_next_namelist_token(
     return true;
 }
 
-static bool quickjs_data_identifier_supported(
-    const char *data, size_t size) {
-    size_t index;
-    unsigned char ch;
-    if (data == NULL || size == 0u)
-        return false;
-    ch = (unsigned char)data[0];
-    if (!((ch >= (unsigned char)'A' &&
-           ch <= (unsigned char)'Z') ||
-          (ch >= (unsigned char)'a' &&
-           ch <= (unsigned char)'z') ||
-          ch == (unsigned char)'_'))
-        return false;
-    for (index = 1u; index < size; ++index) {
-        ch = (unsigned char)data[index];
-        if (!((ch >= (unsigned char)'A' &&
-               ch <= (unsigned char)'Z') ||
-              (ch >= (unsigned char)'a' &&
-               ch <= (unsigned char)'z') ||
-              (ch >= (unsigned char)'0' &&
-               ch <= (unsigned char)'9') ||
-              ch == (unsigned char)'_'))
-            return false;
-    }
-    return true;
-}
-
 static vxml_status validate_dynamic_scripts(
     const vxml_program *program,
     const vxml_quickjs_compile_options_v1 *options,
@@ -662,14 +635,12 @@ static vxml_status validate_data_rows(
                 if (!quickjs_next_namelist_token(
                         row->namelist, row->namelist_size,
                         &cursor, &name, &name_size) ||
-                    name == NULL ||
-                    !quickjs_data_identifier_supported(
-                        name, name_size)) {
+                    name == NULL || name_size == 0u) {
                     quickjs_compile_diagnostic(
-                        diagnostic, VXML_UNSUPPORTED_FEATURE,
+                        diagnostic, VXML_INVALID_STRUCTURE,
                         row->location,
-                        "VoiceXML QuickJS data namelist requires simple identifiers");
-                    return VXML_UNSUPPORTED_FEATURE;
+                        "VoiceXML QuickJS data namelist token is invalid");
+                    return VXML_INVALID_STRUCTURE;
                 }
                 ++field;
             }
@@ -939,15 +910,12 @@ static vxml_status quickjs_prepare_data_request(
         if (!quickjs_next_namelist_token(
                 row->namelist, row->namelist_size,
                 &cursor, &name, &name_size) ||
-            name == NULL ||
-            !quickjs_data_identifier_supported(
-                name, name_size))
+            name == NULL || name_size == 0u)
             return VXML_INVALID_STRUCTURE;
         sandbox_status =
-            quickjs_sandbox_eval_expression_scalar_string(
+            quickjs_sandbox_get_global_scalar_string(
                 &data->runtime,
                 name, name_size,
-                "<voicexml-data-namelist>",
                 program_data->options.max_eval_milliseconds,
                 &value, &value_size,
                 diagnostic, sizeof(diagnostic));
