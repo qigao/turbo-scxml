@@ -9968,7 +9968,6 @@ static bool cmeta_data_request_value_supported(
     case CMETA_DATA_BOOL:
     case CMETA_DATA_SINT:
     case CMETA_DATA_UINT:
-    case CMETA_DATA_FLOAT:
     case CMETA_DATA_STRING:
         return true;
     default:
@@ -10059,7 +10058,7 @@ static vxml_status cmeta_lower_data_namelist(
                 builder->diagnostic,
                 VXML_SEMANTIC_ERROR,
                 location,
-                "VoiceXML data namelist admits only scalar/string values");
+                "VoiceXML data namelist admits bool/integer/string values; float canonicalization is not available in this slice");
             goto done;
         }
         ++*out_count;
