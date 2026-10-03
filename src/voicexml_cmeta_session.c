@@ -11986,6 +11986,7 @@ prompt_foreach_for_source_segment(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_prompt_row *prompt,
     size_t source_absolute) {
+    const vxml_cmeta_prompt_foreach_row *best = NULL;
     size_t offset;
     if (program == NULL || prompt == NULL ||
         prompt->foreach_count == 0u ||
@@ -11999,10 +12000,11 @@ prompt_foreach_for_source_segment(
             &program->prompt_foreach[
                 prompt->first_foreach + offset];
         if (source_absolute >= row->first_segment &&
-            source_absolute - row->first_segment < row->segment_count)
-            return row;
+            source_absolute - row->first_segment < row->segment_count &&
+            (best == NULL || row->depth > best->depth))
+            best = row;
     }
-    return NULL;
+    return best;
 }
 
 static bool prompt_fallback_owned_by_foreach(
