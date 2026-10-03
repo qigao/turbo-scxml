@@ -556,6 +556,7 @@ typedef struct vxml_cmeta_program_data {
     size_t external_data_count;
     size_t first_document_data;
     size_t document_data_count;
+    size_t max_data_uri_bytes;
     size_t max_data_namelist_fields;
     size_t max_data_request_value_bytes;
     vxml_cmeta_action_row *actions;
