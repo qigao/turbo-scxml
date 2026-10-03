@@ -1057,7 +1057,7 @@ static vxml_status quickjs_execute_data_row(
                 &data->data_fetch_audio))
             return session_fail(
                 session, VXML_INVALID_CONTRACT,
-                semantic_event, sizeof(semantic_event) - 1u);
+                badfetch_event, sizeof(badfetch_event) - 1u);
         begin_result = data->data_fetch_audio.begin(
             data->data_fetch_audio_user,
             &audio_request, &audio_ticket);
@@ -1065,18 +1065,25 @@ static vxml_status quickjs_execute_data_row(
             if (audio_ticket.finish == NULL)
                 return session_fail(
                     session, VXML_INVALID_CONTRACT,
-                    semantic_event, sizeof(semantic_event) - 1u);
+                    badfetch_event, sizeof(badfetch_event) - 1u);
             audio_started = true;
         } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
             if (audio_ticket.finish != NULL ||
-                audio_ticket.user != NULL)
+                audio_ticket.user != NULL) {
+                quickjs_finish_data_fetch_audio(
+                    audio_ticket.finish != NULL,
+                    &audio_ticket);
                 return session_fail(
                     session, VXML_INVALID_CONTRACT,
-                    semantic_event, sizeof(semantic_event) - 1u);
+                    badfetch_event, sizeof(badfetch_event) - 1u);
+            }
         } else {
+            quickjs_finish_data_fetch_audio(
+                audio_ticket.finish != NULL,
+                &audio_ticket);
             return session_fail(
                 session, VXML_INVALID_CONTRACT,
-                semantic_event, sizeof(semantic_event) - 1u);
+                badfetch_event, sizeof(badfetch_event) - 1u);
         }
     }
 
@@ -1572,6 +1579,7 @@ static vxml_status quickjs_profile_session_init(
             !session_options_has_data_tail(options) ||
             !data_resource_adapter_v3_valid(options->data_resources) ||
             options->max_data_bytes == 0u ||
+            options->max_data_bytes == SIZE_MAX ||
             options->max_data_request_value_bytes == 0u ||
             options->max_data_request_value_bytes == SIZE_MAX)
             return VXML_INVALID_ARGUMENT;
