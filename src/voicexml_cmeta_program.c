@@ -5169,6 +5169,7 @@ typedef struct cmeta_program_builder {
     const vxml_cmeta_compile_options_v1 *options;
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
+    size_t data_lower_index;
     size_t form_index;
     size_t menu_index;
     size_t menu_choice_index;
@@ -5360,6 +5361,12 @@ static bool cmeta_allocate_rows(
     if (measurement->external_data_count != 0u) {
         profile->max_data_bind_depth = options->max_data_bind_depth;
         profile->max_data_bind_items = options->max_data_bind_items;
+        if (cmeta_dynamic_data_options_valid(options)) {
+            profile->max_data_namelist_fields =
+                options->max_data_namelist_fields;
+            profile->max_data_request_value_bytes =
+                options->max_data_request_value_bytes;
+        }
     }
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
@@ -8404,6 +8411,12 @@ static vxml_status cmeta_build_schemas(
             salts_xml_node_location(root),
             "VoiceXML lexical schema capacity overflow");
     capacity += measurement->prompt_foreach_count;
+    if (capacity > SIZE_MAX - measurement->external_data_count)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(root),
+            "VoiceXML lexical schema capacity overflow");
+    capacity += measurement->external_data_count;
     if (capacity > builder->options->max_scope_slots)
         capacity = builder->options->max_scope_slots;
     for (scope_index = 0u; scope_index < measurement->scope_count;
@@ -8424,6 +8437,9 @@ static vxml_status cmeta_build_schemas(
                 "VoiceXML lexical schema allocation failed");
     }
     builder->profile->first_document_declaration = 0u;
+    builder->profile->first_document_data =
+        builder->external_data_index;
+    builder->profile->document_data_count = 0u;
     for (root_child = 0u;
          root_child < salts_xml_node_child_count(root); ++root_child) {
         const salts_xml_node child =
@@ -8455,11 +8471,23 @@ static vxml_status cmeta_build_schemas(
                     builder->diagnostic, VXML_INVALID_STRUCTURE,
                     salts_xml_node_location(child),
                     "VoiceXML external data row count changed between passes");
-            status = cmeta_compile_external_data(
-                builder, root, child,
-                &builder->profile->external_data[
-                    builder->external_data_index++]);
-            if (status != VXML_OK) return status;
+            {
+                const bool legacy_preload =
+                    cmeta_attribute(child, "srcexpr").impl == NULL &&
+                    cmeta_attribute(child, "method").impl == NULL &&
+                    cmeta_attribute(child, "namelist").impl == NULL &&
+                    cmeta_attribute(child, "enctype").impl == NULL;
+                status = cmeta_compile_external_data(
+                    builder, root, child,
+                    &builder->profile->document_data_fetch,
+                    VXML_CMETA_DATA_DESTINATION_ROOT,
+                    VXML_CMETA_NO_INDEX, VXML_CMETA_NO_INDEX,
+                    legacy_preload,
+                    &builder->profile->external_data[
+                        builder->external_data_index++]);
+                if (status != VXML_OK) return status;
+                ++builder->profile->document_data_count;
+            }
             continue;
         }
         if (cmeta_node_named(child, "var")) {
@@ -8500,6 +8528,8 @@ static vxml_status cmeta_build_schemas(
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
             form->declaration_count = 0u;
+            form->first_data = builder->external_data_index;
+            form->data_count = 0u;
             form->first_field = builder->field_index;
             form->field_count = 0u;
             form->first_initial = builder->initial_index;
@@ -8543,6 +8573,7 @@ static vxml_status cmeta_build_schemas(
             size_t form_child;
             form->scope = form_scope;
             form->first_declaration = builder->declaration_index;
+            form->first_data = builder->external_data_index;
             form->first_field = builder->field_index;
             form->first_initial = builder->initial_index;
             form->first_subdialog = builder->subdialog_index;
@@ -8648,6 +8679,28 @@ static vxml_status cmeta_build_schemas(
                             salts_xml_attribute_location(name_attribute),
                             "VoiceXML property changed between compiler passes");
                     }
+                    continue;
+                }
+
+                if (cmeta_node_named(item, "data")) {
+                    size_t data_slot = VXML_CMETA_NO_INDEX;
+                    if (builder->external_data_index >=
+                        builder->profile->external_data_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic, VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data rows changed between compiler passes");
+                    status = cmeta_register_data_variable(
+                        builder, form_scope, item, false,
+                        &data_slot, NULL);
+                    if (status != VXML_OK) return status;
+                    status = cmeta_compile_external_data(
+                        builder, root, item, &form->data_fetch,
+                        VXML_CMETA_DATA_DESTINATION_SCOPE,
+                        form_scope, data_slot, false,
+                        &builder->profile->external_data[
+                            builder->external_data_index++]);
+                    if (status != VXML_OK) return status;
                     continue;
                 }
 
@@ -9030,6 +9083,8 @@ static vxml_status cmeta_build_schemas(
             }
             form->declaration_count =
                 builder->declaration_index - form->first_declaration;
+            form->data_count =
+                builder->external_data_index - form->first_data;
             form->field_count =
                 builder->field_index - form->first_field;
             form->initial_count =
