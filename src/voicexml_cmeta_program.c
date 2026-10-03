@@ -5345,6 +5345,8 @@ static vxml_status cmeta_register_prompt_foreach(
     vxml_cmeta_prompt_owner_kind owner_kind,
     size_t owner_index,
     size_t prompt_index,
+    size_t parent_foreach,
+    size_t foreach_depth,
     vxml_cmeta_prompt_foreach_row *row) {
     const salts_xml_attribute array = cmeta_attribute(node, "array");
     const salts_xml_attribute item = cmeta_attribute(node, "item");
@@ -5362,6 +5364,8 @@ static vxml_status cmeta_register_prompt_foreach(
         return VXML_INVALID_STRUCTURE;
     memset(row, 0, sizeof(*row));
     row->prompt = prompt_index;
+    row->parent_foreach = parent_foreach;
+    row->depth = foreach_depth;
     row->collection_location = VXML_CMETA_NO_INDEX;
     row->scope = VXML_CMETA_NO_INDEX;
     row->item_slot = VXML_CMETA_NO_INDEX;
@@ -5457,6 +5461,8 @@ static vxml_status cmeta_compile_prompt_schema(
     vxml_cmeta_prompt_owner_kind owner_kind,
     size_t owner_index,
     size_t prompt_index,
+    size_t parent_foreach,
+    size_t foreach_depth,
     vxml_cmeta_prompt_row *out) {
     const salts_xml_attribute count_attribute =
         cmeta_attribute(prompt, "count");
@@ -5468,6 +5474,7 @@ static vxml_status cmeta_compile_prompt_schema(
         cmeta_attribute(prompt, "timeout");
     const bool is_foreach = cmeta_node_named(prompt, "foreach");
     vxml_cmeta_prompt_foreach_row *foreach_row = NULL;
+    size_t current_foreach = VXML_CMETA_NO_INDEX;
     size_t child_index;
     size_t dynamic_mark_count = 0u;
     unsigned count = 1u;
@@ -5512,11 +5519,13 @@ static vxml_status cmeta_compile_prompt_schema(
                 builder->diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_node_location(prompt),
                 "VoiceXML foreach rows changed between compiler passes");
+        current_foreach = builder->prompt_foreach_index;
         foreach_row = &builder->profile->prompt_foreach[
             builder->prompt_foreach_index++];
         status = cmeta_register_prompt_foreach(
             builder, prompt, owner_kind, owner_index,
-            prompt_index, foreach_row);
+            prompt_index, parent_foreach, foreach_depth,
+            foreach_row);
         if (status != VXML_OK) return status;
     }
 
@@ -5535,14 +5544,18 @@ static vxml_status cmeta_compile_prompt_schema(
 
         if (cmeta_node_named(child, "foreach")) {
             vxml_cmeta_prompt_row nested = {0};
-            if (is_foreach)
+            const size_t child_parent =
+                is_foreach ? current_foreach : VXML_CMETA_NO_INDEX;
+            const size_t child_depth =
+                is_foreach ? foreach_depth + 1u : 1u;
+            if (is_foreach && foreach_depth == SIZE_MAX)
                 return cmeta_program_fail(
-                    builder->diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    builder->diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_node_location(child),
-                    "nested VoiceXML prompt foreach is not supported");
+                    "VoiceXML foreach compiler depth overflow");
             status = cmeta_compile_prompt_schema(
                 builder, child, owner_kind, owner_index,
-                prompt_index, &nested);
+                prompt_index, child_parent, child_depth, &nested);
             if (status != VXML_OK) return status;
             if (nested.dynamic_mark_count >
                     SIZE_MAX - dynamic_mark_count)
@@ -8037,6 +8050,7 @@ static vxml_status cmeta_build_schemas(
                                     VXML_CMETA_PROMPT_OWNER_INITIAL,
                                     builder->initial_index,
                                     prompt_index,
+                                    VXML_CMETA_NO_INDEX, 0u,
                                     &builder->profile->prompts[
                                         prompt_index]);
                             }
@@ -8262,6 +8276,7 @@ static vxml_status cmeta_build_schemas(
                                         VXML_CMETA_PROMPT_OWNER_FIELD,
                                         builder->field_index,
                                         prompt_index,
+                                        VXML_CMETA_NO_INDEX, 0u,
                                         &builder->profile->prompts[
                                             prompt_index]);
                                 }
