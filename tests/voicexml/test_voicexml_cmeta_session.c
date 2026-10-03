@@ -13214,7 +13214,7 @@ spec("VoiceXML CMeta session execution") {
             VXML_INVALID_STRUCTURE,
             VXML_INVALID_STRUCTURE,
             VXML_UNSUPPORTED_FEATURE,
-            VXML_UNSUPPORTED_FEATURE
+            VXML_INVALID_CONTRACT
         };
         const vxml_cmeta_compile_options_v1 compile =
             prompt_foreach_compile_options();
@@ -13231,6 +13231,61 @@ spec("VoiceXML CMeta session execution") {
                 expected[index]);
             vxml_program_destroy(&program);
         }
+    }
+
+    it("enforces explicit nested foreach depth and expanded segment bounds") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><field name='value'>"
+            "<prompt><foreach array='items' item='outer'>"
+            "<mark nameexpr='outer'/>"
+            "<foreach array='inner_items' item='inner'>"
+            "<mark nameexpr='inner'/></foreach>"
+            "</foreach></prompt>"
+            "<grammar type='application/srgs+xml' src='g'/></field></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile =
+            prompt_nested_foreach_compile_options();
+        vxml_program program = {0};
+
+        compile.max_prompt_foreach_depth = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_LIMIT_EXCEEDED);
+        vxml_program_destroy(&program);
+
+        compile = prompt_nested_foreach_compile_options();
+        compile.max_prompt_expanded_segments = 16u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_LIMIT_EXCEEDED);
+        vxml_program_destroy(&program);
+
+        compile = prompt_nested_foreach_compile_options();
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        {
+            const vxml_cmeta_program_data *compiled =
+                program_data(&program);
+            check_not_null(compiled);
+            check_equal(compiled->prompt_foreach_count, (size_t)2u);
+            check_not_null(compiled->prompt_foreach);
+            check_equal(
+                compiled->prompt_foreach[0].parent_foreach,
+                VXML_CMETA_NO_INDEX);
+            check_equal(compiled->prompt_foreach[0].depth, (size_t)1u);
+            check_equal(
+                compiled->prompt_foreach[1].parent_foreach,
+                compiled->prompts[0].first_foreach);
+            check_equal(compiled->prompt_foreach[1].depth, (size_t)2u);
+        }
+        vxml_program_destroy(&program);
     }
 
     it("expands prompt foreach from one bounded snapshot and commits the last item") {
