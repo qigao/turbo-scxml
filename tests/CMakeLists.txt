@@ -350,6 +350,24 @@ turboscxml_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/src
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+
+if(TURBOSCXML_ENABLE_QUICKJS)
+  add_executable(
+    voicexml_quickjs_test
+    voicexml_quickjs_test.c)
+  target_compile_features(voicexml_quickjs_test PRIVATE c_std_11)
+  set_target_properties(voicexml_quickjs_test PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_include_directories(voicexml_quickjs_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/src)
+  target_link_libraries(voicexml_quickjs_test PRIVATE
+    TurboSCXML::VoiceXMLQuickJS
+    TurboSCXML::VoiceXMLScriptResource
+    Salts::TinyTest)
+  add_test(NAME voicexml_quickjs_test COMMAND voicexml_quickjs_test)
+endif()
 set_tests_properties(scxml_quickjs_test PROPERTIES
   TIMEOUT 30)
 
