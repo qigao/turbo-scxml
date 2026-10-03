@@ -17,6 +17,7 @@ extern "C" {
 #define VXML_CMETA_SESSION_OPTIONS_ABI_V1 1u
 #define VXML_CMETA_DATA_RESOURCE_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_DATA_REQUEST_ABI_V2 2u
+#define VXML_CMETA_DATA_REQUEST_ABI_V3 3u
 #define VXML_CMETA_COLLECT_ADAPTER_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V1 1u
 #define VXML_CMETA_COLLECT_REQUEST_ABI_V2 2u
@@ -312,6 +313,48 @@ typedef struct vxml_cmeta_data_request_v2 {
      VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED, \
      false, UINT64_C(0), false, UINT64_C(0)}
 
+typedef struct vxml_cmeta_data_field_v1 {
+    const char *name;
+    size_t name_size;
+    const char *value;
+    size_t value_size;
+} vxml_cmeta_data_field_v1;
+
+/*
+ * Request V3 preserves the V2 policy prefix, then appends the dynamic request
+ * surface. Enctype is ignored for GET. fields are callback-borrowed and keep
+ * document/namelist order.
+ */
+typedef struct vxml_cmeta_data_request_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    size_t max_bytes;
+
+    bool has_timeout;
+    uint64_t timeout_us;
+    vxml_cmeta_data_fetch_hint fetch_hint;
+    bool has_max_age;
+    uint64_t max_age_seconds;
+    bool has_max_stale;
+    uint64_t max_stale_seconds;
+
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    const vxml_cmeta_data_field_v1 *fields;
+    size_t field_count;
+} vxml_cmeta_data_request_v3;
+
+#define VXML_CMETA_DATA_REQUEST_V3_INIT \
+    {VXML_CMETA_DATA_REQUEST_ABI_V3, \
+     sizeof(vxml_cmeta_data_request_v3), \
+     NULL, 0u, 0u, false, UINT64_C(0), \
+     VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED, \
+     false, UINT64_C(0), false, UINT64_C(0), \
+     VXML_SUBMIT_METHOD_GET, VXML_SUBMIT_ENCTYPE_URLENCODED, \
+     NULL, 0u}
+
 typedef struct vxml_cmeta_data_resource_adapter_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -331,6 +374,15 @@ typedef struct vxml_cmeta_data_resource_adapter_v1 {
     vxml_status (*open_v2)(
         void *user,
         const vxml_cmeta_data_request_v2 *request,
+        vxml_cmeta_data_resource_v1 *out);
+
+    /*
+     * Optional append-only dynamic request entry point. V3 is required when
+     * method/namelist/enctype or a dynamic URI is used.
+     */
+    vxml_status (*open_v3)(
+        void *user,
+        const vxml_cmeta_data_request_v3 *request,
         vxml_cmeta_data_resource_v1 *out);
 } vxml_cmeta_data_resource_adapter_v1;
 
