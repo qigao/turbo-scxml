@@ -860,6 +860,7 @@ install(
 install(
   FILES
     include/voicexml/voicexml.h
+    include/voicexml/data_resource.h
     include/voicexml/resource.h
     include/voicexml/dialog_manager.h
     include/voicexml/document_store.h

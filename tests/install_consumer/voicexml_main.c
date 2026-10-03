@@ -1,4 +1,5 @@
 #include <voicexml/voicexml.h>
+#include <voicexml/data_resource.h>
 
 #include <string.h>
 
@@ -15,6 +16,10 @@ int main(void) {
     vxml_navigation_target target = {0};
     vxml_navigation_request_v1 navigation = {0};
     vxml_submit_target_v1 submit = {0};
+    vxml_cmeta_data_request_v2 data_v2 =
+        VXML_CMETA_DATA_REQUEST_V2_INIT;
+    vxml_cmeta_data_request_v3 data_v3 =
+        VXML_CMETA_DATA_REQUEST_V3_INIT;
     vxml_status (*submit_fn)(
         const vxml_session *,
         vxml_submit_target_v1 *) = vxml_session_submit;
@@ -25,7 +30,13 @@ int main(void) {
     if (raise_event == NULL || submit_fn == NULL ||
         VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
         VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
-        submit.abi_version != 0u)
+        submit.abi_version != 0u ||
+        data_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
+        data_v2.struct_size != sizeof(data_v2) ||
+        data_v3.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        data_v3.struct_size != sizeof(data_v3) ||
+        data_v3.method != VXML_SUBMIT_METHOD_GET ||
+        data_v3.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
         return 2;
 
     if (vxml_compile(document, strlen(document), NULL, &program, NULL) !=
