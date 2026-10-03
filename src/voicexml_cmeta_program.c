@@ -10533,7 +10533,68 @@ static vxml_status cmeta_lower_simple_action(
     action = &builder->profile->actions[builder->action_index];
     cmeta_action_init(action);
     action->location = salts_xml_node_location(node);
-    if (cmeta_node_named(node, "var")) {
+    if (cmeta_node_named(node, "data")) {
+        const salts_xml_attribute name_attribute =
+            cmeta_attribute(node, "name");
+        const vxml_cmeta_data_fetch_policy *inherited =
+            cmeta_data_fetch_policy_for_scopes(
+                builder, scopes, scope_count);
+        cmeta_decoded_value decoded_name = {0};
+        const cmeta_scope_slot *slot;
+        size_t slot_index = VXML_CMETA_NO_INDEX;
+        size_t data_index;
+        vxml_cmeta_external_data_row *row;
+
+        if (inherited == NULL ||
+            execution_scope >= builder->profile->scope_count ||
+            name_attribute.impl == NULL ||
+            builder->external_data_index >=
+                builder->profile->external_data_count ||
+            builder->profile->external_data == NULL)
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML executable data rows changed between compiler passes");
+
+        status = cmeta_decode_temporary(
+            builder,
+            salts_xml_attribute_value(name_attribute),
+            salts_xml_attribute_location(name_attribute),
+            &decoded_name);
+        if (status != VXML_OK) return status;
+        slot = cmeta_scope_find(
+            &builder->profile->scopes[
+                execution_scope].schema,
+            decoded_name.view.data,
+            decoded_name.view.size,
+            &slot_index);
+        if (slot == NULL) {
+            cmeta_decoded_value_destroy(&decoded_name);
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE,
+                salts_xml_attribute_location(name_attribute),
+                "VoiceXML executable data destination changed between passes");
+        }
+        cmeta_decoded_value_destroy(&decoded_name);
+
+        data_index = builder->external_data_index++;
+        row = &builder->profile->external_data[data_index];
+        status = cmeta_compile_external_data(
+            builder, (salts_xml_node){0}, node,
+            inherited,
+            VXML_CMETA_DATA_DESTINATION_SCOPE,
+            execution_scope, slot_index,
+            false, row);
+        if (status != VXML_OK) return status;
+        status = cmeta_lower_external_data_request(
+            builder, node, row, scopes, scope_count);
+        if (status != VXML_OK) return status;
+
+        action->kind = VXML_CMETA_ACTION_DATA;
+        action->data_index = data_index;
+    } else if (cmeta_node_named(node, "var")) {
         const salts_xml_attribute name_attribute = cmeta_attribute(node, "name");
         const salts_xml_attribute expression = cmeta_attribute(node, "expr");
         cmeta_decoded_value decoded_name = {0};
@@ -10999,6 +11060,7 @@ static vxml_status cmeta_lower_catch(
 
 static vxml_status cmeta_lower_program(
     cmeta_program_builder *builder, salts_xml_node root) {
+    size_t document_data_offset = 0u;
     size_t declaration_index = 0u;
     size_t form_index = 0u;
     size_t field_index = 0u;
@@ -11016,6 +11078,40 @@ static vxml_status cmeta_lower_program(
         if (cmeta_node_ignorable(child)) continue;
         if (cmeta_node_named(child, "property"))
             continue;
+        if (cmeta_node_named(child, "data")) {
+            const vxml_cmeta_expr_compile_scope scope = {
+                0u, &builder->profile->scopes[0].schema};
+            size_t data_index;
+            vxml_cmeta_external_data_row *row;
+            if (document_data_offset >=
+                    builder->profile->document_data_count ||
+                builder->profile->first_document_data >
+                    builder->profile->external_data_count ||
+                document_data_offset >
+                    builder->profile->external_data_count -
+                        builder->profile->first_document_data ||
+                builder->profile->external_data == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document data rows changed during lowering");
+            data_index =
+                builder->profile->first_document_data +
+                document_data_offset++;
+            if (data_index >=
+                builder->profile->external_data_count)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML document data index changed during lowering");
+            row = &builder->profile->external_data[data_index];
+            status = cmeta_lower_external_data_request(
+                builder, child, row, &scope, 1u);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "catch") ||
             cmeta_node_named(child, "help") ||
             cmeta_node_named(child, "noinput") ||
@@ -11058,6 +11154,7 @@ static vxml_status cmeta_lower_program(
                  &builder->profile->scopes[form->scope].schema},
                 {0u, &builder->profile->scopes[0].schema}};
             size_t form_child;
+            size_t form_data_offset = 0u;
             size_t form_filled_offset = 0u;
             for (form_child = 0u;
                  form_child < salts_xml_node_child_count(child);
@@ -11067,6 +11164,37 @@ static vxml_status cmeta_lower_program(
                 if (cmeta_node_ignorable(item)) continue;
                 if (cmeta_node_named(item, "property"))
                     continue;
+                if (cmeta_node_named(item, "data")) {
+                    size_t data_index;
+                    vxml_cmeta_external_data_row *row;
+                    if (form_data_offset >= form->data_count ||
+                        form->first_data >
+                            builder->profile->external_data_count ||
+                        form_data_offset >
+                            builder->profile->external_data_count -
+                                form->first_data ||
+                        builder->profile->external_data == NULL)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data rows changed during lowering");
+                    data_index =
+                        form->first_data + form_data_offset++;
+                    if (data_index >=
+                        builder->profile->external_data_count)
+                        return cmeta_program_fail(
+                            builder->diagnostic,
+                            VXML_INVALID_STRUCTURE,
+                            salts_xml_node_location(item),
+                            "VoiceXML form data index changed during lowering");
+                    row = &builder->profile->external_data[
+                        data_index];
+                    status = cmeta_lower_external_data_request(
+                        builder, item, row, scopes, 2u);
+                    if (status != VXML_OK) return status;
+                    continue;
+                }
                 if (cmeta_node_named(item, "var")) {
                     status = cmeta_compile_declaration_expression(
                         builder, item,
@@ -11665,9 +11793,22 @@ static vxml_status cmeta_lower_program(
                     if (status != VXML_OK) return status;
                 }
             }
+            if (form_data_offset != form->data_count)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child),
+                    "VoiceXML form data rows disappeared during lowering");
             ++form_index;
         }
     }
+    if (document_data_offset !=
+            builder->profile->document_data_count)
+        return cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(root),
+            "VoiceXML document data rows disappeared during lowering");
     if (field_index != builder->profile->field_count ||
         initial_index != builder->profile->initial_count ||
         subdialog_index != builder->profile->subdialog_count ||
