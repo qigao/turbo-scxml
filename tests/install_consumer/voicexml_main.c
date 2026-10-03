@@ -1,4 +1,5 @@
 #include <voicexml/voicexml.h>
+#include <voicexml/data_resource.h>
 
 #include <string.h>
 
@@ -15,6 +16,8 @@ int main(void) {
     vxml_navigation_target target = {0};
     vxml_navigation_request_v1 navigation = {0};
     vxml_submit_target_v1 submit = {0};
+    vxml_cmeta_data_field_v1 data_field = {0};
+    vxml_cmeta_data_request_v3 data_request = VXML_CMETA_DATA_REQUEST_V3_INIT;
     vxml_status (*submit_fn)(
         const vxml_session *,
         vxml_submit_target_v1 *) = vxml_session_submit;
@@ -25,7 +28,11 @@ int main(void) {
     if (raise_event == NULL || submit_fn == NULL ||
         VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
         VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
-        submit.abi_version != 0u)
+        submit.abi_version != 0u ||
+        data_request.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
+        data_request.struct_size != sizeof(data_request) ||
+        data_request.method != VXML_SUBMIT_METHOD_GET ||
+        data_field.name != NULL)
         return 2;
 
     if (vxml_compile(document, strlen(document), NULL, &program, NULL) !=
