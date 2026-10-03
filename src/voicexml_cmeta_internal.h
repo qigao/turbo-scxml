@@ -427,6 +427,7 @@ typedef struct vxml_cmeta_external_data_row {
 
     vxml_submit_method method;
     vxml_submit_enctype enctype;
+    bool request_v3;
     size_t first_location;
     size_t location_count;
 
