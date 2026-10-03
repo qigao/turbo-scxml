@@ -9530,6 +9530,131 @@ spec("VoiceXML CMeta session execution") {
         vxml_program_destroy(&program);
     }
 
+    it("executes form-scoped dynamic data before the first form item") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<var name='text' expr='&quot;form.json&quot;'/>"
+            "<data name='other' srcexpr='text'/>"
+            "<block><exit expr='other'/></block>"
+            "</form></vxml>";
+        static const char payload[] = "9";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .expected_uri = "form.json",
+            .expected_uri_size = sizeof("form.json") - 1u,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_name_view exit_name = {0};
+        vxml_cmeta_value_view exit_value = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(probe.open_v3_calls, (size_t)0u);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &exit_name, &exit_value),
+            VXML_OK);
+        check_equal(exit_value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(exit_value.data.sint, INT64_C(9));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("executes dynamic data in block action order against staged values") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<var name='text' expr='&quot;action.json&quot;'/>"
+            "<var name='value' expr='4'/>"
+            "<data name='other' srcexpr='text' method='post' "
+            "namelist='value' "
+            "enctype='application/x-www-form-urlencoded'/>"
+            "<exit expr='other + value'/>"
+            "</block></form></vxml>";
+        static const char payload[] = "6";
+        const vxml_cmeta_compile_options_v1 compile =
+            data_compile_options();
+        const vxml_cmeta_session_root root = {0};
+        cmeta_data_resource_probe probe = {
+            .open_status = VXML_OK,
+            .expected_uri = "action.json",
+            .expected_uri_size = sizeof("action.json") - 1u,
+            .payload = payload,
+            .payload_size = sizeof(payload) - 1u,
+            .format = VXML_CMETA_DATA_JSON};
+        const vxml_cmeta_session_options_v1 options =
+            data_session_options(&root, &probe);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_name_view exit_name = {0};
+        vxml_cmeta_value_view exit_value = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(probe.open_v3_calls, (size_t)1u);
+        check_equal(probe.open_calls, (size_t)0u);
+        check_equal(probe.open_v2_calls, (size_t)0u);
+        check_equal(probe.close_calls, (size_t)1u);
+        check_equal(
+            probe.last_request_v3.field_count,
+            (size_t)1u);
+        check_equal(
+            probe.last_request_v3.fields[0].name_size,
+            sizeof("value") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[0].name,
+                "value", sizeof("value") - 1u),
+            0);
+        check_equal(
+            probe.last_request_v3.fields[0].value_size,
+            sizeof("4") - 1u);
+        check_equal(
+            memcmp(
+                probe.last_request_v3.fields[0].value,
+                "4", sizeof("4") - 1u),
+            0);
+        check_equal(
+            vxml_session_cmeta_exit_at(
+                &session, 0u, &exit_name, &exit_value),
+            VXML_OK);
+        check_equal(exit_value.kind, VXML_CMETA_VALUE_SINT);
+        check_equal(exit_value.data.sint, INT64_C(10));
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("keeps fetchaudio SKIPPED independent from legacy V1 data fetch") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
