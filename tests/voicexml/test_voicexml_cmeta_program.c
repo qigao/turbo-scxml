@@ -147,6 +147,15 @@ static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 submit_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_submit_fields = 4u;
+    options.max_submit_value_bytes = 128u;
+    options.max_submit_uri_bytes = 128u;
+    return options;
+}
+
+
 static vxml_cmeta_compile_options_v1 field_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = compile_options();
     options.max_fields = 8u;
@@ -3268,6 +3277,188 @@ spec("VoiceXML CMeta program compiler") {
             check_equal(diagnostic.status, cases[index].expected);
             vxml_program_destroy(&program);
         }
+    }
+
+    it("lowers typed urlencoded submit into one immutable action and ordered locations") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='result.vxml' method='post' "
+            "namelist='value flag' "
+            "enctype='application/x-www-form-urlencoded'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            submit_compile_options();
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+        const vxml_cmeta_program_data *profile;
+        const vxml_cmeta_action_row *action;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, strlen(source), NULL, &options,
+                &program, &diagnostic),
+            VXML_OK);
+        check_not_null(program.impl);
+        if (program.impl == NULL) return;
+
+        profile = (const vxml_cmeta_program_data *)
+            ((const vxml_program_impl *)program.impl)->profile_data;
+        check_not_null(profile);
+        check_equal(profile->action_count, (size_t)1u);
+        check_equal(profile->location_count, (size_t)2u);
+        check_equal(profile->max_submit_fields, (size_t)4u);
+        check_equal(profile->max_submit_value_bytes, (size_t)128u);
+        check_equal(profile->max_submit_uri_bytes, (size_t)128u);
+        action = &profile->actions[0];
+        check_equal(action->kind, VXML_CMETA_ACTION_SUBMIT);
+        check_equal(
+            action->submit_method, VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            action->submit_enctype,
+            VXML_SUBMIT_ENCTYPE_URLENCODED);
+        check_equal(
+            action->navigation_uri_size,
+            sizeof("result.vxml") - 1u);
+        check_equal(
+            memcmp(
+                action->navigation_uri,
+                "result.vxml",
+                action->navigation_uri_size),
+            0);
+        check_equal(action->first_location, (size_t)0u);
+        check_equal(action->location_count, (size_t)2u);
+        check_equal(profile->locations[0].name_size,
+                    sizeof("value") - 1u);
+        check_equal(
+            memcmp(profile->locations[0].name, "value",
+                   profile->locations[0].name_size), 0);
+        check_equal(profile->locations[1].name_size,
+                    sizeof("flag") - 1u);
+        check_equal(
+            memcmp(profile->locations[1].name, "flag",
+                   profile->locations[1].name_size), 0);
+
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            memcmp(
+                action->navigation_uri,
+                "result.vxml",
+                action->navigation_uri_size),
+            0);
+        vxml_program_destroy(&program);
+    }
+
+    it("defaults typed submit to GET urlencoded with an empty field snapshot") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='result.vxml'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 options =
+            submit_compile_options();
+        vxml_program program = {0};
+        const vxml_cmeta_program_data *profile;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL, &options,
+                &program, NULL),
+            VXML_OK);
+        profile = program.impl != NULL
+            ? (const vxml_cmeta_program_data *)
+                ((const vxml_program_impl *)program.impl)->profile_data
+            : NULL;
+        check_not_null(profile);
+        if (profile != NULL) {
+            check_equal(
+                profile->actions[0].kind,
+                VXML_CMETA_ACTION_SUBMIT);
+            check_equal(
+                profile->actions[0].submit_method,
+                VXML_SUBMIT_METHOD_GET);
+            check_equal(
+                profile->actions[0].submit_enctype,
+                VXML_SUBMIT_ENCTYPE_URLENCODED);
+            check_equal(
+                profile->actions[0].location_count, (size_t)0u);
+        }
+        vxml_program_destroy(&program);
+    }
+
+    it("keeps typed submit fail-closed and rejects invalid static request shapes") {
+        static const char *const bodies[] = {
+            "<form><block><submit next='x'/></block></form>",
+            "<form><block><submit next='x' namelist='value value'/>"
+            "</block></form>",
+            "<form><block><submit next='x' namelist='missing'/>"
+            "</block></form>",
+            "<form><block><submit next='x' method='put'/></block></form>",
+            "<form><block><submit next='x' "
+            "enctype='multipart/form-data'/></block></form>",
+            "<form><block><submit next='12345'/></block></form>"
+        };
+        static const vxml_status expected[] = {
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_INVALID_STRUCTURE,
+            VXML_SEMANTIC_ERROR,
+            VXML_INVALID_STRUCTURE,
+            VXML_UNSUPPORTED_FEATURE,
+            VXML_LIMIT_EXCEEDED
+        };
+        size_t index;
+
+        for (index = 0u;
+             index < sizeof(bodies) / sizeof(bodies[0]);
+             ++index) {
+            static const char prefix[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' "
+                "version='2.1' datamodel='cmeta'>";
+            char source[512];
+            vxml_cmeta_compile_options_v1 options =
+                index == 0u
+                    ? compile_options()
+                    : submit_compile_options();
+            vxml_program program = {0};
+            vxml_diagnostic diagnostic = {0};
+            const int written = snprintf(
+                source, sizeof(source), "%s%s</vxml>",
+                prefix, bodies[index]);
+            check_true(
+                written > 0 &&
+                (size_t)written < sizeof(source));
+            if (index == 5u)
+                options.max_submit_uri_bytes = 4u;
+            check_equal(
+                vxml_compile_cmeta(
+                    source, (size_t)written, NULL, &options,
+                    &program, &diagnostic),
+                expected[index]);
+            check_null(program.impl);
+            check_equal(diagnostic.status, expected[index]);
+        }
+    }
+
+    it("enforces the typed submit field ceiling before publication") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' namelist='value flag'/>"
+            "</block></form></vxml>";
+        vxml_cmeta_compile_options_v1 options =
+            submit_compile_options();
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+
+        options.max_submit_fields = 1u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL, &options,
+                &program, &diagnostic),
+            VXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
+        check_equal(
+            diagnostic.status, VXML_LIMIT_EXCEEDED);
     }
 
     it("shares executable declarations across nested conditional branches") {
