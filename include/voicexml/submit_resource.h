@@ -29,13 +29,6 @@ typedef enum vxml_submit_resource_status {
     VXML_SUBMIT_RESOURCE_INVALID_RESPONSE
 } vxml_submit_resource_status;
 
-typedef struct vxml_submit_field_v1 {
-    const char *name;
-    size_t name_size;
-    const char *value;
-    size_t value_size;
-} vxml_submit_field_v1;
-
 /**
  * Caller request before URI resolution and form encoding.
  *
