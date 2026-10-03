@@ -3741,6 +3741,26 @@ static bool measure_external_data_scratch(
     return true;
 }
 
+static bool data_fetch_policy_requires_v2(
+    const vxml_cmeta_data_fetch_policy *policy) {
+    return policy != NULL &&
+        (policy->has_timeout ||
+         policy->fetch_hint !=
+             VXML_CMETA_DATA_FETCH_HINT_UNSPECIFIED ||
+         policy->has_max_age ||
+         policy->has_max_stale);
+}
+
+static bool data_adapter_has_open_v2(
+    const vxml_cmeta_data_resource_adapter_v1 *adapter) {
+    const size_t tail_size =
+        offsetof(vxml_cmeta_data_resource_adapter_v1, open_v2) +
+        sizeof(((vxml_cmeta_data_resource_adapter_v1 *)0)->open_v2);
+    return adapter != NULL &&
+        adapter->struct_size >= tail_size &&
+        adapter->open_v2 != NULL;
+}
+
 static vxml_status load_external_data(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
@@ -3758,6 +3778,9 @@ static vxml_status load_external_data(
         const vxml_cmeta_external_data_row *row =
             &program->external_data[index];
         vxml_cmeta_data_resource_v1 resource = {0};
+        vxml_cmeta_data_request_v2 request =
+            VXML_CMETA_DATA_REQUEST_V2_INIT;
+        vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
         DataBindFormatReader format_reader =
             DATA_BIND_FORMAT_READER_INIT;
         DataBindError format_error = DATA_BIND_ERROR_INIT;
@@ -3771,6 +3794,7 @@ static vxml_status load_external_data(
         vxml_status status;
         bool resource_open = false;
         bool reader_open = false;
+        bool fetch_audio_started = false;
         unsigned char *destination;
 
         if (row->field_index >= root_shape->field_count ||
@@ -3779,12 +3803,75 @@ static vxml_status load_external_data(
             root_shape->fields[row->field_index].offset != row->field_offset)
             return VXML_INVALID_STRUCTURE;
 
-        status = options->data_resources->open(
-            options->data_resource_user,
-            row->uri, row->uri_size,
-            options->max_data_bytes, &resource);
+        if (row->fetch_policy.fetchaudio.uri_size != 0u) {
+            vxml_fetch_audio_request_v1 audio_request = {
+                .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+                .struct_size = sizeof(vxml_fetch_audio_request_v1),
+                .uri = row->fetch_policy.fetchaudio.uri,
+                .uri_size = row->fetch_policy.fetchaudio.uri_size,
+                .has_delay =
+                    row->fetch_policy.fetchaudio.has_delay,
+                .delay_us =
+                    row->fetch_policy.fetchaudio.delay_us,
+                .has_minimum =
+                    row->fetch_policy.fetchaudio.has_minimum,
+                .minimum_us =
+                    row->fetch_policy.fetchaudio.minimum_us};
+            vxml_fetch_audio_begin_result begin_result;
+            if (audio_request.uri == NULL ||
+                !session_data_fetch_audio_options_valid(options))
+                return VXML_INVALID_CONTRACT;
+            begin_result = options->data_fetch_audio->begin(
+                options->data_fetch_audio_user,
+                &audio_request, &fetch_audio_ticket);
+            if (begin_result == VXML_FETCH_AUDIO_STARTED) {
+                if (fetch_audio_ticket.finish == NULL)
+                    return VXML_INVALID_CONTRACT;
+                fetch_audio_started = true;
+            } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
+                if (fetch_audio_ticket.finish != NULL ||
+                    fetch_audio_ticket.user != NULL)
+                    return VXML_INVALID_CONTRACT;
+            } else {
+                return VXML_INVALID_CONTRACT;
+            }
+        }
+
+        if (data_fetch_policy_requires_v2(
+                &row->fetch_policy)) {
+            if (!data_adapter_has_open_v2(
+                    options->data_resources)) {
+                status = VXML_UNSUPPORTED_FEATURE;
+                goto settle;
+            }
+            request.uri = row->uri;
+            request.uri_size = row->uri_size;
+            request.max_bytes = options->max_data_bytes;
+            request.has_timeout =
+                row->fetch_policy.has_timeout;
+            request.timeout_us =
+                row->fetch_policy.timeout_us;
+            request.fetch_hint =
+                row->fetch_policy.fetch_hint;
+            request.has_max_age =
+                row->fetch_policy.has_max_age;
+            request.max_age_seconds =
+                row->fetch_policy.max_age_seconds;
+            request.has_max_stale =
+                row->fetch_policy.has_max_stale;
+            request.max_stale_seconds =
+                row->fetch_policy.max_stale_seconds;
+            status = options->data_resources->open_v2(
+                options->data_resource_user,
+                &request, &resource);
+        } else {
+            status = options->data_resources->open(
+                options->data_resource_user,
+                row->uri, row->uri_size,
+                options->max_data_bytes, &resource);
+        }
         if (status != VXML_OK)
-            return status;
+            goto settle;
         resource_open = true;
         if (resource.lease == NULL ||
             resource.size > options->max_data_bytes ||
@@ -3867,6 +3954,9 @@ settle:
         if (resource_open)
             options->data_resources->close(
                 options->data_resource_user, &resource);
+        if (fetch_audio_started)
+            fetch_audio_ticket.finish(
+                fetch_audio_ticket.user);
         if (status != VXML_OK)
             return status;
     }
