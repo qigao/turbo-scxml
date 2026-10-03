@@ -540,6 +540,133 @@ done:
 #endif
 }
 
+
+quickjs_sandbox_status quickjs_sandbox_get_global_scalar_string(
+    quickjs_sandbox_runtime *runtime,
+    const char *name, size_t name_size,
+    uint64_t max_eval_milliseconds,
+    const char **out_string, size_t *out_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    if (out_string != NULL) *out_string = NULL;
+    if (out_size != NULL) *out_size = 0u;
+    if (runtime == NULL || runtime->runtime == NULL ||
+        runtime->context == NULL ||
+        name == NULL || name_size == 0u ||
+        name_size == SIZE_MAX ||
+        memchr(name, '\0', name_size) != NULL ||
+        max_eval_milliseconds == 0u ||
+        out_string == NULL || out_size == NULL ||
+        runtime->result_string == NULL ||
+        runtime->result_string_capacity == 0u) {
+        quickjs_sandbox_diagnostic(
+            diagnostic, diagnostic_capacity,
+            "invalid QuickJS global scalar request");
+        return QUICKJS_SANDBOX_INVALID_ARGUMENT;
+    }
+#if !TURBOSCXML_HAS_QUICKJS
+    return QUICKJS_SANDBOX_INVALID_ARGUMENT;
+#else
+    {
+        JSContext *context = (JSContext *)runtime->context;
+        JSValue global = JS_UNDEFINED;
+        JSValue value = JS_UNDEFINED;
+        char *terminated_name = NULL;
+        const char *text = NULL;
+        size_t text_size = 0u;
+        bool owns_deadline;
+        quickjs_sandbox_status status = QUICKJS_SANDBOX_OK;
+
+        terminated_name = (char *)malloc(name_size + 1u);
+        if (terminated_name == NULL)
+            return QUICKJS_SANDBOX_ALLOCATION_FAILED;
+        memcpy(terminated_name, name, name_size);
+        terminated_name[name_size] = '\0';
+
+        owns_deadline = quickjs_sandbox_deadline_begin(
+            runtime, max_eval_milliseconds);
+        JS_UpdateStackTop((JSRuntime *)runtime->runtime);
+        global = JS_GetGlobalObject(context);
+        if (JS_IsException(global)) {
+            status = quickjs_sandbox_exception(
+                runtime, diagnostic, diagnostic_capacity);
+            goto done;
+        }
+        value = JS_GetPropertyStr(
+            context, global, terminated_name);
+        if (JS_IsException(value)) {
+            status = quickjs_sandbox_exception(
+                runtime, diagnostic, diagnostic_capacity);
+            goto done;
+        }
+
+        if (JS_IsNumber(value)) {
+            double number;
+            if (JS_ToFloat64(context, &number, value) != 0 ||
+                !isfinite(number)) {
+                quickjs_sandbox_diagnostic(
+                    diagnostic, diagnostic_capacity,
+                    "QuickJS global scalar number must be finite");
+                status = QUICKJS_SANDBOX_TYPE_MISMATCH;
+                goto done;
+            }
+        } else if (!JS_IsString(value) && !JS_IsBool(value)) {
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS global property is not a supported scalar");
+            status = QUICKJS_SANDBOX_TYPE_MISMATCH;
+            goto done;
+        }
+
+        text = JS_ToCStringLen(
+            context, &text_size, value);
+        if (text == NULL) {
+            status = quickjs_sandbox_exception(
+                runtime, diagnostic, diagnostic_capacity);
+            goto done;
+        }
+        if (text_size >= runtime->result_string_capacity) {
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS global scalar exceeds result bound");
+            status = QUICKJS_SANDBOX_LIMIT_EXCEEDED;
+            goto done;
+        }
+        memcpy(runtime->result_string, text, text_size);
+        runtime->result_string[text_size] = '\0';
+        *out_string = runtime->result_string;
+        *out_size = text_size;
+
+        if (quickjs_sandbox_deadline_expired(runtime)) {
+            *out_string = NULL;
+            *out_size = 0u;
+            quickjs_sandbox_diagnostic(
+                diagnostic, diagnostic_capacity,
+                "QuickJS evaluation deadline exceeded");
+            status = QUICKJS_SANDBOX_LIMIT_EXCEEDED;
+            goto done;
+        }
+        quickjs_sandbox_diagnostic(
+            diagnostic, diagnostic_capacity, "");
+
+done:
+        if (text != NULL)
+            JS_FreeCString(context, text);
+        if (!JS_IsUndefined(value))
+            JS_FreeValue(context, value);
+        if (!JS_IsUndefined(global))
+            JS_FreeValue(context, global);
+        quickjs_sandbox_deadline_end(
+            runtime, owns_deadline);
+        free(terminated_name);
+        if (status != QUICKJS_SANDBOX_OK) {
+            *out_string = NULL;
+            *out_size = 0u;
+        }
+        return status;
+    }
+#endif
+}
+
 void quickjs_sandbox_runtime_destroy(
     quickjs_sandbox_runtime *runtime) {
     if (runtime == NULL) return;
