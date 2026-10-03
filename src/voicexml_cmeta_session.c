@@ -11800,25 +11800,34 @@ static vxml_status prompt_foreach_snapshot_collection(
     vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_prompt_foreach_row *foreach_row,
+    size_t arena_offset,
+    unsigned char **out_storage,
     size_t *out_count,
-    size_t *out_stride) {
+    size_t *out_stride,
+    size_t *out_next_offset) {
     const vxml_cmeta_location_row *location;
     const cmeta_data_desc *collection = NULL;
     const cmeta_data_desc *static_element;
     const void *object = NULL;
     prompt_foreach_snapshot_context snapshot = {0};
     cmeta_status meta_status;
+    size_t aligned_offset;
     size_t stride;
+    size_t used_bytes;
     vxml_status status;
+    if (out_storage != NULL) *out_storage = NULL;
     if (out_count != NULL) *out_count = 0u;
     if (out_stride != NULL) *out_stride = 0u;
+    if (out_next_offset != NULL) *out_next_offset = arena_offset;
     if (profile == NULL || program == NULL || foreach_row == NULL ||
-        out_count == NULL || out_stride == NULL ||
+        out_storage == NULL || out_count == NULL ||
+        out_stride == NULL || out_next_offset == NULL ||
         foreach_row->collection_location >= program->location_count ||
         program->locations == NULL ||
         foreach_row->element == NULL ||
         foreach_row->element->storage_type == NULL ||
-        profile->prompt_foreach_snapshot == NULL)
+        profile->prompt_foreach_snapshot == NULL ||
+        arena_offset > profile->prompt_foreach_snapshot_capacity)
         return VXML_INVALID_STRUCTURE;
     location =
         &program->locations[foreach_row->collection_location];
@@ -11834,16 +11843,29 @@ static vxml_status prompt_foreach_snapshot_collection(
         return VXML_INVALID_STRUCTURE;
     if (!valid_alignment(foreach_row->element->storage_type->align) ||
         foreach_row->element->storage_type->size >
+            SIZE_MAX - (foreach_row->element->storage_type->align - 1u) ||
+        arena_offset >
             SIZE_MAX - (foreach_row->element->storage_type->align - 1u))
         return VXML_INVALID_STRUCTURE;
+    aligned_offset =
+        (arena_offset + foreach_row->element->storage_type->align - 1u) &
+        ~(foreach_row->element->storage_type->align - 1u);
+    if (aligned_offset >
+        profile->prompt_foreach_snapshot_capacity)
+        return VXML_LIMIT_EXCEEDED;
     stride =
         (foreach_row->element->storage_type->size +
          foreach_row->element->storage_type->align - 1u) &
         ~(foreach_row->element->storage_type->align - 1u);
-    if (stride == 0u || stride > profile->prompt_foreach_snapshot_capacity)
+    if (stride == 0u ||
+        stride >
+            profile->prompt_foreach_snapshot_capacity -
+                aligned_offset)
         return VXML_LIMIT_EXCEEDED;
-    snapshot.storage = profile->prompt_foreach_snapshot;
-    snapshot.capacity = profile->prompt_foreach_snapshot_capacity;
+    snapshot.storage =
+        profile->prompt_foreach_snapshot + aligned_offset;
+    snapshot.capacity =
+        profile->prompt_foreach_snapshot_capacity - aligned_offset;
     snapshot.stride = stride;
     snapshot.max_items = program->max_prompt_foreach_items;
     snapshot.element = foreach_row->element;
@@ -11858,8 +11880,19 @@ static vxml_status prompt_foreach_snapshot_collection(
         return status != VXML_OK
             ? status : prompt_foreach_meta_status(meta_status);
     }
+    if (!checked_multiply(snapshot.count, stride, &used_bytes) ||
+        aligned_offset >
+            profile->prompt_foreach_snapshot_capacity - used_bytes) {
+        status = prompt_foreach_snapshot_clear(
+            foreach_row->element,
+            snapshot.storage, snapshot.count, snapshot.stride);
+        return status != VXML_OK
+            ? status : VXML_LIMIT_EXCEEDED;
+    }
+    *out_storage = snapshot.storage;
     *out_count = snapshot.count;
     *out_stride = stride;
+    *out_next_offset = aligned_offset + used_bytes;
     return VXML_OK;
 }
 
