@@ -805,7 +805,7 @@ static bool quickjs_cmeta_default_export_collection(
     const cmeta_data_desc *element;
     quickjs_cmeta_aligned_storage scratch = {0};
     cmeta_collector collector = {0};
-    JSValue length_value;
+    int64_t length_value = 0;
     uint32_t length = 0u;
     uint32_t index;
     bool element_live = false;
@@ -828,18 +828,16 @@ static bool quickjs_cmeta_default_export_collection(
         !quickjs_cmeta_aligned_storage_init(
             &scratch, element->storage_type))
         goto cleanup;
-    length_value = JS_GetPropertyStr(
-        bridge->context, value, "length");
-    if (JS_IsException(length_value) ||
-        JS_ToUint32(
-            bridge->context, &length, length_value) != 0) {
-        if (!JS_IsException(length_value))
-            JS_FreeValue(bridge->context, length_value);
+    if (JS_GetLength(
+            bridge->context, value,
+            &length_value) != 0 ||
+        length_value < 0 ||
+        (uint64_t)length_value > UINT32_MAX ||
+        (uint64_t)length_value >
+            bridge->limits.max_array_items)
         goto cleanup;
-    }
-    JS_FreeValue(bridge->context, length_value);
-    if (length > bridge->limits.max_array_items ||
-        cmeta_collector_begin(&collector) != CMETA_OK)
+    length = (uint32_t)length_value;
+    if (cmeta_collector_begin(&collector) != CMETA_OK)
         goto cleanup;
     begun = true;
     for (index = 0u; index < length; ++index) {
