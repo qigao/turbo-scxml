@@ -104,13 +104,11 @@ quickjs_sandbox_status quickjs_sandbox_exception(
 #else
     JSContext *context;
     JSValue exception;
-    const char *message;
     quickjs_sandbox_status status;
     if (runtime == NULL || runtime->context == NULL)
         return QUICKJS_SANDBOX_INVALID_ARGUMENT;
     context = (JSContext *)runtime->context;
     exception = JS_GetException(context);
-    message = JS_ToCString(context, exception);
     status = runtime->interrupted
         ? QUICKJS_SANDBOX_LIMIT_EXCEEDED
         : QUICKJS_SANDBOX_EXCEPTION;
@@ -118,8 +116,7 @@ quickjs_sandbox_status quickjs_sandbox_exception(
         diagnostic, diagnostic_capacity,
         runtime->interrupted
             ? "QuickJS evaluation deadline exceeded"
-            : (message != NULL ? message : "QuickJS exception"));
-    if (message != NULL) JS_FreeCString(context, message);
+            : "QuickJS exception");
     JS_FreeValue(context, exception);
     return status;
 #endif
