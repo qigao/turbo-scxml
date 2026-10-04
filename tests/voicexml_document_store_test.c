@@ -155,6 +155,8 @@ typedef struct fetch_audio_probe {
     uint64_t delay_us;
     bool has_minimum;
     uint64_t minimum_us;
+    bool force_ticket;
+    bool suppress_started_ticket;
 } fetch_audio_probe;
 
 static void fetch_audio_finish(void *user) {
@@ -188,7 +190,9 @@ static vxml_fetch_audio_begin_result fetch_audio_begin(
     probe->delay_us = request->delay_us;
     probe->has_minimum = request->has_minimum;
     probe->minimum_us = request->minimum_us;
-    if (probe->result == VXML_FETCH_AUDIO_STARTED)
+    if ((probe->result == VXML_FETCH_AUDIO_STARTED &&
+         !probe->suppress_started_ticket) ||
+        probe->force_ticket)
         *out_ticket = (vxml_fetch_audio_ticket_v1){
             .finish = fetch_audio_finish,
             .user = probe};
@@ -869,6 +873,70 @@ spec("VoiceXML bounded document store") {
         check_equal(result, VXML_FETCH_AUDIO_SKIPPED);
         check_null(ticket.finish);
         check_null(ticket.user);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("settles malformed fetchaudio provider tickets and fails closed") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        fetch_audio_probe audio = {
+            .document = &document,
+            .result = VXML_FETCH_AUDIO_SKIPPED,
+            .force_ticket = true};
+        vxml_document_store_config_v1 config =
+            store_config(&document, 1u, 4096u);
+        vxml_document_store store = {0};
+        vxml_fetch_audio_request_v1 request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_fetch_audio_request_v1),
+            .uri = "https://voice.example/media/wait.wav",
+            .uri_size =
+                sizeof("https://voice.example/media/wait.wav") - 1u};
+        vxml_fetch_audio_begin_result result =
+            VXML_FETCH_AUDIO_STARTED;
+        vxml_fetch_audio_ticket_v1 ticket = {0};
+
+        config.fetch_audio = &fetch_audio_adapter;
+        config.fetch_audio_user = &audio;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+
+        check_equal(
+            vxml_document_store_fetch_audio_begin(
+                &store, &request, &result, &ticket),
+            VXML_DOCUMENT_STORE_INVALID_ARGUMENT);
+        check_equal(audio.begin_calls, (size_t)1u);
+        check_equal(audio.finish_calls, (size_t)1u);
+        check_equal(result, VXML_FETCH_AUDIO_SKIPPED);
+        check_null(ticket.finish);
+
+        audio.result = (vxml_fetch_audio_begin_result)99;
+        result = VXML_FETCH_AUDIO_SKIPPED;
+        check_equal(
+            vxml_document_store_fetch_audio_begin(
+                &store, &request, &result, &ticket),
+            VXML_DOCUMENT_STORE_INVALID_ARGUMENT);
+        check_equal(audio.begin_calls, (size_t)2u);
+        check_equal(audio.finish_calls, (size_t)2u);
+        check_null(ticket.finish);
+
+        audio.result = VXML_FETCH_AUDIO_STARTED;
+        audio.force_ticket = false;
+        audio.suppress_started_ticket = true;
+        result = VXML_FETCH_AUDIO_SKIPPED;
+        check_equal(
+            vxml_document_store_fetch_audio_begin(
+                &store, &request, &result, &ticket),
+            VXML_DOCUMENT_STORE_INVALID_ARGUMENT);
+        check_equal(audio.begin_calls, (size_t)3u);
+        check_equal(audio.finish_calls, (size_t)2u);
+        check_null(ticket.finish);
+
         check_equal(
             vxml_document_store_destroy(&store),
             VXML_DOCUMENT_STORE_OK);
