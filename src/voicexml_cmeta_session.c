@@ -1972,7 +1972,7 @@ static vxml_status publish_pending_submit(
     impl->submit_field_count =
         profile->pending_submit_field_count;
     profile->submit_requested = false;
-    session->pending_submit_uri = NULL;
+    profile->pending_submit_uri = NULL;
     profile->pending_submit_uri_size = 0u;
     profile->pending_submit_field_count = 0u;
     impl->state = VXML_SESSION_SUBMITTING;
