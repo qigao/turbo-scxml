@@ -50,7 +50,7 @@ int main(void) {
     const int result = voicexml_fuzz_run(
         VOICEXML_FUZZ_CORPUS_DIR,
         seeds, sizeof(seeds) / sizeof(seeds[0]),
-        96u, 4096u, run_case, NULL);
+        32u, 4096u, run_case, NULL);
     if (result != 0)
         fprintf(stderr, "VoiceXML base fuzz smoke failed\n");
     return result;
