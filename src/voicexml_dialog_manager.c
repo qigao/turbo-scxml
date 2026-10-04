@@ -1080,6 +1080,7 @@ static vxml_dialog_manager_status follow_one_submit(
     store_status = vxml_document_store_compile_source(
         impl->document_store,
         response.data, response.size,
+        &impl->voice_limits,
         &next_program, &diagnostic);
     (void)vxml_submit_resource_close(
         &impl->submit, impl->submit_user, &response);
