@@ -1,0 +1,9 @@
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1" datamodel="cmeta">
+  <form>
+    <field name="value">
+      <prompt>Hello <mark name="m"/></prompt>
+      <grammar type="application/srgs+xml" src="value.grxml"/>
+      <filled><assign name="flag" expr="true"/></filled>
+    </field>
+  </form>
+</vxml>
