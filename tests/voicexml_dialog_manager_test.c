@@ -659,7 +659,7 @@ typedef struct submit_probe {
     bool saw_borrowed;
     char uri[256];
     char content_type[128];
-    char body[256];
+    char body[4096];
 } submit_probe;
 
 static vxml_submit_resource_status submit_execute(
