@@ -1,0 +1,7 @@
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1" datamodel="cmeta">
+  <data name="value" src="state.json"/>
+  <form><block>
+    <data src="more.json" method="post" namelist="value flag"/>
+    <submit next="result.vxml" method="post" namelist="value flag" enctype="application/x-www-form-urlencoded"/>
+  </block></form>
+</vxml>
