@@ -95,6 +95,9 @@ static bool submit_request_timeout(
             timeout_tail))
         return false;
     if (request->struct_size >= timeout_tail) {
+        if (!request->has_timeout &&
+            request->timeout_us != UINT64_C(0))
+            return false;
         *out_has_timeout = request->has_timeout;
         *out_timeout_us = request->timeout_us;
     }
@@ -122,6 +125,9 @@ static bool multipart_request_timeout(
          request->struct_size < timeout_tail))
         return false;
     if (request->struct_size >= timeout_tail) {
+        if (!request->has_timeout &&
+            request->timeout_us != UINT64_C(0))
+            return false;
         *out_has_timeout = request->has_timeout;
         *out_timeout_us = request->timeout_us;
     }
