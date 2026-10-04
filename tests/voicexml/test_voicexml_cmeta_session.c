@@ -2273,6 +2273,8 @@ spec("VoiceXML CMeta session execution") {
         static const char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
             "datamodel='cmeta'><form>"
+            "<property name='fetchaudiodelay' value='100ms'/>"
+            "<property name='fetchaudiominimum' value='200ms'/>"
             "<record name='memo' dtmfterm='false' type='audio/wav'>"
             "<filled><submit next='result.vxml' method='post' "
             "enctype='multipart/form-data' "
@@ -2369,6 +2371,12 @@ spec("VoiceXML CMeta session execution") {
             memcmp(
                 submit.fetchaudio_uri, "wait.wav",
                 submit.fetchaudio_uri_size), 0);
+        check_true(submit.has_fetchaudio_delay);
+        check_equal(
+            submit.fetchaudio_delay_us, UINT64_C(100000));
+        check_true(submit.has_fetchaudio_minimum);
+        check_equal(
+            submit.fetchaudio_minimum_us, UINT64_C(200000));
         check_equal(submit.field_count, (size_t)2u);
         check_equal(submit.recording_count, (size_t)1u);
         check_equal(submit.part_count, (size_t)3u);
