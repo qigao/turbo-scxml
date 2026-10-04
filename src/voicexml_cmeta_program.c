@@ -11542,7 +11542,7 @@ static vxml_status cmeta_lower_simple_action(
                     &action->submit_recording_count);
                 if (status != VXML_OK) return status;
                 action->submit_part_count =
-                    action->location_count;
+                    multipart ? action->location_count : 0u;
             } else {
                 action->first_location =
                     VXML_CMETA_NO_INDEX;
