@@ -3288,6 +3288,10 @@ spec("VoiceXML CMeta session execution") {
         check_equal(probe.release_calls, (size_t)0u);
 
         check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_try_complete(
+                &session, &completion),
+            VXML_CMETA_RECORD_INGRESS_CLOSED);
         check_equal(probe.release_calls, (size_t)1u);
         check_equal(probe.cancel_calls, (size_t)0u);
         check_equal(probe.quiesce_calls, (size_t)1u);
@@ -16852,6 +16856,11 @@ spec("VoiceXML CMeta session execution") {
                 "busy", sizeof("busy") - 1u),
             0);
 
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(
+            vxml_session_cmeta_transfer_try_complete(
+                &session, &completion),
+            VXML_CMETA_TRANSFER_INGRESS_CLOSED);
         vxml_session_destroy(&session);
         check_equal(probe.cancel_calls, (size_t)0u);
         check_equal(probe.quiesce_calls, (size_t)1u);
