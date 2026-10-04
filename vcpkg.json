@@ -2,8 +2,6 @@
   "name": "turboscxml",
   "version-semver": "0.1.0",
   "dependencies": [
-    "c-ares",
-    "llhttp",
     "boringssl"
   ],
   "features": {
