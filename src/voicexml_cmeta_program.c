@@ -5501,6 +5501,15 @@ static bool cmeta_allocate_rows(
                 options->max_data_request_value_bytes;
         }
     }
+    if (measurement->submit_count != 0u &&
+        cmeta_submit_options_valid(options)) {
+        profile->max_submit_fields =
+            options->max_submit_fields;
+        profile->max_submit_value_bytes =
+            options->max_submit_value_bytes;
+        profile->max_submit_uri_bytes =
+            options->max_submit_uri_bytes;
+    }
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
             options->semantic_data_count * sizeof(*profile->semantic_data));
@@ -10408,6 +10417,51 @@ done:
     return status;
 }
 
+static vxml_status cmeta_validate_submit_locations(
+    cmeta_program_builder *builder,
+    size_t first, size_t count,
+    salts_xml_location location) {
+    size_t index;
+    if (builder == NULL ||
+        count > builder->options->max_submit_fields ||
+        !range_valid(
+            first, count,
+            builder->profile->location_count) ||
+        (count != 0u &&
+         builder->profile->locations == NULL))
+        return cmeta_program_fail(
+            builder != NULL ? builder->diagnostic : NULL,
+            count > (builder != NULL
+                ? builder->options->max_submit_fields : 0u)
+                ? VXML_LIMIT_EXCEEDED
+                : VXML_INVALID_STRUCTURE,
+            location,
+            "VoiceXML submit namelist range is invalid");
+    for (index = 0u; index < count; ++index) {
+        const vxml_cmeta_location_row *row =
+            &builder->profile->locations[first + index];
+        size_t prior;
+        if (row->name == NULL || row->name_size == 0u)
+            return cmeta_program_fail(
+                builder->diagnostic,
+                VXML_INVALID_STRUCTURE, location,
+                "VoiceXML submit namelist location is invalid");
+        for (prior = 0u; prior < index; ++prior) {
+            const vxml_cmeta_location_row *previous =
+                &builder->profile->locations[first + prior];
+            if (previous->name_size == row->name_size &&
+                memcmp(
+                    previous->name, row->name,
+                    row->name_size) == 0)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE, location,
+                    "VoiceXML submit namelist contains a duplicate name");
+        }
+    }
+    return VXML_OK;
+}
+
 static vxml_status cmeta_lower_executable(
     cmeta_program_builder *builder, salts_xml_node node,
     size_t execution_scope,
@@ -10941,6 +10995,86 @@ static vxml_status cmeta_lower_simple_action(
                         VXML_INVALID_STRUCTURE,
                         salts_xml_attribute_location(fetchaudio),
                         "VoiceXML goto fetchaudio disappeared between compiler passes");
+            }
+    } else if (cmeta_node_named(node, "submit")) {
+            const salts_xml_attribute next =
+                cmeta_attribute(node, "next");
+            const salts_xml_attribute method =
+                cmeta_attribute(node, "method");
+            const salts_xml_attribute namelist =
+                cmeta_attribute(node, "namelist");
+            const salts_xml_attribute enctype =
+                cmeta_attribute(node, "enctype");
+            action->kind = VXML_CMETA_ACTION_SUBMIT;
+            action->submit_method = VXML_SUBMIT_METHOD_GET;
+            action->submit_enctype =
+                VXML_SUBMIT_ENCTYPE_URLENCODED;
+            if (!cmeta_submit_options_valid(
+                    builder->options) ||
+                next.impl == NULL)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_CONTRACT,
+                    salts_xml_node_location(node),
+                    "VoiceXML typed submit bounds/target changed between compiler passes");
+            status = cmeta_retain_decoded_view(
+                builder,
+                salts_xml_attribute_value(next),
+                salts_xml_attribute_location(next),
+                &action->navigation_uri,
+                &action->navigation_uri_size);
+            if (status != VXML_OK) return status;
+            if (action->navigation_uri_size == 0u ||
+                action->navigation_uri_size >
+                    builder->options->max_submit_uri_bytes)
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    action->navigation_uri_size >
+                            builder->options->max_submit_uri_bytes
+                        ? VXML_LIMIT_EXCEEDED
+                        : VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(next),
+                    "VoiceXML submit next changed between compiler passes");
+            if (method.impl != NULL) {
+                if (cmeta_decoded_equal(
+                        salts_xml_attribute_value(method),
+                        "post"))
+                    action->submit_method =
+                        VXML_SUBMIT_METHOD_POST;
+                else if (!cmeta_decoded_equal(
+                             salts_xml_attribute_value(method),
+                             "get"))
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(method),
+                        "VoiceXML submit method changed between compiler passes");
+            }
+            if (enctype.impl != NULL) {
+                if (action->submit_method !=
+                        VXML_SUBMIT_METHOD_POST ||
+                    !cmeta_decoded_equal(
+                        salts_xml_attribute_value(enctype),
+                        "application/x-www-form-urlencoded"))
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(enctype),
+                        "VoiceXML submit enctype changed between compiler passes");
+            }
+            if (namelist.impl != NULL) {
+                status = cmeta_lower_namelist(
+                    builder, namelist,
+                    scopes, scope_count,
+                    &action->first_location,
+                    &action->location_count);
+                if (status != VXML_OK) return status;
+                status = cmeta_validate_submit_locations(
+                    builder,
+                    action->first_location,
+                    action->location_count,
+                    salts_xml_attribute_location(namelist));
+                if (status != VXML_OK) return status;
             }
     } else if (cmeta_node_named(node, "exit")) {
             const salts_xml_attribute expression =
