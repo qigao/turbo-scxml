@@ -721,6 +721,62 @@ vxml_document_store_status vxml_document_store_compile_source(
     return VXML_DOCUMENT_STORE_OK;
 }
 
+vxml_document_store_status vxml_document_store_fetch_audio_begin(
+    const vxml_document_store *store,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_begin_result *out_result,
+    vxml_fetch_audio_ticket_v1 *out_ticket) {
+    const vxml_document_store_impl *impl =
+        store != NULL
+            ? (const vxml_document_store_impl *)store->impl : NULL;
+    uri_parts parts;
+    vxml_fetch_audio_ticket_v1 ticket = {0};
+    vxml_fetch_audio_begin_result result;
+
+    if (out_result != NULL)
+        *out_result = VXML_FETCH_AUDIO_SKIPPED;
+    if (out_ticket != NULL)
+        *out_ticket = (vxml_fetch_audio_ticket_v1){0};
+
+    if (impl == NULL || request == NULL ||
+        out_result == NULL || out_ticket == NULL ||
+        request->abi_version != VXML_FETCH_AUDIO_REQUEST_ABI_V1 ||
+        request->struct_size < sizeof(*request) ||
+        request->uri == NULL || request->uri_size == 0u ||
+        request->uri_size > impl->max_uri_bytes ||
+        !uri_bytes_valid(request->uri, request->uri_size) ||
+        !parse_absolute_uri(
+            request->uri, request->uri_size, &parts))
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+
+    if (!impl->fetch_audio_enabled)
+        return VXML_DOCUMENT_STORE_OK;
+
+    result = impl->fetch_audio.begin(
+        impl->fetch_audio_user, request, &ticket);
+    if (result == VXML_FETCH_AUDIO_STARTED) {
+        if (ticket.finish == NULL) {
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        }
+        *out_result = result;
+        *out_ticket = ticket;
+        return VXML_DOCUMENT_STORE_OK;
+    }
+    if (result == VXML_FETCH_AUDIO_SKIPPED) {
+        if (ticket.finish != NULL || ticket.user != NULL) {
+            if (ticket.finish != NULL)
+                ticket.finish(ticket.user);
+            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        }
+        *out_result = result;
+        return VXML_DOCUMENT_STORE_OK;
+    }
+
+    if (ticket.finish != NULL)
+        ticket.finish(ticket.user);
+    return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+}
+
 vxml_document_store_status vxml_document_store_resolve(
     const vxml_document_store *store,
     const char *base_document_uri,
@@ -954,7 +1010,7 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
         }
     }
 
-    if (has_fetchaudio && impl->fetch_audio_enabled) {
+    if (has_fetchaudio) {
         const vxml_fetch_audio_request_v1 request = {
             .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
             .struct_size = sizeof(vxml_fetch_audio_request_v1),
@@ -964,40 +1020,21 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
             .delay_us = policy->fetchaudio_delay_us,
             .has_minimum = policy->has_fetchaudio_minimum,
             .minimum_us = policy->fetchaudio_minimum_us};
-        const vxml_fetch_audio_begin_result begin_result =
-            impl->fetch_audio.begin(
-                impl->fetch_audio_user,
-                &request,
-                &fetch_audio_ticket);
-        if (begin_result == VXML_FETCH_AUDIO_STARTED) {
-            if (fetch_audio_ticket.finish == NULL) {
-                free(canonical);
-                error_set(
-                    out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
-                    VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
-                return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
-            }
-            fetch_audio_started = true;
-        } else if (begin_result == VXML_FETCH_AUDIO_SKIPPED) {
-            if (fetch_audio_ticket.finish != NULL ||
-                fetch_audio_ticket.user != NULL) {
-                if (fetch_audio_ticket.finish != NULL)
-                    fetch_audio_ticket.finish(fetch_audio_ticket.user);
-                free(canonical);
-                error_set(
-                    out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
-                    VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
-                return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
-            }
-        } else {
-            if (fetch_audio_ticket.finish != NULL)
-                fetch_audio_ticket.finish(fetch_audio_ticket.user);
+        vxml_fetch_audio_begin_result begin_result =
+            VXML_FETCH_AUDIO_SKIPPED;
+        const vxml_document_store_status audio_status =
+            vxml_document_store_fetch_audio_begin(
+                store, &request,
+                &begin_result, &fetch_audio_ticket);
+        if (audio_status != VXML_DOCUMENT_STORE_OK) {
             free(canonical);
             error_set(
-                out_error, VXML_DOCUMENT_STORE_INVALID_ARGUMENT,
+                out_error, audio_status,
                 VXML_DIALOG_MANAGER_INVALID_ARGUMENT, VXML_OK);
-            return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+            return audio_status;
         }
+        fetch_audio_started =
+            begin_result == VXML_FETCH_AUDIO_STARTED;
     }
 
     if (policy != NULL && policy->has_timeout) {
