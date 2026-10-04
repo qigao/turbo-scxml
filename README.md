@@ -264,6 +264,8 @@ TurboSCXML::VoiceXML
 
 The current VoiceXML core is an intentionally bounded, non-media profile. It does not claim full VoiceXML 2.0/2.1 conformance.
 
+Current profile support and executable witnesses are tracked in [VoiceXML support and conformance evidence matrix](docs/specs/voicexml-support-matrix.md).
+
 Its accepted document subset is explicit and fail-fast. Programs and sessions have single-owner handles, no implicit thread creation, and deterministic lifecycle transitions.
 
 A successful compile owns an immutable representation independent of the source buffer. A session borrows its program, so the program must outlive the session.
