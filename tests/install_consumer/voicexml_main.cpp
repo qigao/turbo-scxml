@@ -14,6 +14,9 @@ static_assert(
     std::is_standard_layout<vxml_submit_target_v2>::value,
     "submit target V2 must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_submit_target_v3>::value,
+    "submit target V3 must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_submit_field_v1>::value,
     "submit field view must remain C-compatible");
 static_assert(
@@ -40,24 +43,31 @@ int main() {
     vxml_navigation_request_v1 navigation{};
     vxml_submit_target_v1 submit{};
     vxml_submit_target_v2 submit_v2{};
+    vxml_submit_target_v3 submit_v3{};
     vxml_cmeta_data_request_v2 data_v2 =
         VXML_CMETA_DATA_REQUEST_V2_INIT;
     vxml_cmeta_data_request_v3 data_v3 =
         VXML_CMETA_DATA_REQUEST_V3_INIT;
     auto submit_fn = &vxml_session_submit;
     auto submit_v2_fn = &vxml_session_submit_v2;
+    auto submit_v3_fn = &vxml_session_submit_v3;
     auto raise_event = &vxml_session_raise_event;
     int result = 1;
 
     if (raise_event == nullptr || submit_fn == nullptr ||
-        submit_v2_fn == nullptr ||
+        submit_v2_fn == nullptr || submit_v3_fn == nullptr ||
         VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
         VXML_SUBMIT_TARGET_ABI_V2 <= VXML_SUBMIT_TARGET_ABI_V1 ||
+        VXML_SUBMIT_TARGET_ABI_V3 <= VXML_SUBMIT_TARGET_ABI_V2 ||
         VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
         submit.abi_version != 0u ||
         submit_v2.abi_version != 0u ||
         submit_v2.fields != nullptr ||
         submit_v2.field_count != 0u ||
+        submit_v3.abi_version != 0u ||
+        submit_v3.has_timeout ||
+        submit_v3.timeout_us != UINT64_C(0) ||
+        submit_v3.fetchaudio_uri != nullptr ||
         data_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
         data_v2.struct_size != sizeof(data_v2) ||
         data_v3.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||
