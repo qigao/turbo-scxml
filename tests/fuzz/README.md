@@ -5,8 +5,10 @@ fuzzing.
 
 ## Targets
 
-- `voicexml_base_fuzz_smoke`: base VoiceXML compile plus one bounded Session
-  initialization/start for successfully compiled mutations.
+- `voicexml_base_fuzz_smoke`: arbitrary mutations exercise base VoiceXML
+  compile plus Session init/destroy publication invariants; runtime `start`
+  is exercised only on fixed known-safe seeds because the literal profile has
+  no execution-step quota.
 - `voicexml_cmeta_fuzz_smoke`: CMeta compile plus one bounded CMeta Session
   initialization/start for successfully compiled mutations.
 
@@ -24,7 +26,10 @@ conformance suite.
 
 The harness asserts compiler publication invariants: success must publish a
 Program and failure must leave the Program empty. Session initialization has
-the same success/handle invariant.
+the same success/handle invariant. Arbitrary literal mutations are never
+allowed to enter unbounded control-flow execution; fixed runtime seeds cover
+literal start, while CMeta mutation runtime remains bounded by its explicit
+128-step quota.
 
 ## Regression workflow
 
