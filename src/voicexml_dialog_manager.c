@@ -921,6 +921,19 @@ static vxml_status start_current_session(
         : vxml_session_start(&row->session);
 }
 
+static bool submit_timeout_provider_capable(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t tail =
+        offsetof(vxml_submit_resource_adapter_v1, capabilities) +
+        sizeof(adapter->capabilities);
+    return adapter != NULL &&
+        adapter->abi_version ==
+            VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= tail &&
+        (adapter->capabilities &
+         VXML_SUBMIT_RESOURCE_CAP_TIMEOUT) != 0u;
+}
+
 static vxml_status submit_failure_voice_status(
     vxml_submit_resource_status status) {
     switch (status) {
@@ -989,6 +1002,12 @@ static vxml_dialog_manager_status follow_one_submit(
             row, VXML_DIALOG_EVENT_ERROR_START,
             voice_status);
     if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_UNSUPPORTED_FEATURE);
+
+    if (submit.has_timeout &&
+        !submit_timeout_provider_capable(&impl->submit))
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_UNSUPPORTED_FEATURE);
