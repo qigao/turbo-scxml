@@ -150,11 +150,15 @@ vxml_document_store_status vxml_document_store_init(
  * This performs no provider I/O, cache insertion, pinning, or URI work.
  * On success out_program owns one independent immutable Program. The caller
  * must destroy it. When no custom compiler was configured, this uses the same
- * literal vxml_compile() + voice_limits contract as cache misses.
+ * literal vxml_compile() contract. fallback_limits is used only when no
+ * custom compiler exists; NULL selects the Store's configured voice_limits.
+ * This lets owners preserve an existing local literal-limit contract without
+ * bypassing a configured custom compiler.
  */
 vxml_document_store_status vxml_document_store_compile_source(
     const vxml_document_store *store,
     const void *source, size_t source_size,
+    const vxml_limits *fallback_limits,
     vxml_program *out_program,
     vxml_diagnostic *diagnostic);
 
