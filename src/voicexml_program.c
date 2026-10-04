@@ -2997,15 +2997,9 @@ vxml_status vxml_compile_with_features(
         &document, (const char *)bytes, size, &active_limits.xml,
         &xml_diagnostic);
     if (xml_status != SALTS_XML_OK) {
-        status = fail(
+        return fail(
             diagnostic, map_xml_status(xml_status), xml_diagnostic.location,
             xml_diagnostic.message);
-        /*
-         * salts_xml_parse() may publish a partially built document on
-         * failure. Always settle it before returning.
-         */
-        salts_xml_document_destroy(&document);
-        return status;
     }
     status = measure_document(
         salts_xml_document_root(&document), &measurement,
