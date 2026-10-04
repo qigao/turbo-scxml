@@ -25,6 +25,8 @@ typedef struct submit_probe {
     vxml_submit_method method;
     bool has_timeout;
     uint64_t timeout_us;
+    size_t wire_struct_size;
+    size_t wire_v2_struct_size;
 } submit_probe;
 
 static vxml_submit_resource_status submit_execute(
@@ -32,9 +34,15 @@ static vxml_submit_resource_status submit_execute(
     const vxml_submit_wire_request_v1 *request,
     vxml_submit_response *out_response) {
     submit_probe *probe = (submit_probe *)user;
+    const size_t historical_prefix =
+        offsetof(vxml_submit_wire_request_v1, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_wire_request_v1, timeout_us) +
+        sizeof(request->timeout_us);
     if (probe == NULL || request == NULL || out_response == NULL ||
         request->abi_version != VXML_SUBMIT_WIRE_REQUEST_ABI_V1 ||
-        request->struct_size < sizeof(*request) ||
+        (request->struct_size != historical_prefix &&
+         request->struct_size < timeout_tail) ||
         request->uri == NULL ||
         request->uri_size >= sizeof(probe->uri) ||
         request->fragment_size >= sizeof(probe->fragment) ||
@@ -63,8 +71,13 @@ static vxml_submit_resource_status submit_execute(
     probe->body[request->body_size] = '\0';
     probe->body_size = request->body_size;
     probe->method = request->method;
-    probe->has_timeout = request->has_timeout;
-    probe->timeout_us = request->timeout_us;
+    probe->wire_struct_size = request->struct_size;
+    probe->has_timeout =
+        request->struct_size >= timeout_tail
+            ? request->has_timeout : false;
+    probe->timeout_us =
+        request->struct_size >= timeout_tail
+            ? request->timeout_us : UINT64_C(0);
 
     if (probe->execute_status != VXML_SUBMIT_RESOURCE_OK) {
         if (probe->publish_on_failure) {
@@ -107,9 +120,16 @@ static vxml_submit_resource_status submit_execute_v2(
     size_t cursor = 0u;
     size_t index;
 
+    const size_t historical_prefix =
+        offsetof(vxml_submit_wire_request_v2, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_wire_request_v2, timeout_us) +
+        sizeof(request->timeout_us);
+
     if (probe == NULL || request == NULL || out_response == NULL ||
         request->abi_version != VXML_SUBMIT_WIRE_REQUEST_ABI_V2 ||
-        request->struct_size < sizeof(*request) ||
+        (request->struct_size != historical_prefix &&
+         request->struct_size < timeout_tail) ||
         request->uri == NULL ||
         request->uri_size >= sizeof(probe->uri) ||
         request->fragment_size >= sizeof(probe->fragment) ||
@@ -135,8 +155,13 @@ static vxml_submit_resource_status submit_execute_v2(
         request->content_type_size);
     probe->content_type[request->content_type_size] = '\0';
     probe->method = request->method;
-    probe->has_timeout = request->has_timeout;
-    probe->timeout_us = request->timeout_us;
+    probe->wire_v2_struct_size = request->struct_size;
+    probe->has_timeout =
+        request->struct_size >= timeout_tail
+            ? request->has_timeout : false;
+    probe->timeout_us =
+        request->struct_size >= timeout_tail
+            ? request->timeout_us : UINT64_C(0);
 
     for (index = 0u; index < request->segment_count; ++index) {
         const vxml_submit_body_segment_v1 *segment =
@@ -461,6 +486,9 @@ spec("VoiceXML one-attempt submit resource") {
         check_false(probe.has_timeout);
         check_equal(probe.timeout_us, UINT64_C(0));
         check_equal(
+            probe.wire_struct_size,
+            offsetof(vxml_submit_wire_request_v1, has_timeout));
+        check_equal(
             vxml_submit_resource_close(
                 &legacy, &probe, &response),
             VXML_SUBMIT_RESOURCE_OK);
@@ -746,6 +774,9 @@ spec("VoiceXML one-attempt submit resource") {
             VXML_SUBMIT_RESOURCE_OK);
         check_equal(probe.execute_v2_calls, (size_t)1u);
         check_true(probe.saw_borrowed);
+        check_equal(
+            probe.wire_v2_struct_size,
+            offsetof(vxml_submit_wire_request_v2, has_timeout));
         alpha = probe_body_find(
             &probe, alpha_header,
             sizeof(alpha_header) - 1u);
