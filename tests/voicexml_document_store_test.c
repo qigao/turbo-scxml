@@ -278,6 +278,7 @@ spec("VoiceXML bounded document store") {
             vxml_document_store_compile_source(
                 &store,
                 valid_document, sizeof(valid_document) - 1u,
+                NULL,
                 &program, &diagnostic),
             VXML_DOCUMENT_STORE_OK);
         check_equal(compiler.calls, (size_t)1u);
@@ -322,6 +323,7 @@ spec("VoiceXML bounded document store") {
             vxml_document_store_compile_source(
                 &store,
                 valid_document, sizeof(valid_document) - 1u,
+                NULL,
                 &program, &diagnostic),
             VXML_DOCUMENT_STORE_COMPILE_ERROR);
         check_equal(compiler.calls, (size_t)1u);
