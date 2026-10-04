@@ -1856,6 +1856,17 @@ static void transaction_commit(
     const vxml_cmeta_program_data *program) {
     vxml_cmeta_root_storage root_swap = session->committed_root;
     unsigned char *declared_swap = session->committed_declared;
+    const char *pending_submit_uri = session->pending_submit_uri;
+    const size_t pending_submit_uri_size =
+        session->pending_submit_uri_size;
+    const vxml_submit_method pending_submit_method =
+        session->pending_submit_method;
+    const vxml_submit_enctype pending_submit_enctype =
+        session->pending_submit_enctype;
+    const size_t pending_submit_field_count =
+        session->pending_submit_field_count;
+    const bool submit_requested =
+        session->submit_requested;
     size_t index;
     session->committed_root = session->staged_root;
     session->staged_root = root_swap;
@@ -1869,6 +1880,19 @@ static void transaction_commit(
     apply_retry_resets(session, program);
     record_results_reconcile(session, program);
     transaction_reset(session, program);
+    if (submit_requested) {
+        session->pending_submit_uri =
+            pending_submit_uri;
+        session->pending_submit_uri_size =
+            pending_submit_uri_size;
+        session->pending_submit_method =
+            pending_submit_method;
+        session->pending_submit_enctype =
+            pending_submit_enctype;
+        session->pending_submit_field_count =
+            pending_submit_field_count;
+        session->submit_requested = true;
+    }
 }
 
 static vxml_status session_fail(
@@ -1953,6 +1977,21 @@ static vxml_status publish_pending_submit(
     profile->pending_submit_field_count = 0u;
     impl->state = VXML_SESSION_SUBMITTING;
     impl->error = VXML_OK;
+    return VXML_OK;
+}
+
+static vxml_status publish_pending_control(
+    vxml_session_impl *impl,
+    vxml_cmeta_session_data *profile) {
+    if (impl == NULL || profile == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (profile->submit_requested &&
+        profile->pending_navigation_uri != NULL)
+        return VXML_INVALID_STRUCTURE;
+    if (profile->submit_requested)
+        return publish_pending_submit(impl, profile);
+    if (profile->pending_navigation_uri != NULL)
+        return publish_pending_navigation(impl, profile);
     return VXML_OK;
 }
 
@@ -3595,13 +3634,17 @@ static vxml_status execute_submit(
         session->submit_requested ||
         action->location_count >
             program->max_submit_fields ||
-        !range_valid(
-            action->first_location,
-            action->location_count,
-            program->location_count) ||
+        action->location_count >
+            session->submit_field_capacity ||
         (action->location_count != 0u &&
-         (program->locations == NULL ||
-          session->submit_fields == NULL)))
+         (!range_valid(
+              action->first_location,
+              action->location_count,
+              program->location_count) ||
+          program->locations == NULL ||
+          session->submit_fields == NULL)) ||
+        session->submit_values == NULL ||
+        session->submit_value_capacity == 0u)
         return VXML_INVALID_STRUCTURE;
 
     if (action->location_count != 0u)
@@ -6109,15 +6152,9 @@ static vxml_status cmeta_session_start_profile_at_entry(
             }
         }
         transaction_commit(profile, program);
-        if (profile->submit_requested) {
-            status = publish_pending_submit(
-                session, profile);
-            exit_snapshot_destroy(&profile->pending_exit);
-            return status != VXML_OK
-                ? session_fail(session, status) : VXML_OK;
-        }
-        if (profile->pending_navigation_uri != NULL) {
-            status = publish_pending_navigation(
+        if (profile->submit_requested ||
+            profile->pending_navigation_uri != NULL) {
+            status = publish_pending_control(
                 session, profile);
             exit_snapshot_destroy(&profile->pending_exit);
             return status != VXML_OK
@@ -10525,8 +10562,9 @@ vxml_status vxml_session_cmeta_collect_run_ready(
             VXML_CMETA_COLLECT_MAILBOX_DISARMED,
             memory_order_release);
 
-        if (profile->pending_navigation_uri != NULL) {
-            status = publish_pending_navigation(
+        if (profile->submit_requested ||
+            profile->pending_navigation_uri != NULL) {
+            status = publish_pending_control(
                 impl, profile);
             if (status != VXML_OK)
                 return session_fail(impl, status);
@@ -10816,8 +10854,9 @@ static vxml_status execute_event_handler(
         return status;
     }
     transaction_commit(profile, program);
-    if (profile->pending_navigation_uri != NULL) {
-        status = publish_pending_navigation(
+    if (profile->submit_requested ||
+        profile->pending_navigation_uri != NULL) {
+        status = publish_pending_control(
             impl, profile);
         profile->handler_reprompt_requested = false;
         exit_snapshot_destroy(&profile->pending_exit);
@@ -11709,8 +11748,9 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
      */
     if (impl->state != VXML_SESSION_RUNNING)
         return VXML_OK;
-    if (profile->pending_navigation_uri != NULL) {
-        status = publish_pending_navigation(impl, profile);
+    if (profile->submit_requested ||
+        profile->pending_navigation_uri != NULL) {
+        status = publish_pending_control(impl, profile);
         if (status != VXML_OK)
             return session_fail(impl, status);
         return VXML_OK;
@@ -11870,8 +11910,9 @@ vxml_status vxml_session_cmeta_subdialog_run_ready(
         subdialog_mailbox_payload_reset(mailbox);
         profile->active_subdialog = VXML_CMETA_NO_INDEX;
 
-        if (profile->pending_navigation_uri != NULL) {
-            status = publish_pending_navigation(
+        if (profile->submit_requested ||
+            profile->pending_navigation_uri != NULL) {
+            status = publish_pending_control(
                 impl, profile);
             if (status != VXML_OK)
                 return session_fail(impl, status);
