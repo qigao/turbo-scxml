@@ -20,27 +20,36 @@ set(forbidden_names
   "perror")
 
 foreach(path IN LISTS voice_sources)
-  file(READ "${path}" source)
-  foreach(name IN LISTS forbidden_names)
-    # Match a standalone C identifier call, but not snprintf/vsnprintf.
+  file(STRINGS "${path}" source_lines)
+  foreach(line IN LISTS source_lines)
+    foreach(name IN LISTS forbidden_names)
+      # Match a standalone C identifier call; snprintf/vsnprintf do not match.
+      string(REGEX MATCH
+        "(^|[^A-Za-z0-9_])${name}[ \t]*\\("
+        forbidden_match
+        "${line}")
+      if(forbidden_match)
+        file(RELATIVE_PATH relative "${REPO_ROOT}" "${path}")
+        message(FATAL_ERROR
+          "VoiceXML direct output sink is forbidden: ${relative}: ${name}()")
+      endif()
+    endforeach()
+
     string(REGEX MATCH
-      "(^|[^A-Za-z0-9_])${name}[ \t\r\n]*\\("
-      forbidden_match
-      "${source}")
-    if(forbidden_match)
+      "(^|[^A-Za-z0-9_])SALTS_LOG[A-Za-z0-9_]*"
+      salts_macro
+      "${line}")
+    string(REGEX MATCH
+      "(^|[^A-Za-z0-9_])salts_log[A-Za-z0-9_]*"
+      salts_fn
+      "${line}")
+    if(salts_macro OR salts_fn)
       file(RELATIVE_PATH relative "${REPO_ROOT}" "${path}")
       message(FATAL_ERROR
-        "VoiceXML direct output sink is forbidden: ${relative}: ${name}()")
+        "VoiceXML default SALTS logging is forbidden: ${relative}")
     endif()
   endforeach()
-
-  string(REGEX MATCH "(^|[^A-Za-z0-9_])SALTS_LOG[A-Za-z0-9_]*" salts_macro "${source}")
-  string(REGEX MATCH "(^|[^A-Za-z0-9_])salts_log[A-Za-z0-9_]*" salts_fn "${source}")
-  if(salts_macro OR salts_fn)
-    file(RELATIVE_PATH relative "${REPO_ROOT}" "${path}")
-    message(FATAL_ERROR
-      "VoiceXML default SALTS logging is forbidden: ${relative}")
-  endif()
 endforeach()
 
-message(STATUS "Validated no-output security contract across ${source_count} VoiceXML source files")
+message(STATUS
+  "Validated no-output security contract across ${source_count} VoiceXML source files")
