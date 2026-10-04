@@ -1,0 +1,6 @@
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1" datamodel="cmeta">
+  <form>
+    <record name="voice" beep="true" dtmfterm="true" type="audio/wav"/>
+    <transfer name="call" dest="tel:+15551212" bridge="true" connecttimeout="3s"/>
+  </form>
+</vxml>
