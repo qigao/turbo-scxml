@@ -58,3 +58,12 @@ The first example is the malformed XML lexer error-token leak found by this
 smoke gate in Native SDK CI run `37181219319`. The ownership bug belonged to
 SaltsUtils XML parser/cxml and was fixed/regressed there before TurboSCXML
 qualification resumed.
+
+
+The second minimized regression came from PR #285 fuzz smoke: a malformed
+VoiceXML mutation built a partial XML tree before parse failure. The compiler
+returned immediately without settling that partial `salts_xml_document`,
+which LSan reported as 17 leaked parser allocations. Base and CMeta compiler
+parse-failure paths now always destroy the document, and
+`partial-tree-unclosed.vxml` keeps that ownership contract in both seed
+corpora.
