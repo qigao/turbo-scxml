@@ -424,6 +424,18 @@ spec("VoiceXML session") {
                 check_equal(
                     submit_v3.fetchaudio_delay_us,
                     UINT64_C(100000));
+
+                impl->submit_has_timeout = false;
+                check_equal(
+                    vxml_session_submit_v3(&session, &submit_v3),
+                    VXML_INVALID_CONTRACT);
+                impl->submit_has_timeout = true;
+
+                impl->submit_has_fetchaudio_delay = false;
+                check_equal(
+                    vxml_session_submit_v3(&session, &submit_v3),
+                    VXML_INVALID_CONTRACT);
+                impl->submit_has_fetchaudio_delay = true;
             }
             check_equal(
                 vxml_session_navigation(
