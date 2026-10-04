@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 #define VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 1u
+#define VXML_SUBMIT_RESOURCE_CAP_TIMEOUT (UINT64_C(1) << 0)
 #define VXML_SUBMIT_REQUEST_ABI_V1 1u
 #define VXML_SUBMIT_WIRE_REQUEST_ABI_V1 1u
 #define VXML_SUBMIT_WIRE_REQUEST_ABI_V2 2u
@@ -26,7 +27,8 @@ typedef enum vxml_submit_resource_status {
     VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING,
     VXML_SUBMIT_RESOURCE_PROVIDER_ERROR,
     VXML_SUBMIT_RESOURCE_POSSIBLY_PROCESSED,
-    VXML_SUBMIT_RESOURCE_INVALID_RESPONSE
+    VXML_SUBMIT_RESOURCE_INVALID_RESPONSE,
+    VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY
 } vxml_submit_resource_status;
 
 /**
@@ -50,12 +52,16 @@ typedef struct vxml_submit_request_v1 {
     size_t max_uri_bytes;
     size_t max_body_bytes;
     size_t max_response_bytes;
+
+    /* Optional append-only exact provider deadline. */
+    bool has_timeout;
+    uint64_t timeout_us;
 } vxml_submit_request_v1;
 
 #define VXML_SUBMIT_REQUEST_V1_INIT \
     {VXML_SUBMIT_REQUEST_ABI_V1, sizeof(vxml_submit_request_v1), \
      NULL, 0u, NULL, 0u, VXML_SUBMIT_METHOD_GET, NULL, 0u, \
-     NULL, 0u, 0u, 0u, 0u}
+     NULL, 0u, 0u, 0u, 0u, false, UINT64_C(0)}
 
 /** Callback-borrowed, already resolved/encoded one-attempt request. */
 typedef struct vxml_submit_wire_request_v1 {
@@ -70,6 +76,10 @@ typedef struct vxml_submit_wire_request_v1 {
     size_t content_type_size;
     const void *body;
     size_t body_size;
+
+    /* Present only when the provider advertised timeout capability. */
+    bool has_timeout;
+    uint64_t timeout_us;
 } vxml_submit_wire_request_v1;
 
 /*
@@ -100,6 +110,10 @@ typedef struct vxml_submit_wire_request_v2 {
     const vxml_submit_body_segment_v1 *segments;
     size_t segment_count;
     size_t body_size;
+
+    /* Present only when the provider advertised timeout capability. */
+    bool has_timeout;
+    uint64_t timeout_us;
 } vxml_submit_wire_request_v2;
 
 /** Explicit borrowed recording selection for one multipart file field. */
@@ -165,13 +179,18 @@ typedef struct vxml_submit_multipart_request_v1 {
      */
     const vxml_submit_multipart_part_ref_v1 *parts;
     size_t part_count;
+
+    /* Optional append-only exact provider deadline. */
+    bool has_timeout;
+    uint64_t timeout_us;
 } vxml_submit_multipart_request_v1;
 
 #define VXML_SUBMIT_MULTIPART_REQUEST_V1_INIT \
     {VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1, \
      sizeof(vxml_submit_multipart_request_v1), \
      NULL, 0u, NULL, 0u, NULL, 0u, NULL, 0u, \
-     0u, 0u, 0u, 0u, 0u, 0u, 0u, NULL, 0u}
+     0u, 0u, 0u, 0u, 0u, 0u, 0u, NULL, 0u, \
+     false, UINT64_C(0)}
 
 /** Provider-owned VoiceXML response source retained by lease. */
 typedef struct vxml_submit_response {
@@ -209,6 +228,9 @@ typedef struct vxml_submit_resource_adapter_v1 {
         void *user,
         const vxml_submit_wire_request_v2 *request,
         vxml_submit_response *out_response);
+
+    /* Optional append-only provider capabilities. */
+    uint64_t capabilities;
 } vxml_submit_resource_adapter_v1;
 
 const char *vxml_submit_resource_status_string(
