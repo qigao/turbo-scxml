@@ -16,7 +16,7 @@ conformance suite.
 ## CI bounds
 
 - maximum input: 4096 bytes;
-- iterations: 96 mutations per seed;
+- iterations: 32 mutations per seed;
 - deterministic xorshift mutation schedule;
 - no network, CHTTP, provider, filesystem writes, or background workers;
 - CMeta runtime is bounded by 128 execution steps;
