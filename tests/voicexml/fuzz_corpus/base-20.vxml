@@ -1,0 +1,4 @@
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.0">
+  <form id="main"><block><goto next="#done"/></block></form>
+  <form id="done"><block><exit/></block></form>
+</vxml>
