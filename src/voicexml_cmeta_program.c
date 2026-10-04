@@ -567,6 +567,7 @@ typedef struct cmeta_program_measurement {
     size_t declaration_count;
     size_t initializer_count;
     size_t action_count;
+    size_t submit_count;
     size_t branch_count;
     size_t expression_count;
     size_t location_count;
@@ -739,7 +740,8 @@ static bool cmeta_known_profile_element(salts_xml_node node) {
         cmeta_node_named(node, "else") || cmeta_node_named(node, "exit") ||
         cmeta_node_named(node, "return") ||
         cmeta_node_named(node, "disconnect") ||
-        cmeta_node_named(node, "goto");
+        cmeta_node_named(node, "goto") ||
+        cmeta_node_named(node, "submit");
 }
 
 static bool cmeta_event_options_valid(
@@ -900,6 +902,21 @@ static bool cmeta_dynamic_data_options_valid(
         options->struct_size >= tail_size &&
         options->max_data_namelist_fields != 0u &&
         options->max_data_request_value_bytes != 0u;
+}
+
+static bool cmeta_submit_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_submit_uri_bytes) +
+        sizeof(options->max_submit_uri_bytes);
+    return options != NULL &&
+        options->struct_size >= tail_size &&
+        options->max_submit_fields != 0u &&
+        options->max_submit_value_bytes != 0u &&
+        options->max_submit_uri_bytes != 0u &&
+        options->max_submit_uri_bytes != SIZE_MAX;
 }
 
 static bool range_valid(size_t first, size_t count, size_t total) {
