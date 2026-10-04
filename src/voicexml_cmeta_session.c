@@ -1973,6 +1973,14 @@ static vxml_status publish_pending_submit(
             ? profile->submit_fields : NULL;
     impl->submit_field_count =
         profile->pending_submit_field_count;
+    impl->submit_has_timeout = false;
+    impl->submit_timeout_us = UINT64_C(0);
+    impl->submit_fetchaudio_uri = NULL;
+    impl->submit_fetchaudio_uri_size = 0u;
+    impl->submit_has_fetchaudio_delay = false;
+    impl->submit_fetchaudio_delay_us = UINT64_C(0);
+    impl->submit_has_fetchaudio_minimum = false;
+    impl->submit_fetchaudio_minimum_us = UINT64_C(0);
     profile->submit_requested = false;
     profile->pending_submit_uri = NULL;
     profile->pending_submit_uri_size = 0u;
@@ -6276,6 +6284,14 @@ vxml_status vxml_session_cmeta_start_child(
     impl->submit_enctype = 0;
     impl->submit_fields = NULL;
     impl->submit_field_count = 0u;
+    impl->submit_has_timeout = false;
+    impl->submit_timeout_us = UINT64_C(0);
+    impl->submit_fetchaudio_uri = NULL;
+    impl->submit_fetchaudio_uri_size = 0u;
+    impl->submit_has_fetchaudio_delay = false;
+    impl->submit_fetchaudio_delay_us = UINT64_C(0);
+    impl->submit_has_fetchaudio_minimum = false;
+    impl->submit_fetchaudio_minimum_us = UINT64_C(0);
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
