@@ -1,0 +1,9 @@
+<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1" datamodel="cmeta">
+  <form>
+    <menu>
+      <choice dtmf="1" next="#done">one</choice>
+      <choice dtmf="2" event="help">two</choice>
+    </menu>
+    <block name="done"><exit/></block>
+  </form>
+</vxml>
