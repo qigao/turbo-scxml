@@ -677,6 +677,7 @@ vxml_document_store_status vxml_document_store_init(
 vxml_document_store_status vxml_document_store_compile_source(
     const vxml_document_store *store,
     const void *source, size_t source_size,
+    const vxml_limits *fallback_limits,
     vxml_program *out_program,
     vxml_diagnostic *diagnostic) {
     const vxml_document_store_impl *impl =
@@ -699,7 +700,9 @@ vxml_document_store_status vxml_document_store_compile_source(
     } else {
         voice_status = vxml_compile(
             source, source_size,
-            &impl->voice_limits,
+            fallback_limits != NULL
+                ? fallback_limits
+                : &impl->voice_limits,
             out_program, diagnostic);
     }
     if (voice_status != VXML_OK) {
@@ -1077,7 +1080,7 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
         const vxml_document_store_status compile_status =
             vxml_document_store_compile_source(
                 store, source_copy, source_size,
-                &program, &diagnostic);
+                NULL, &program, &diagnostic);
         if (compile_status != VXML_DOCUMENT_STORE_OK) {
             voice_status =
                 diagnostic.status != VXML_OK
