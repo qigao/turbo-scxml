@@ -3701,12 +3701,186 @@ static vxml_status submit_value_append(
     return VXML_OK;
 }
 
+static bool submit_recording_suffix(
+    const char *path, size_t path_size,
+    const char *suffix, size_t suffix_size,
+    size_t *out_owner_size) {
+    if (out_owner_size != NULL) *out_owner_size = 0u;
+    if (path == NULL || suffix == NULL ||
+        path_size <= suffix_size)
+        return false;
+    if (memcmp(
+            path + path_size - suffix_size,
+            suffix, suffix_size) != 0)
+        return false;
+    if (out_owner_size != NULL)
+        *out_owner_size = path_size - suffix_size;
+    return true;
+}
+
+static vxml_status submit_recording_view(
+    const vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const char *name, size_t name_size,
+    vxml_submit_recording_field_v1 *out) {
+    static const char app_recording[] =
+        "application.lastresult$.recording";
+    static const char field_suffix[] =
+        "$.recording";
+    const vxml_cmeta_form_row *form;
+    size_t offset;
+    size_t owner_size = 0u;
+
+    if (out != NULL)
+        *out = (vxml_submit_recording_field_v1){0};
+    if (session == NULL || program == NULL ||
+        name == NULL || name_size == 0u ||
+        out == NULL ||
+        memchr(name, '\0', name_size) != NULL ||
+        session->active_form == VXML_CMETA_NO_INDEX ||
+        session->active_form >= program->form_count ||
+        program->forms == NULL)
+        return VXML_INVALID_ARGUMENT;
+    form = &program->forms[session->active_form];
+
+    /* Direct <record name="..."> result. */
+    if (!range_valid(
+            form->first_record, form->record_count,
+            program->record_count) ||
+        (form->record_count != 0u &&
+         program->records == NULL))
+        return VXML_INVALID_STRUCTURE;
+    for (offset = 0u; offset < form->record_count; ++offset) {
+        const size_t record_index =
+            form->first_record + offset;
+        const vxml_cmeta_record_row *record =
+            &program->records[record_index];
+        const vxml_cmeta_record_result_slot *result;
+        if (record->name == NULL ||
+            record->name_size != name_size ||
+            memcmp(record->name, name, name_size) != 0)
+            continue;
+        if (session->record_results == NULL ||
+            record_index >= session->record_result_count)
+            return VXML_INVALID_STRUCTURE;
+        result = &session->record_results[record_index];
+        if (!result->live ||
+            result->outcome !=
+                VXML_CMETA_RECORD_OUTCOME_SUCCESS ||
+            result->recording.data == NULL ||
+            result->recording.size == 0u ||
+            result->recording.lease == NULL ||
+            result->media_type == NULL ||
+            result->media_type_size == 0u)
+            return VXML_INVALID_STATE;
+        *out = (vxml_submit_recording_field_v1){
+            .name = name,
+            .name_size = name_size,
+            .filename = NULL,
+            .filename_size = 0u,
+            .media_type = result->media_type,
+            .media_type_size = result->media_type_size,
+            .data = result->recording.data,
+            .size = result->recording.size};
+        return VXML_OK;
+    }
+
+    /* application.lastresult$.recording */
+    if (name_size == sizeof(app_recording) - 1u &&
+        memcmp(
+            name, app_recording,
+            sizeof(app_recording) - 1u) == 0) {
+        const vxml_cmeta_collect_utterance_result_slot *result =
+            &session->collect_utterance_result;
+        if (!result->live ||
+            result->recording.data == NULL ||
+            result->recording.size == 0u ||
+            result->recording.lease == NULL ||
+            result->media_type == NULL ||
+            result->media_type_size == 0u)
+            return VXML_INVALID_STATE;
+        *out = (vxml_submit_recording_field_v1){
+            .name = name,
+            .name_size = name_size,
+            .filename = NULL,
+            .filename_size = 0u,
+            .media_type = result->media_type,
+            .media_type_size = result->media_type_size,
+            .data = result->recording.data,
+            .size = result->recording.size};
+        return VXML_OK;
+    }
+
+    /* <field-name>$.recording */
+    if (submit_recording_suffix(
+            name, name_size,
+            field_suffix, sizeof(field_suffix) - 1u,
+            &owner_size)) {
+        const vxml_cmeta_collect_utterance_result_slot *result =
+            &session->collect_utterance_result;
+        if (!range_valid(
+                form->first_field, form->field_count,
+                program->field_count) ||
+            (form->field_count != 0u &&
+             program->fields == NULL) ||
+            session->field_recording_shadows == NULL)
+            return VXML_INVALID_STRUCTURE;
+        for (offset = 0u; offset < form->field_count; ++offset) {
+            const size_t field_index =
+                form->first_field + offset;
+            const vxml_cmeta_field_row *field =
+                &program->fields[field_index];
+            const vxml_cmeta_field_recording_shadow *shadow;
+            if (field->name == NULL ||
+                field->name_size != owner_size ||
+                memcmp(field->name, name, owner_size) != 0)
+                continue;
+            if (field_index >=
+                session->field_recording_shadow_count)
+                return VXML_INVALID_STRUCTURE;
+            shadow =
+                &session->field_recording_shadows[field_index];
+            if (!result->live ||
+                !shadow->assigned ||
+                !shadow->has_recording ||
+                shadow->generation != result->generation ||
+                result->recording.data == NULL ||
+                result->recording.size == 0u ||
+                result->recording.lease == NULL ||
+                result->media_type == NULL ||
+                result->media_type_size == 0u)
+                return VXML_INVALID_STATE;
+            *out = (vxml_submit_recording_field_v1){
+                .name = name,
+                .name_size = name_size,
+                .filename = NULL,
+                .filename_size = 0u,
+                .media_type = result->media_type,
+                .media_type_size = result->media_type_size,
+                .data = result->recording.data,
+                .size = result->recording.size};
+            return VXML_OK;
+        }
+        return VXML_INVALID_ARGUMENT;
+    }
+
+    return VXML_INVALID_ARGUMENT;
+}
+
 static vxml_status execute_submit(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_action_row *action) {
+    const bool multipart =
+        action != NULL &&
+        action->submit_enctype ==
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
     size_t offset;
     size_t used = 0u;
+    size_t scalar_count = 0u;
+    size_t recording_count = 0u;
+    size_t part_count = 0u;
+
     if (session == NULL || program == NULL || action == NULL ||
         action->kind != VXML_CMETA_ACTION_SUBMIT ||
         action->navigation_uri == NULL ||
@@ -3718,28 +3892,69 @@ static vxml_status execute_submit(
             action->navigation_uri_size) != NULL ||
         (action->submit_method != VXML_SUBMIT_METHOD_GET &&
          action->submit_method != VXML_SUBMIT_METHOD_POST) ||
-        action->submit_enctype !=
-            VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        (action->submit_enctype !=
+             VXML_SUBMIT_ENCTYPE_URLENCODED &&
+         action->submit_enctype !=
+             VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA) ||
+        (multipart &&
+         action->submit_method != VXML_SUBMIT_METHOD_POST) ||
         session->submit_requested ||
         action->location_count >
-            program->max_submit_fields ||
-        action->location_count >
-            session->submit_field_capacity ||
+            (multipart
+                ? program->max_submit_parts
+                : program->max_submit_fields) ||
         (action->location_count != 0u &&
          (!range_valid(
               action->first_location,
               action->location_count,
               program->location_count) ||
-          program->locations == NULL ||
-          session->submit_fields == NULL)) ||
+          program->locations == NULL)) ||
         session->submit_values == NULL ||
-        session->submit_value_capacity == 0u)
+        session->submit_value_capacity == 0u ||
+        (action->submit_has_timeout &&
+         (action->submit_timeout_us == UINT64_C(0) ||
+          action->submit_timeout_us >
+              program->max_submit_timeout_us)) ||
+        (!action->submit_has_timeout &&
+         action->submit_timeout_us != UINT64_C(0)) ||
+        ((action->fetchaudio.uri == NULL) !=
+         (action->fetchaudio.uri_size == 0u)) ||
+        (action->fetchaudio.uri_size >
+            program->max_submit_fetchaudio_uri_bytes &&
+         action->fetchaudio.uri_size != 0u))
         return VXML_INVALID_STRUCTURE;
 
-    if (action->location_count != 0u)
+    if (multipart) {
+        if (action->submit_recording_count == 0u ||
+            action->submit_recording_count >
+                program->max_submit_recordings ||
+            action->submit_recording_count >
+                session->submit_recording_capacity ||
+            action->submit_part_count !=
+                action->location_count ||
+            action->submit_part_count >
+                session->submit_part_capacity ||
+            session->submit_recordings == NULL ||
+            session->submit_parts == NULL)
+            return VXML_INVALID_STRUCTURE;
+        memset(
+            session->submit_recordings, 0,
+            action->submit_recording_count *
+                sizeof(*session->submit_recordings));
+        memset(
+            session->submit_parts, 0,
+            action->submit_part_count *
+                sizeof(*session->submit_parts));
+    } else if (action->submit_recording_count != 0u ||
+               action->submit_part_count != 0u) {
+        return VXML_INVALID_STRUCTURE;
+    }
+
+    if (session->submit_fields != NULL &&
+        session->submit_field_capacity != 0u)
         memset(
             session->submit_fields, 0,
-            action->location_count *
+            session->submit_field_capacity *
                 sizeof(*session->submit_fields));
 
     for (offset = 0u;
@@ -3748,34 +3963,87 @@ static vxml_status execute_submit(
         const vxml_cmeta_location_row *location =
             &program->locations[
                 action->first_location + offset];
-        const cmeta_data_desc *value_data = NULL;
-        const void *object = NULL;
-        vxml_cmeta_value_view value = {0};
-        vxml_submit_field_v1 *field =
-            &session->submit_fields[offset];
-        vxml_status status = read_location_object(
-            session, program, location, true,
-            &value_data, &object);
-        if (status != VXML_OK) return status;
-        if (object == NULL ||
-            value_data != location->value ||
-            location->name == NULL ||
-            location->name_size == 0u)
-            return VXML_SEMANTIC_ERROR;
-        status = read_scalar_value(
-            value_data, object,
-            session->read_scratch,
-            session->read_scratch_bytes,
-            &value);
-        if (status != VXML_OK) return status;
-        status = submit_value_append(
-            session, &value,
-            &field->value, &field->value_size,
-            &used);
-        if (status != VXML_OK) return status;
-        field->name = location->name;
-        field->name_size = location->name_size;
+        vxml_status status;
+
+        if (location->value == NULL &&
+            location->candidate_count == 0u) {
+            vxml_submit_recording_field_v1 *recording;
+            if (!multipart ||
+                recording_count >=
+                    session->submit_recording_capacity ||
+                part_count >= session->submit_part_capacity ||
+                location->name == NULL ||
+                location->name_size == 0u)
+                return VXML_INVALID_STRUCTURE;
+            recording =
+                &session->submit_recordings[recording_count];
+            status = submit_recording_view(
+                session, program,
+                location->name, location->name_size,
+                recording);
+            if (status != VXML_OK)
+                return status;
+            session->submit_parts[part_count++] =
+                (vxml_submit_multipart_part_ref_v1){
+                    .kind =
+                        VXML_SUBMIT_MULTIPART_PART_RECORDING,
+                    .index = recording_count};
+            ++recording_count;
+            continue;
+        }
+
+        {
+            const cmeta_data_desc *value_data = NULL;
+            const void *object = NULL;
+            vxml_cmeta_value_view value = {0};
+            vxml_submit_field_v1 *field;
+            if (scalar_count >=
+                    session->submit_field_capacity ||
+                session->submit_fields == NULL)
+                return VXML_LIMIT_EXCEEDED;
+            field = &session->submit_fields[scalar_count];
+            status = read_location_object(
+                session, program, location, true,
+                &value_data, &object);
+            if (status != VXML_OK) return status;
+            if (object == NULL ||
+                value_data != location->value ||
+                location->name == NULL ||
+                location->name_size == 0u)
+                return VXML_SEMANTIC_ERROR;
+            status = read_scalar_value(
+                value_data, object,
+                session->read_scratch,
+                session->read_scratch_bytes,
+                &value);
+            if (status != VXML_OK) return status;
+            status = submit_value_append(
+                session, &value,
+                &field->value, &field->value_size,
+                &used);
+            if (status != VXML_OK) return status;
+            field->name = location->name;
+            field->name_size = location->name_size;
+            if (multipart) {
+                if (part_count >=
+                    session->submit_part_capacity)
+                    return VXML_LIMIT_EXCEEDED;
+                session->submit_parts[part_count++] =
+                    (vxml_submit_multipart_part_ref_v1){
+                        .kind =
+                            VXML_SUBMIT_MULTIPART_PART_TEXT,
+                        .index = scalar_count};
+            }
+            ++scalar_count;
+        }
     }
+
+    if (scalar_count > program->max_submit_fields ||
+        recording_count !=
+            action->submit_recording_count ||
+        (multipart &&
+         part_count != action->submit_part_count))
+        return VXML_INVALID_STRUCTURE;
 
     session->pending_submit_uri =
         action->navigation_uri;
@@ -3786,7 +4054,17 @@ static vxml_status execute_submit(
     session->pending_submit_enctype =
         action->submit_enctype;
     session->pending_submit_field_count =
-        action->location_count;
+        scalar_count;
+    session->pending_submit_recording_count =
+        recording_count;
+    session->pending_submit_part_count =
+        multipart ? part_count : 0u;
+    session->pending_submit_has_timeout =
+        action->submit_has_timeout;
+    session->pending_submit_timeout_us =
+        action->submit_timeout_us;
+    session->pending_submit_fetchaudio =
+        action->fetchaudio;
     session->submit_requested = true;
     return VXML_OK;
 }
