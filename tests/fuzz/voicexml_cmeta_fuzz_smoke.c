@@ -119,7 +119,8 @@ int main(void) {
         "conditional-exit.vxml",
         "submit-urlencoded.vxml",
         "invalid-namelist.vxml",
-        "malformed-expression.vxml"
+        "malformed-expression.vxml",
+        "partial-tree-unclosed.vxml"
     };
     const int result = voicexml_fuzz_run(
         VOICEXML_CMETA_FUZZ_CORPUS_DIR,
