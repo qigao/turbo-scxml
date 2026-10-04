@@ -23,6 +23,8 @@ typedef struct submit_probe {
     const void *expected_borrowed;
     bool saw_borrowed;
     vxml_submit_method method;
+    bool has_timeout;
+    uint64_t timeout_us;
 } submit_probe;
 
 static vxml_submit_resource_status submit_execute(
@@ -61,6 +63,8 @@ static vxml_submit_resource_status submit_execute(
     probe->body[request->body_size] = '\0';
     probe->body_size = request->body_size;
     probe->method = request->method;
+    probe->has_timeout = request->has_timeout;
+    probe->timeout_us = request->timeout_us;
 
     if (probe->execute_status != VXML_SUBMIT_RESOURCE_OK) {
         if (probe->publish_on_failure) {
@@ -131,6 +135,8 @@ static vxml_submit_resource_status submit_execute_v2(
         request->content_type_size);
     probe->content_type[request->content_type_size] = '\0';
     probe->method = request->method;
+    probe->has_timeout = request->has_timeout;
+    probe->timeout_us = request->timeout_us;
 
     for (index = 0u; index < request->segment_count; ++index) {
         const vxml_submit_body_segment_v1 *segment =
@@ -201,7 +207,8 @@ static const vxml_submit_resource_adapter_v1 submit_adapter = {
     .struct_size = sizeof(vxml_submit_resource_adapter_v1),
     .execute = submit_execute,
     .close = submit_close,
-    .execute_v2 = submit_execute_v2};
+    .execute_v2 = submit_execute_v2,
+    .capabilities = VXML_SUBMIT_RESOURCE_CAP_TIMEOUT};
 
 static vxml_dialog_manager_status unused_document_open(
     void *user,
@@ -333,6 +340,135 @@ static submit_probe successful_probe(void) {
 }
 
 spec("VoiceXML one-attempt submit resource") {
+    it("requires explicit timeout capability before urlencoded provider admission") {
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_request_v1 request = base_request();
+        vxml_submit_response response = {0};
+        vxml_submit_resource_adapter_v1 legacy =
+            submit_adapter;
+
+        request.method = VXML_SUBMIT_METHOD_POST;
+        request.has_timeout = true;
+        request.timeout_us = UINT64_C(2500000);
+        legacy.struct_size =
+            offsetof(
+                vxml_submit_resource_adapter_v1,
+                capabilities);
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute(
+                &store, &legacy, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY);
+        check_equal(probe.execute_calls, (size_t)0u);
+        check_null(response.lease);
+
+        check_equal(
+            vxml_submit_resource_execute(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(probe.execute_calls, (size_t)1u);
+        check_true(probe.has_timeout);
+        check_equal(
+            probe.timeout_us, UINT64_C(2500000));
+        check_equal(
+            vxml_submit_resource_close(
+                &submit_adapter, &probe, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("projects explicit timeout through segmented multipart wire request") {
+        static const unsigned char recording_bytes[] = {
+            0x01u, 0x02u, 0x03u};
+        static const vxml_submit_recording_field_v1 recordings[] = {
+            {
+                "voice", sizeof("voice") - 1u,
+                NULL, 0u,
+                "audio/wav", sizeof("audio/wav") - 1u,
+                recording_bytes, sizeof(recording_bytes)
+            }};
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_multipart_request_v1 request =
+            base_multipart_request();
+        vxml_submit_response response = {0};
+        vxml_submit_resource_adapter_v1 no_timeout =
+            submit_adapter;
+
+        request.recordings = recordings;
+        request.recording_count = 1u;
+        request.has_timeout = true;
+        request.timeout_us = UINT64_C(4000000);
+        no_timeout.capabilities = 0u;
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &no_timeout, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(probe.execute_v2_calls, (size_t)1u);
+        check_true(probe.has_timeout);
+        check_equal(
+            probe.timeout_us, UINT64_C(4000000));
+        check_equal(
+            vxml_submit_resource_close(
+                &submit_adapter, &probe, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("keeps historical request prefixes timeout-free even when new tail storage is populated") {
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_request_v1 request = base_request();
+        vxml_submit_response response = {0};
+        vxml_submit_resource_adapter_v1 legacy =
+            submit_adapter;
+
+        request.method = VXML_SUBMIT_METHOD_POST;
+        request.has_timeout = true;
+        request.timeout_us = UINT64_C(999);
+        request.struct_size =
+            offsetof(vxml_submit_request_v1, has_timeout);
+        legacy.struct_size =
+            offsetof(
+                vxml_submit_resource_adapter_v1,
+                capabilities);
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute(
+                &store, &legacy, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(probe.execute_calls, (size_t)1u);
+        check_false(probe.has_timeout);
+        check_equal(probe.timeout_us, UINT64_C(0));
+        check_equal(
+            vxml_submit_resource_close(
+                &legacy, &probe, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("encodes a stable ordered GET query and preserves response fragment") {
         static const vxml_submit_field_v1 fields[] = {
             {"first name", sizeof("first name") - 1u,
