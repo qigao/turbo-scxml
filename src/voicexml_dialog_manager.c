@@ -105,6 +105,12 @@ struct vxml_dialog_manager_impl {
     vxml_submit_resource_adapter_v1 submit;
     void *submit_user;
     size_t max_submit_response_bytes;
+    size_t max_submit_body_bytes;
+    size_t max_submit_parts;
+    size_t max_submit_boundary_bytes;
+    size_t max_submit_header_bytes;
+    size_t max_submit_segments;
+    bool multipart_submit_enabled;
     size_t max_navigation_hops;
     char *resolve_uri_scratch;
     char *resolve_fragment_scratch;
@@ -1535,6 +1541,11 @@ vxml_dialog_manager_config_v4 vxml_dialog_manager_default_config_v4(void) {
     config.max_dialog_id_bytes = 63u;
     config.max_navigation_hops = 32u;
     config.max_submit_response_bytes = 1024u * 1024u;
+    config.max_submit_body_bytes = 8u * 1024u * 1024u;
+    config.max_submit_parts = 64u;
+    config.max_submit_boundary_bytes = 64u;
+    config.max_submit_header_bytes = 64u * 1024u;
+    config.max_submit_segments = 256u;
     config.voice_limits = vxml_default_limits();
     return config;
 }
@@ -1694,7 +1705,14 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
         (config->struct_size >= factory_tail &&
          config->session_factory != NULL &&
          !session_factory_prefix_valid(
-             config->session_factory)))
+             config->session_factory)) ||
+        (config->struct_size >= multipart_tail &&
+         (config->max_submit_body_bytes == 0u ||
+          config->max_submit_body_bytes == SIZE_MAX ||
+          config->max_submit_parts == 0u ||
+          config->max_submit_boundary_bytes == 0u ||
+          config->max_submit_header_bytes == 0u ||
+          config->max_submit_segments == 0u)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
@@ -1790,6 +1808,9 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     const size_t factory_tail =
         offsetof(vxml_dialog_manager_config_v4, session_factory_user) +
         sizeof(config->session_factory_user);
+    const size_t multipart_tail =
+        offsetof(vxml_dialog_manager_config_v4, max_submit_segments) +
+        sizeof(config->max_submit_segments);
     vxml_dialog_manager_config_v3 v3;
     vxml_dialog_manager_impl *impl;
     vxml_dialog_manager_status status;
@@ -1838,6 +1859,19 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     impl->submit_enabled = true;
     impl->max_submit_response_bytes =
         config->max_submit_response_bytes;
+    if (config->struct_size >= multipart_tail) {
+        impl->max_submit_body_bytes =
+            config->max_submit_body_bytes;
+        impl->max_submit_parts =
+            config->max_submit_parts;
+        impl->max_submit_boundary_bytes =
+            config->max_submit_boundary_bytes;
+        impl->max_submit_header_bytes =
+            config->max_submit_header_bytes;
+        impl->max_submit_segments =
+            config->max_submit_segments;
+        impl->multipart_submit_enabled = true;
+    }
     impl->voice_limits = config->voice_limits;
     return VXML_DIALOG_MANAGER_OK;
 }
