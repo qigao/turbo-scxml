@@ -427,6 +427,12 @@ vxml_status vxml_session_submit_v3(
          memchr(
              impl->submit_fetchaudio_uri, '\0',
              impl->submit_fetchaudio_uri_size) != NULL) ||
+        (!impl->submit_has_timeout &&
+         impl->submit_timeout_us != UINT64_C(0)) ||
+        (!impl->submit_has_fetchaudio_delay &&
+         impl->submit_fetchaudio_delay_us != UINT64_C(0)) ||
+        (!impl->submit_has_fetchaudio_minimum &&
+         impl->submit_fetchaudio_minimum_us != UINT64_C(0)) ||
         (impl->submit_fetchaudio_uri_size == 0u &&
          (impl->submit_has_fetchaudio_delay ||
           impl->submit_has_fetchaudio_minimum)))
