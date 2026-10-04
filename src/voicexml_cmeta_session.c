@@ -1802,7 +1802,7 @@ static void transaction_reset(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
-    profile->pending_submit_uri = NULL;
+    session->pending_submit_uri = NULL;
     session->pending_submit_uri_size = 0u;
     session->pending_submit_method =
         (vxml_submit_method)0;
