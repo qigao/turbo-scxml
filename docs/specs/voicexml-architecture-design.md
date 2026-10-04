@@ -357,6 +357,11 @@ artifacts; consumer CMake must not require pinned exact package versions.
 
 ## Conformance and security
 
+Sensitive-data and trust-boundary policy is documented in
+`docs/specs/voicexml-security-policy.md`. VoiceXML core has no default
+payload/body/recording logging sink; compile diagnostics remain
+caller-controlled source-sensitive data.
+
 TurboSCXML remains an incubating profile. Issue #51 owns the remaining
 evidence/hardening work:
 
