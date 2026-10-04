@@ -1671,6 +1671,8 @@ static void session_data_destroy(
     vxml_free(session->data_request_uri);
     vxml_free(session->data_request_values);
     vxml_free(session->data_request_fields);
+    vxml_free(session->submit_parts);
+    vxml_free(session->submit_recordings);
     vxml_free(session->submit_values);
     vxml_free(session->submit_fields);
     vxml_free(session->data_value_allocation);
@@ -1809,6 +1811,12 @@ static void transaction_reset(
     session->pending_submit_enctype =
         (vxml_submit_enctype)0;
     session->pending_submit_field_count = 0u;
+    session->pending_submit_recording_count = 0u;
+    session->pending_submit_part_count = 0u;
+    session->pending_submit_has_timeout = false;
+    session->pending_submit_timeout_us = UINT64_C(0);
+    session->pending_submit_fetchaudio =
+        (vxml_cmeta_fetchaudio_policy){0};
     session->submit_requested = false;
     root_storage_clear(&session->staged_root, program);
     for (index = 0u; index < program->scope_count; ++index)
@@ -1865,6 +1873,17 @@ static void transaction_commit(
         session->pending_submit_enctype;
     const size_t pending_submit_field_count =
         session->pending_submit_field_count;
+    const size_t pending_submit_recording_count =
+        session->pending_submit_recording_count;
+    const size_t pending_submit_part_count =
+        session->pending_submit_part_count;
+    const bool pending_submit_has_timeout =
+        session->pending_submit_has_timeout;
+    const uint64_t pending_submit_timeout_us =
+        session->pending_submit_timeout_us;
+    const vxml_cmeta_fetchaudio_policy
+        pending_submit_fetchaudio =
+            session->pending_submit_fetchaudio;
     const bool submit_requested =
         session->submit_requested;
     size_t index;
@@ -1891,6 +1910,16 @@ static void transaction_commit(
             pending_submit_enctype;
         session->pending_submit_field_count =
             pending_submit_field_count;
+        session->pending_submit_recording_count =
+            pending_submit_recording_count;
+        session->pending_submit_part_count =
+            pending_submit_part_count;
+        session->pending_submit_has_timeout =
+            pending_submit_has_timeout;
+        session->pending_submit_timeout_us =
+            pending_submit_timeout_us;
+        session->pending_submit_fetchaudio =
+            pending_submit_fetchaudio;
         session->submit_requested = true;
     }
 }
@@ -1943,6 +1972,10 @@ static vxml_status publish_pending_navigation(
 static vxml_status publish_pending_submit(
     vxml_session_impl *impl,
     vxml_cmeta_session_data *profile) {
+    const bool multipart =
+        profile != NULL &&
+        profile->pending_submit_enctype ==
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
     if (impl == NULL || profile == NULL)
         return VXML_INVALID_ARGUMENT;
     if (!profile->submit_requested)
@@ -1956,11 +1989,32 @@ static vxml_status publish_pending_submit(
              VXML_SUBMIT_METHOD_GET &&
          profile->pending_submit_method !=
              VXML_SUBMIT_METHOD_POST) ||
-        profile->pending_submit_enctype !=
-            VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        (profile->pending_submit_enctype !=
+             VXML_SUBMIT_ENCTYPE_URLENCODED &&
+         profile->pending_submit_enctype !=
+             VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA) ||
         (profile->pending_submit_field_count != 0u &&
-         profile->submit_fields == NULL))
+         profile->submit_fields == NULL) ||
+        (profile->pending_submit_recording_count != 0u &&
+         profile->submit_recordings == NULL) ||
+        (profile->pending_submit_part_count != 0u &&
+         profile->submit_parts == NULL) ||
+        (!profile->pending_submit_has_timeout &&
+         profile->pending_submit_timeout_us != UINT64_C(0)) ||
+        ((profile->pending_submit_fetchaudio.uri == NULL) !=
+         (profile->pending_submit_fetchaudio.uri_size == 0u)) ||
+        (!multipart &&
+         (profile->pending_submit_recording_count != 0u ||
+          profile->pending_submit_part_count != 0u)) ||
+        (multipart &&
+         (profile->pending_submit_method !=
+              VXML_SUBMIT_METHOD_POST ||
+          profile->pending_submit_recording_count == 0u ||
+          profile->pending_submit_part_count !=
+              profile->pending_submit_field_count +
+              profile->pending_submit_recording_count)))
         return VXML_INVALID_STRUCTURE;
+
     impl->submit_uri = profile->pending_submit_uri;
     impl->submit_uri_size =
         profile->pending_submit_uri_size;
@@ -1973,22 +2027,43 @@ static vxml_status publish_pending_submit(
             ? profile->submit_fields : NULL;
     impl->submit_field_count =
         profile->pending_submit_field_count;
-    impl->submit_has_timeout = false;
-    impl->submit_timeout_us = UINT64_C(0);
-    impl->submit_fetchaudio_uri = NULL;
-    impl->submit_fetchaudio_uri_size = 0u;
-    impl->submit_has_fetchaudio_delay = false;
-    impl->submit_fetchaudio_delay_us = UINT64_C(0);
-    impl->submit_has_fetchaudio_minimum = false;
-    impl->submit_fetchaudio_minimum_us = UINT64_C(0);
-    impl->submit_recordings = NULL;
-    impl->submit_recording_count = 0u;
-    impl->submit_parts = NULL;
-    impl->submit_part_count = 0u;
+    impl->submit_has_timeout =
+        profile->pending_submit_has_timeout;
+    impl->submit_timeout_us =
+        profile->pending_submit_timeout_us;
+    impl->submit_fetchaudio_uri =
+        profile->pending_submit_fetchaudio.uri;
+    impl->submit_fetchaudio_uri_size =
+        profile->pending_submit_fetchaudio.uri_size;
+    impl->submit_has_fetchaudio_delay =
+        profile->pending_submit_fetchaudio.has_delay;
+    impl->submit_fetchaudio_delay_us =
+        profile->pending_submit_fetchaudio.delay_us;
+    impl->submit_has_fetchaudio_minimum =
+        profile->pending_submit_fetchaudio.has_minimum;
+    impl->submit_fetchaudio_minimum_us =
+        profile->pending_submit_fetchaudio.minimum_us;
+    impl->submit_recordings =
+        profile->pending_submit_recording_count != 0u
+            ? profile->submit_recordings : NULL;
+    impl->submit_recording_count =
+        profile->pending_submit_recording_count;
+    impl->submit_parts =
+        profile->pending_submit_part_count != 0u
+            ? profile->submit_parts : NULL;
+    impl->submit_part_count =
+        profile->pending_submit_part_count;
+
     profile->submit_requested = false;
     profile->pending_submit_uri = NULL;
     profile->pending_submit_uri_size = 0u;
     profile->pending_submit_field_count = 0u;
+    profile->pending_submit_recording_count = 0u;
+    profile->pending_submit_part_count = 0u;
+    profile->pending_submit_has_timeout = false;
+    profile->pending_submit_timeout_us = UINT64_C(0);
+    profile->pending_submit_fetchaudio =
+        (vxml_cmeta_fetchaudio_policy){0};
     impl->state = VXML_SESSION_SUBMITTING;
     impl->error = VXML_OK;
     return VXML_OK;
