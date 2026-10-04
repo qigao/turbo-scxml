@@ -301,6 +301,24 @@ static bool probe_body_contains(
     return false;
 }
 
+static size_t probe_body_find(
+    const submit_probe *probe,
+    const void *needle, size_t needle_size) {
+    size_t index;
+    if (probe == NULL || needle == NULL ||
+        needle_size == 0u ||
+        probe->body_size < needle_size)
+        return SIZE_MAX;
+    for (index = 0u;
+         index <= probe->body_size - needle_size;
+         ++index)
+        if (memcmp(
+                probe->body + index,
+                needle, needle_size) == 0)
+            return index;
+    return SIZE_MAX;
+}
+
 static submit_probe successful_probe(void) {
     static const char response[] =
         "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
@@ -536,6 +554,227 @@ spec("VoiceXML one-attempt submit resource") {
         check_null(response.lease);
         check_equal(vxml_document_store_destroy(&store),
                     VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("preserves explicit global text-recording-text multipart order") {
+        static const vxml_submit_field_v1 fields[] = {
+            {"alpha", sizeof("alpha") - 1u,
+             "one", sizeof("one") - 1u},
+            {"omega", sizeof("omega") - 1u,
+             "three", sizeof("three") - 1u}};
+        static const unsigned char recording_bytes[] = {
+            0x10u, 0x20u, 0x30u};
+        static const vxml_submit_recording_field_v1 recordings[] = {
+            {
+                "voice", sizeof("voice") - 1u,
+                "voice.wav", sizeof("voice.wav") - 1u,
+                "audio/wav", sizeof("audio/wav") - 1u,
+                recording_bytes, sizeof(recording_bytes)
+            }};
+        static const vxml_submit_multipart_part_ref_v1 parts[] = {
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+            {VXML_SUBMIT_MULTIPART_PART_RECORDING, 0u},
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 1u}
+        };
+        static const char alpha_header[] =
+            "Content-Disposition: form-data; name=\"alpha\"";
+        static const char voice_header[] =
+            "Content-Disposition: form-data; name=\"voice\"; "
+            "filename=\"voice.wav\"";
+        static const char omega_header[] =
+            "Content-Disposition: form-data; name=\"omega\"";
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_multipart_request_v1 request =
+            base_multipart_request();
+        vxml_submit_response response = {0};
+        size_t alpha;
+        size_t voice;
+        size_t omega;
+
+        request.fields = fields;
+        request.field_count =
+            sizeof(fields) / sizeof(fields[0]);
+        request.recordings = recordings;
+        request.recording_count = 1u;
+        request.parts = parts;
+        request.part_count =
+            sizeof(parts) / sizeof(parts[0]);
+        probe.expected_borrowed = recording_bytes;
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(probe.execute_v2_calls, (size_t)1u);
+        check_true(probe.saw_borrowed);
+        alpha = probe_body_find(
+            &probe, alpha_header,
+            sizeof(alpha_header) - 1u);
+        voice = probe_body_find(
+            &probe, voice_header,
+            sizeof(voice_header) - 1u);
+        omega = probe_body_find(
+            &probe, omega_header,
+            sizeof(omega_header) - 1u);
+        check_true(alpha != SIZE_MAX);
+        check_true(voice != SIZE_MAX);
+        check_true(omega != SIZE_MAX);
+        check_true(alpha < voice);
+        check_true(voice < omega);
+
+        check_equal(
+            vxml_submit_resource_close(
+                &submit_adapter, &probe, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("keeps historical multipart prefix on text-then-recording order") {
+        static const vxml_submit_field_v1 fields[] = {
+            {"first", sizeof("first") - 1u,
+             "one", sizeof("one") - 1u},
+            {"second", sizeof("second") - 1u,
+             "two", sizeof("two") - 1u}};
+        static const unsigned char recording_bytes[] = {
+            0x41u, 0x42u};
+        static const vxml_submit_recording_field_v1 recordings[] = {
+            {
+                "voice", sizeof("voice") - 1u,
+                NULL, 0u,
+                "audio/wav", sizeof("audio/wav") - 1u,
+                recording_bytes, sizeof(recording_bytes)
+            }};
+        static const vxml_submit_multipart_part_ref_v1 ignored_tail[] = {
+            {VXML_SUBMIT_MULTIPART_PART_RECORDING, 0u},
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 1u},
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u}
+        };
+        static const char second_header[] =
+            "Content-Disposition: form-data; name=\"second\"";
+        static const char voice_header[] =
+            "Content-Disposition: form-data; name=\"voice\"";
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_multipart_request_v1 request =
+            base_multipart_request();
+        vxml_submit_response response = {0};
+        size_t second;
+        size_t voice;
+
+        request.struct_size =
+            offsetof(
+                vxml_submit_multipart_request_v1,
+                parts);
+        request.fields = fields;
+        request.field_count =
+            sizeof(fields) / sizeof(fields[0]);
+        request.recordings = recordings;
+        request.recording_count = 1u;
+        request.parts = ignored_tail;
+        request.part_count =
+            sizeof(ignored_tail) /
+            sizeof(ignored_tail[0]);
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        second = probe_body_find(
+            &probe, second_header,
+            sizeof(second_header) - 1u);
+        voice = probe_body_find(
+            &probe, voice_header,
+            sizeof(voice_header) - 1u);
+        check_true(second != SIZE_MAX);
+        check_true(voice != SIZE_MAX);
+        check_true(second < voice);
+
+        check_equal(
+            vxml_submit_resource_close(
+                &submit_adapter, &probe, &response),
+            VXML_SUBMIT_RESOURCE_OK);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("rejects incomplete duplicate or invalid ordered multipart refs before provider admission") {
+        static const vxml_submit_field_v1 fields[] = {
+            {"note", sizeof("note") - 1u,
+             "one", sizeof("one") - 1u}};
+        static const unsigned char recording_bytes[] = {
+            0x01u, 0x02u};
+        static const vxml_submit_recording_field_v1 recordings[] = {
+            {
+                "voice", sizeof("voice") - 1u,
+                NULL, 0u,
+                "audio/wav", sizeof("audio/wav") - 1u,
+                recording_bytes, sizeof(recording_bytes)
+            }};
+        static const vxml_submit_multipart_part_ref_v1 duplicate[] = {
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u}
+        };
+        static const vxml_submit_multipart_part_ref_v1 invalid[] = {
+            {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+            {VXML_SUBMIT_MULTIPART_PART_RECORDING, 3u}
+        };
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_multipart_request_v1 request =
+            base_multipart_request();
+        vxml_submit_response response = {0};
+
+        request.fields = fields;
+        request.field_count = 1u;
+        request.recordings = recordings;
+        request.recording_count = 1u;
+        init_resolver(&store);
+
+        request.parts = duplicate;
+        request.part_count = 1u;
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+
+        request.part_count = 2u;
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+
+        request.parts = invalid;
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+
+        request.parts = NULL;
+        request.part_count = 2u;
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
     }
 
     it("streams deterministic multipart from explicit recording selections") {

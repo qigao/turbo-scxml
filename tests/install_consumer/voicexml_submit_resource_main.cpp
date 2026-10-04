@@ -21,6 +21,9 @@ static_assert(
     std::is_standard_layout<vxml_submit_recording_field_v1>::value,
     "submit recording field must remain C-compatible");
 static_assert(
+    std::is_standard_layout<vxml_submit_multipart_part_ref_v1>::value,
+    "multipart part ref must remain C-compatible");
+static_assert(
     std::is_standard_layout<vxml_submit_multipart_request_v1>::value,
     "multipart submit request must remain C-compatible");
 static_assert(
@@ -44,6 +47,8 @@ int main() {
            multipart.abi_version ==
                VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1 &&
            multipart.struct_size == sizeof(multipart) &&
+           multipart.parts == nullptr &&
+           multipart.part_count == 0u &&
            execute_fn != nullptr && multipart_fn != nullptr &&
            close_fn != nullptr
         ? 0 : 1;

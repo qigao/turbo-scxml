@@ -5,6 +5,7 @@ int main(void) {
     vxml_submit_multipart_request_v1 multipart =
         VXML_SUBMIT_MULTIPART_REQUEST_V1_INIT;
     vxml_submit_recording_field_v1 recording = {0};
+    vxml_submit_multipart_part_ref_v1 part = {0};
     vxml_submit_body_segment_v1 segment = {0};
     vxml_submit_wire_request_v2 wire_v2 = {0};
     vxml_submit_response response = {0};
@@ -33,6 +34,8 @@ int main(void) {
             VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1 ||
         multipart.struct_size != sizeof(multipart) ||
         recording.data != NULL || recording.size != 0u ||
+        multipart.parts != NULL || multipart.part_count != 0u ||
+        part.kind != 0 || part.index != 0u ||
         segment.data != NULL || segment.size != 0u ||
         wire_v2.abi_version != 0u ||
         response.data != NULL || response.size != 0u ||
