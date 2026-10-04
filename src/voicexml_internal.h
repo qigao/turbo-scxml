@@ -143,6 +143,10 @@ struct vxml_session_impl {
     uint64_t submit_fetchaudio_delay_us;
     bool submit_has_fetchaudio_minimum;
     uint64_t submit_fetchaudio_minimum_us;
+    const vxml_submit_recording_field_v1 *submit_recordings;
+    size_t submit_recording_count;
+    const vxml_submit_multipart_part_ref_v1 *submit_parts;
+    size_t submit_part_count;
     const char *script_src;
     size_t script_src_size;
     const char *script_charset;
