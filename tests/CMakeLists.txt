@@ -24,7 +24,7 @@ endfunction()
 add_test(
   NAME voicexml_security_policy_test
   COMMAND "${CMAKE_COMMAND}"
-    -DREPO_ROOT="${PROJECT_SOURCE_DIR}"
+    -DREPO_ROOT=${PROJECT_SOURCE_DIR}
     -P "${CMAKE_CURRENT_SOURCE_DIR}/voicexml/validate_security_policy.cmake")
 set_tests_properties(voicexml_security_policy_test PROPERTIES
   LABELS "voicexml;security;policy")
