@@ -1767,14 +1767,7 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
         (config->struct_size >= factory_tail &&
          config->session_factory != NULL &&
          !session_factory_prefix_valid(
-             config->session_factory)) ||
-        (config->struct_size >= multipart_tail &&
-         (config->max_submit_body_bytes == 0u ||
-          config->max_submit_body_bytes == SIZE_MAX ||
-          config->max_submit_parts == 0u ||
-          config->max_submit_boundary_bytes == 0u ||
-          config->max_submit_header_bytes == 0u ||
-          config->max_submit_segments == 0u)))
+             config->session_factory)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
@@ -1887,7 +1880,16 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
         (config->struct_size >= factory_tail &&
          config->session_factory != NULL &&
          !session_factory_prefix_valid(
-             config->session_factory)))
+             config->session_factory)) ||
+        (config->struct_size > factory_tail &&
+         config->struct_size < multipart_tail) ||
+        (config->struct_size >= multipart_tail &&
+         (config->max_submit_body_bytes == 0u ||
+          config->max_submit_body_bytes == SIZE_MAX ||
+          config->max_submit_parts == 0u ||
+          config->max_submit_boundary_bytes == 0u ||
+          config->max_submit_header_bytes == 0u ||
+          config->max_submit_segments == 0u)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     v3 = vxml_dialog_manager_default_config_v3();
