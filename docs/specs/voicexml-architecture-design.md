@@ -362,6 +362,11 @@ artifacts; consumer CMake must not require pinned exact package versions.
 
 ## Conformance and security
 
+Security and sensitive-data handling is defined by
+[VoiceXML security and sensitive-data policy](voicexml-security-policy.md).
+The default contract redacts QuickJS exception payloads and provider-controlled
+prepare-error text from TurboSCXML-owned diagnostics.
+
 TurboSCXML remains an incubating profile. The
 [VoiceXML support and conformance evidence matrix](voicexml-support-matrix.md)
 is the current evidence surface. Issue #51 owns the remaining hardening work:

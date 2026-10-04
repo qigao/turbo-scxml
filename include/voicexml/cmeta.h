@@ -1115,6 +1115,10 @@ vxml_status vxml_session_cmeta_read(
  * configured child owner to reserve admission. Provider callbacks borrow all
  * request views only for prepare().
  */
+/*
+ * out_error is redacted by TurboSCXML. Provider-supplied text is not
+ * forwarded; failures expose only a fixed subdialog-provider category.
+ */
 vxml_status vxml_session_cmeta_subdialog_prepare(
     vxml_session *session, const char **out_error);
 
@@ -1154,7 +1158,11 @@ vxml_status vxml_session_cmeta_record_request(
     const vxml_session *session,
     vxml_cmeta_record_request_v1 *out_request);
 
-/** Reserve the active record provider operation without committing work. */
+/**
+ * Reserve the active record provider operation without committing work.
+ * out_error, when non-NULL, receives only a fixed TurboSCXML category string;
+ * provider-supplied diagnostic text is never forwarded.
+ */
 vxml_status vxml_session_cmeta_record_prepare(
     vxml_session *session, const char **out_error);
 
@@ -1199,7 +1207,11 @@ vxml_status vxml_session_cmeta_transfer_request(
     const vxml_session *session,
     vxml_cmeta_transfer_request_v1 *out_request);
 
-/** Reserve the active transfer provider operation without committing work. */
+/**
+ * Reserve the active transfer provider operation without committing work.
+ * out_error, when non-NULL, receives only a fixed TurboSCXML category string;
+ * provider-supplied diagnostic text is never forwarded.
+ */
 vxml_status vxml_session_cmeta_transfer_prepare(
     vxml_session *session, const char **out_error);
 
@@ -1262,6 +1274,10 @@ vxml_status vxml_session_cmeta_initial_collect_request(
  * Ask the configured provider to reserve the selected collect operation.
  * Success stores the provider ticket inside the session; no provider work is
  * committed until vxml_session_cmeta_collect_commit().
+ */
+/*
+ * out_error is redacted by TurboSCXML. Provider-supplied text is not
+ * forwarded; failures expose only a fixed collect-provider category.
  */
 vxml_status vxml_session_cmeta_collect_prepare(
     vxml_session *session, const char **out_error);
@@ -1407,7 +1423,11 @@ vxml_status vxml_session_cmeta_prompt_media_batch_request(
     const vxml_session *session,
     vxml_cmeta_prompt_media_batch_request_v1 *out_request);
 
-/** Reserve the current prompt with the configured media provider. */
+/**
+ * Reserve the current prompt with the configured media provider.
+ * out_error, when non-NULL, receives only a fixed TurboSCXML category string;
+ * provider-supplied diagnostic text is never forwarded.
+ */
 vxml_status vxml_session_cmeta_prompt_media_prepare(
     vxml_session *session, const char **out_error);
 

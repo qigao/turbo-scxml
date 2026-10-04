@@ -385,6 +385,33 @@ spec("private QuickJS sandbox kernel") {
         quickjs_sandbox_runtime_destroy(&runtime);
     }
 
+    it("redacts thrown exception payloads from diagnostics") {
+        static const char source[] =
+            "throw new Error('voice-secret-7f31');";
+        quickjs_sandbox_options options = sandbox_options();
+        quickjs_sandbox_runtime runtime = {0};
+        char diagnostic[256] = {0};
+
+        check_equal(
+            quickjs_sandbox_runtime_init(
+                &runtime, &options,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_OK);
+        check_equal(
+            quickjs_sandbox_runtime_eval(
+                &runtime,
+                source, sizeof(source) - 1u,
+                "<redaction>",
+                options.max_eval_milliseconds,
+                diagnostic, sizeof(diagnostic)),
+            QUICKJS_SANDBOX_EXCEPTION);
+        check_equal(
+            strcmp(diagnostic, "QuickJS exception"), 0);
+        check_null(strstr(diagnostic, "voice-secret-7f31"));
+
+        quickjs_sandbox_runtime_destroy(&runtime);
+    }
+
     it("interrupts an infinite evaluation and recovers with a fresh context") {
         static const char spin[] = "for (;;) {}";
         static const char after[] = "globalThis.afterTimeout = 1;";

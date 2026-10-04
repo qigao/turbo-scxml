@@ -6738,6 +6738,15 @@ vxml_status vxml_session_cmeta_start_child(
         impl, form_index, entry);
 }
 
+static void cmeta_publish_redacted_provider_error(
+    const char **out_error,
+    vxml_status status,
+    const char *category) {
+    if (out_error == NULL) return;
+    *out_error =
+        status == VXML_OK ? NULL : category;
+}
+
 static const vxml_session_impl *cmeta_session(const vxml_session *session) {
     const vxml_session_impl *impl;
     if (session == NULL || session->impl == NULL) return NULL;
@@ -6756,6 +6765,7 @@ vxml_status vxml_session_cmeta_subdialog_prepare(
     const vxml_cmeta_subdialog_row *subdialog;
     vxml_cmeta_subdialog_request_v1 request = {0};
     vxml_cmeta_subdialog_ticket_v1 ticket = {0};
+    const char *provider_error = NULL;
     vxml_status status;
 
     if (out_error != NULL) *out_error = NULL;
@@ -6807,7 +6817,9 @@ vxml_status vxml_session_cmeta_subdialog_prepare(
         .param_count = profile->subdialog_snapshot_param_count
     };
     status = profile->subdialog_adapter->prepare(
-        profile->subdialog_user, &request, &ticket, out_error);
+        profile->subdialog_user, &request, &ticket, &provider_error);
+    cmeta_publish_redacted_provider_error(
+        out_error, status, "VoiceXML subdialog provider error");
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
@@ -6971,6 +6983,7 @@ vxml_status vxml_session_cmeta_record_prepare(
     vxml_cmeta_session_data *profile;
     vxml_cmeta_record_request_v1 request = {0};
     vxml_cmeta_record_ticket_v1 ticket = {0};
+    const char *provider_error = NULL;
     vxml_status status;
 
     if (out_error != NULL) *out_error = NULL;
@@ -6999,7 +7012,9 @@ vxml_status vxml_session_cmeta_record_prepare(
         return VXML_UNSUPPORTED_FEATURE;
 
     status = profile->record_adapter->prepare(
-        profile->record_user, &request, &ticket, out_error);
+        profile->record_user, &request, &ticket, &provider_error);
+    cmeta_publish_redacted_provider_error(
+        out_error, status, "VoiceXML record provider error");
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
@@ -7155,6 +7170,7 @@ vxml_status vxml_session_cmeta_transfer_prepare(
     vxml_cmeta_session_data *profile;
     vxml_cmeta_transfer_request_v1 request = {0};
     vxml_cmeta_transfer_ticket_v1 ticket = {0};
+    const char *provider_error = NULL;
     vxml_status status;
 
     if (out_error != NULL) *out_error = NULL;
@@ -7182,7 +7198,9 @@ vxml_status vxml_session_cmeta_transfer_prepare(
         return VXML_UNSUPPORTED_FEATURE;
 
     status = profile->transfer_adapter->prepare(
-        profile->transfer_user, &request, &ticket, out_error);
+        profile->transfer_user, &request, &ticket, &provider_error);
+    cmeta_publish_redacted_provider_error(
+        out_error, status, "VoiceXML transfer provider error");
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
@@ -8571,6 +8589,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     vxml_cmeta_collect_ticket_v1 ticket = {0};
+    const char *provider_error = NULL;
     vxml_status status;
     if (out_error != NULL) *out_error = NULL;
     if (session == NULL || session->impl == NULL)
@@ -8601,7 +8620,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
         if (!collect_adapter_has_initial(profile->collect_adapter))
             return VXML_UNSUPPORTED_FEATURE;
         status = profile->collect_adapter->prepare_initial(
-            profile->collect_user, &request, &ticket, out_error);
+            profile->collect_user, &request, &ticket, &provider_error);
     } else if (profile->active_menu != VXML_CMETA_NO_INDEX) {
         const vxml_cmeta_program_data *program =
             (const vxml_cmeta_program_data *)impl->program->profile_data;
@@ -8622,7 +8641,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
             if (!collect_adapter_has_menu_v2(profile->collect_adapter))
                 return VXML_UNSUPPORTED_FEATURE;
             status = profile->collect_adapter->prepare_menu_v2(
-                profile->collect_user, &request, &ticket, out_error);
+                profile->collect_user, &request, &ticket, &provider_error);
         } else {
             vxml_cmeta_menu_collect_request_v1 request = {0};
             status = menu_collect_request_from_impl(impl, &request);
@@ -8634,7 +8653,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
             if (!collect_adapter_has_menu(profile->collect_adapter))
                 return VXML_UNSUPPORTED_FEATURE;
             status = profile->collect_adapter->prepare_menu(
-                profile->collect_user, &request, &ticket, out_error);
+                profile->collect_user, &request, &ticket, &provider_error);
         }
     } else {
         const vxml_cmeta_program_data *program =
@@ -8660,7 +8679,7 @@ vxml_status vxml_session_cmeta_collect_prepare(
             if (!collect_adapter_has_field_v2(profile->collect_adapter))
                 return VXML_UNSUPPORTED_FEATURE;
             status = profile->collect_adapter->prepare_v2(
-                profile->collect_user, &request, &ticket, out_error);
+                profile->collect_user, &request, &ticket, &provider_error);
         } else {
             vxml_cmeta_collect_request_v1 request = {0};
             status = collect_request_from_impl(impl, &request);
@@ -8674,10 +8693,12 @@ vxml_status vxml_session_cmeta_collect_prepare(
             if (profile->collect_adapter->prepare == NULL)
                 return VXML_INVALID_CONTRACT;
             status = profile->collect_adapter->prepare(
-                profile->collect_user, &request, &ticket, out_error);
+                profile->collect_user, &request, &ticket, &provider_error);
         }
     }
 
+    cmeta_publish_redacted_provider_error(
+        out_error, status, "VoiceXML collect provider error");
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
@@ -14009,6 +14030,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     const vxml_cmeta_program_data *program;
     vxml_cmeta_prompt_media_batch_request_v1 batch = {0};
     vxml_cmeta_prompt_media_ticket_v1 ticket = {0};
+    const char *provider_error = NULL;
     vxml_status status;
     if (out_error != NULL) *out_error = NULL;
     if (session == NULL || session->impl == NULL)
@@ -14091,7 +14113,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         }
         status = profile->prompt_media_adapter->prepare(
             profile->prompt_media_user,
-            &request, &ticket, out_error);
+            &request, &ticket, &provider_error);
     } else {
         const size_t batch_field_size =
             offsetof(vxml_cmeta_prompt_media_adapter_v1, prepare_batch) +
@@ -14105,9 +14127,11 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         }
         status = profile->prompt_media_adapter->prepare_batch(
             profile->prompt_media_user,
-            &batch, &ticket, out_error);
+            &batch, &ticket, &provider_error);
     }
 
+    cmeta_publish_redacted_provider_error(
+        out_error, status, "VoiceXML prompt media provider error");
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
