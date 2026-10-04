@@ -11371,6 +11371,27 @@ static vxml_status cmeta_lower_simple_action(
             action->submit_method = VXML_SUBMIT_METHOD_GET;
             action->submit_enctype =
                 VXML_SUBMIT_ENCTYPE_URLENCODED;
+            if (cmeta_submit_multipart_options_valid(
+                    builder->options)) {
+                const vxml_cmeta_fetchaudio_policy *inherited =
+                    cmeta_fetchaudio_policy_for_scopes(
+                        builder, scopes, scope_count);
+                if (inherited == NULL)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(node),
+                        "VoiceXML submit fetchaudio scope changed between compiler passes");
+                action->fetchaudio = *inherited;
+                if (action->fetchaudio.uri_size >
+                    builder->options
+                        ->max_submit_fetchaudio_uri_bytes)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_LIMIT_EXCEEDED,
+                        salts_xml_node_location(node),
+                        "VoiceXML inherited submit fetchaudio exceeds configured URI bound");
+            }
             if (!cmeta_submit_options_valid(
                     builder->options) ||
                 next.impl == NULL)
