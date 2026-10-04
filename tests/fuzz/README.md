@@ -40,3 +40,21 @@ When sanitizer fuzz smoke finds a crash, timeout, or invariant violation:
    changes.
 
 Do not turn CI into an unbounded fuzz service.
+
+## Cross-repository regressions
+
+If a minimized fuzz failure belongs to a consumed package rather than
+TurboSCXML itself:
+
+1. fix and regress it in the owning repository;
+2. qualify the owner fix under its sanitizer gate;
+3. publish the normal latest package release;
+4. re-run TurboSCXML against that released package.
+
+Do not add a sanitizer suppression, consumer-side ownership workaround,
+fallback implementation, or dependency version pin.
+
+The first example is the malformed XML lexer error-token leak found by this
+smoke gate in Native SDK CI run `37181219319`. The ownership bug belonged to
+SaltsUtils XML parser/cxml and was fixed/regressed there before TurboSCXML
+qualification resumed.
