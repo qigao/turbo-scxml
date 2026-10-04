@@ -253,6 +253,86 @@ static vxml_document_store_status resolve_uri(
 }
 
 spec("VoiceXML bounded document store") {
+    it("compiles borrowed source through the configured Store compiler without caching") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        compile_probe compiler = {
+            .result_override = VXML_OK};
+        vxml_document_compile_adapter_v1 compiler_adapter =
+            compile_adapter;
+        vxml_document_store_config_v1 config =
+            store_config(&document, 2u, 4096u);
+        vxml_document_store store = {0};
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+        vxml_document_store_stats stats = {0};
+
+        config.compiler = &compiler_adapter;
+        config.compiler_user = &compiler;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_compile_source(
+                &store,
+                valid_document, sizeof(valid_document) - 1u,
+                &program, &diagnostic),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(compiler.calls, (size_t)1u);
+        check_true(compiler.last_source == valid_document);
+        check_equal(
+            compiler.last_source_size,
+            sizeof(valid_document) - 1u);
+        check_equal(document.open_calls, (size_t)0u);
+        check_equal(document.close_calls, (size_t)0u);
+        check_not_null(program.impl);
+        check_true(vxml_document_store_get_stats(&store, &stats));
+        check_equal(stats.entries, (size_t)0u);
+        check_equal(stats.active_borrows, (size_t)0u);
+
+        vxml_program_destroy(&program);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("surfaces custom compiler failure through compile_source without publishing a Program") {
+        document_probe document = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        compile_probe compiler = {
+            .result_override = VXML_SEMANTIC_ERROR};
+        vxml_document_compile_adapter_v1 compiler_adapter =
+            compile_adapter;
+        vxml_document_store_config_v1 config =
+            store_config(&document, 1u, 4096u);
+        vxml_document_store store = {0};
+        vxml_program program = {0};
+        vxml_diagnostic diagnostic = {0};
+
+        config.compiler = &compiler_adapter;
+        config.compiler_user = &compiler;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_compile_source(
+                &store,
+                valid_document, sizeof(valid_document) - 1u,
+                &program, &diagnostic),
+            VXML_DOCUMENT_STORE_COMPILE_ERROR);
+        check_equal(compiler.calls, (size_t)1u);
+        check_equal(diagnostic.status, VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
+        check_equal(document.open_calls, (size_t)0u);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("uses an optional compiler once per cache miss over Store-owned source") {
         document_probe document = {
             .open_status = VXML_DIALOG_MANAGER_OK,
