@@ -7,6 +7,11 @@ not a claim of full VoiceXML conformance. The supported surface is defined by
 executable tests, explicit profile contracts, installed target dependencies,
 and the support/conformance work tracked by issue #51.
 
+The executable support truth is maintained in
+[VoiceXML support and conformance evidence matrix](voicexml-support-matrix.md).
+The matrix links every supported/partial surface to concrete positive and
+negative witnesses and records provenance rules.
+
 The architecture has moved beyond the original non-media MVP. The canonical
 runtime now includes:
 
@@ -357,11 +362,16 @@ artifacts; consumer CMake must not require pinned exact package versions.
 
 ## Conformance and security
 
-TurboSCXML remains an incubating profile. Issue #51 owns the remaining
-evidence/hardening work:
+Security and sensitive-data handling is defined by
+[VoiceXML security and sensitive-data policy](voicexml-security-policy.md).
+The default contract redacts QuickJS exception payloads and provider-controlled
+prepare-error text from TurboSCXML-owned diagnostics.
 
-- VoiceXML-specific conformance/support matrix;
-- upstream provenance and executable witnesses;
+TurboSCXML remains an incubating profile. The
+[VoiceXML support and conformance evidence matrix](voicexml-support-matrix.md)
+is the current evidence surface. Issue #51 owns the remaining hardening work:
+
+- upkeep/extension of the VoiceXML-specific evidence matrix and provenance;
 - parser/runtime fuzzing and minimized regressions;
 - supported option-matrix qualification;
 - URI/script/recording/logging security policy;
@@ -375,7 +385,9 @@ different language surfaces.
 This file is the canonical high-level VoiceXML architecture.
 
 Detailed feature specs under `docs/specs/` remain authoritative for their
-individual contracts. GitHub issues track delivery and qualification evidence.
+individual contracts. The support matrix is authoritative for the current
+supported/partial/unsupported evidence surface. GitHub issues track delivery
+and qualification evidence.
 
 Historical implementation plans are not architectural truth and should not be
 used to infer current support or dependencies.
