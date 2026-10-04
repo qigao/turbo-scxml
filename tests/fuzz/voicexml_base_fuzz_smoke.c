@@ -46,6 +46,7 @@ int main(void) {
         "utf8-entities.vxml",
         "malformed-entity.vxml",
         "lexer-unterminated-attribute.vxml",
+        "partial-tree-unclosed.vxml",
         "wrong-namespace.vxml"
     };
     const int result = voicexml_fuzz_run(
