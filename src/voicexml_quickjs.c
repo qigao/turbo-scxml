@@ -1498,6 +1498,10 @@ static vxml_status quickjs_run_from(
                 session->submit_fetchaudio_delay_us = UINT64_C(0);
                 session->submit_has_fetchaudio_minimum = false;
                 session->submit_fetchaudio_minimum_us = UINT64_C(0);
+                session->submit_recordings = NULL;
+                session->submit_recording_count = 0u;
+                session->submit_parts = NULL;
+                session->submit_part_count = 0u;
                 session->state = VXML_SESSION_SUBMITTING;
                 return VXML_OK;
             }
