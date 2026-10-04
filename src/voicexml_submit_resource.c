@@ -399,7 +399,9 @@ vxml_submit_resource_status vxml_submit_resource_execute(
 
     wire = (vxml_submit_wire_request_v1){
         .abi_version = VXML_SUBMIT_WIRE_REQUEST_ABI_V1,
-        .struct_size = sizeof(vxml_submit_wire_request_v1),
+        .struct_size = has_timeout
+            ? sizeof(vxml_submit_wire_request_v1)
+            : offsetof(vxml_submit_wire_request_v1, has_timeout),
         .uri = wire_uri,
         .uri_size = wire_uri_size,
         .fragment = resolved.fragment_size != 0u ? fragment : NULL,
@@ -1415,7 +1417,9 @@ vxml_submit_resource_status vxml_submit_resource_execute_multipart(
 
     wire = (vxml_submit_wire_request_v2){
         .abi_version = VXML_SUBMIT_WIRE_REQUEST_ABI_V2,
-        .struct_size = sizeof(vxml_submit_wire_request_v2),
+        .struct_size = has_timeout
+            ? sizeof(vxml_submit_wire_request_v2)
+            : offsetof(vxml_submit_wire_request_v2, has_timeout),
         .uri = resolved_uri,
         .uri_size = resolved.document_uri_size,
         .fragment =
