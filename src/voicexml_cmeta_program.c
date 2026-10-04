@@ -944,6 +944,12 @@ static vxml_status cmeta_measure_name(
     salts_xml_attribute attribute, cmeta_program_measurement *measurement,
     const vxml_limits *limits, vxml_diagnostic *diagnostic);
 
+static vxml_status cmeta_parse_prompt_timeout(
+    salts_xml_attribute attribute,
+    bool *out_has_timeout,
+    uint64_t *out_timeout_us,
+    vxml_diagnostic *diagnostic);
+
 static vxml_status cmeta_measure_event_name(
     salts_xml_attribute attribute,
     const vxml_cmeta_compile_options_v1 *options,
