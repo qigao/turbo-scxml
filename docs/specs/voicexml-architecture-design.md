@@ -357,6 +357,11 @@ artifacts; consumer CMake must not require pinned exact package versions.
 
 ## Conformance and security
 
+The current VoiceXML-specific support/evidence matrix is documented in
+`docs/specs/voicexml-support-matrix.md` and validated from
+`tests/voicexml/support-matrix.tsv`. It is deliberately separate from the
+SCXML W3C manifest.
+
 TurboSCXML remains an incubating profile. Issue #51 owns the remaining
 evidence/hardening work:
 
