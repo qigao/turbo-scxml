@@ -55,6 +55,23 @@ typedef struct vxml_dialog_event_sink_v1 {
 
 typedef struct vxml_document_store vxml_document_store;
 
+#define VXML_SESSION_FACTORY_ABI_V1 1u
+
+typedef struct vxml_session_factory_v1 {
+    uint32_t abi_version;
+    size_t struct_size;
+    vxml_status (*init)(
+        void *user,
+        vxml_session *session,
+        const vxml_program *program);
+} vxml_session_factory_v1;
+
+/*
+ * Store-backed managers may append this factory to pair a DocumentStore
+ * compiler profile with its matching Session initializer. When absent,
+ * vxml_session_init() remains the exact historical default.
+ */
+
 typedef struct vxml_dialog_manager_config_v1 {
     uint32_t abi_version;
     size_t struct_size;
@@ -110,6 +127,10 @@ typedef struct vxml_dialog_manager_config_v2 {
 
     const vxml_dialog_event_sink_v1 *events;
     void *event_user;
+
+    /* Optional append-only runtime profile factory. */
+    const vxml_session_factory_v1 *session_factory;
+    void *session_factory_user;
 } vxml_dialog_manager_config_v2;
 
 /**
@@ -138,6 +159,10 @@ typedef struct vxml_dialog_manager_config_v3 {
 
     const vxml_dialog_event_sink_v1 *events;
     void *event_user;
+
+    /* Optional append-only runtime profile factory. */
+    const vxml_session_factory_v1 *session_factory;
+    void *session_factory_user;
 } vxml_dialog_manager_config_v3;
 
 /**
@@ -171,6 +196,10 @@ typedef struct vxml_dialog_manager_config_v4 {
 
     const vxml_dialog_event_sink_v1 *events;
     void *event_user;
+
+    /* Optional append-only runtime profile factory. */
+    const vxml_session_factory_v1 *session_factory;
+    void *session_factory_user;
 } vxml_dialog_manager_config_v4;
 
 typedef struct vxml_dialog_manager_stats {

@@ -29,6 +29,9 @@ int main(void) {
         .struct_size = sizeof(vxml_fetch_audio_adapter_v1)};
     vxml_document_store_config_v1 store_config = {0};
     vxml_document_ref ref = {0};
+    vxml_session_factory_v1 session_factory = {
+        .abi_version = VXML_SESSION_FACTORY_ABI_V1,
+        .struct_size = sizeof(vxml_session_factory_v1)};
 
     if (manager.impl != NULL || store.impl != NULL)
         return 1;
@@ -50,7 +53,12 @@ int main(void) {
         v4.voice_limits.max_forms == 0u)
         return 5;
     if (v2.document_store != NULL || v3.document_store != NULL ||
-        v4.document_store != NULL || v4.submit != NULL)
+        v4.document_store != NULL || v4.submit != NULL ||
+        v2.session_factory != NULL ||
+        v3.session_factory != NULL ||
+        v4.session_factory != NULL ||
+        session_factory.abi_version !=
+            VXML_SESSION_FACTORY_ABI_V1)
         return 6;
     if (fetch_policy.abi_version != VXML_DOCUMENT_FETCH_POLICY_ABI_V1 ||
         fetch_policy.struct_size != sizeof(fetch_policy) ||

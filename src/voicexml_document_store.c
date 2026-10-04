@@ -674,6 +674,53 @@ vxml_document_store_status vxml_document_store_init(
     return VXML_DOCUMENT_STORE_OK;
 }
 
+vxml_document_store_status vxml_document_store_compile_source(
+    const vxml_document_store *store,
+    const void *source, size_t source_size,
+    const vxml_limits *fallback_limits,
+    vxml_program *out_program,
+    vxml_diagnostic *diagnostic) {
+    const vxml_document_store_impl *impl =
+        store != NULL
+            ? (const vxml_document_store_impl *)store->impl : NULL;
+    vxml_status voice_status;
+
+    if (impl == NULL || source == NULL || source_size == 0u ||
+        out_program == NULL || out_program->impl != NULL)
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+
+    if (diagnostic != NULL)
+        *diagnostic = (vxml_diagnostic){0};
+
+    if (impl->compiler_enabled) {
+        voice_status = impl->compiler.compile(
+            impl->compiler_user,
+            source, source_size,
+            out_program, diagnostic);
+    } else {
+        voice_status = vxml_compile(
+            source, source_size,
+            fallback_limits != NULL
+                ? fallback_limits
+                : &impl->voice_limits,
+            out_program, diagnostic);
+    }
+    if (voice_status != VXML_OK) {
+        vxml_program_destroy(out_program);
+        if (diagnostic != NULL &&
+            diagnostic->status == VXML_OK)
+            diagnostic->status = voice_status;
+        return VXML_DOCUMENT_STORE_COMPILE_ERROR;
+    }
+    if (out_program->impl == NULL) {
+        if (diagnostic != NULL &&
+            diagnostic->status == VXML_OK)
+            diagnostic->status = VXML_INVALID_CONTRACT;
+        return VXML_DOCUMENT_STORE_COMPILE_ERROR;
+    }
+    return VXML_DOCUMENT_STORE_OK;
+}
+
 vxml_document_store_status vxml_document_store_resolve(
     const vxml_document_store *store,
     const char *base_document_uri,
@@ -1029,23 +1076,24 @@ vxml_document_store_status vxml_document_store_acquire_with_policy(
     source_copy[source_size] = '\0';
     impl->documents.close(impl->document_user, &document);
 
-    if (impl->compiler_enabled) {
-        voice_status = impl->compiler.compile(
-            impl->compiler_user,
-            source_copy, source_size,
-            &program, &diagnostic);
-    } else {
-        voice_status = vxml_compile(
-            source_copy, source_size,
-            &impl->voice_limits, &program, &diagnostic);
-    }
-    if (voice_status != VXML_OK) {
-        vxml_program_destroy(&program);
-        free(allocation);
-        free(canonical);
-        error_set(out_error, VXML_DOCUMENT_STORE_COMPILE_ERROR,
-                  VXML_DIALOG_MANAGER_OK, voice_status);
-        return VXML_DOCUMENT_STORE_COMPILE_ERROR;
+    {
+        const vxml_document_store_status compile_status =
+            vxml_document_store_compile_source(
+                store, source_copy, source_size,
+                NULL, &program, &diagnostic);
+        if (compile_status != VXML_DOCUMENT_STORE_OK) {
+            voice_status =
+                diagnostic.status != VXML_OK
+                    ? diagnostic.status
+                    : VXML_INVALID_CONTRACT;
+            vxml_program_destroy(&program);
+            free(allocation);
+            free(canonical);
+            error_set(
+                out_error, compile_status,
+                VXML_DIALOG_MANAGER_OK, voice_status);
+            return compile_status;
+        }
     }
 
     if (!make_room(impl, allocation_size, &slot)) {
