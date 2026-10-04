@@ -5526,6 +5526,46 @@ vxml_status vxml_cmeta_session_init_profile(
             program->max_submit_fields;
         profile->submit_value_capacity =
             program->max_submit_value_bytes;
+
+        if (program->max_submit_recordings != 0u ||
+            program->max_submit_parts != 0u ||
+            program->max_submit_recording_name_bytes != 0u ||
+            program->max_submit_fetchaudio_uri_bytes != 0u ||
+            program->max_submit_timeout_us != UINT64_C(0)) {
+            if (program->max_submit_recordings == 0u ||
+                program->max_submit_parts == 0u ||
+                program->max_submit_recording_name_bytes == 0u ||
+                program->max_submit_fetchaudio_uri_bytes == 0u ||
+                program->max_submit_timeout_us == UINT64_C(0) ||
+                program->max_submit_recordings >
+                    SIZE_MAX /
+                        sizeof(*profile->submit_recordings) ||
+                program->max_submit_parts >
+                    SIZE_MAX /
+                        sizeof(*profile->submit_parts)) {
+                status = VXML_INVALID_CONTRACT;
+                goto failure;
+            }
+            profile->submit_recordings =
+                (vxml_submit_recording_field_v1 *)
+                    vxml_calloc(
+                        program->max_submit_recordings,
+                        sizeof(*profile->submit_recordings));
+            profile->submit_parts =
+                (vxml_submit_multipart_part_ref_v1 *)
+                    vxml_calloc(
+                        program->max_submit_parts,
+                        sizeof(*profile->submit_parts));
+            if (profile->submit_recordings == NULL ||
+                profile->submit_parts == NULL) {
+                status = VXML_ALLOCATION_FAILED;
+                goto failure;
+            }
+            profile->submit_recording_capacity =
+                program->max_submit_recordings;
+            profile->submit_part_capacity =
+                program->max_submit_parts;
+        }
     }
     profile->runtime_scope_capacity = 3u;
     profile->runtime_scopes = (vxml_cmeta_expr_runtime_scope *)vxml_calloc(
