@@ -786,6 +786,94 @@ spec("VoiceXML bounded document store") {
                     VXML_DOCUMENT_STORE_OK);
     }
 
+    it("exposes Store-owned fetchaudio begin without leaking the adapter") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        fetch_audio_probe audio = {
+            .document = &probe,
+            .result = VXML_FETCH_AUDIO_STARTED};
+        vxml_document_store_config_v1 config =
+            store_config(&probe, 1u, 4096u);
+        vxml_document_store store = {0};
+        vxml_fetch_audio_request_v1 request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_fetch_audio_request_v1),
+            .uri = "https://voice.example/media/wait.wav",
+            .uri_size =
+                sizeof("https://voice.example/media/wait.wav") - 1u,
+            .has_delay = true,
+            .delay_us = UINT64_C(1000),
+            .has_minimum = true,
+            .minimum_us = UINT64_C(2000)};
+        vxml_fetch_audio_begin_result result =
+            VXML_FETCH_AUDIO_SKIPPED;
+        vxml_fetch_audio_ticket_v1 ticket = {0};
+
+        config.fetch_audio = &fetch_audio_adapter;
+        config.fetch_audio_user = &audio;
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_fetch_audio_begin(
+                &store, &request, &result, &ticket),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(result, VXML_FETCH_AUDIO_STARTED);
+        check_not_null(ticket.finish);
+        check_equal(audio.begin_calls, (size_t)1u);
+        check_equal(audio.finish_calls, (size_t)0u);
+        check_equal(
+            audio.uri, "https://voice.example/media/wait.wav");
+        check_true(audio.has_delay);
+        check_equal(audio.delay_us, UINT64_C(1000));
+        check_true(audio.has_minimum);
+        check_equal(audio.minimum_us, UINT64_C(2000));
+
+        ticket.finish(ticket.user);
+        ticket = (vxml_fetch_audio_ticket_v1){0};
+        check_equal(audio.finish_calls, (size_t)1u);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("reports missing fetchaudio adapter as SKIPPED with a zero ticket") {
+        document_probe probe = {
+            .open_status = VXML_DIALOG_MANAGER_OK,
+            .body = valid_document,
+            .body_size = sizeof(valid_document) - 1u};
+        vxml_document_store_config_v1 config =
+            store_config(&probe, 1u, 4096u);
+        vxml_document_store store = {0};
+        vxml_fetch_audio_request_v1 request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_fetch_audio_request_v1),
+            .uri = "https://voice.example/media/wait.wav",
+            .uri_size =
+                sizeof("https://voice.example/media/wait.wav") - 1u};
+        vxml_fetch_audio_begin_result result =
+            VXML_FETCH_AUDIO_STARTED;
+        vxml_fetch_audio_ticket_v1 ticket = {
+            .finish = fetch_audio_finish,
+            .user = &probe};
+
+        check_equal(
+            vxml_document_store_init(&store, &config),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_fetch_audio_begin(
+                &store, &request, &result, &ticket),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(result, VXML_FETCH_AUDIO_SKIPPED);
+        check_null(ticket.finish);
+        check_null(ticket.user);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("brackets a real cache miss with exact fetchaudio timing") {
         document_probe probe = {
             .open_status = VXML_DIALOG_MANAGER_OK,
