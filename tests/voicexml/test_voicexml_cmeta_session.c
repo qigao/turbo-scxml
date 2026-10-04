@@ -3996,12 +3996,28 @@ spec("VoiceXML CMeta session execution") {
         check_equal(runtime->subdialog_snapshot_generation, generation);
         check_not_null(runtime->subdialog_snapshot_params);
 
+        {
+            const char *error = "stale-caller-error";
+            probe.prepare_status = VXML_INVALID_STATE;
+            check_equal(
+                vxml_session_cmeta_subdialog_prepare(
+                    &session, &error),
+                VXML_INVALID_STATE);
+            check_not_null(error);
+            check_equal(
+                strcmp(
+                    error,
+                    "VoiceXML subdialog provider error"), 0);
+            check_null(strstr(error, "subdialog-probe"));
+            probe.prepare_status = VXML_OK;
+        }
+
         ((vxml_cmeta_subdialog_test_root *)
             runtime->committed_root.storage)->value = 40;
         check_equal(
             vxml_session_cmeta_subdialog_prepare(&session, NULL),
             VXML_OK);
-        check_equal(probe.prepare_calls, (size_t)2u);
+        check_equal(probe.prepare_calls, (size_t)3u);
         check_equal(probe.params[0].value.data.sint, INT64_C(8));
         check_equal(
             vxml_session_cmeta_subdialog_commit(&session),
