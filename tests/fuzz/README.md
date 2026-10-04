@@ -11,6 +11,12 @@ fuzzing.
   no execution-step quota.
 - `voicexml_cmeta_fuzz_smoke`: CMeta compile plus one bounded CMeta Session
   initialization/start for successfully compiled mutations.
+- `voicexml_resource_fuzz_smoke`: profile-neutral DocumentStore URI/compiler
+  and SubmitResource urlencoded/multipart policy/encoding boundaries with
+  inert local adapters only.
+- `voicexml_quickjs_fuzz_smoke`: QuickJS VoiceXML compiler metadata
+  validation only; arbitrary mutated JavaScript is never executed. This target
+  exists only when QuickJS is enabled.
 
 Each checked-in seed is locally authored and is not copied from an upstream
 conformance suite.
@@ -22,7 +28,9 @@ conformance suite.
 - deterministic xorshift mutation schedule;
 - no network, CHTTP, provider, filesystem writes, or background workers;
 - CMeta runtime is bounded by 128 execution steps;
-- smoke runs only in the existing ASan+UBSan job.
+- smoke runs only in the existing ASan+UBSan job;
+- no target uses CHTTP, DNS, sockets or remote providers;
+- feature-OFF builds do not construct or link the QuickJS fuzz target.
 
 The harness asserts compiler publication invariants: success must publish a
 Program and failure must leave the Program empty. Session initialization has
