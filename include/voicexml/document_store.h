@@ -163,6 +163,19 @@ vxml_document_store_status vxml_document_store_compile_source(
     vxml_diagnostic *diagnostic);
 
 /**
+ * Start one optional fetch-audio playback handoff owned by this Store.
+ *
+ * No configured adapter is reported as SKIPPED with a zero ticket. STARTED
+ * publishes one caller-owned finish ticket that must be settled exactly once.
+ * The Store retains ownership of the adapter itself.
+ */
+vxml_document_store_status vxml_document_store_fetch_audio_begin(
+    const vxml_document_store *store,
+    const vxml_fetch_audio_request_v1 *request,
+    vxml_fetch_audio_begin_result *out_result,
+    vxml_fetch_audio_ticket_v1 *out_ticket);
+
+/**
  * Resolve reference relative to base_document_uri.
  *
  * When base_document_uri is empty, the copied application URI is used.

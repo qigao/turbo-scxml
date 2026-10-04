@@ -83,6 +83,7 @@ typedef enum vxml_submit_enctype {
 
 #define VXML_SUBMIT_TARGET_ABI_V1 1u
 #define VXML_SUBMIT_TARGET_ABI_V2 2u
+#define VXML_SUBMIT_TARGET_ABI_V3 3u
 
 typedef struct vxml_submit_field_v1 {
     const char *name;
@@ -117,6 +118,34 @@ typedef struct vxml_submit_target_v2 {
     const vxml_submit_field_v1 *fields;
     size_t field_count;
 } vxml_submit_target_v2;
+
+/**
+ * Profile-neutral submit policy handoff.
+ *
+ * V3 preserves the exact V2 prefix and appends one explicit resource timeout
+ * plus optional fetch-audio playback policy. Views remain borrowed while the
+ * Session stays VXML_SESSION_SUBMITTING.
+ */
+typedef struct vxml_submit_target_v3 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    const vxml_submit_field_v1 *fields;
+    size_t field_count;
+
+    bool has_timeout;
+    uint64_t timeout_us;
+
+    const char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
+} vxml_submit_target_v3;
 
 #define VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 1u
 
@@ -220,6 +249,16 @@ vxml_status vxml_session_submit(
 vxml_status vxml_session_submit_v2(
     const vxml_session *session,
     vxml_submit_target_v2 *out_target);
+
+/**
+ * Borrow the submit target plus resource policy.
+ *
+ * V2 fails closed when V3-only policy is present so older callers cannot
+ * silently discard an explicit timeout or fetch-audio request.
+ */
+vxml_status vxml_session_submit_v3(
+    const vxml_session *session,
+    vxml_submit_target_v3 *out_target);
 
 /** Borrow the external script descriptor while state is VXML_SESSION_SCRIPTING. */
 vxml_status vxml_session_script(

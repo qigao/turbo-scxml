@@ -135,6 +135,14 @@ struct vxml_session_impl {
     vxml_submit_enctype submit_enctype;
     const vxml_submit_field_v1 *submit_fields;
     size_t submit_field_count;
+    bool submit_has_timeout;
+    uint64_t submit_timeout_us;
+    const char *submit_fetchaudio_uri;
+    size_t submit_fetchaudio_uri_size;
+    bool submit_has_fetchaudio_delay;
+    uint64_t submit_fetchaudio_delay_us;
+    bool submit_has_fetchaudio_minimum;
+    uint64_t submit_fetchaudio_minimum_us;
     const char *script_src;
     size_t script_src_size;
     const char *script_charset;

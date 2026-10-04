@@ -19,9 +19,12 @@ int main() {
     vxml_document_store store{};
     auto compile_source_fn =
         &vxml_document_store_compile_source;
+    auto fetch_audio_fn =
+        &vxml_document_store_fetch_audio_begin;
     config.compiler = &compiler;
     config.compiler_user = nullptr;
     return store.impl == nullptr &&
            config.compiler == &compiler &&
-           compile_source_fn != nullptr ? 0 : 1;
+           compile_source_fn != nullptr &&
+           fetch_audio_fn != nullptr ? 0 : 1;
 }

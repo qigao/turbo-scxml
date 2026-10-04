@@ -921,6 +921,19 @@ static vxml_status start_current_session(
         : vxml_session_start(&row->session);
 }
 
+static bool submit_timeout_provider_capable(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t tail =
+        offsetof(vxml_submit_resource_adapter_v1, capabilities) +
+        sizeof(adapter->capabilities);
+    return adapter != NULL &&
+        adapter->abi_version ==
+            VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= tail &&
+        (adapter->capabilities &
+         VXML_SUBMIT_RESOURCE_CAP_TIMEOUT) != 0u;
+}
+
 static vxml_status submit_failure_voice_status(
     vxml_submit_resource_status status) {
     switch (status) {
@@ -932,6 +945,7 @@ static vxml_status submit_failure_voice_status(
     case VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT:
         return VXML_INVALID_ARGUMENT;
     case VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING:
+    case VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY:
         return VXML_UNSUPPORTED_FEATURE;
     case VXML_SUBMIT_RESOURCE_PROVIDER_ERROR:
     case VXML_SUBMIT_RESOURCE_POSSIBLY_PROCESSED:
@@ -948,7 +962,7 @@ static vxml_dialog_manager_status follow_one_submit(
     static const char urlencoded[] =
         "application/x-www-form-urlencoded";
     vxml_dialog_manager_impl *impl;
-    vxml_submit_target_v2 submit = {0};
+    vxml_submit_target_v3 submit = {0};
     vxml_submit_request_v1 request = VXML_SUBMIT_REQUEST_V1_INIT;
     vxml_submit_response response = {0};
     vxml_resolved_uri_v1 target_resolved;
@@ -962,6 +976,8 @@ static vxml_dialog_manager_status follow_one_submit(
     vxml_program next_program = {0};
     vxml_diagnostic diagnostic = {0};
     vxml_status voice_status;
+    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
+    bool fetch_audio_started = false;
 
     if (row == NULL || row->owner == NULL)
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
@@ -979,13 +995,19 @@ static vxml_dialog_manager_status follow_one_submit(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_LIMIT_EXCEEDED);
 
-    voice_status = vxml_session_submit_v2(
+    voice_status = vxml_session_submit_v3(
         &row->session, &submit);
     if (voice_status != VXML_OK)
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
             voice_status);
     if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_UNSUPPORTED_FEATURE);
+
+    if (submit.has_timeout &&
+        !submit_timeout_provider_capable(&impl->submit))
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_UNSUPPORTED_FEATURE);
@@ -1008,6 +1030,64 @@ static vxml_dialog_manager_status follow_one_submit(
             row, VXML_DIALOG_EVENT_ERROR_START,
             store_failure_voice_status(store_status, NULL));
 
+    if (submit.fetchaudio_uri_size != 0u) {
+        vxml_resolved_uri_v1 audio_resolved = {
+            .abi_version = 1u,
+            .struct_size = sizeof(vxml_resolved_uri_v1),
+            .document_uri =
+                impl->resolve_fetchaudio_uri_scratch,
+            .document_uri_capacity =
+                impl->max_source_bytes + 1u,
+            .fragment =
+                impl->resolve_fetchaudio_fragment_scratch,
+            .fragment_capacity =
+                impl->max_source_bytes + 1u};
+        vxml_fetch_audio_request_v1 audio_request = {
+            .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+            .struct_size = sizeof(vxml_fetch_audio_request_v1),
+            .has_delay = submit.has_fetchaudio_delay,
+            .delay_us = submit.fetchaudio_delay_us,
+            .has_minimum =
+                submit.has_fetchaudio_minimum,
+            .minimum_us =
+                submit.fetchaudio_minimum_us};
+        vxml_fetch_audio_begin_result audio_result =
+            VXML_FETCH_AUDIO_SKIPPED;
+        store_status = vxml_document_store_resolve(
+            impl->document_store,
+            row->current_document_uri,
+            row->current_document_uri_size,
+            submit.fetchaudio_uri,
+            submit.fetchaudio_uri_size,
+            &audio_resolved);
+        if (store_status != VXML_DOCUMENT_STORE_OK)
+            return queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                store_failure_voice_status(
+                    store_status, NULL));
+        if (audio_resolved.fragment_size != 0u)
+            return queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                VXML_INVALID_ARGUMENT);
+        audio_request.uri =
+            audio_resolved.document_uri;
+        audio_request.uri_size =
+            audio_resolved.document_uri_size;
+        store_status =
+            vxml_document_store_fetch_audio_begin(
+                impl->document_store,
+                &audio_request,
+                &audio_result,
+                &fetch_audio_ticket);
+        if (store_status != VXML_DOCUMENT_STORE_OK)
+            return queue_event(
+                row, VXML_DIALOG_EVENT_ERROR_START,
+                store_failure_voice_status(
+                    store_status, NULL));
+        fetch_audio_started =
+            audio_result == VXML_FETCH_AUDIO_STARTED;
+    }
+
     request.base_document_uri = row->current_document_uri;
     request.base_document_uri_size =
         row->current_document_uri_size;
@@ -1024,11 +1104,20 @@ static vxml_dialog_manager_status follow_one_submit(
     request.max_body_bytes = impl->max_source_bytes;
     request.max_response_bytes =
         impl->max_submit_response_bytes;
+    request.has_timeout = submit.has_timeout;
+    request.timeout_us = submit.timeout_us;
 
     submit_status = vxml_submit_resource_execute(
         impl->document_store,
         &impl->submit, impl->submit_user,
         &request, &response);
+    if (fetch_audio_started) {
+        fetch_audio_ticket.finish(
+            fetch_audio_ticket.user);
+        fetch_audio_ticket =
+            (vxml_fetch_audio_ticket_v1){0};
+        fetch_audio_started = false;
+    }
     if (submit_status != VXML_SUBMIT_RESOURCE_OK)
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,

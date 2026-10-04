@@ -28,11 +28,18 @@ int main(void) {
         const vxml_limits *,
         vxml_program *, vxml_diagnostic *) =
         vxml_document_store_compile_source;
+    vxml_document_store_status (*fetch_audio_fn)(
+        const vxml_document_store *,
+        const vxml_fetch_audio_request_v1 *,
+        vxml_fetch_audio_begin_result *,
+        vxml_fetch_audio_ticket_v1 *) =
+        vxml_document_store_fetch_audio_begin;
 
     config.compiler = &compiler;
     config.compiler_user = NULL;
     if (config.compiler->compile == NULL ||
-        compile_source_fn == NULL)
+        compile_source_fn == NULL ||
+        fetch_audio_fn == NULL)
         return 1;
     if (store.impl != NULL)
         return 2;
