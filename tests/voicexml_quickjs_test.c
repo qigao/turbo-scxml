@@ -564,13 +564,13 @@ spec("VoiceXML QuickJS script target profile") {
             VXML_DOCUMENT_STORE_OK);
     }
 
-    it("rolls back committed CMeta state and closes the lease when script throws") {
+    it("rolls back state, closes the lease, and exposes no sensitive QuickJS exception text") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
             "<form><block><script src='scripts/fail.js'/></block>"
             "<block><exit/></block></form></vxml>";
         static const char body[] =
-            "value = 77; throw new Error('boom');";
+            "value = 77; throw new Error('SENSITIVE-VOICE-TOKEN-42');";
         vxml_quickjs_compile_options_v1 compile =
             typed_compile_options();
         const voice_quickjs_state initial = {3};
