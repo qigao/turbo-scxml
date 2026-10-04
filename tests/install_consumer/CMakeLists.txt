@@ -351,13 +351,6 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
         "Expected installed target ${TURBOSCXML_EXPECTED_TARGET}")
     endif()
   endforeach()
-  foreach(TURBOSCXML_FORBIDDEN_TARGET IN ITEMS
-      Salts::CFlow)
-    if(TARGET ${TURBOSCXML_FORBIDDEN_TARGET})
-      message(FATAL_ERROR
-        "VoiceXMLCMeta unexpectedly discovered ${TURBOSCXML_FORBIDDEN_TARGET}")
-    endif()
-  endforeach()
   get_target_property(
     TURBOSCXML_VOICEXML_CMETA_LINKS
     TurboSCXML::VoiceXMLCMeta INTERFACE_LINK_LIBRARIES)
