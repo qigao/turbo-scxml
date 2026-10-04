@@ -49,7 +49,9 @@ Runtime failures are represented by:
 
 Runtime QuickJS failures map to status plus fixed Events such as
 `error.semantic`; external-script evaluation does not publish the engine
-exception string through the Session API.
+exception string through the Session API. The QuickJS runtime regression test
+throws a distinctive sensitive sentinel and still exposes only the fixed
+`error.semantic` Event.
 
 Fetched document/data/script bodies, submit field values and recording bytes
 must not be written by TurboSCXML to stdout/stderr or a default log sink.
