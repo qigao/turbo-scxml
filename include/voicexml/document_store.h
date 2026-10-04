@@ -145,6 +145,20 @@ vxml_document_store_status vxml_document_store_init(
     const vxml_document_store_config_v1 *config);
 
 /**
+ * Compile caller-borrowed source with this Store's configured compiler.
+ *
+ * This performs no provider I/O, cache insertion, pinning, or URI work.
+ * On success out_program owns one independent immutable Program. The caller
+ * must destroy it. When no custom compiler was configured, this uses the same
+ * literal vxml_compile() + voice_limits contract as cache misses.
+ */
+vxml_document_store_status vxml_document_store_compile_source(
+    const vxml_document_store *store,
+    const void *source, size_t source_size,
+    vxml_program *out_program,
+    vxml_diagnostic *diagnostic);
+
+/**
  * Resolve reference relative to base_document_uri.
  *
  * When base_document_uri is empty, the copied application URI is used.
