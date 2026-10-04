@@ -50,6 +50,11 @@ int main(void) {
         v4.capacity == 0u || v4.max_source_bytes == 0u ||
         v4.max_navigation_hops == 0u ||
         v4.max_submit_response_bytes == 0u ||
+        v4.max_submit_body_bytes == 0u ||
+        v4.max_submit_parts == 0u ||
+        v4.max_submit_boundary_bytes == 0u ||
+        v4.max_submit_header_bytes == 0u ||
+        v4.max_submit_segments == 0u ||
         v4.voice_limits.max_forms == 0u)
         return 5;
     if (v2.document_store != NULL || v3.document_store != NULL ||
