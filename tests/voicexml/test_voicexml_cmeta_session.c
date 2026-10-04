@@ -1462,6 +1462,20 @@ static vxml_cmeta_compile_options_v1 submit_compile_options(void) {
     return options;
 }
 
+static vxml_cmeta_compile_options_v1 multipart_submit_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options =
+        record_compile_options();
+    options.max_submit_fields = 8u;
+    options.max_submit_value_bytes = 128u;
+    options.max_submit_uri_bytes = 128u;
+    options.max_submit_recordings = 4u;
+    options.max_submit_parts = 12u;
+    options.max_submit_recording_name_bytes = 128u;
+    options.max_submit_fetchaudio_uri_bytes = 128u;
+    options.max_submit_timeout_us = UINT64_C(5000000);
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = compile_options();
     options.max_external_data_resources = 4u;
@@ -2255,6 +2269,283 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("publishes ordered scalar-recording-scalar multipart submit with policy and borrowed lease") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form>"
+            "<record name='memo' dtmfterm='false' type='audio/wav'>"
+            "<filled><submit next='result.vxml' method='post' "
+            "enctype='multipart/form-data' "
+            "namelist='value memo flag' "
+            "fetchtimeout='2s' fetchaudio='wait.wav'/></filled>"
+            "</record></form></vxml>";
+        static const unsigned char recording_bytes[] = {
+            0x11u, 0x22u, 0x33u, 0x44u};
+        const vxml_cmeta_compile_options_v1 compile =
+            multipart_submit_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .flag = true};
+        cmeta_record_probe probe = {
+            .prepare_status = VXML_OK};
+        vxml_cmeta_session_options_v1 options =
+            record_session_options(
+                &root, &probe,
+                VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_cmeta_session_data *runtime;
+        vxml_cmeta_record_completion_v1 completion = {
+            .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1,
+            .struct_size = sizeof(vxml_cmeta_record_completion_v1),
+            .outcome = VXML_CMETA_RECORD_OUTCOME_SUCCESS,
+            .duration_us = UINT64_C(250000),
+            .media_type = {
+                "audio/wav", sizeof("audio/wav") - 1u},
+            .recording = {
+                .data = recording_bytes,
+                .size = sizeof(recording_bytes),
+                .lease = &probe,
+                .release = cmeta_recording_release,
+                .release_user = &probe}
+        };
+        vxml_submit_target_v3 v3 = {0};
+        vxml_submit_target_v4 submit = {0};
+        bool progressed = false;
+        uint64_t generation;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        generation = runtime->record_generation;
+        check_equal(
+            vxml_session_cmeta_record_prepare(
+                &session, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_cmeta_record_commit(&session),
+            VXML_OK);
+        completion.generation = generation;
+        check_equal(
+            vxml_session_cmeta_record_try_complete(
+                &session, &completion),
+            VXML_CMETA_RECORD_INGRESS_ACCEPTED);
+        check_equal(
+            vxml_session_cmeta_record_run_ready(
+                &session, &progressed),
+            VXML_OK);
+        check_true(progressed);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SUBMITTING);
+        check_equal(probe.release_calls, (size_t)0u);
+
+        check_equal(
+            vxml_session_submit_v3(&session, &v3),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_submit_v4(&session, &submit),
+            VXML_OK);
+        check_equal(
+            submit.enctype,
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA);
+        check_equal(
+            submit.method, VXML_SUBMIT_METHOD_POST);
+        check_true(submit.has_timeout);
+        check_equal(
+            submit.timeout_us, UINT64_C(2000000));
+        check_equal(
+            submit.fetchaudio_uri_size,
+            sizeof("wait.wav") - 1u);
+        check_equal(
+            memcmp(
+                submit.fetchaudio_uri, "wait.wav",
+                submit.fetchaudio_uri_size), 0);
+        check_equal(submit.field_count, (size_t)2u);
+        check_equal(submit.recording_count, (size_t)1u);
+        check_equal(submit.part_count, (size_t)3u);
+        check_not_null(submit.fields);
+        check_not_null(submit.recordings);
+        check_not_null(submit.parts);
+
+        if (submit.fields != NULL &&
+            submit.field_count == 2u) {
+            check_equal(
+                submit.fields[0].name_size,
+                sizeof("value") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[0].name, "value",
+                    submit.fields[0].name_size), 0);
+            check_equal(
+                submit.fields[0].value_size,
+                sizeof("7") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[0].value, "7",
+                    submit.fields[0].value_size), 0);
+            check_equal(
+                submit.fields[1].name_size,
+                sizeof("flag") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[1].name, "flag",
+                    submit.fields[1].name_size), 0);
+            check_equal(
+                submit.fields[1].value_size,
+                sizeof("true") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[1].value, "true",
+                    submit.fields[1].value_size), 0);
+        }
+        if (submit.recordings != NULL) {
+            check_equal(
+                submit.recordings[0].name_size,
+                sizeof("memo") - 1u);
+            check_equal(
+                memcmp(
+                    submit.recordings[0].name, "memo",
+                    submit.recordings[0].name_size), 0);
+            check_true(
+                submit.recordings[0].data ==
+                    recording_bytes);
+            check_equal(
+                submit.recordings[0].size,
+                sizeof(recording_bytes));
+            check_equal(
+                submit.recordings[0].media_type_size,
+                sizeof("audio/wav") - 1u);
+        }
+        if (submit.parts != NULL &&
+            submit.part_count == 3u) {
+            check_equal(
+                submit.parts[0].kind,
+                VXML_SUBMIT_MULTIPART_PART_TEXT);
+            check_equal(
+                submit.parts[0].index, (size_t)0u);
+            check_equal(
+                submit.parts[1].kind,
+                VXML_SUBMIT_MULTIPART_PART_RECORDING);
+            check_equal(
+                submit.parts[1].index, (size_t)0u);
+            check_equal(
+                submit.parts[2].kind,
+                VXML_SUBMIT_MULTIPART_PART_TEXT);
+            check_equal(
+                submit.parts[2].index, (size_t)1u);
+        }
+
+        check_equal(probe.release_calls, (size_t)0u);
+        vxml_session_destroy(&session);
+        check_equal(probe.release_calls, (size_t)1u);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails a missing lastresult recording before publishing multipart submit") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='result.vxml' method='post' "
+            "enctype='multipart/form-data' "
+            "namelist='application.lastresult$.recording'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            multipart_submit_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_submit_target_v4 submit = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_INVALID_STATE);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(
+            vxml_session_submit_v4(&session, &submit),
+            VXML_INVALID_STATE);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("keeps multipart submit fail-closed without the append-only policy tail") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' method='post' "
+            "enctype='multipart/form-data' "
+            "namelist='application.lastresult$.recording'/>"
+            "</block></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile =
+            multipart_submit_compile_options();
+        vxml_program program = {0};
+
+        compile.struct_size =
+            offsetof(
+                vxml_cmeta_compile_options_v1,
+                max_submit_recordings);
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_CONTRACT);
+        check_null(program.impl);
+    }
+
+    it("rejects multipart submit without a recording selection and over-limit timeout") {
+        static const char no_recording[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' method='post' "
+            "enctype='multipart/form-data' "
+            "namelist='value flag'/>"
+            "</block></form></vxml>";
+        static const char timeout[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' method='post' "
+            "namelist='value' fetchtimeout='6s'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            multipart_submit_compile_options();
+        vxml_program program = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                no_recording, sizeof(no_recording) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(
+            vxml_compile_cmeta(
+                timeout, sizeof(timeout) - 1u,
+                NULL, &compile, &program, NULL),
+            VXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
+    }
+
     it("publishes ordered typed POST submit fields through generic V2 and stops later actions") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
