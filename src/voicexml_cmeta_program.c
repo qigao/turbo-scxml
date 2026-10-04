@@ -919,6 +919,23 @@ static bool cmeta_submit_options_valid(
         options->max_submit_uri_bytes != SIZE_MAX;
 }
 
+static bool cmeta_submit_multipart_options_valid(
+    const vxml_cmeta_compile_options_v1 *options) {
+    const size_t tail_size =
+        offsetof(
+            vxml_cmeta_compile_options_v1,
+            max_submit_timeout_us) +
+        sizeof(options->max_submit_timeout_us);
+    return cmeta_submit_options_valid(options) &&
+        options->struct_size >= tail_size &&
+        options->max_submit_recordings != 0u &&
+        options->max_submit_parts != 0u &&
+        options->max_submit_recording_name_bytes != 0u &&
+        options->max_submit_fetchaudio_uri_bytes != 0u &&
+        options->max_submit_fetchaudio_uri_bytes != SIZE_MAX &&
+        options->max_submit_timeout_us != UINT64_C(0);
+}
+
 static bool range_valid(size_t first, size_t count, size_t total) {
     return first <= total && count <= total - first;
 }
@@ -1369,7 +1386,8 @@ static vxml_status cmeta_measure_executable(
         }
     } else if (cmeta_node_named(node, "submit")) {
         static const char *const allowed[] = {
-            "next", "method", "namelist", "enctype"};
+            "next", "method", "namelist", "enctype",
+            "fetchtimeout", "fetchaudio"};
         const salts_xml_attribute next =
             cmeta_attribute(node, "next");
         const salts_xml_attribute method =
@@ -1378,16 +1396,38 @@ static vxml_status cmeta_measure_executable(
             cmeta_attribute(node, "namelist");
         const salts_xml_attribute enctype =
             cmeta_attribute(node, "enctype");
+        const salts_xml_attribute fetchtimeout =
+            cmeta_attribute(node, "fetchtimeout");
+        const salts_xml_attribute fetchaudio =
+            cmeta_attribute(node, "fetchaudio");
+        const bool multipart =
+            enctype.impl != NULL &&
+            cmeta_decoded_equal(
+                salts_xml_attribute_value(enctype),
+                "multipart/form-data");
+        const bool policy_requested =
+            fetchtimeout.impl != NULL ||
+            fetchaudio.impl != NULL;
         size_t decoded_size = 0u;
         size_t first_location;
+        bool has_timeout = false;
+        uint64_t timeout_us = UINT64_C(0);
         status = cmeta_validate_attributes(
-            node, allowed, 4u, diagnostic);
+            node, allowed,
+            sizeof(allowed) / sizeof(allowed[0]),
+            diagnostic);
         if (status != VXML_OK) return status;
         if (!cmeta_submit_options_valid(options))
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_CONTRACT,
                 salts_xml_node_location(node),
                 "VoiceXML typed submit requires enabled submit bounds");
+        if ((multipart || policy_requested) &&
+            !cmeta_submit_multipart_options_valid(options))
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_CONTRACT,
+                salts_xml_node_location(node),
+                "VoiceXML multipart/policy submit requires enabled append-only bounds");
         if (next.impl == NULL)
             return cmeta_program_fail(
                 diagnostic, VXML_INVALID_STRUCTURE,
@@ -1421,11 +1461,12 @@ static vxml_status cmeta_measure_executable(
         if (enctype.impl != NULL &&
             !cmeta_decoded_equal(
                 salts_xml_attribute_value(enctype),
-                "application/x-www-form-urlencoded"))
+                "application/x-www-form-urlencoded") &&
+            !multipart)
             return cmeta_program_fail(
                 diagnostic, VXML_UNSUPPORTED_FEATURE,
                 salts_xml_attribute_location(enctype),
-                "typed CMeta submit supports urlencoded enctype in this slice");
+                "VoiceXML submit enctype is unsupported");
         if (enctype.impl != NULL &&
             (method.impl == NULL ||
              cmeta_decoded_equal(
@@ -1434,20 +1475,75 @@ static vxml_status cmeta_measure_executable(
                 diagnostic, VXML_INVALID_STRUCTURE,
                 salts_xml_attribute_location(enctype),
                 "VoiceXML submit enctype applies only to POST");
+        if (fetchtimeout.impl != NULL) {
+            status = cmeta_parse_prompt_timeout(
+                fetchtimeout,
+                &has_timeout, &timeout_us,
+                diagnostic);
+            if (status != VXML_OK) return status;
+            if (!has_timeout ||
+                timeout_us > options->max_submit_timeout_us)
+                return cmeta_program_fail(
+                    diagnostic,
+                    timeout_us > options->max_submit_timeout_us
+                        ? VXML_LIMIT_EXCEEDED
+                        : VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(fetchtimeout),
+                    "VoiceXML submit fetchtimeout exceeds configured bound");
+        }
+        if (fetchaudio.impl != NULL) {
+            decoded_size = 0u;
+            if (!cmeta_decode_entities(
+                    salts_xml_attribute_value(fetchaudio),
+                    NULL, 0u, &decoded_size))
+                return cmeta_program_fail(
+                    diagnostic, VXML_XML_ERROR,
+                    salts_xml_attribute_location(fetchaudio),
+                    "VoiceXML submit fetchaudio contains an invalid XML reference");
+            if (decoded_size == 0u ||
+                decoded_size >
+                    options->max_submit_fetchaudio_uri_bytes)
+                return cmeta_program_fail(
+                    diagnostic,
+                    decoded_size >
+                            options->max_submit_fetchaudio_uri_bytes
+                        ? VXML_LIMIT_EXCEEDED
+                        : VXML_INVALID_STRUCTURE,
+                    salts_xml_attribute_location(fetchaudio),
+                    "VoiceXML submit fetchaudio must be a bounded non-empty URI");
+        }
         status = cmeta_measure_name(
             next, measurement, limits, diagnostic);
         if (status != VXML_OK) return status;
+        if (fetchaudio.impl != NULL) {
+            status = cmeta_measure_name(
+                fetchaudio, measurement, limits, diagnostic);
+            if (status != VXML_OK) return status;
+        }
         first_location = measurement->location_count;
         if (namelist.impl != NULL) {
             status = cmeta_measure_namelist(
                 namelist, measurement, limits, diagnostic);
             if (status != VXML_OK) return status;
-            if (measurement->location_count - first_location >
-                    options->max_submit_fields)
+            if (multipart) {
+                if (measurement->location_count - first_location >
+                        options->max_submit_parts)
+                    return cmeta_program_fail(
+                        diagnostic, VXML_LIMIT_EXCEEDED,
+                        salts_xml_attribute_location(namelist),
+                        "VoiceXML multipart submit namelist exceeds max_submit_parts");
+            } else if (measurement->location_count - first_location >
+                           options->max_submit_fields) {
                 return cmeta_program_fail(
                     diagnostic, VXML_LIMIT_EXCEEDED,
                     salts_xml_attribute_location(namelist),
                     "VoiceXML submit namelist exceeds max_submit_fields");
+            }
+        } else if (multipart) {
+            return cmeta_program_fail(
+                diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node),
+                "VoiceXML multipart submit requires an explicit recording namelist");
         }
         if (!cmeta_measure_increment(
                 &measurement->submit_count))
