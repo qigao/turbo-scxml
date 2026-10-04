@@ -112,6 +112,9 @@ struct vxml_dialog_manager_impl {
     char *resolve_fetchaudio_fragment_scratch;
     vxml_dialog_event_sink_v1 events;
     void *event_user;
+    vxml_session_factory_v1 session_factory;
+    void *session_factory_user;
+    bool session_factory_enabled;
 
     vxml_dialog_row *rows;
     bool closed;
@@ -141,6 +144,17 @@ static bool media_type_valid(const char *data, size_t size) {
     return data != NULL &&
            size == sizeof(VXML_MEDIA_TYPE) - 1u &&
            memcmp(data, VXML_MEDIA_TYPE, size) == 0;
+}
+
+static bool session_factory_prefix_valid(
+    const vxml_session_factory_v1 *factory) {
+    const size_t prefix =
+        offsetof(vxml_session_factory_v1, init) +
+        sizeof(factory->init);
+    return factory != NULL &&
+        factory->abi_version == VXML_SESSION_FACTORY_ABI_V1 &&
+        factory->struct_size >= prefix &&
+        factory->init != NULL;
 }
 
 static bool submit_prefix_valid(
@@ -886,10 +900,18 @@ static vxml_status start_current_session(
     vxml_dialog_row *row,
     const char *fragment,
     size_t fragment_size) {
+    vxml_dialog_manager_impl *impl;
     vxml_status status;
-    if (row == NULL || row->program_view == NULL)
+    if (row == NULL || row->owner == NULL ||
+        row->program_view == NULL)
         return VXML_INVALID_ARGUMENT;
-    status = vxml_session_init(&row->session, row->program_view);
+    impl = row->owner;
+    status = impl->session_factory_enabled
+        ? impl->session_factory.init(
+              impl->session_factory_user,
+              &row->session, row->program_view)
+        : vxml_session_init(
+              &row->session, row->program_view);
     if (status != VXML_OK)
         return status;
     row->session_live = true;
@@ -1055,13 +1077,18 @@ static vxml_dialog_manager_status follow_one_submit(
         }
     }
 
-    voice_status = vxml_compile(
+    store_status = vxml_document_store_compile_source(
+        impl->document_store,
         response.data, response.size,
-        &impl->voice_limits,
         &next_program, &diagnostic);
     (void)vxml_submit_resource_close(
         &impl->submit, impl->submit_user, &response);
-    if (voice_status != VXML_OK) {
+    if (store_status != VXML_DOCUMENT_STORE_OK) {
+        voice_status =
+            diagnostic.status != VXML_OK
+                ? diagnostic.status
+                : store_failure_voice_status(
+                    store_status, NULL);
         vxml_program_destroy(&next_program);
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
@@ -1493,7 +1520,11 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
         config->events == NULL ||
         config->events->abi_version != VXML_DIALOG_EVENT_SINK_ABI_V1 ||
         config->events->struct_size < sizeof(*config->events) ||
-        config->events->try_publish == NULL)
+        config->events->try_publish == NULL ||
+        (config->struct_size >= factory_tail &&
+         config->session_factory != NULL &&
+         !session_factory_prefix_valid(
+             config->session_factory)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
@@ -1522,6 +1553,21 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
     impl->document_user = config->document_user;
     impl->events = *config->events;
     impl->event_user = config->event_user;
+    if (config->struct_size >= factory_tail &&
+        config->session_factory != NULL) {
+        memset(
+            &impl->session_factory, 0,
+            sizeof(impl->session_factory));
+        memcpy(
+            &impl->session_factory,
+            config->session_factory,
+            min_size(
+                config->session_factory->struct_size,
+                sizeof(impl->session_factory)));
+        impl->session_factory_user =
+            config->session_factory_user;
+        impl->session_factory_enabled = true;
+    }
 
     for (index = 0u; index < impl->capacity; ++index) {
         vxml_dialog_row *row = &impl->rows[index];
@@ -1549,12 +1595,18 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
 vxml_dialog_manager_status vxml_dialog_manager_init_v2(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v2 *config) {
+    const size_t historical_prefix =
+        offsetof(vxml_dialog_manager_config_v2, event_user) +
+        sizeof(config->event_user);
+    const size_t factory_tail =
+        offsetof(vxml_dialog_manager_config_v2, session_factory_user) +
+        sizeof(config->session_factory_user);
     vxml_dialog_manager_impl *impl;
     size_t index;
     if (manager == NULL || manager->impl != NULL ||
         config == NULL ||
         config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V2 ||
-        config->struct_size < sizeof(*config) ||
+        config->struct_size < historical_prefix ||
         config->capacity == 0u ||
         config->max_source_bytes == 0u ||
         config->max_source_bytes == SIZE_MAX ||
@@ -1642,17 +1694,27 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
 vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v4 *config) {
+    const size_t historical_prefix =
+        offsetof(vxml_dialog_manager_config_v4, event_user) +
+        sizeof(config->event_user);
+    const size_t factory_tail =
+        offsetof(vxml_dialog_manager_config_v4, session_factory_user) +
+        sizeof(config->session_factory_user);
     vxml_dialog_manager_config_v3 v3;
     vxml_dialog_manager_impl *impl;
     vxml_dialog_manager_status status;
 
     if (manager == NULL || config == NULL ||
         config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V4 ||
-        config->struct_size < sizeof(*config) ||
+        config->struct_size < historical_prefix ||
         config->max_navigation_hops == 0u ||
         config->max_submit_response_bytes == 0u ||
         config->max_submit_response_bytes == SIZE_MAX ||
-        !submit_prefix_valid(config->submit))
+        !submit_prefix_valid(config->submit) ||
+        (config->struct_size >= factory_tail &&
+         config->session_factory != NULL &&
+         !session_factory_prefix_valid(
+             config->session_factory)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     v3 = vxml_dialog_manager_default_config_v3();
@@ -1667,6 +1729,11 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     v3.document_store = config->document_store;
     v3.events = config->events;
     v3.event_user = config->event_user;
+    if (config->struct_size >= factory_tail) {
+        v3.session_factory = config->session_factory;
+        v3.session_factory_user =
+            config->session_factory_user;
+    }
 
     status = vxml_dialog_manager_init_v3(manager, &v3);
     if (status != VXML_DIALOG_MANAGER_OK)
@@ -1688,14 +1755,24 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
 vxml_dialog_manager_status vxml_dialog_manager_init_v3(
     vxml_dialog_manager *manager,
     const vxml_dialog_manager_config_v3 *config) {
+    const size_t historical_prefix =
+        offsetof(vxml_dialog_manager_config_v3, event_user) +
+        sizeof(config->event_user);
+    const size_t factory_tail =
+        offsetof(vxml_dialog_manager_config_v3, session_factory_user) +
+        sizeof(config->session_factory_user);
     vxml_dialog_manager_config_v2 v2;
     vxml_dialog_manager_impl *impl;
     vxml_dialog_manager_status status;
 
     if (manager == NULL || config == NULL ||
         config->abi_version != VXML_DIALOG_MANAGER_CONFIG_ABI_V3 ||
-        config->struct_size < sizeof(*config) ||
-        config->max_navigation_hops == 0u)
+        config->struct_size < historical_prefix ||
+        config->max_navigation_hops == 0u ||
+        (config->struct_size >= factory_tail &&
+         config->session_factory != NULL &&
+         !session_factory_prefix_valid(
+             config->session_factory)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     v2 = vxml_dialog_manager_default_config_v2();
@@ -1709,6 +1786,11 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v3(
     v2.document_store = config->document_store;
     v2.events = config->events;
     v2.event_user = config->event_user;
+    if (config->struct_size >= factory_tail) {
+        v2.session_factory = config->session_factory;
+        v2.session_factory_user =
+            config->session_factory_user;
+    }
 
     status = vxml_dialog_manager_init_v2(manager, &v2);
     if (status != VXML_DIALOG_MANAGER_OK)
