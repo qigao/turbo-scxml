@@ -11447,8 +11447,9 @@ vxml_status vxml_session_cmeta_record_run_ready(
         memory_order_release);
     profile->active_record = VXML_CMETA_NO_INDEX;
 
-    if (profile->pending_navigation_uri != NULL) {
-        status = publish_pending_navigation(
+    if (profile->submit_requested ||
+        profile->pending_navigation_uri != NULL) {
+        status = publish_pending_control(
             impl, profile);
         if (status != VXML_OK)
             return session_fail(impl, status);
