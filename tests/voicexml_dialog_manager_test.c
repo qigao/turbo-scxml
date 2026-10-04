@@ -20,6 +20,11 @@ typedef struct fake_profile_probe {
     size_t submit_uri_size;
     const vxml_submit_field_v1 *submit_fields;
     size_t submit_field_count;
+    vxml_submit_enctype submit_enctype;
+    const vxml_submit_recording_field_v1 *submit_recordings;
+    size_t submit_recording_count;
+    const vxml_submit_multipart_part_ref_v1 *submit_parts;
+    size_t submit_part_count;
     bool submit_has_timeout;
     uint64_t submit_timeout_us;
     const char *submit_fetchaudio_uri;
@@ -54,10 +59,19 @@ static vxml_status fake_profile_start(vxml_session_impl *session) {
         session->submit_uri_size = probe->submit_uri_size;
         session->submit_method = VXML_SUBMIT_METHOD_POST;
         session->submit_enctype =
-            VXML_SUBMIT_ENCTYPE_URLENCODED;
+            probe->submit_enctype != 0
+                ? probe->submit_enctype
+                : VXML_SUBMIT_ENCTYPE_URLENCODED;
         session->submit_fields = probe->submit_fields;
         session->submit_field_count =
             probe->submit_field_count;
+        session->submit_recordings =
+            probe->submit_recordings;
+        session->submit_recording_count =
+            probe->submit_recording_count;
+        session->submit_parts = probe->submit_parts;
+        session->submit_part_count =
+            probe->submit_part_count;
         session->submit_has_timeout =
             probe->submit_has_timeout;
         session->submit_timeout_us =
@@ -634,12 +648,15 @@ typedef struct submit_probe {
     const char *response_body;
     const char *effective_uri;
     size_t execute_calls;
+    size_t execute_v2_calls;
     size_t close_calls;
     vxml_submit_method method;
     bool has_timeout;
     uint64_t timeout_us;
     navigation_document_probe *ordering_documents;
     size_t execute_sequence;
+    const void *expected_borrowed;
+    bool saw_borrowed;
     char uri[256];
     char content_type[128];
     char body[256];
@@ -709,6 +726,93 @@ static vxml_submit_resource_status submit_execute(
     return VXML_SUBMIT_RESOURCE_OK;
 }
 
+
+static vxml_submit_resource_status submit_execute_v2(
+    void *user,
+    const vxml_submit_wire_request_v2 *request,
+    vxml_submit_response *out_response) {
+    static const char media[] = "application/voicexml+xml";
+    const size_t historical_prefix =
+        offsetof(vxml_submit_wire_request_v2, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_wire_request_v2, timeout_us) +
+        sizeof(request->timeout_us);
+    submit_probe *probe = (submit_probe *)user;
+    const size_t response_size =
+        probe != NULL && probe->response_body != NULL
+            ? strlen(probe->response_body) : 0u;
+    size_t cursor = 0u;
+    size_t index;
+
+    if (probe == NULL || request == NULL ||
+        out_response == NULL ||
+        request->abi_version != VXML_SUBMIT_WIRE_REQUEST_ABI_V2 ||
+        (request->struct_size != historical_prefix &&
+         request->struct_size < timeout_tail) ||
+        request->uri == NULL ||
+        request->uri_size == 0u ||
+        request->uri_size >= sizeof(probe->uri) ||
+        request->content_type_size >=
+            sizeof(probe->content_type) ||
+        request->body_size >= sizeof(probe->body) ||
+        request->segments == NULL ||
+        request->segment_count == 0u ||
+        request->method != VXML_SUBMIT_METHOD_POST)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+
+    ++probe->execute_v2_calls;
+    probe->method = request->method;
+    probe->has_timeout =
+        request->struct_size >= timeout_tail
+            ? request->has_timeout : false;
+    probe->timeout_us =
+        request->struct_size >= timeout_tail
+            ? request->timeout_us : UINT64_C(0);
+    if (probe->ordering_documents != NULL)
+        probe->execute_sequence =
+            ++probe->ordering_documents->sequence;
+    memcpy(probe->uri, request->uri, request->uri_size);
+    probe->uri[request->uri_size] = '\0';
+    memcpy(
+        probe->content_type,
+        request->content_type,
+        request->content_type_size);
+    probe->content_type[request->content_type_size] = '\0';
+
+    for (index = 0u; index < request->segment_count; ++index) {
+        const vxml_submit_body_segment_v1 *segment =
+            &request->segments[index];
+        if ((segment->size != 0u && segment->data == NULL) ||
+            segment->size > request->body_size - cursor)
+            return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+        if (segment->data == probe->expected_borrowed &&
+            segment->size != 0u)
+            probe->saw_borrowed = true;
+        if (segment->size != 0u)
+            memcpy(
+                probe->body + cursor,
+                segment->data, segment->size);
+        cursor += segment->size;
+    }
+    if (cursor != request->body_size)
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    probe->body[cursor] = '\0';
+
+    if (probe->status != VXML_SUBMIT_RESOURCE_OK)
+        return probe->status;
+    *out_response = (vxml_submit_response){
+        .data = probe->response_body,
+        .size = response_size,
+        .media_type = media,
+        .media_type_size = sizeof(media) - 1u,
+        .effective_uri = probe->effective_uri,
+        .effective_uri_size =
+            probe->effective_uri != NULL
+                ? strlen(probe->effective_uri) : 0u,
+        .lease = probe};
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
 static void submit_close(
     void *user, vxml_submit_response *response) {
     submit_probe *probe = (submit_probe *)user;
@@ -724,6 +828,7 @@ static const vxml_submit_resource_adapter_v1 submit_adapter = {
     .struct_size = sizeof(vxml_submit_resource_adapter_v1),
     .execute = submit_execute,
     .close = submit_close,
+    .execute_v2 = submit_execute_v2,
     .capabilities = VXML_SUBMIT_RESOURCE_CAP_TIMEOUT};
 
 static vxml_dialog_manager_status manager_init_v4(
