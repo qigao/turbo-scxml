@@ -25,6 +25,7 @@ int main(void) {
     vxml_document_store_status (*compile_source_fn)(
         const vxml_document_store *,
         const void *, size_t,
+        const vxml_limits *,
         vxml_program *, vxml_diagnostic *) =
         vxml_document_store_compile_source;
 
