@@ -513,7 +513,6 @@ static vxml_status admit_cmeta_datamodel(
             (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
                            "%s", xml_diagnostic.message);
         }
-        salts_xml_document_destroy(&document);
         return status;
     }
     root = salts_xml_document_root(&document);
@@ -5216,13 +5215,10 @@ static vxml_status cmeta_measure_program(
     measurement->scope_count = 1u;
     xml_status = salts_xml_parse(
         &document, bytes, size, &limits->xml, &xml_diagnostic);
-    if (xml_status != SALTS_XML_OK) {
-        status = cmeta_program_fail(
+    if (xml_status != SALTS_XML_OK)
+        return cmeta_program_fail(
             diagnostic, map_cmeta_xml_status(xml_status),
             xml_diagnostic.location, xml_diagnostic.message);
-        salts_xml_document_destroy(&document);
-        return status;
-    }
     root = salts_xml_document_root(&document);
     if (!cmeta_node_named(root, "vxml")) {
         status = cmeta_program_fail(
@@ -12645,13 +12641,10 @@ static vxml_status cmeta_write_program(
     vxml_status status;
     xml_status = salts_xml_parse(
         &document, bytes, size, &limits->xml, &xml_diagnostic);
-    if (xml_status != SALTS_XML_OK) {
-        status = cmeta_program_fail(
+    if (xml_status != SALTS_XML_OK)
+        return cmeta_program_fail(
             diagnostic, map_cmeta_xml_status(xml_status),
             xml_diagnostic.location, xml_diagnostic.message);
-        salts_xml_document_destroy(&document);
-        return status;
-    }
     if (!cmeta_allocate_rows(
             measurement, size, options, &impl, &profile)) {
         const salts_xml_location location =
