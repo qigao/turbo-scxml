@@ -219,6 +219,17 @@ typedef struct vxml_cmeta_compile_options_v1 {
     size_t max_submit_fields;
     size_t max_submit_value_bytes;
     size_t max_submit_uri_bytes;
+
+    /*
+     * Optional append-only multipart/fetch-policy submit bounds.
+     * A complete nonzero tail enables explicit recording selections plus
+     * fetchtimeout/fetchaudio. Older prefixes remain urlencoded-only.
+     */
+    size_t max_submit_recordings;
+    size_t max_submit_parts;
+    size_t max_submit_recording_name_bytes;
+    size_t max_submit_fetchaudio_uri_bytes;
+    uint64_t max_submit_timeout_us;
 } vxml_cmeta_compile_options_v1;
 
 typedef struct vxml_cmeta_session_options_v1 {

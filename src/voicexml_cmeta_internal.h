@@ -467,6 +467,10 @@ typedef struct vxml_cmeta_action_row {
     vxml_cmeta_fetchaudio_policy fetchaudio;
     vxml_submit_method submit_method;
     vxml_submit_enctype submit_enctype;
+    bool submit_has_timeout;
+    uint64_t submit_timeout_us;
+    size_t submit_recording_count;
+    size_t submit_part_count;
     size_t data_index;
     bool clear_all_form_items;
 } vxml_cmeta_action_row;
@@ -582,6 +586,11 @@ typedef struct vxml_cmeta_program_data {
     size_t max_submit_fields;
     size_t max_submit_value_bytes;
     size_t max_submit_uri_bytes;
+    size_t max_submit_recordings;
+    size_t max_submit_parts;
+    size_t max_submit_recording_name_bytes;
+    size_t max_submit_fetchaudio_uri_bytes;
+    uint64_t max_submit_timeout_us;
     vxml_cmeta_action_row *actions;
     size_t action_count;
     vxml_cmeta_branch_row *branches;
@@ -949,11 +958,20 @@ typedef struct vxml_cmeta_session_data {
     size_t submit_field_capacity;
     char *submit_values;
     size_t submit_value_capacity;
+    vxml_submit_recording_field_v1 *submit_recordings;
+    size_t submit_recording_capacity;
+    vxml_submit_multipart_part_ref_v1 *submit_parts;
+    size_t submit_part_capacity;
     const char *pending_submit_uri;
     size_t pending_submit_uri_size;
     vxml_submit_method pending_submit_method;
     vxml_submit_enctype pending_submit_enctype;
     size_t pending_submit_field_count;
+    size_t pending_submit_recording_count;
+    size_t pending_submit_part_count;
+    bool pending_submit_has_timeout;
+    uint64_t pending_submit_timeout_us;
+    vxml_cmeta_fetchaudio_policy pending_submit_fetchaudio;
     bool submit_requested;
 
     vxml_cmeta_expr_runtime_scope *runtime_scopes;

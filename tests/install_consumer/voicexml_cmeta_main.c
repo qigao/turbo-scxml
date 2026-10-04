@@ -38,7 +38,12 @@ int main(void) {
         .max_data_request_value_bytes = 256u,
         .max_submit_fields = 4u,
         .max_submit_value_bytes = 256u,
-        .max_submit_uri_bytes = 128u
+        .max_submit_uri_bytes = 128u,
+        .max_submit_recordings = 2u,
+        .max_submit_parts = 6u,
+        .max_submit_recording_name_bytes = 64u,
+        .max_submit_fetchaudio_uri_bytes = 128u,
+        .max_submit_timeout_us = UINT64_C(5000000)
     };
     const vxml_cmeta_session_options_v1 session_options = {
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,
