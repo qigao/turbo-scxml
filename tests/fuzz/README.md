@@ -60,10 +60,11 @@ SaltsUtils XML parser/cxml and was fixed/regressed there before TurboSCXML
 qualification resumed.
 
 
-The second minimized regression came from PR #285 fuzz smoke: a malformed
-VoiceXML mutation built a partial XML tree before parse failure. The compiler
-returned immediately without settling that partial `salts_xml_document`,
-which LSan reported as 17 leaked parser allocations. Base and CMeta compiler
-parse-failure paths now always destroy the document, and
-`partial-tree-unclosed.vxml` keeps that ownership contract in both seed
-corpora.
+A later PR #285 sanitizer run exposed another malformed-XML ownership
+regression while exercising the same public parser contract. Because
+`salts_xml_parse()` guarantees that failure leaves an empty output, the fix
+remained in the SaltsUtils XML parser owner rather than adding a consumer-side
+destroy workaround. SaltsUtils #477/#480 fixed and qualified the exact
+VoiceXML mutations, then release 4.1.19 published that fix. The local
+`partial-tree-unclosed.vxml` seeds keep the cross-repository regression
+visible while TurboSCXML continues to consume the latest released SDK.
