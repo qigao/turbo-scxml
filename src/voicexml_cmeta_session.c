@@ -1958,8 +1958,8 @@ static vxml_status publish_pending_submit(
              VXML_SUBMIT_METHOD_POST) ||
         profile->pending_submit_enctype !=
             VXML_SUBMIT_ENCTYPE_URLENCODED ||
-        ((profile->submit_fields == NULL) !=
-         (profile->pending_submit_field_count == 0u)))
+        (profile->pending_submit_field_count != 0u &&
+         profile->submit_fields == NULL))
         return VXML_INVALID_STRUCTURE;
     impl->submit_uri = profile->pending_submit_uri;
     impl->submit_uri_size =
@@ -1968,7 +1968,9 @@ static vxml_status publish_pending_submit(
         profile->pending_submit_method;
     impl->submit_enctype =
         profile->pending_submit_enctype;
-    impl->submit_fields = profile->submit_fields;
+    impl->submit_fields =
+        profile->pending_submit_field_count != 0u
+            ? profile->submit_fields : NULL;
     impl->submit_field_count =
         profile->pending_submit_field_count;
     profile->submit_requested = false;
