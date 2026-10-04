@@ -10526,51 +10526,6 @@ done:
     return status;
 }
 
-static vxml_status cmeta_validate_submit_locations(
-    cmeta_program_builder *builder,
-    size_t first, size_t count,
-    salts_xml_location location) {
-    size_t index;
-    if (builder == NULL ||
-        count > builder->options->max_submit_fields ||
-        !range_valid(
-            first, count,
-            builder->profile->location_count) ||
-        (count != 0u &&
-         builder->profile->locations == NULL))
-        return cmeta_program_fail(
-            builder != NULL ? builder->diagnostic : NULL,
-            count > (builder != NULL
-                ? builder->options->max_submit_fields : 0u)
-                ? VXML_LIMIT_EXCEEDED
-                : VXML_INVALID_STRUCTURE,
-            location,
-            "VoiceXML submit namelist range is invalid");
-    for (index = 0u; index < count; ++index) {
-        const vxml_cmeta_location_row *row =
-            &builder->profile->locations[first + index];
-        size_t prior;
-        if (row->name == NULL || row->name_size == 0u)
-            return cmeta_program_fail(
-                builder->diagnostic,
-                VXML_INVALID_STRUCTURE, location,
-                "VoiceXML submit namelist location is invalid");
-        for (prior = 0u; prior < index; ++prior) {
-            const vxml_cmeta_location_row *previous =
-                &builder->profile->locations[first + prior];
-            if (previous->name_size == row->name_size &&
-                memcmp(
-                    previous->name, row->name,
-                    row->name_size) == 0)
-                return cmeta_program_fail(
-                    builder->diagnostic,
-                    VXML_INVALID_STRUCTURE, location,
-                    "VoiceXML submit namelist contains a duplicate name");
-        }
-    }
-    return VXML_OK;
-}
-
 static vxml_status cmeta_lower_executable(
     cmeta_program_builder *builder, salts_xml_node node,
     size_t execution_scope,
