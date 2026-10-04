@@ -458,6 +458,46 @@ spec("VoiceXML one-attempt submit resource") {
             VXML_DOCUMENT_STORE_OK);
     }
 
+    it("rejects noncanonical hidden timeout values before provider admission") {
+        static const unsigned char recording_bytes[] = {0x01u};
+        static const vxml_submit_recording_field_v1 recordings[] = {
+            {
+                "voice", sizeof("voice") - 1u,
+                NULL, 0u,
+                "audio/wav", sizeof("audio/wav") - 1u,
+                recording_bytes, sizeof(recording_bytes)
+            }};
+        submit_probe probe = successful_probe();
+        vxml_document_store store = {0};
+        vxml_submit_request_v1 request = base_request();
+        vxml_submit_multipart_request_v1 multipart =
+            base_multipart_request();
+        vxml_submit_response response = {0};
+
+        request.timeout_us = UINT64_C(1);
+        multipart.recordings = recordings;
+        multipart.recording_count = 1u;
+        multipart.timeout_us = UINT64_C(1);
+
+        init_resolver(&store);
+        check_equal(
+            vxml_submit_resource_execute(
+                &store, &submit_adapter, &probe,
+                &request, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_calls, (size_t)0u);
+
+        check_equal(
+            vxml_submit_resource_execute_multipart(
+                &store, &submit_adapter, &probe,
+                &multipart, &response),
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT);
+        check_equal(probe.execute_v2_calls, (size_t)0u);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
     it("keeps historical request prefixes timeout-free even when new tail storage is populated") {
         submit_probe probe = successful_probe();
         vxml_document_store store = {0};
