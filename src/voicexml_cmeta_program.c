@@ -10590,6 +10590,297 @@ static const vxml_cmeta_field_row *cmeta_form_field_by_name(
     return NULL;
 }
 
+
+static const vxml_cmeta_record_row *cmeta_form_record_by_name(
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_form_row *form,
+    salts_xml_string_view name,
+    size_t *out_record_index) {
+    size_t offset;
+    if (program == NULL || form == NULL ||
+        !range_valid(
+            form->first_record, form->record_count,
+            program->record_count) ||
+        (form->record_count != 0u &&
+         program->records == NULL))
+        return NULL;
+    for (offset = 0u; offset < form->record_count; ++offset) {
+        const size_t index = form->first_record + offset;
+        const vxml_cmeta_record_row *record =
+            &program->records[index];
+        if (record->name != NULL &&
+            record->name_size == name.size &&
+            memcmp(record->name, name.data, name.size) == 0) {
+            if (out_record_index != NULL)
+                *out_record_index = index;
+            return record;
+        }
+    }
+    return NULL;
+}
+
+static vxml_status cmeta_submit_recording_shadow_token(
+    cmeta_program_builder *builder,
+    salts_xml_string_view name,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    bool *out_recording) {
+    static const char application_owner[] =
+        "application.lastresult";
+    salts_xml_string_view owner = {0};
+    size_t form_index;
+    if (out_recording != NULL) *out_recording = false;
+    if (builder == NULL || scopes == NULL ||
+        scope_count == 0u || out_recording == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (!cmeta_shadow_property(
+            name, "recording", &owner))
+        return VXML_OK;
+    if (owner.size == sizeof(application_owner) - 1u &&
+        memcmp(
+            owner.data, application_owner,
+            sizeof(application_owner) - 1u) == 0) {
+        *out_recording = true;
+        return VXML_OK;
+    }
+    if (!cmeta_ascii_ncname(owner))
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            (salts_xml_location){0},
+            "VoiceXML submit recording shadow owner must be application.lastresult or a field NCName");
+    form_index = cmeta_expression_form_from_scopes(
+        builder->profile, scopes, scope_count);
+    if (form_index == VXML_CMETA_NO_INDEX ||
+        form_index >= builder->profile->form_count ||
+        builder->profile->forms == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            (salts_xml_location){0},
+            "VoiceXML submit field recording shadow requires form scope");
+    if (cmeta_form_field_by_name(
+            builder->profile,
+            &builder->profile->forms[form_index],
+            owner, NULL) == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_SEMANTIC_ERROR,
+            (salts_xml_location){0},
+            "VoiceXML submit recording shadow field does not exist in the active form");
+    *out_recording = true;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_append_submit_recording_location(
+    cmeta_program_builder *builder,
+    salts_xml_string_view name,
+    salts_xml_location location,
+    size_t *out_location) {
+    vxml_cmeta_location_row *row;
+    if (builder == NULL || out_location == NULL ||
+        builder->location_index >=
+            builder->profile->location_count ||
+        builder->profile->locations == NULL)
+        return VXML_INVALID_ARGUMENT;
+    row = &builder->profile->locations[
+        builder->location_index];
+    memset(row, 0, sizeof(*row));
+    row->location = location;
+    row->first_candidate = builder->candidate_index;
+    row->name = cmeta_retain_view(builder, name);
+    row->name_size = name.size;
+    if (row->name == NULL)
+        return cmeta_program_fail(
+            builder->diagnostic, VXML_LIMIT_EXCEEDED,
+            location,
+            "VoiceXML retained submit recording name storage overflow");
+    *out_location = builder->location_index++;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_lower_submit_namelist(
+    cmeta_program_builder *builder,
+    salts_xml_attribute attribute,
+    const vxml_cmeta_expr_compile_scope *scopes,
+    size_t scope_count,
+    bool multipart,
+    size_t *out_first,
+    size_t *out_count,
+    size_t *out_recording_count) {
+    cmeta_decoded_value decoded = {0};
+    salts_xml_string_view list;
+    const salts_xml_location location =
+        salts_xml_attribute_location(attribute);
+    salts_xml_string_view name;
+    size_t cursor = 0u;
+    size_t scalar_count = 0u;
+    size_t recording_count = 0u;
+    vxml_status status =
+        cmeta_decode_temporary(
+            builder,
+            salts_xml_attribute_value(attribute),
+            location, &decoded);
+    if (status != VXML_OK) return status;
+    list = decoded.view;
+    *out_first = builder->location_index;
+    *out_count = 0u;
+    *out_recording_count = 0u;
+
+    while (cmeta_namelist_next(
+               list, &cursor, &name)) {
+        size_t prior_cursor = 0u;
+        size_t prior_count = 0u;
+        bool shadow_recording = false;
+        bool record_item = false;
+        size_t ignored_location = VXML_CMETA_NO_INDEX;
+        const size_t form_index =
+            cmeta_expression_form_from_scopes(
+                builder->profile,
+                scopes, scope_count);
+
+        while (prior_count < *out_count) {
+            salts_xml_string_view prior;
+            if (!cmeta_namelist_next(
+                    list, &prior_cursor, &prior)) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    location,
+                    "VoiceXML submit namelist changed during lowering");
+                goto done;
+            }
+            if (prior.size == name.size &&
+                memcmp(prior.data, name.data, name.size) == 0) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_STRUCTURE,
+                    location,
+                    "VoiceXML submit namelist contains a duplicate name");
+                goto done;
+            }
+            ++prior_count;
+        }
+
+        status = cmeta_submit_recording_shadow_token(
+            builder, name,
+            scopes, scope_count,
+            &shadow_recording);
+        if (status != VXML_OK) {
+            if (builder->diagnostic != NULL &&
+                builder->diagnostic->location.line == 0u)
+                builder->diagnostic->location = location;
+            goto done;
+        }
+
+        if (!shadow_recording &&
+            form_index != VXML_CMETA_NO_INDEX &&
+            form_index < builder->profile->form_count &&
+            builder->profile->forms != NULL)
+            record_item =
+                cmeta_form_record_by_name(
+                    builder->profile,
+                    &builder->profile->forms[form_index],
+                    name, NULL) != NULL;
+
+        if (shadow_recording || record_item) {
+            if (!multipart ||
+                !cmeta_submit_multipart_options_valid(
+                    builder->options)) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_UNSUPPORTED_FEATURE,
+                    location,
+                    "VoiceXML recording submit values require multipart/form-data");
+                goto done;
+            }
+            if (name.size >
+                    builder->options
+                        ->max_submit_recording_name_bytes ||
+                recording_count >=
+                    builder->options->max_submit_recordings) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_LIMIT_EXCEEDED,
+                    location,
+                    "VoiceXML submit recording selection exceeds configured bounds");
+                goto done;
+            }
+            status = cmeta_append_submit_recording_location(
+                builder, name, location,
+                &ignored_location);
+            if (status != VXML_OK) goto done;
+            ++recording_count;
+        } else {
+            vxml_cmeta_location_row *row;
+            status = cmeta_append_location_view(
+                builder, name, location,
+                scopes, scope_count,
+                false, &ignored_location);
+            if (status != VXML_OK) goto done;
+            if (ignored_location >=
+                    builder->profile->location_count ||
+                builder->profile->locations == NULL) {
+                status = VXML_INVALID_STRUCTURE;
+                goto done;
+            }
+            row = &builder->profile->locations[
+                ignored_location];
+            if (!cmeta_data_request_value_supported(
+                    row->value)) {
+                status = cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_SEMANTIC_ERROR,
+                    location,
+                    "VoiceXML submit scalar namelist admits bool/integer/string values");
+                goto done;
+            }
+            ++scalar_count;
+        }
+        ++*out_count;
+    }
+
+    if (*out_count == 0u) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            location,
+            "VoiceXML submit namelist must not be empty");
+        goto done;
+    }
+    if (scalar_count >
+            builder->options->max_submit_fields ||
+        (multipart &&
+         *out_count >
+             builder->options->max_submit_parts)) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            VXML_LIMIT_EXCEEDED,
+            location,
+            "VoiceXML submit namelist exceeds scalar/part bounds");
+        goto done;
+    }
+    if (multipart && recording_count == 0u) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            location,
+            "VoiceXML multipart submit requires at least one recording selection");
+        goto done;
+    }
+    if (!multipart && recording_count != 0u) {
+        status = cmeta_program_fail(
+            builder->diagnostic,
+            VXML_INVALID_STRUCTURE,
+            location,
+            "VoiceXML recording selection requires multipart/form-data");
+        goto done;
+    }
+    *out_recording_count = recording_count;
+    status = VXML_OK;
+
+done:
+    cmeta_decoded_value_destroy(&decoded);
+    return status;
+}
+
 static const vxml_cmeta_subdialog_row *cmeta_form_subdialog_by_name(
     const vxml_cmeta_program_data *program,
     const vxml_cmeta_form_row *form,
