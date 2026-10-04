@@ -1671,6 +1671,8 @@ static void session_data_destroy(
     vxml_free(session->data_request_uri);
     vxml_free(session->data_request_values);
     vxml_free(session->data_request_fields);
+    vxml_free(session->submit_values);
+    vxml_free(session->submit_fields);
     vxml_free(session->data_value_allocation);
     vxml_free(session->data_workspace_allocation);
     vxml_free(session->exec_frames);
@@ -1800,6 +1802,14 @@ static void transaction_reset(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
+    profile->pending_submit_uri = NULL;
+    session->pending_submit_uri_size = 0u;
+    session->pending_submit_method =
+        (vxml_submit_method)0;
+    session->pending_submit_enctype =
+        (vxml_submit_enctype)0;
+    session->pending_submit_field_count = 0u;
+    session->submit_requested = false;
     root_storage_clear(&session->staged_root, program);
     for (index = 0u; index < program->scope_count; ++index)
         cmeta_scope_view_clear(&session->staged_scopes[index].view);
@@ -1902,6 +1912,46 @@ static vxml_status publish_pending_navigation(
     profile->pending_navigation_fetchaudio =
         (vxml_cmeta_fetchaudio_policy){0};
     impl->state = VXML_SESSION_NAVIGATING;
+    impl->error = VXML_OK;
+    return VXML_OK;
+}
+
+static vxml_status publish_pending_submit(
+    vxml_session_impl *impl,
+    vxml_cmeta_session_data *profile) {
+    if (impl == NULL || profile == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (!profile->submit_requested)
+        return VXML_OK;
+    if (profile->pending_submit_uri == NULL ||
+        profile->pending_submit_uri_size == 0u ||
+        memchr(
+            profile->pending_submit_uri, '\0',
+            profile->pending_submit_uri_size) != NULL ||
+        (profile->pending_submit_method !=
+             VXML_SUBMIT_METHOD_GET &&
+         profile->pending_submit_method !=
+             VXML_SUBMIT_METHOD_POST) ||
+        profile->pending_submit_enctype !=
+            VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        ((profile->submit_fields == NULL) !=
+         (profile->pending_submit_field_count == 0u)))
+        return VXML_INVALID_STRUCTURE;
+    impl->submit_uri = profile->pending_submit_uri;
+    impl->submit_uri_size =
+        profile->pending_submit_uri_size;
+    impl->submit_method =
+        profile->pending_submit_method;
+    impl->submit_enctype =
+        profile->pending_submit_enctype;
+    impl->submit_fields = profile->submit_fields;
+    impl->submit_field_count =
+        profile->pending_submit_field_count;
+    profile->submit_requested = false;
+    session->pending_submit_uri = NULL;
+    profile->pending_submit_uri_size = 0u;
+    profile->pending_submit_field_count = 0u;
+    impl->state = VXML_SESSION_SUBMITTING;
     impl->error = VXML_OK;
     return VXML_OK;
 }
@@ -3454,6 +3504,161 @@ static vxml_status execute_rethrow(
     return VXML_OK;
 }
 
+
+static vxml_status submit_value_append(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_value_view *value,
+    const char **out_data, size_t *out_size,
+    size_t *used) {
+    char integer[32];
+    const char *source = NULL;
+    size_t size = 0u;
+    int written = 0;
+    if (out_data != NULL) *out_data = NULL;
+    if (out_size != NULL) *out_size = 0u;
+    if (session == NULL || value == NULL ||
+        out_data == NULL || out_size == NULL || used == NULL ||
+        session->submit_values == NULL ||
+        *used > session->submit_value_capacity)
+        return VXML_INVALID_ARGUMENT;
+
+    switch (value->kind) {
+    case VXML_CMETA_VALUE_BOOL:
+        source = value->data.boolean ? "true" : "false";
+        size = value->data.boolean
+            ? sizeof("true") - 1u
+            : sizeof("false") - 1u;
+        break;
+    case VXML_CMETA_VALUE_SINT:
+        written = snprintf(
+            integer, sizeof(integer),
+            "%" PRId64, value->data.sint);
+        if (written <= 0 || (size_t)written >= sizeof(integer))
+            return VXML_INVALID_CONTRACT;
+        source = integer;
+        size = (size_t)written;
+        break;
+    case VXML_CMETA_VALUE_UINT:
+        written = snprintf(
+            integer, sizeof(integer),
+            "%" PRIu64, value->data.uint_value);
+        if (written <= 0 || (size_t)written >= sizeof(integer))
+            return VXML_INVALID_CONTRACT;
+        source = integer;
+        size = (size_t)written;
+        break;
+    case VXML_CMETA_VALUE_STRING:
+        source = value->data.string.data;
+        size = value->data.string.size;
+        if ((size != 0u && source == NULL) ||
+            (size != 0u &&
+             memchr(source, '\0', size) != NULL))
+            return VXML_SEMANTIC_ERROR;
+        break;
+    case VXML_CMETA_VALUE_UNDEFINED:
+    case VXML_CMETA_VALUE_FLOAT:
+    default:
+        return VXML_SEMANTIC_ERROR;
+    }
+
+    if (size > session->submit_value_capacity - *used)
+        return VXML_LIMIT_EXCEEDED;
+    if (size != 0u)
+        memcpy(
+            session->submit_values + *used,
+            source, size);
+    *out_data = session->submit_values + *used;
+    *out_size = size;
+    *used += size;
+    return VXML_OK;
+}
+
+static vxml_status execute_submit(
+    vxml_cmeta_session_data *session,
+    const vxml_cmeta_program_data *program,
+    const vxml_cmeta_action_row *action) {
+    size_t offset;
+    size_t used = 0u;
+    if (session == NULL || program == NULL || action == NULL ||
+        action->kind != VXML_CMETA_ACTION_SUBMIT ||
+        action->navigation_uri == NULL ||
+        action->navigation_uri_size == 0u ||
+        action->navigation_uri_size >
+            program->max_submit_uri_bytes ||
+        memchr(
+            action->navigation_uri, '\0',
+            action->navigation_uri_size) != NULL ||
+        (action->submit_method != VXML_SUBMIT_METHOD_GET &&
+         action->submit_method != VXML_SUBMIT_METHOD_POST) ||
+        action->submit_enctype !=
+            VXML_SUBMIT_ENCTYPE_URLENCODED ||
+        session->submit_requested ||
+        action->location_count >
+            program->max_submit_fields ||
+        !range_valid(
+            action->first_location,
+            action->location_count,
+            program->location_count) ||
+        (action->location_count != 0u &&
+         (program->locations == NULL ||
+          session->submit_fields == NULL)))
+        return VXML_INVALID_STRUCTURE;
+
+    if (action->location_count != 0u)
+        memset(
+            session->submit_fields, 0,
+            action->location_count *
+                sizeof(*session->submit_fields));
+
+    for (offset = 0u;
+         offset < action->location_count;
+         ++offset) {
+        const vxml_cmeta_location_row *location =
+            &program->locations[
+                action->first_location + offset];
+        const cmeta_data_desc *value_data = NULL;
+        const void *object = NULL;
+        vxml_cmeta_value_view value = {0};
+        vxml_submit_field_v1 *field =
+            &session->submit_fields[offset];
+        vxml_status status = read_location_object(
+            session, program, location, true,
+            &value_data, &object);
+        if (status != VXML_OK) return status;
+        if (object == NULL ||
+            value_data != location->value ||
+            location->name == NULL ||
+            location->name_size == 0u)
+            return VXML_SEMANTIC_ERROR;
+        status = read_scalar_value(
+            value_data, object,
+            session->read_scratch,
+            session->read_scratch_bytes,
+            &value);
+        if (status != VXML_OK) return status;
+        status = submit_value_append(
+            session, &value,
+            &field->value, &field->value_size,
+            &used);
+        if (status != VXML_OK) return status;
+        field->name = location->name;
+        field->name_size = location->name_size;
+    }
+
+    session->pending_submit_uri =
+        action->navigation_uri;
+    session->pending_submit_uri_size =
+        action->navigation_uri_size;
+    session->pending_submit_method =
+        action->submit_method;
+    session->pending_submit_enctype =
+        action->submit_enctype;
+    session->pending_submit_field_count =
+        action->location_count;
+    session->submit_requested = true;
+    return VXML_OK;
+}
+
 static vxml_status execute_goto(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_action_row *action) {
@@ -3639,6 +3844,13 @@ static vxml_status execute_action_range(
             case VXML_CMETA_ACTION_GOTO: {
                 const vxml_status status =
                     execute_goto(session, action);
+                if (status != VXML_OK) return status;
+                return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_SUBMIT: {
+                const vxml_status status =
+                    execute_submit(
+                        session, program, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
             }
@@ -5155,6 +5367,34 @@ vxml_status vxml_cmeta_session_init_profile(
             goto failure;
         }
     }
+    if (program->max_submit_fields != 0u ||
+        program->max_submit_value_bytes != 0u ||
+        program->max_submit_uri_bytes != 0u) {
+        if (program->max_submit_fields == 0u ||
+            program->max_submit_value_bytes == 0u ||
+            program->max_submit_uri_bytes == 0u ||
+            program->max_submit_fields >
+                SIZE_MAX / sizeof(*profile->submit_fields)) {
+            status = VXML_INVALID_CONTRACT;
+            goto failure;
+        }
+        profile->submit_fields =
+            (vxml_submit_field_v1 *)vxml_calloc(
+                program->max_submit_fields,
+                sizeof(*profile->submit_fields));
+        profile->submit_values =
+            (char *)vxml_malloc(
+                program->max_submit_value_bytes);
+        if (profile->submit_fields == NULL ||
+            profile->submit_values == NULL) {
+            status = VXML_ALLOCATION_FAILED;
+            goto failure;
+        }
+        profile->submit_field_capacity =
+            program->max_submit_fields;
+        profile->submit_value_capacity =
+            program->max_submit_value_bytes;
+    }
     profile->runtime_scope_capacity = 3u;
     profile->runtime_scopes = (vxml_cmeta_expr_runtime_scope *)vxml_calloc(
         profile->runtime_scope_capacity, sizeof(*profile->runtime_scopes));
@@ -5869,6 +6109,13 @@ static vxml_status cmeta_session_start_profile_at_entry(
             }
         }
         transaction_commit(profile, program);
+        if (profile->submit_requested) {
+            status = publish_pending_submit(
+                session, profile);
+            exit_snapshot_destroy(&profile->pending_exit);
+            return status != VXML_OK
+                ? session_fail(session, status) : VXML_OK;
+        }
         if (profile->pending_navigation_uri != NULL) {
             status = publish_pending_navigation(
                 session, profile);
