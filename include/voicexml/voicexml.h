@@ -84,6 +84,7 @@ typedef enum vxml_submit_enctype {
 #define VXML_SUBMIT_TARGET_ABI_V1 1u
 #define VXML_SUBMIT_TARGET_ABI_V2 2u
 #define VXML_SUBMIT_TARGET_ABI_V3 3u
+#define VXML_SUBMIT_TARGET_ABI_V4 4u
 
 typedef struct vxml_submit_field_v1 {
     const char *name;
@@ -91,6 +92,29 @@ typedef struct vxml_submit_field_v1 {
     const char *value;
     size_t value_size;
 } vxml_submit_field_v1;
+
+/** Explicit borrowed recording selection for one multipart file field. */
+typedef struct vxml_submit_recording_field_v1 {
+    const char *name;
+    size_t name_size;
+    const char *filename;
+    size_t filename_size;
+    const char *media_type;
+    size_t media_type_size;
+    const void *data;
+    size_t size;
+} vxml_submit_recording_field_v1;
+
+typedef enum vxml_submit_multipart_part_kind {
+    VXML_SUBMIT_MULTIPART_PART_TEXT = 1,
+    VXML_SUBMIT_MULTIPART_PART_RECORDING
+} vxml_submit_multipart_part_kind;
+
+/** One index into the scalar or recording array of a multipart handoff. */
+typedef struct vxml_submit_multipart_part_ref_v1 {
+    vxml_submit_multipart_part_kind kind;
+    size_t index;
+} vxml_submit_multipart_part_ref_v1;
 
 typedef struct vxml_submit_target_v1 {
     uint32_t abi_version;
@@ -146,6 +170,37 @@ typedef struct vxml_submit_target_v3 {
     bool has_fetchaudio_minimum;
     uint64_t fetchaudio_minimum_us;
 } vxml_submit_target_v3;
+
+/**
+ * Profile-neutral multipart submit handoff.
+ *
+ * V4 preserves the exact V3 prefix and appends explicit borrowed recording
+ * views plus one global ordered part sequence. These views never own or
+ * release recording storage.
+ */
+typedef struct vxml_submit_target_v4 {
+    uint32_t abi_version;
+    size_t struct_size;
+    const char *uri;
+    size_t uri_size;
+    vxml_submit_method method;
+    vxml_submit_enctype enctype;
+    const vxml_submit_field_v1 *fields;
+    size_t field_count;
+    bool has_timeout;
+    uint64_t timeout_us;
+    const char *fetchaudio_uri;
+    size_t fetchaudio_uri_size;
+    bool has_fetchaudio_delay;
+    uint64_t fetchaudio_delay_us;
+    bool has_fetchaudio_minimum;
+    uint64_t fetchaudio_minimum_us;
+
+    const vxml_submit_recording_field_v1 *recordings;
+    size_t recording_count;
+    const vxml_submit_multipart_part_ref_v1 *parts;
+    size_t part_count;
+} vxml_submit_target_v4;
 
 #define VXML_EXTERNAL_SCRIPT_TARGET_ABI_V1 1u
 
@@ -259,6 +314,11 @@ vxml_status vxml_session_submit_v2(
 vxml_status vxml_session_submit_v3(
     const vxml_session *session,
     vxml_submit_target_v3 *out_target);
+
+/** Borrow the full scalar/recording/policy submit handoff. */
+vxml_status vxml_session_submit_v4(
+    const vxml_session *session,
+    vxml_submit_target_v4 *out_target);
 
 /** Borrow the external script descriptor while state is VXML_SESSION_SCRIPTING. */
 vxml_status vxml_session_script(
