@@ -56,6 +56,77 @@ static bool adapter_v2_valid(
         adapter->execute_v2 != NULL;
 }
 
+static bool adapter_timeout_capable(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t tail =
+        offsetof(vxml_submit_resource_adapter_v1, capabilities) +
+        sizeof(adapter->capabilities);
+    return adapter != NULL &&
+        adapter->struct_size >= tail &&
+        (adapter->capabilities &
+         VXML_SUBMIT_RESOURCE_CAP_TIMEOUT) != 0u;
+}
+
+static bool optional_timeout_tail_valid(
+    size_t struct_size,
+    size_t historical_prefix,
+    size_t timeout_tail) {
+    return struct_size == historical_prefix ||
+        struct_size >= timeout_tail;
+}
+
+static bool submit_request_timeout(
+    const vxml_submit_request_v1 *request,
+    bool *out_has_timeout,
+    uint64_t *out_timeout_us) {
+    const size_t historical_prefix =
+        offsetof(vxml_submit_request_v1, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_request_v1, timeout_us) +
+        sizeof(request->timeout_us);
+    if (out_has_timeout != NULL) *out_has_timeout = false;
+    if (out_timeout_us != NULL) *out_timeout_us = UINT64_C(0);
+    if (request == NULL ||
+        out_has_timeout == NULL ||
+        out_timeout_us == NULL ||
+        !optional_timeout_tail_valid(
+            request->struct_size,
+            historical_prefix,
+            timeout_tail))
+        return false;
+    if (request->struct_size >= timeout_tail) {
+        *out_has_timeout = request->has_timeout;
+        *out_timeout_us = request->timeout_us;
+    }
+    return true;
+}
+
+static bool multipart_request_timeout(
+    const vxml_submit_multipart_request_v1 *request,
+    bool *out_has_timeout,
+    uint64_t *out_timeout_us) {
+    const size_t historical_prefix =
+        offsetof(vxml_submit_multipart_request_v1, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_multipart_request_v1, timeout_us) +
+        sizeof(request->timeout_us);
+    if (out_has_timeout != NULL) *out_has_timeout = false;
+    if (out_timeout_us != NULL) *out_timeout_us = UINT64_C(0);
+    if (request == NULL ||
+        out_has_timeout == NULL ||
+        out_timeout_us == NULL ||
+        !optional_timeout_tail_valid(
+            request->struct_size,
+            historical_prefix,
+            timeout_tail))
+        return false;
+    if (request->struct_size >= timeout_tail) {
+        *out_has_timeout = request->has_timeout;
+        *out_timeout_us = request->timeout_us;
+    }
+    return true;
+}
+
 static void close_if_live(
     const vxml_submit_resource_adapter_v1 *adapter,
     void *user,
@@ -204,6 +275,8 @@ const char *vxml_submit_resource_status_string(
         return "possibly_processed";
     case VXML_SUBMIT_RESOURCE_INVALID_RESPONSE:
         return "invalid_response";
+    case VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY:
+        return "unsupported_policy";
     default:
         return "unknown";
     }
@@ -226,6 +299,10 @@ vxml_submit_resource_status vxml_submit_resource_execute(
     vxml_submit_response response = {0};
     vxml_submit_resource_status status;
     vxml_document_store_status resolve_status;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
+    const size_t historical_prefix =
+        offsetof(vxml_submit_request_v1, has_timeout);
 
     if (out_response != NULL)
         *out_response = (vxml_submit_response){0};
@@ -233,7 +310,9 @@ vxml_submit_resource_status vxml_submit_resource_execute(
         !adapter_valid(adapter) ||
         request == NULL || out_response == NULL ||
         request->abi_version != VXML_SUBMIT_REQUEST_ABI_V1 ||
-        request->struct_size < sizeof(*request) ||
+        request->struct_size < historical_prefix ||
+        !submit_request_timeout(
+            request, &has_timeout, &timeout_us) ||
         !bytes_valid(request->target, request->target_size, false) ||
         (request->base_document_uri_size != 0u &&
          !bytes_valid(
@@ -256,6 +335,9 @@ vxml_submit_resource_status vxml_submit_resource_execute(
             request->enctype, request->enctype_size,
             submit_urlencoded_type))
         return VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING;
+
+    if (has_timeout && !adapter_timeout_capable(adapter))
+        return VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY;
 
     status = validate_fields(request, &encoded_size);
     if (status != VXML_SUBMIT_RESOURCE_OK)
@@ -334,7 +416,9 @@ vxml_submit_resource_status vxml_submit_resource_execute(
                 ? encoded : NULL,
         .body_size =
             request->method == VXML_SUBMIT_METHOD_POST
-                ? encoded_size : 0u};
+                ? encoded_size : 0u,
+        .has_timeout = has_timeout,
+        .timeout_us = timeout_us};
 
     /*
      * Exactly one provider attempt. There is intentionally no loop here:
@@ -745,6 +829,15 @@ static vxml_submit_resource_status multipart_validate(
             vxml_submit_multipart_request_v1,
             max_segments) +
         sizeof(request->max_segments);
+    const size_t policy_prefix =
+        offsetof(
+            vxml_submit_multipart_request_v1,
+            has_timeout);
+    const size_t timeout_tail =
+        offsetof(
+            vxml_submit_multipart_request_v1,
+            timeout_us) +
+        sizeof(request->timeout_us);
     uint64_t hash = UINT64_C(1469598103934665603);
     size_t parts;
     size_t metadata = 0u;
@@ -764,6 +857,10 @@ static vxml_submit_resource_status multipart_validate(
         request->abi_version !=
             VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1 ||
         request->struct_size < historical_prefix ||
+        !optional_timeout_tail_valid(
+            request->struct_size,
+            policy_prefix,
+            timeout_tail) ||
         !bytes_valid(
             request->target,
             request->target_size, false) ||
@@ -1224,6 +1321,8 @@ vxml_submit_resource_status vxml_submit_resource_execute_multipart(
     vxml_submit_response response = {0};
     vxml_submit_resource_status status;
     vxml_document_store_status resolve_status;
+    bool has_timeout = false;
+    uint64_t timeout_us = UINT64_C(0);
 
     if (out_response != NULL)
         *out_response = (vxml_submit_response){0};
@@ -1239,6 +1338,12 @@ vxml_submit_resource_status vxml_submit_resource_execute_multipart(
         &metadata_size, &segment_capacity, &body_size);
     if (status != VXML_SUBMIT_RESOURCE_OK)
         return status;
+
+    if (!multipart_request_timeout(
+            request, &has_timeout, &timeout_us))
+        return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    if (has_timeout && !adapter_timeout_capable(adapter))
+        return VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY;
 
     content_type_size =
         sizeof(submit_multipart_type) - 1u +
@@ -1321,7 +1426,9 @@ vxml_submit_resource_status vxml_submit_resource_execute_multipart(
         .content_type_size = content_type_size,
         .segments = segments,
         .segment_count = segment_count,
-        .body_size = body_size};
+        .body_size = body_size,
+        .has_timeout = has_timeout,
+        .timeout_us = timeout_us};
 
     /*
      * Exactly one provider attempt. There is no V1 buffering fallback and no
