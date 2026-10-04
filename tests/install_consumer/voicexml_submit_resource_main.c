@@ -7,7 +7,9 @@ int main(void) {
     vxml_submit_recording_field_v1 recording = {0};
     vxml_submit_multipart_part_ref_v1 part = {0};
     vxml_submit_body_segment_v1 segment = {0};
+    vxml_submit_wire_request_v1 wire_v1 = {0};
     vxml_submit_wire_request_v2 wire_v2 = {0};
+    vxml_submit_resource_adapter_v1 adapter = {0};
     vxml_submit_response response = {0};
     vxml_submit_resource_status (*execute_fn)(
         const vxml_document_store *,
@@ -35,15 +37,22 @@ int main(void) {
         multipart.struct_size != sizeof(multipart) ||
         recording.data != NULL || recording.size != 0u ||
         multipart.parts != NULL || multipart.part_count != 0u ||
+        request.has_timeout || request.timeout_us != UINT64_C(0) ||
+        multipart.has_timeout || multipart.timeout_us != UINT64_C(0) ||
         part.kind != 0 || part.index != 0u ||
         segment.data != NULL || segment.size != 0u ||
-        wire_v2.abi_version != 0u ||
+        wire_v1.has_timeout || wire_v1.timeout_us != UINT64_C(0) ||
+        wire_v2.has_timeout || wire_v2.timeout_us != UINT64_C(0) ||
+        adapter.capabilities != 0u ||
         response.data != NULL || response.size != 0u ||
         response.lease != NULL ||
         execute_fn == NULL || multipart_fn == NULL || close_fn == NULL ||
         VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 == 0u ||
         VXML_SUBMIT_WIRE_REQUEST_ABI_V1 == 0u ||
-        VXML_SUBMIT_WIRE_REQUEST_ABI_V2 == 0u)
+        VXML_SUBMIT_WIRE_REQUEST_ABI_V2 == 0u ||
+        VXML_SUBMIT_RESOURCE_CAP_TIMEOUT == 0u ||
+        vxml_submit_resource_status_string(
+            VXML_SUBMIT_RESOURCE_UNSUPPORTED_POLICY) == NULL)
         return 1;
     return vxml_submit_resource_status_string(
                VXML_SUBMIT_RESOURCE_OK) != NULL
