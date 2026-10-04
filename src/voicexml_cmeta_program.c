@@ -10779,7 +10779,6 @@ static vxml_status cmeta_lower_submit_namelist(
             if (status != VXML_OK) goto done;
             ++recording_count;
         } else {
-            vxml_cmeta_location_row *row;
             status = cmeta_append_location_view(
                 builder, name, location,
                 scopes, scope_count,
@@ -10791,17 +10790,11 @@ static vxml_status cmeta_lower_submit_namelist(
                 status = VXML_INVALID_STRUCTURE;
                 goto done;
             }
-            row = &builder->profile->locations[
-                ignored_location];
-            if (!cmeta_data_request_value_supported(
-                    row->value)) {
-                status = cmeta_program_fail(
-                    builder->diagnostic,
-                    VXML_SEMANTIC_ERROR,
-                    location,
-                    "VoiceXML submit scalar namelist admits bool/integer/string values");
-                goto done;
-            }
+            /*
+             * Keep #258 semantics: reflected scalar type is resolved at
+             * compile time, but bool/integer/string admission happens from
+             * the staged runtime value immediately before submit publication.
+             */
             ++scalar_count;
         }
         ++*out_count;
