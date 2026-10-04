@@ -37,6 +37,23 @@ target_compile_definitions(voicexml_base_fuzz_smoke PRIVATE
 target_link_libraries(voicexml_base_fuzz_smoke PRIVATE
   TurboSCXML::VoiceXML)
 
+add_executable(
+  voicexml_resource_fuzz_smoke
+  fuzz/voicexml_resource_fuzz_smoke.c
+  fuzz/voicexml_fuzz_common.c)
+target_compile_features(voicexml_resource_fuzz_smoke PRIVATE c_std_11)
+set_target_properties(voicexml_resource_fuzz_smoke PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_include_directories(voicexml_resource_fuzz_smoke PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
+target_compile_definitions(voicexml_resource_fuzz_smoke PRIVATE
+  VOICEXML_RESOURCE_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/resource")
+target_link_libraries(voicexml_resource_fuzz_smoke PRIVATE
+  TurboSCXML::VoiceXMLDocumentStore
+  TurboSCXML::VoiceXMLSubmitResource)
+
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
   add_executable(
     voicexml_cmeta_fuzz_smoke
@@ -384,6 +401,24 @@ turboscxml_add_test(
   INCLUDES ${PROJECT_SOURCE_DIR}/src
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
+
+if(TURBOSCXML_ENABLE_QUICKJS)
+  add_executable(
+    voicexml_quickjs_fuzz_smoke
+    fuzz/voicexml_quickjs_fuzz_smoke.c
+    fuzz/voicexml_fuzz_common.c)
+  target_compile_features(voicexml_quickjs_fuzz_smoke PRIVATE c_std_11)
+  set_target_properties(voicexml_quickjs_fuzz_smoke PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_include_directories(voicexml_quickjs_fuzz_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
+  target_compile_definitions(voicexml_quickjs_fuzz_smoke PRIVATE
+    VOICEXML_QUICKJS_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/quickjs")
+  target_link_libraries(voicexml_quickjs_fuzz_smoke PRIVATE
+    TurboSCXML::VoiceXMLQuickJS)
+endif()
 
 if(TURBOSCXML_ENABLE_QUICKJS)
   add_executable(
