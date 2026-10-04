@@ -21,6 +21,14 @@ function(turboscxml_add_test target source)
   add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+add_test(
+  NAME voicexml_security_policy_test
+  COMMAND "${CMAKE_COMMAND}"
+    -DREPO_ROOT="${PROJECT_SOURCE_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/voicexml/validate_security_policy.cmake")
+set_tests_properties(voicexml_security_policy_test PROPERTIES
+  LABELS "voicexml;security;policy")
+
 add_executable(voicexml_api_test voicexml/test_voicexml_api.c)
 target_compile_features(voicexml_api_test PRIVATE c_std_11)
 set_target_properties(voicexml_api_test PROPERTIES
