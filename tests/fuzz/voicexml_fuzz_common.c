@@ -193,6 +193,13 @@ int voicexml_fuzz_run(
                 UINT32_C(0x811c9dc5) ^
                     (uint32_t)(seed_index * UINT32_C(0x01000193)),
                 iteration);
+            if (getenv("VOICEXML_FUZZ_TRACE") != NULL) {
+                fprintf(
+                    stderr,
+                    "fuzz case: seed=%s iteration=%zu size=%zu\n",
+                    seeds[seed_index], iteration, size);
+                fflush(stderr);
+            }
             if (run_case(work, size, user) != 0) {
                 fprintf(
                     stderr,
