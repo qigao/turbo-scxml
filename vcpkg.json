@@ -1,7 +1,9 @@
 {
   "name": "turboscxml",
   "version-semver": "0.1.0",
-  "dependencies": [],
+  "dependencies": [
+    "boringssl"
+  ],
   "features": {
     "chttp": {
       "description": "Enable the optional CHTTP adapters; the HTTP implementation is provided by the standalone installed CHTTP package"
