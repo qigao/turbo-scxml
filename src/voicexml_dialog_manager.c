@@ -105,6 +105,12 @@ struct vxml_dialog_manager_impl {
     vxml_submit_resource_adapter_v1 submit;
     void *submit_user;
     size_t max_submit_response_bytes;
+    size_t max_submit_body_bytes;
+    size_t max_submit_parts;
+    size_t max_submit_boundary_bytes;
+    size_t max_submit_header_bytes;
+    size_t max_submit_segments;
+    bool multipart_submit_enabled;
     size_t max_navigation_hops;
     char *resolve_uri_scratch;
     char *resolve_fragment_scratch;
@@ -921,6 +927,18 @@ static vxml_status start_current_session(
         : vxml_session_start(&row->session);
 }
 
+static bool submit_multipart_provider_capable(
+    const vxml_submit_resource_adapter_v1 *adapter) {
+    const size_t tail =
+        offsetof(vxml_submit_resource_adapter_v1, execute_v2) +
+        sizeof(adapter->execute_v2);
+    return adapter != NULL &&
+        adapter->abi_version ==
+            VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1 &&
+        adapter->struct_size >= tail &&
+        adapter->execute_v2 != NULL;
+}
+
 static bool submit_timeout_provider_capable(
     const vxml_submit_resource_adapter_v1 *adapter) {
     const size_t tail =
@@ -962,8 +980,10 @@ static vxml_dialog_manager_status follow_one_submit(
     static const char urlencoded[] =
         "application/x-www-form-urlencoded";
     vxml_dialog_manager_impl *impl;
-    vxml_submit_target_v3 submit = {0};
+    vxml_submit_target_v4 submit = {0};
     vxml_submit_request_v1 request = VXML_SUBMIT_REQUEST_V1_INIT;
+    vxml_submit_multipart_request_v1 multipart =
+        VXML_SUBMIT_MULTIPART_REQUEST_V1_INIT;
     vxml_submit_response response = {0};
     vxml_resolved_uri_v1 target_resolved;
     vxml_resolved_uri_v1 effective_resolved;
@@ -995,13 +1015,22 @@ static vxml_dialog_manager_status follow_one_submit(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_LIMIT_EXCEEDED);
 
-    voice_status = vxml_session_submit_v3(
+    voice_status = vxml_session_submit_v4(
         &row->session, &submit);
     if (voice_status != VXML_OK)
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
             voice_status);
-    if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED)
+    if (submit.enctype ==
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA &&
+        (!impl->multipart_submit_enabled ||
+         !submit_multipart_provider_capable(&impl->submit)))
+        return queue_event(
+            row, VXML_DIALOG_EVENT_ERROR_START,
+            VXML_UNSUPPORTED_FEATURE);
+    if (submit.enctype != VXML_SUBMIT_ENCTYPE_URLENCODED &&
+        submit.enctype !=
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA)
         return queue_event(
             row, VXML_DIALOG_EVENT_ERROR_START,
             VXML_UNSUPPORTED_FEATURE);
@@ -1088,29 +1117,68 @@ static vxml_dialog_manager_status follow_one_submit(
             audio_result == VXML_FETCH_AUDIO_STARTED;
     }
 
-    request.base_document_uri = row->current_document_uri;
-    request.base_document_uri_size =
-        row->current_document_uri_size;
-    request.target = submit.uri;
-    request.target_size = submit.uri_size;
-    request.method = submit.method;
-    request.fields = submit.fields;
-    request.field_count = submit.field_count;
-    if (submit.method == VXML_SUBMIT_METHOD_POST) {
-        request.enctype = urlencoded;
-        request.enctype_size = sizeof(urlencoded) - 1u;
-    }
-    request.max_uri_bytes = impl->max_source_bytes;
-    request.max_body_bytes = impl->max_source_bytes;
-    request.max_response_bytes =
-        impl->max_submit_response_bytes;
-    request.has_timeout = submit.has_timeout;
-    request.timeout_us = submit.timeout_us;
+    if (submit.enctype ==
+            VXML_SUBMIT_ENCTYPE_URLENCODED) {
+        request.base_document_uri =
+            row->current_document_uri;
+        request.base_document_uri_size =
+            row->current_document_uri_size;
+        request.target = submit.uri;
+        request.target_size = submit.uri_size;
+        request.method = submit.method;
+        request.fields = submit.fields;
+        request.field_count = submit.field_count;
+        if (submit.method == VXML_SUBMIT_METHOD_POST) {
+            request.enctype = urlencoded;
+            request.enctype_size =
+                sizeof(urlencoded) - 1u;
+        }
+        request.max_uri_bytes = impl->max_source_bytes;
+        request.max_body_bytes = impl->max_source_bytes;
+        request.max_response_bytes =
+            impl->max_submit_response_bytes;
+        request.has_timeout = submit.has_timeout;
+        request.timeout_us = submit.timeout_us;
 
-    submit_status = vxml_submit_resource_execute(
-        impl->document_store,
-        &impl->submit, impl->submit_user,
-        &request, &response);
+        submit_status = vxml_submit_resource_execute(
+            impl->document_store,
+            &impl->submit, impl->submit_user,
+            &request, &response);
+    } else {
+        multipart.base_document_uri =
+            row->current_document_uri;
+        multipart.base_document_uri_size =
+            row->current_document_uri_size;
+        multipart.target = submit.uri;
+        multipart.target_size = submit.uri_size;
+        multipart.fields = submit.fields;
+        multipart.field_count = submit.field_count;
+        multipart.recordings = submit.recordings;
+        multipart.recording_count =
+            submit.recording_count;
+        multipart.parts = submit.parts;
+        multipart.part_count = submit.part_count;
+        multipart.max_uri_bytes = impl->max_source_bytes;
+        multipart.max_body_bytes =
+            impl->max_submit_body_bytes;
+        multipart.max_response_bytes =
+            impl->max_submit_response_bytes;
+        multipart.max_parts = impl->max_submit_parts;
+        multipart.max_boundary_bytes =
+            impl->max_submit_boundary_bytes;
+        multipart.max_header_bytes =
+            impl->max_submit_header_bytes;
+        multipart.max_segments =
+            impl->max_submit_segments;
+        multipart.has_timeout = submit.has_timeout;
+        multipart.timeout_us = submit.timeout_us;
+
+        submit_status =
+            vxml_submit_resource_execute_multipart(
+                impl->document_store,
+                &impl->submit, impl->submit_user,
+                &multipart, &response);
+    }
     if (fetch_audio_started) {
         fetch_audio_ticket.finish(
             fetch_audio_ticket.user);
@@ -1535,6 +1603,11 @@ vxml_dialog_manager_config_v4 vxml_dialog_manager_default_config_v4(void) {
     config.max_dialog_id_bytes = 63u;
     config.max_navigation_hops = 32u;
     config.max_submit_response_bytes = 1024u * 1024u;
+    config.max_submit_body_bytes = 8u * 1024u * 1024u;
+    config.max_submit_parts = 64u;
+    config.max_submit_boundary_bytes = 64u;
+    config.max_submit_header_bytes = 64u * 1024u;
+    config.max_submit_segments = 256u;
     config.voice_limits = vxml_default_limits();
     return config;
 }
@@ -1790,6 +1863,9 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     const size_t factory_tail =
         offsetof(vxml_dialog_manager_config_v4, session_factory_user) +
         sizeof(config->session_factory_user);
+    const size_t multipart_tail =
+        offsetof(vxml_dialog_manager_config_v4, max_submit_segments) +
+        sizeof(config->max_submit_segments);
     vxml_dialog_manager_config_v3 v3;
     vxml_dialog_manager_impl *impl;
     vxml_dialog_manager_status status;
@@ -1804,7 +1880,16 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
         (config->struct_size >= factory_tail &&
          config->session_factory != NULL &&
          !session_factory_prefix_valid(
-             config->session_factory)))
+             config->session_factory)) ||
+        (config->struct_size > factory_tail &&
+         config->struct_size < multipart_tail) ||
+        (config->struct_size >= multipart_tail &&
+         (config->max_submit_body_bytes == 0u ||
+          config->max_submit_body_bytes == SIZE_MAX ||
+          config->max_submit_parts == 0u ||
+          config->max_submit_boundary_bytes == 0u ||
+          config->max_submit_header_bytes == 0u ||
+          config->max_submit_segments == 0u)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     v3 = vxml_dialog_manager_default_config_v3();
@@ -1838,6 +1923,19 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v4(
     impl->submit_enabled = true;
     impl->max_submit_response_bytes =
         config->max_submit_response_bytes;
+    if (config->struct_size >= multipart_tail) {
+        impl->max_submit_body_bytes =
+            config->max_submit_body_bytes;
+        impl->max_submit_parts =
+            config->max_submit_parts;
+        impl->max_submit_boundary_bytes =
+            config->max_submit_boundary_bytes;
+        impl->max_submit_header_bytes =
+            config->max_submit_header_bytes;
+        impl->max_submit_segments =
+            config->max_submit_segments;
+        impl->multipart_submit_enabled = true;
+    }
     impl->voice_limits = config->voice_limits;
     return VXML_DIALOG_MANAGER_OK;
 }

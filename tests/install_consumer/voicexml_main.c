@@ -18,6 +18,9 @@ int main(void) {
     vxml_submit_target_v1 submit = {0};
     vxml_submit_target_v2 submit_v2 = {0};
     vxml_submit_target_v3 submit_v3 = {0};
+    vxml_submit_target_v4 submit_v4 = {0};
+    vxml_submit_recording_field_v1 recording = {0};
+    vxml_submit_multipart_part_ref_v1 part = {0};
     vxml_cmeta_data_request_v2 data_v2 =
         VXML_CMETA_DATA_REQUEST_V2_INIT;
     vxml_cmeta_data_request_v3 data_v3 =
@@ -31,15 +34,20 @@ int main(void) {
     vxml_status (*submit_v3_fn)(
         const vxml_session *,
         vxml_submit_target_v3 *) = vxml_session_submit_v3;
+    vxml_status (*submit_v4_fn)(
+        const vxml_session *,
+        vxml_submit_target_v4 *) = vxml_session_submit_v4;
     vxml_status (*raise_event)(
         vxml_session *, const char *, size_t) = vxml_session_raise_event;
     int result = 1;
 
     if (raise_event == NULL || submit_fn == NULL ||
         submit_v2_fn == NULL || submit_v3_fn == NULL ||
+        submit_v4_fn == NULL ||
         VXML_SUBMIT_TARGET_ABI_V1 == 0u ||
         VXML_SUBMIT_TARGET_ABI_V2 <= VXML_SUBMIT_TARGET_ABI_V1 ||
         VXML_SUBMIT_TARGET_ABI_V3 <= VXML_SUBMIT_TARGET_ABI_V2 ||
+        VXML_SUBMIT_TARGET_ABI_V4 <= VXML_SUBMIT_TARGET_ABI_V3 ||
         VXML_SUBMIT_METHOD_GET == VXML_SUBMIT_METHOD_POST ||
         submit.abi_version != 0u ||
         submit_v2.abi_version != 0u ||
@@ -49,6 +57,13 @@ int main(void) {
         submit_v3.has_timeout ||
         submit_v3.timeout_us != UINT64_C(0) ||
         submit_v3.fetchaudio_uri != NULL ||
+        submit_v4.abi_version != 0u ||
+        submit_v4.recordings != NULL ||
+        submit_v4.recording_count != 0u ||
+        submit_v4.parts != NULL ||
+        submit_v4.part_count != 0u ||
+        recording.data != NULL || recording.size != 0u ||
+        part.kind != 0 || part.index != 0u ||
         data_v2.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V2 ||
         data_v2.struct_size != sizeof(data_v2) ||
         data_v3.abi_version != VXML_CMETA_DATA_REQUEST_ABI_V3 ||

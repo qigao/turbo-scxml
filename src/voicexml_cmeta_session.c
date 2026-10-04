@@ -1981,6 +1981,10 @@ static vxml_status publish_pending_submit(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     profile->submit_requested = false;
     profile->pending_submit_uri = NULL;
     profile->pending_submit_uri_size = 0u;
@@ -6292,6 +6296,10 @@ vxml_status vxml_session_cmeta_start_child(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;

@@ -116,34 +116,6 @@ typedef struct vxml_submit_wire_request_v2 {
     uint64_t timeout_us;
 } vxml_submit_wire_request_v2;
 
-/** Explicit borrowed recording selection for one multipart file field. */
-typedef struct vxml_submit_recording_field_v1 {
-    const char *name;
-    size_t name_size;
-    const char *filename;
-    size_t filename_size;
-    const char *media_type;
-    size_t media_type_size;
-    const void *data;
-    size_t size;
-} vxml_submit_recording_field_v1;
-
-typedef enum vxml_submit_multipart_part_kind {
-    VXML_SUBMIT_MULTIPART_PART_TEXT = 1,
-    VXML_SUBMIT_MULTIPART_PART_RECORDING
-} vxml_submit_multipart_part_kind;
-
-/**
- * One index into the text or recording arrays of a multipart request.
- *
- * An optional ordered-part tail can use these refs to preserve global
- * VoiceXML namelist order across scalar and recording values.
- */
-typedef struct vxml_submit_multipart_part_ref_v1 {
-    vxml_submit_multipart_part_kind kind;
-    size_t index;
-} vxml_submit_multipart_part_ref_v1;
-
 /**
  * One POST multipart/form-data request.
  *
