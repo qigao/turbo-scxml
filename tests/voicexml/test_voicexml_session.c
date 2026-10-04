@@ -333,6 +333,7 @@ spec("VoiceXML session") {
             vxml_session session = {0};
             vxml_submit_target_v1 submit = {0};
             vxml_submit_target_v2 submit_v2 = {0};
+            vxml_submit_target_v3 submit_v3 = {0};
 
             check_equal(compile_program(source, &program), VXML_OK);
             check_equal(vxml_session_init(&session, &program), VXML_OK);
@@ -367,6 +368,15 @@ spec("VoiceXML session") {
                 submit_v2.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
             check_null(submit_v2.fields);
             check_equal(submit_v2.field_count, (size_t)0u);
+            check_equal(
+                vxml_session_submit_v3(&session, &submit_v3),
+                VXML_OK);
+            check_equal(
+                submit_v3.abi_version, VXML_SUBMIT_TARGET_ABI_V3);
+            check_false(submit_v3.has_timeout);
+            check_equal(submit_v3.timeout_us, UINT64_C(0));
+            check_null(submit_v3.fetchaudio_uri);
+            check_equal(submit_v3.fetchaudio_uri_size, (size_t)0u);
             {
                 vxml_session_impl *impl =
                     (vxml_session_impl *)session.impl;
@@ -381,6 +391,39 @@ spec("VoiceXML session") {
                     VXML_OK);
                 check_true(submit_v2.fields == fields);
                 check_equal(submit_v2.field_count, (size_t)1u);
+
+                impl->submit_has_timeout = true;
+                impl->submit_timeout_us = UINT64_C(2500000);
+                impl->submit_fetchaudio_uri = "wait.wav";
+                impl->submit_fetchaudio_uri_size =
+                    sizeof("wait.wav") - 1u;
+                impl->submit_has_fetchaudio_delay = true;
+                impl->submit_fetchaudio_delay_us =
+                    UINT64_C(100000);
+                check_equal(
+                    vxml_session_submit_v2(&session, &submit_v2),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit(&session, &submit),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit_v3(&session, &submit_v3),
+                    VXML_OK);
+                check_true(submit_v3.has_timeout);
+                check_equal(
+                    submit_v3.timeout_us, UINT64_C(2500000));
+                check_equal(
+                    submit_v3.fetchaudio_uri_size,
+                    sizeof("wait.wav") - 1u);
+                check_equal(
+                    memcmp(
+                        submit_v3.fetchaudio_uri, "wait.wav",
+                        submit_v3.fetchaudio_uri_size),
+                    0);
+                check_true(submit_v3.has_fetchaudio_delay);
+                check_equal(
+                    submit_v3.fetchaudio_delay_us,
+                    UINT64_C(100000));
             }
             check_equal(
                 vxml_session_navigation(
@@ -391,6 +434,9 @@ spec("VoiceXML session") {
                 vxml_session_submit(&session, &submit), VXML_CLOSED);
             check_equal(
                 vxml_session_submit_v2(&session, &submit_v2),
+                VXML_CLOSED);
+            check_equal(
+                vxml_session_submit_v3(&session, &submit_v3),
                 VXML_CLOSED);
 
             vxml_session_destroy(&session);
