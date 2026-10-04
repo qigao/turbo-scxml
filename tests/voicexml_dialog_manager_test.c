@@ -654,10 +654,16 @@ static vxml_submit_resource_status submit_execute(
     const size_t body_size =
         probe != NULL && probe->response_body != NULL
             ? strlen(probe->response_body) : 0u;
+    const size_t historical_prefix =
+        offsetof(vxml_submit_wire_request_v1, has_timeout);
+    const size_t timeout_tail =
+        offsetof(vxml_submit_wire_request_v1, timeout_us) +
+        sizeof(request->timeout_us);
     if (probe == NULL || request == NULL ||
         out_response == NULL ||
         request->abi_version != VXML_SUBMIT_WIRE_REQUEST_ABI_V1 ||
-        request->struct_size < sizeof(*request) ||
+        (request->struct_size != historical_prefix &&
+         request->struct_size < timeout_tail) ||
         request->uri == NULL ||
         request->uri_size == 0u ||
         request->uri_size >= sizeof(probe->uri) ||
@@ -667,8 +673,12 @@ static vxml_submit_resource_status submit_execute(
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
     ++probe->execute_calls;
     probe->method = request->method;
-    probe->has_timeout = request->has_timeout;
-    probe->timeout_us = request->timeout_us;
+    probe->has_timeout =
+        request->struct_size >= timeout_tail
+            ? request->has_timeout : false;
+    probe->timeout_us =
+        request->struct_size >= timeout_tail
+            ? request->timeout_us : UINT64_C(0);
     if (probe->ordering_documents != NULL)
         probe->execute_sequence =
             ++probe->ordering_documents->sequence;
@@ -1879,6 +1889,131 @@ spec("VoiceXML dialog manager") {
         check_equal(events.count, (size_t)2u);
         check_equal(events.rows[0].name, "dialog.started");
         check_equal(events.rows[1].name, "dialog.exit");
+
+        active_fake_profile = NULL;
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("V4 rejects unsupported submit timeout before fetchaudio or provider admission") {
+        static const char absolute[] =
+            "https://voice.example/app/dialogs/submit-policy-unsupported.vxml";
+        static const char source[] =
+            "dialogs/submit-policy-unsupported.vxml";
+        static const char initial_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><exit/></block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {absolute, initial_body, VXML_DIALOG_MANAGER_OK}};
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "call-submit-policy-unsupported";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 1u};
+        fake_profile_probe profile_probe = {
+            .submit_on_start = true,
+            .submit_uri = "../submit",
+            .submit_uri_size = sizeof("../submit") - 1u,
+            .submit_has_timeout = true,
+            .submit_timeout_us = UINT64_C(3500000),
+            .submit_fetchaudio_uri = "../media/wait.wav",
+            .submit_fetchaudio_uri_size =
+                sizeof("../media/wait.wav") - 1u};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK};
+        vxml_submit_resource_adapter_v1 no_timeout =
+            submit_adapter;
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_document_ref preload = {0};
+        vxml_document_view view = {0};
+        vxml_document_store_error store_error = {0};
+        vxml_dialog_manager manager = {0};
+        vxml_dialog_manager_config_v4 config =
+            vxml_dialog_manager_default_config_v4();
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request start = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        no_timeout.capabilities = 0u;
+
+        check_equal(
+            navigation_store_init(
+                &store, &documents, 2u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_acquire(
+                &store, absolute, sizeof(absolute) - 1u,
+                &preload, &store_error),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            vxml_document_store_view(
+                &store, preload, &view),
+            VXML_DOCUMENT_STORE_OK);
+        check_not_null(view.program);
+        if (view.program != NULL) {
+            vxml_program_impl *impl =
+                (vxml_program_impl *)view.program->impl;
+            check_not_null(impl);
+            impl->profile_session_init = fake_profile_init;
+            impl->profile_session_start = fake_profile_start;
+            impl->profile_session_destroy = fake_profile_destroy;
+        }
+        check_equal(
+            vxml_document_store_release(
+                &store, &preload),
+            VXML_DOCUMENT_STORE_OK);
+
+        config.capacity = 1u;
+        config.max_source_bytes = 256u;
+        config.max_navigation_hops = 4u;
+        config.max_submit_response_bytes = 2048u;
+        config.upstream = &upstream_adapter;
+        config.upstream_user = &upstream;
+        config.document_store = &store;
+        config.submit = &no_timeout;
+        config.submit_user = &submit;
+        config.events = &event_sink;
+        config.event_user = &events;
+
+        active_fake_profile = &profile_probe;
+        check_equal(
+            vxml_dialog_manager_init_v4(
+                &manager, &config),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &start, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(submit.execute_calls, (size_t)0u);
+        check_equal(
+            documents.fetch_audio_begin_calls, (size_t)0u);
+        check_equal(
+            documents.fetch_audio_finish_calls, (size_t)0u);
+        check_equal(events.count, (size_t)1u);
+        check_equal(events.rows[0].name, "error.dialog.start");
+        check_equal(
+            events.rows[0].voice_status,
+            VXML_UNSUPPORTED_FEATURE);
 
         active_fake_profile = NULL;
         manager_close_destroy(&manager, &upstream);
