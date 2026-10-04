@@ -105,7 +105,9 @@ static bool multipart_request_timeout(
     const vxml_submit_multipart_request_v1 *request,
     bool *out_has_timeout,
     uint64_t *out_timeout_us) {
-    const size_t historical_prefix =
+    const size_t legacy_prefix =
+        offsetof(vxml_submit_multipart_request_v1, parts);
+    const size_t ordered_prefix =
         offsetof(vxml_submit_multipart_request_v1, has_timeout);
     const size_t timeout_tail =
         offsetof(vxml_submit_multipart_request_v1, timeout_us) +
@@ -115,10 +117,9 @@ static bool multipart_request_timeout(
     if (request == NULL ||
         out_has_timeout == NULL ||
         out_timeout_us == NULL ||
-        !optional_timeout_tail_valid(
-            request->struct_size,
-            historical_prefix,
-            timeout_tail))
+        (request->struct_size != legacy_prefix &&
+         request->struct_size != ordered_prefix &&
+         request->struct_size < timeout_tail))
         return false;
     if (request->struct_size >= timeout_tail) {
         *out_has_timeout = request->has_timeout;
@@ -857,10 +858,9 @@ static vxml_submit_resource_status multipart_validate(
         request->abi_version !=
             VXML_SUBMIT_MULTIPART_REQUEST_ABI_V1 ||
         request->struct_size < historical_prefix ||
-        !optional_timeout_tail_valid(
-            request->struct_size,
-            policy_prefix,
-            timeout_tail) ||
+        (request->struct_size != historical_prefix &&
+         request->struct_size != policy_prefix &&
+         request->struct_size < timeout_tail) ||
         !bytes_valid(
             request->target,
             request->target_size, false) ||
