@@ -24,8 +24,8 @@ endfunction()
 add_test(
   NAME voicexml_support_matrix_test
   COMMAND "${CMAKE_COMMAND}"
-    -DREPO_ROOT="${PROJECT_SOURCE_DIR}"
-    -DMATRIX="${CMAKE_CURRENT_SOURCE_DIR}/voicexml/support-matrix.tsv"
+    -DREPO_ROOT=${PROJECT_SOURCE_DIR}
+    -DMATRIX=${CMAKE_CURRENT_SOURCE_DIR}/voicexml/support-matrix.tsv
     -P "${CMAKE_CURRENT_SOURCE_DIR}/voicexml/validate_support_matrix.cmake")
 set_tests_properties(voicexml_support_matrix_test PROPERTIES
   LABELS "voicexml;docs;support-matrix")
