@@ -1520,11 +1520,7 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
         config->events == NULL ||
         config->events->abi_version != VXML_DIALOG_EVENT_SINK_ABI_V1 ||
         config->events->struct_size < sizeof(*config->events) ||
-        config->events->try_publish == NULL ||
-        (config->struct_size >= factory_tail &&
-         config->session_factory != NULL &&
-         !session_factory_prefix_valid(
-             config->session_factory)))
+        config->events->try_publish == NULL)
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
@@ -1553,21 +1549,6 @@ vxml_dialog_manager_status vxml_dialog_manager_init(
     impl->document_user = config->document_user;
     impl->events = *config->events;
     impl->event_user = config->event_user;
-    if (config->struct_size >= factory_tail &&
-        config->session_factory != NULL) {
-        memset(
-            &impl->session_factory, 0,
-            sizeof(impl->session_factory));
-        memcpy(
-            &impl->session_factory,
-            config->session_factory,
-            min_size(
-                config->session_factory->struct_size,
-                sizeof(impl->session_factory)));
-        impl->session_factory_user =
-            config->session_factory_user;
-        impl->session_factory_enabled = true;
-    }
 
     for (index = 0u; index < impl->capacity; ++index) {
         vxml_dialog_row *row = &impl->rows[index];
@@ -1619,7 +1600,11 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
         config->events == NULL ||
         config->events->abi_version != VXML_DIALOG_EVENT_SINK_ABI_V1 ||
         config->events->struct_size < sizeof(*config->events) ||
-        config->events->try_publish == NULL)
+        config->events->try_publish == NULL ||
+        (config->struct_size >= factory_tail &&
+         config->session_factory != NULL &&
+         !session_factory_prefix_valid(
+             config->session_factory)))
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
 
     impl = (vxml_dialog_manager_impl *)calloc(1u, sizeof(*impl));
@@ -1663,6 +1648,21 @@ vxml_dialog_manager_status vxml_dialog_manager_init_v2(
     impl->upstream_user = config->upstream_user;
     impl->events = *config->events;
     impl->event_user = config->event_user;
+    if (config->struct_size >= factory_tail &&
+        config->session_factory != NULL) {
+        memset(
+            &impl->session_factory, 0,
+            sizeof(impl->session_factory));
+        memcpy(
+            &impl->session_factory,
+            config->session_factory,
+            min_size(
+                config->session_factory->struct_size,
+                sizeof(impl->session_factory)));
+        impl->session_factory_user =
+            config->session_factory_user;
+        impl->session_factory_enabled = true;
+    }
 
     for (index = 0u; index < impl->capacity; ++index) {
         vxml_dialog_row *row = &impl->rows[index];
