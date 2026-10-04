@@ -10,5 +10,6 @@ for target in "$base" "$cmeta"; do
     printf 'missing VoiceXML fuzz smoke target: %s\n' "$target" >&2
     exit 1
   fi
+  printf 'running bounded fuzz smoke: %s\n' "$target"
   timeout --signal=KILL 30s "$target"
 done
