@@ -445,6 +445,166 @@ static vxml_document_store_status navigation_store_init(
     return vxml_document_store_init(store, &config);
 }
 
+
+typedef struct profile_pair_probe {
+    size_t compile_calls;
+    size_t factory_calls;
+    size_t start_calls;
+    size_t start_at_calls;
+    size_t destroy_calls;
+    size_t last_form_index;
+    const void *compile_sources[4];
+    size_t compile_sizes[4];
+} profile_pair_probe;
+
+static vxml_status profile_pair_init(
+    vxml_session_impl *session,
+    const void *options) {
+    if (session == NULL || options == NULL)
+        return VXML_INVALID_CONTRACT;
+    session->profile_data = (void *)options;
+    return VXML_OK;
+}
+
+static vxml_status profile_pair_start(
+    vxml_session_impl *session) {
+    profile_pair_probe *probe = session != NULL
+        ? (profile_pair_probe *)session->profile_data : NULL;
+    if (probe == NULL)
+        return VXML_INVALID_CONTRACT;
+    ++probe->start_calls;
+    if (probe->start_calls == 1u) {
+        static const char target[] = "../submit";
+        session->submit_uri = target;
+        session->submit_uri_size = sizeof(target) - 1u;
+        session->submit_method = VXML_SUBMIT_METHOD_POST;
+        session->submit_enctype =
+            VXML_SUBMIT_ENCTYPE_URLENCODED;
+        session->submit_fields = NULL;
+        session->submit_field_count = 0u;
+        session->state = VXML_SESSION_SUBMITTING;
+    } else {
+        session->state = VXML_SESSION_EXITED;
+    }
+    return VXML_OK;
+}
+
+static vxml_status profile_pair_start_at(
+    vxml_session_impl *session,
+    size_t form_index) {
+    profile_pair_probe *probe = session != NULL
+        ? (profile_pair_probe *)session->profile_data : NULL;
+    if (probe == NULL)
+        return VXML_INVALID_CONTRACT;
+    ++probe->start_at_calls;
+    probe->last_form_index = form_index;
+    return profile_pair_start(session);
+}
+
+static void profile_pair_destroy(
+    vxml_session_impl *session) {
+    profile_pair_probe *probe = session != NULL
+        ? (profile_pair_probe *)session->profile_data : NULL;
+    if (probe != NULL)
+        ++probe->destroy_calls;
+    if (session != NULL)
+        session->profile_data = NULL;
+}
+
+static vxml_status profile_pair_compile(
+    void *user,
+    const void *source, size_t source_size,
+    vxml_program *out_program,
+    vxml_diagnostic *diagnostic) {
+    profile_pair_probe *probe =
+        (profile_pair_probe *)user;
+    vxml_limits limits = vxml_default_limits();
+    vxml_program_impl *impl;
+    vxml_status status;
+    if (probe == NULL || source == NULL ||
+        source_size == 0u || out_program == NULL)
+        return VXML_INVALID_ARGUMENT;
+    if (probe->compile_calls <
+        sizeof(probe->compile_sources) /
+            sizeof(probe->compile_sources[0])) {
+        probe->compile_sources[probe->compile_calls] =
+            source;
+        probe->compile_sizes[probe->compile_calls] =
+            source_size;
+    }
+    ++probe->compile_calls;
+    status = vxml_compile(
+        source, source_size, &limits,
+        out_program, diagnostic);
+    if (status != VXML_OK)
+        return status;
+    impl = (vxml_program_impl *)out_program->impl;
+    if (impl == NULL) {
+        vxml_program_destroy(out_program);
+        return VXML_INVALID_CONTRACT;
+    }
+    impl->profile_kind = VXML_PROFILE_CMETA;
+    impl->profile_session_init = profile_pair_init;
+    impl->profile_session_start = profile_pair_start;
+    impl->profile_session_start_at = profile_pair_start_at;
+    impl->profile_session_destroy = profile_pair_destroy;
+    return VXML_OK;
+}
+
+static const vxml_document_compile_adapter_v1
+profile_pair_compiler = {
+    .abi_version = VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1,
+    .struct_size =
+        sizeof(vxml_document_compile_adapter_v1),
+    .compile = profile_pair_compile};
+
+static vxml_status profile_pair_factory_init(
+    void *user,
+    vxml_session *session,
+    const vxml_program *program) {
+    profile_pair_probe *probe =
+        (profile_pair_probe *)user;
+    if (probe == NULL)
+        return VXML_INVALID_ARGUMENT;
+    ++probe->factory_calls;
+    return vxml_session_init_profile(
+        session, program, probe);
+}
+
+static const vxml_session_factory_v1
+profile_pair_factory = {
+    .abi_version = VXML_SESSION_FACTORY_ABI_V1,
+    .struct_size = sizeof(vxml_session_factory_v1),
+    .init = profile_pair_factory_init};
+
+static vxml_document_store_status
+profile_pair_store_init(
+    vxml_document_store *store,
+    navigation_document_probe *documents,
+    profile_pair_probe *profile,
+    size_t capacity) {
+    static const char application_uri[] =
+        "https://voice.example/app/root.vxml";
+    vxml_document_store_config_v1 config = {
+        .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1,
+        .struct_size =
+            sizeof(vxml_document_store_config_v1),
+        .application_uri = application_uri,
+        .application_uri_size =
+            sizeof(application_uri) - 1u,
+        .capacity = capacity,
+        .max_uri_bytes = 256u,
+        .max_document_bytes = 1024u,
+        .max_cache_bytes = 8192u,
+        .voice_limits = {0},
+        .documents = &navigation_document_adapter,
+        .document_user = documents,
+        .compiler = &profile_pair_compiler,
+        .compiler_user = profile};
+    config.voice_limits = vxml_default_limits();
+    return vxml_document_store_init(store, &config);
+}
+
 typedef struct submit_probe {
     vxml_submit_resource_status status;
     const char *response_body;
@@ -544,6 +704,35 @@ static vxml_dialog_manager_status manager_init_v4(
     config.events = &event_sink;
     config.event_user = events;
     return vxml_dialog_manager_init_v4(manager, &config);
+}
+
+static vxml_dialog_manager_status manager_init_v4_profile(
+    vxml_dialog_manager *manager,
+    size_t capacity,
+    size_t max_navigation_hops,
+    upstream_probe *upstream,
+    vxml_document_store *store,
+    submit_probe *submit,
+    event_probe *events,
+    profile_pair_probe *profile) {
+    vxml_dialog_manager_config_v4 config =
+        vxml_dialog_manager_default_config_v4();
+    config.capacity = capacity;
+    config.max_source_bytes = 256u;
+    config.max_navigation_hops =
+        max_navigation_hops;
+    config.max_submit_response_bytes = 2048u;
+    config.upstream = &upstream_adapter;
+    config.upstream_user = upstream;
+    config.document_store = store;
+    config.submit = &submit_adapter;
+    config.submit_user = submit;
+    config.events = &event_sink;
+    config.event_user = events;
+    config.session_factory = &profile_pair_factory;
+    config.session_factory_user = profile;
+    return vxml_dialog_manager_init_v4(
+        manager, &config);
 }
 
 static vxml_dialog_manager_status manager_init_v3(
@@ -1648,6 +1837,143 @@ spec("VoiceXML dialog manager") {
         check_equal(events.rows[1].name, "dialog.exit");
 
         active_fake_profile = NULL;
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("pairs one Store compiler with one Session factory across initial and submit-response Programs") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/profile.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='entry'><block><exit/></block></form></vxml>";
+        static const char submit_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form id='response'><block><exit/></block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK}};
+        static const char source[] =
+            "dialogs/profile.vxml#entry";
+        static const char media[] =
+            "application/voicexml+xml";
+        static const char connection[] =
+            "call-profile-pair";
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 1u};
+        profile_pair_probe profile = {
+            .last_form_index = SIZE_MAX};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK,
+            .response_body = submit_body,
+            .effective_uri =
+                "https://voice.example/app/result/profile-response.vxml"};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        const ccxml_telephony_adapter_v1 *adapter;
+        ccxml_dialog_start_request request = {
+            .source = source,
+            .source_size = sizeof(source) - 1u,
+            .media_type = media,
+            .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size =
+                sizeof(connection) - 1u};
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        size_t processed = 0u;
+
+        check_equal(
+            profile_pair_store_init(
+                &store, &documents, &profile, 2u),
+            VXML_DOCUMENT_STORE_OK);
+        check_equal(
+            manager_init_v4_profile(
+                &manager, 1u, 4u, &upstream, &store,
+                &submit, &events, &profile),
+            VXML_DIALOG_MANAGER_OK);
+        adapter = vxml_dialog_manager_ccxml_adapter();
+
+        check_equal(
+            adapter->prepare_dialog_start(
+                vxml_dialog_manager_ccxml_user(&manager),
+                &request, &dialog_id, &ticket, NULL),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(
+            vxml_dialog_manager_run_ready(
+                &manager, 1u, &processed),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(profile.compile_calls, (size_t)2u);
+        check_equal(profile.factory_calls, (size_t)2u);
+        check_equal(profile.start_calls, (size_t)2u);
+        check_equal(profile.start_at_calls, (size_t)1u);
+        check_equal(profile.last_form_index, (size_t)0u);
+        check_equal(profile.destroy_calls, (size_t)2u);
+        check_equal(documents.open_calls, (size_t)1u);
+        check_equal(documents.close_calls, (size_t)1u);
+        check_equal(submit.execute_calls, (size_t)1u);
+        check_equal(submit.close_calls, (size_t)1u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.rows[0].name, "dialog.started");
+        check_equal(events.rows[1].name, "dialog.exit");
+
+        manager_close_destroy(&manager, &upstream);
+        check_equal(
+            vxml_document_store_destroy(&store),
+            VXML_DOCUMENT_STORE_OK);
+    }
+
+    it("accepts the historical V4 config prefix without a Session factory") {
+        static const char a_uri[] =
+            "https://voice.example/app/dialogs/prefix.vxml";
+        static const char a_body[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><exit/></block></form></vxml>";
+        static const navigation_document_entry entries[] = {
+            {a_uri, a_body, VXML_DIALOG_MANAGER_OK}};
+        navigation_document_probe documents = {
+            .entries = entries,
+            .entry_count = 1u};
+        submit_probe submit = {
+            .status = VXML_SUBMIT_RESOURCE_OK};
+        upstream_probe upstream = {0};
+        event_probe events = {0};
+        vxml_document_store store = {0};
+        vxml_dialog_manager manager = {0};
+        vxml_dialog_manager_config_v4 config =
+            vxml_dialog_manager_default_config_v4();
+
+        check_equal(
+            navigation_store_init(
+                &store, &documents, 1u),
+            VXML_DOCUMENT_STORE_OK);
+        config.struct_size =
+            offsetof(
+                vxml_dialog_manager_config_v4,
+                event_user) +
+            sizeof(config.event_user);
+        config.capacity = 1u;
+        config.max_source_bytes = 256u;
+        config.max_navigation_hops = 4u;
+        config.max_submit_response_bytes = 2048u;
+        config.upstream = &upstream_adapter;
+        config.upstream_user = &upstream;
+        config.document_store = &store;
+        config.submit = &submit_adapter;
+        config.submit_user = &submit;
+        config.events = &event_sink;
+        config.event_user = &events;
+        check_equal(
+            vxml_dialog_manager_init_v4(
+                &manager, &config),
+            VXML_DIALOG_MANAGER_OK);
+
         manager_close_destroy(&manager, &upstream);
         check_equal(
             vxml_document_store_destroy(&store),
