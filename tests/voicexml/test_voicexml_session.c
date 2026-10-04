@@ -329,11 +329,30 @@ spec("VoiceXML session") {
             static const vxml_submit_field_v1 fields[] = {
                 {"alpha", sizeof("alpha") - 1u,
                  "one", sizeof("one") - 1u}};
+            static const vxml_submit_field_v1 multipart_fields[] = {
+                {"alpha", sizeof("alpha") - 1u,
+                 "one", sizeof("one") - 1u},
+                {"beta", sizeof("beta") - 1u,
+                 "two", sizeof("two") - 1u}};
+            static const unsigned char recording_bytes[] = {
+                0x01u, 0x02u, 0x03u};
+            static const vxml_submit_recording_field_v1 recordings[] = {
+                {
+                    "voice", sizeof("voice") - 1u,
+                    "voice.wav", sizeof("voice.wav") - 1u,
+                    "audio/wav", sizeof("audio/wav") - 1u,
+                    recording_bytes, sizeof(recording_bytes)
+                }};
+            static const vxml_submit_multipart_part_ref_v1 parts[] = {
+                {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+                {VXML_SUBMIT_MULTIPART_PART_RECORDING, 0u},
+                {VXML_SUBMIT_MULTIPART_PART_TEXT, 1u}};
             vxml_program program = {0};
             vxml_session session = {0};
             vxml_submit_target_v1 submit = {0};
             vxml_submit_target_v2 submit_v2 = {0};
             vxml_submit_target_v3 submit_v3 = {0};
+            vxml_submit_target_v4 submit_v4 = {0};
 
             check_equal(compile_program(source, &program), VXML_OK);
             check_equal(vxml_session_init(&session, &program), VXML_OK);
@@ -436,6 +455,67 @@ spec("VoiceXML session") {
                     vxml_session_submit_v3(&session, &submit_v3),
                     VXML_INVALID_CONTRACT);
                 impl->submit_has_fetchaudio_delay = true;
+
+                impl->submit_enctype =
+                    VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
+                impl->submit_fields = multipart_fields;
+                impl->submit_field_count =
+                    sizeof(multipart_fields) /
+                    sizeof(multipart_fields[0]);
+                impl->submit_recordings = recordings;
+                impl->submit_recording_count = 1u;
+                impl->submit_parts = parts;
+                impl->submit_part_count =
+                    sizeof(parts) / sizeof(parts[0]);
+
+                check_equal(
+                    vxml_session_submit_v3(&session, &submit_v3),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit_v2(&session, &submit_v2),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit(&session, &submit),
+                    VXML_UNSUPPORTED_FEATURE);
+                check_equal(
+                    vxml_session_submit_v4(&session, &submit_v4),
+                    VXML_OK);
+                check_equal(
+                    submit_v4.abi_version,
+                    VXML_SUBMIT_TARGET_ABI_V4);
+                check_true(
+                    submit_v4.recordings == recordings);
+                check_equal(
+                    submit_v4.recording_count, (size_t)1u);
+                check_true(submit_v4.parts == parts);
+                check_equal(
+                    submit_v4.part_count, (size_t)3u);
+                check_true(
+                    submit_v4.recordings[0].data ==
+                    recording_bytes);
+                check_equal(
+                    submit_v4.parts[0].kind,
+                    VXML_SUBMIT_MULTIPART_PART_TEXT);
+                check_equal(
+                    submit_v4.parts[1].kind,
+                    VXML_SUBMIT_MULTIPART_PART_RECORDING);
+                check_equal(
+                    submit_v4.parts[2].kind,
+                    VXML_SUBMIT_MULTIPART_PART_TEXT);
+
+                {
+                    static const
+                    vxml_submit_multipart_part_ref_v1 bad_parts[] = {
+                        {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+                        {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u},
+                        {VXML_SUBMIT_MULTIPART_PART_RECORDING, 0u}};
+                    impl->submit_parts = bad_parts;
+                    check_equal(
+                        vxml_session_submit_v4(
+                            &session, &submit_v4),
+                        VXML_INVALID_CONTRACT);
+                    impl->submit_parts = parts;
+                }
             }
             check_equal(
                 vxml_session_navigation(
@@ -449,6 +529,9 @@ spec("VoiceXML session") {
                 VXML_CLOSED);
             check_equal(
                 vxml_session_submit_v3(&session, &submit_v3),
+                VXML_CLOSED);
+            check_equal(
+                vxml_session_submit_v4(&session, &submit_v4),
                 VXML_CLOSED);
 
             vxml_session_destroy(&session);
