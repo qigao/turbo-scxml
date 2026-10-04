@@ -5605,6 +5605,19 @@ static bool cmeta_allocate_rows(
             options->max_submit_value_bytes;
         profile->max_submit_uri_bytes =
             options->max_submit_uri_bytes;
+        if (cmeta_submit_multipart_options_valid(
+                options)) {
+            profile->max_submit_recordings =
+                options->max_submit_recordings;
+            profile->max_submit_parts =
+                options->max_submit_parts;
+            profile->max_submit_recording_name_bytes =
+                options->max_submit_recording_name_bytes;
+            profile->max_submit_fetchaudio_uri_bytes =
+                options->max_submit_fetchaudio_uri_bytes;
+            profile->max_submit_timeout_us =
+                options->max_submit_timeout_us;
+        }
     }
     if (options->semantic_data_count != 0u) {
         profile->semantic_data = (const cmeta_data_desc **)vxml_malloc(
@@ -10624,6 +10637,7 @@ static vxml_status cmeta_submit_recording_shadow_token(
     salts_xml_string_view name,
     const vxml_cmeta_expr_compile_scope *scopes,
     size_t scope_count,
+    salts_xml_location location,
     bool *out_recording) {
     static const char application_owner[] =
         "application.lastresult";
@@ -10646,7 +10660,7 @@ static vxml_status cmeta_submit_recording_shadow_token(
     if (!cmeta_ascii_ncname(owner))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
-            (salts_xml_location){0},
+            location,
             "VoiceXML submit recording shadow owner must be application.lastresult or a field NCName");
     form_index = cmeta_expression_form_from_scopes(
         builder->profile, scopes, scope_count);
@@ -10655,7 +10669,7 @@ static vxml_status cmeta_submit_recording_shadow_token(
         builder->profile->forms == NULL)
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
-            (salts_xml_location){0},
+            location,
             "VoiceXML submit field recording shadow requires form scope");
     if (cmeta_form_field_by_name(
             builder->profile,
@@ -10663,7 +10677,7 @@ static vxml_status cmeta_submit_recording_shadow_token(
             owner, NULL) == NULL)
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
-            (salts_xml_location){0},
+            location,
             "VoiceXML submit recording shadow field does not exist in the active form");
     *out_recording = true;
     return VXML_OK;
@@ -10762,13 +10776,8 @@ static vxml_status cmeta_lower_submit_namelist(
         status = cmeta_submit_recording_shadow_token(
             builder, name,
             scopes, scope_count,
-            &shadow_recording);
-        if (status != VXML_OK) {
-            if (builder->diagnostic != NULL &&
-                builder->diagnostic->location.line == 0u)
-                builder->diagnostic->location = location;
-            goto done;
-        }
+            location, &shadow_recording);
+        if (status != VXML_OK) goto done;
 
         if (!shadow_recording &&
             form_index != VXML_CMETA_NO_INDEX &&
@@ -11392,6 +11401,17 @@ static vxml_status cmeta_lower_simple_action(
                 cmeta_attribute(node, "namelist");
             const salts_xml_attribute enctype =
                 cmeta_attribute(node, "enctype");
+            const salts_xml_attribute fetchtimeout =
+                cmeta_attribute(node, "fetchtimeout");
+            const salts_xml_attribute fetchaudio =
+                cmeta_attribute(node, "fetchaudio");
+            const bool multipart =
+                enctype.impl != NULL &&
+                cmeta_decoded_equal(
+                    salts_xml_attribute_value(enctype),
+                    "multipart/form-data");
+            bool has_timeout = false;
+            uint64_t timeout_us = UINT64_C(0);
             action->kind = VXML_CMETA_ACTION_SUBMIT;
             action->submit_method = VXML_SUBMIT_METHOD_GET;
             action->submit_enctype =
@@ -11404,6 +11424,16 @@ static vxml_status cmeta_lower_simple_action(
                     VXML_INVALID_CONTRACT,
                     salts_xml_node_location(node),
                     "VoiceXML typed submit bounds/target changed between compiler passes");
+            if ((multipart ||
+                 fetchtimeout.impl != NULL ||
+                 fetchaudio.impl != NULL) &&
+                !cmeta_submit_multipart_options_valid(
+                    builder->options))
+                return cmeta_program_fail(
+                    builder->diagnostic,
+                    VXML_INVALID_CONTRACT,
+                    salts_xml_node_location(node),
+                    "VoiceXML multipart/policy submit bounds changed between compiler passes");
             status = cmeta_retain_decoded_view(
                 builder,
                 salts_xml_attribute_value(next),
@@ -11439,29 +11469,92 @@ static vxml_status cmeta_lower_simple_action(
             }
             if (enctype.impl != NULL) {
                 if (action->submit_method !=
-                        VXML_SUBMIT_METHOD_POST ||
-                    !cmeta_decoded_equal(
-                        salts_xml_attribute_value(enctype),
-                        "application/x-www-form-urlencoded"))
+                    VXML_SUBMIT_METHOD_POST)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(enctype),
+                        "VoiceXML submit enctype requires POST");
+                if (multipart)
+                    action->submit_enctype =
+                        VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA;
+                else if (!cmeta_decoded_equal(
+                             salts_xml_attribute_value(enctype),
+                             "application/x-www-form-urlencoded"))
                     return cmeta_program_fail(
                         builder->diagnostic,
                         VXML_INVALID_STRUCTURE,
                         salts_xml_attribute_location(enctype),
                         "VoiceXML submit enctype changed between compiler passes");
             }
+            if (fetchtimeout.impl != NULL) {
+                status = cmeta_parse_prompt_timeout(
+                    fetchtimeout,
+                    &has_timeout, &timeout_us,
+                    builder->diagnostic);
+                if (status != VXML_OK) return status;
+                if (!has_timeout ||
+                    timeout_us >
+                        builder->options
+                            ->max_submit_timeout_us)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        timeout_us >
+                                builder->options
+                                    ->max_submit_timeout_us
+                            ? VXML_LIMIT_EXCEEDED
+                            : VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(
+                            fetchtimeout),
+                        "VoiceXML submit timeout changed between compiler passes");
+                action->submit_has_timeout = true;
+                action->submit_timeout_us = timeout_us;
+            }
+            if (fetchaudio.impl != NULL) {
+                status = cmeta_retain_decoded_view(
+                    builder,
+                    salts_xml_attribute_value(fetchaudio),
+                    salts_xml_attribute_location(fetchaudio),
+                    &action->fetchaudio.uri,
+                    &action->fetchaudio.uri_size);
+                if (status != VXML_OK) return status;
+                if (action->fetchaudio.uri_size == 0u ||
+                    action->fetchaudio.uri_size >
+                        builder->options
+                            ->max_submit_fetchaudio_uri_bytes)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        action->fetchaudio.uri_size >
+                                builder->options
+                                    ->max_submit_fetchaudio_uri_bytes
+                            ? VXML_LIMIT_EXCEEDED
+                            : VXML_INVALID_STRUCTURE,
+                        salts_xml_attribute_location(fetchaudio),
+                        "VoiceXML submit fetchaudio changed between compiler passes");
+            }
             if (namelist.impl != NULL) {
-                status = cmeta_lower_namelist(
+                status = cmeta_lower_submit_namelist(
                     builder, namelist,
                     scopes, scope_count,
+                    multipart,
                     &action->first_location,
-                    &action->location_count);
+                    &action->location_count,
+                    &action->submit_recording_count);
                 if (status != VXML_OK) return status;
-                status = cmeta_validate_submit_locations(
-                    builder,
-                    action->first_location,
-                    action->location_count,
-                    salts_xml_attribute_location(namelist));
-                if (status != VXML_OK) return status;
+                action->submit_part_count =
+                    action->location_count;
+            } else {
+                action->first_location =
+                    VXML_CMETA_NO_INDEX;
+                action->location_count = 0u;
+                action->submit_recording_count = 0u;
+                action->submit_part_count = 0u;
+                if (multipart)
+                    return cmeta_program_fail(
+                        builder->diagnostic,
+                        VXML_INVALID_STRUCTURE,
+                        salts_xml_node_location(node),
+                        "VoiceXML multipart submit requires a recording namelist");
             }
     } else if (cmeta_node_named(node, "exit")) {
             const salts_xml_attribute expression =
