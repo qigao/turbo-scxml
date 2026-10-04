@@ -214,6 +214,10 @@ vxml_status vxml_session_init_profile(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -261,6 +265,10 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -319,6 +327,10 @@ vxml_status vxml_session_start_at_form(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -396,14 +408,127 @@ static bool submit_field_view_valid(
     return true;
 }
 
-vxml_status vxml_session_submit_v3(
+static bool submit_recording_view_valid(
+    const vxml_submit_recording_field_v1 *field) {
+    return field != NULL &&
+        field->name != NULL &&
+        field->name_size != 0u &&
+        memchr(field->name, '\0', field->name_size) == NULL &&
+        ((field->filename == NULL) ==
+         (field->filename_size == 0u)) &&
+        (field->filename_size == 0u ||
+         memchr(
+             field->filename, '\0',
+             field->filename_size) == NULL) &&
+        field->media_type != NULL &&
+        field->media_type_size != 0u &&
+        memchr(
+            field->media_type, '\0',
+            field->media_type_size) == NULL &&
+        field->data != NULL &&
+        field->size != 0u;
+}
+
+static bool submit_names_equal(
+    const char *a, size_t a_size,
+    const char *b, size_t b_size) {
+    return a != NULL && b != NULL &&
+        a_size == b_size &&
+        memcmp(a, b, a_size) == 0;
+}
+
+static bool submit_multipart_views_valid(
+    const vxml_session_impl *impl) {
+    size_t index;
+    size_t prior;
+    size_t total;
+
+    if (impl == NULL)
+        return false;
+    if ((impl->submit_recordings == NULL) !=
+            (impl->submit_recording_count == 0u) ||
+        (impl->submit_parts == NULL) !=
+            (impl->submit_part_count == 0u))
+        return false;
+
+    if (impl->submit_enctype ==
+            VXML_SUBMIT_ENCTYPE_URLENCODED)
+        return impl->submit_recording_count == 0u &&
+            impl->submit_part_count == 0u;
+
+    if (impl->submit_enctype !=
+            VXML_SUBMIT_ENCTYPE_MULTIPART_FORM_DATA ||
+        impl->submit_method != VXML_SUBMIT_METHOD_POST ||
+        impl->submit_recording_count == 0u ||
+        impl->submit_recordings == NULL ||
+        impl->submit_parts == NULL ||
+        impl->submit_field_count >
+            SIZE_MAX - impl->submit_recording_count)
+        return false;
+
+    total =
+        impl->submit_field_count +
+        impl->submit_recording_count;
+    if (impl->submit_part_count != total)
+        return false;
+
+    for (index = 0u;
+         index < impl->submit_recording_count;
+         ++index) {
+        const vxml_submit_recording_field_v1 *recording =
+            &impl->submit_recordings[index];
+        if (!submit_recording_view_valid(recording))
+            return false;
+        for (prior = 0u; prior < index; ++prior)
+            if (submit_names_equal(
+                    recording->name,
+                    recording->name_size,
+                    impl->submit_recordings[prior].name,
+                    impl->submit_recordings[prior].name_size))
+                return false;
+        for (prior = 0u;
+             prior < impl->submit_field_count;
+             ++prior)
+            if (submit_names_equal(
+                    recording->name,
+                    recording->name_size,
+                    impl->submit_fields[prior].name,
+                    impl->submit_fields[prior].name_size))
+                return false;
+    }
+
+    for (index = 0u; index < impl->submit_part_count; ++index) {
+        const vxml_submit_multipart_part_ref_v1 *part =
+            &impl->submit_parts[index];
+        if ((part->kind ==
+                 VXML_SUBMIT_MULTIPART_PART_TEXT &&
+             part->index >= impl->submit_field_count) ||
+            (part->kind ==
+                 VXML_SUBMIT_MULTIPART_PART_RECORDING &&
+             part->index >= impl->submit_recording_count) ||
+            (part->kind !=
+                 VXML_SUBMIT_MULTIPART_PART_TEXT &&
+             part->kind !=
+                 VXML_SUBMIT_MULTIPART_PART_RECORDING))
+            return false;
+        for (prior = 0u; prior < index; ++prior)
+            if (impl->submit_parts[prior].kind ==
+                    part->kind &&
+                impl->submit_parts[prior].index ==
+                    part->index)
+                return false;
+    }
+    return true;
+}
+
+vxml_status vxml_session_submit_v4(
     const vxml_session *session,
-    vxml_submit_target_v3 *out_target) {
+    vxml_submit_target_v4 *out_target) {
     const vxml_session_impl *impl;
     size_t index;
     if (session == NULL || out_target == NULL)
         return VXML_INVALID_ARGUMENT;
-    *out_target = (vxml_submit_target_v3){0};
+    *out_target = (vxml_submit_target_v4){0};
     impl = (const vxml_session_impl *)session->impl;
     if (impl == NULL) return VXML_INVALID_STATE;
     if (impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
@@ -411,8 +536,9 @@ vxml_status vxml_session_submit_v3(
         return VXML_INVALID_STATE;
     if (impl->submit_uri == NULL ||
         impl->submit_uri_size == 0u ||
-        memchr(impl->submit_uri, '\0',
-               impl->submit_uri_size) != NULL ||
+        memchr(
+            impl->submit_uri, '\0',
+            impl->submit_uri_size) != NULL ||
         (impl->submit_method != VXML_SUBMIT_METHOD_GET &&
          impl->submit_method != VXML_SUBMIT_METHOD_POST) ||
         (impl->submit_enctype !=
@@ -441,9 +567,12 @@ vxml_status vxml_session_submit_v3(
         if (!submit_field_view_valid(
                 &impl->submit_fields[index]))
             return VXML_INVALID_CONTRACT;
-    *out_target = (vxml_submit_target_v3){
-        .abi_version = VXML_SUBMIT_TARGET_ABI_V3,
-        .struct_size = sizeof(vxml_submit_target_v3),
+    if (!submit_multipart_views_valid(impl))
+        return VXML_INVALID_CONTRACT;
+
+    *out_target = (vxml_submit_target_v4){
+        .abi_version = VXML_SUBMIT_TARGET_ABI_V4,
+        .struct_size = sizeof(vxml_submit_target_v4),
         .uri = impl->submit_uri,
         .uri_size = impl->submit_uri_size,
         .method = impl->submit_method,
@@ -462,7 +591,52 @@ vxml_status vxml_session_submit_v3(
         .has_fetchaudio_minimum =
             impl->submit_has_fetchaudio_minimum,
         .fetchaudio_minimum_us =
-            impl->submit_fetchaudio_minimum_us};
+            impl->submit_fetchaudio_minimum_us,
+        .recordings = impl->submit_recordings,
+        .recording_count =
+            impl->submit_recording_count,
+        .parts = impl->submit_parts,
+        .part_count = impl->submit_part_count};
+    return VXML_OK;
+}
+
+vxml_status vxml_session_submit_v3(
+    const vxml_session *session,
+    vxml_submit_target_v3 *out_target) {
+    vxml_submit_target_v4 submit = {0};
+    vxml_status status;
+    if (out_target == NULL)
+        return VXML_INVALID_ARGUMENT;
+    *out_target = (vxml_submit_target_v3){0};
+    status = vxml_session_submit_v4(
+        session, &submit);
+    if (status != VXML_OK)
+        return status;
+    if (submit.recording_count != 0u ||
+        submit.part_count != 0u)
+        return VXML_UNSUPPORTED_FEATURE;
+    *out_target = (vxml_submit_target_v3){
+        .abi_version = VXML_SUBMIT_TARGET_ABI_V3,
+        .struct_size = sizeof(vxml_submit_target_v3),
+        .uri = submit.uri,
+        .uri_size = submit.uri_size,
+        .method = submit.method,
+        .enctype = submit.enctype,
+        .fields = submit.fields,
+        .field_count = submit.field_count,
+        .has_timeout = submit.has_timeout,
+        .timeout_us = submit.timeout_us,
+        .fetchaudio_uri = submit.fetchaudio_uri,
+        .fetchaudio_uri_size =
+            submit.fetchaudio_uri_size,
+        .has_fetchaudio_delay =
+            submit.has_fetchaudio_delay,
+        .fetchaudio_delay_us =
+            submit.fetchaudio_delay_us,
+        .has_fetchaudio_minimum =
+            submit.has_fetchaudio_minimum,
+        .fetchaudio_minimum_us =
+            submit.fetchaudio_minimum_us};
     return VXML_OK;
 }
 

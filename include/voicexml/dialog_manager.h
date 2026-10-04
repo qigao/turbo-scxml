@@ -200,6 +200,16 @@ typedef struct vxml_dialog_manager_config_v4 {
     /* Optional append-only runtime profile factory. */
     const vxml_session_factory_v1 *session_factory;
     void *session_factory_user;
+
+    /*
+     * Optional append-only multipart SubmitResource limits.
+     * A complete nonzero tail enables generic multipart handoff.
+     */
+    size_t max_submit_body_bytes;
+    size_t max_submit_parts;
+    size_t max_submit_boundary_bytes;
+    size_t max_submit_header_bytes;
+    size_t max_submit_segments;
 } vxml_dialog_manager_config_v4;
 
 typedef struct vxml_dialog_manager_stats {
