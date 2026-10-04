@@ -1454,6 +1454,14 @@ static const vxml_fetch_audio_adapter_v1 cmeta_data_fetch_audio_adapter = {
     .struct_size = sizeof(vxml_fetch_audio_adapter_v1),
     .begin = cmeta_data_fetch_audio_begin};
 
+static vxml_cmeta_compile_options_v1 submit_compile_options(void) {
+    vxml_cmeta_compile_options_v1 options = compile_options();
+    options.max_submit_fields = 8u;
+    options.max_submit_value_bytes = 128u;
+    options.max_submit_uri_bytes = 128u;
+    return options;
+}
+
 static vxml_cmeta_compile_options_v1 data_compile_options(void) {
     vxml_cmeta_compile_options_v1 options = compile_options();
     options.max_external_data_resources = 4u;
@@ -2247,6 +2255,281 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
 }
 
 spec("VoiceXML CMeta session execution") {
+    it("publishes ordered typed POST submit fields through generic V2 and stops later actions") {
+        char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='result.vxml' method='post' "
+            "enctype='application/x-www-form-urlencoded' "
+            "namelist='value flag'/>"
+            "<assign name='other' expr='99'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        const vxml_cmeta_session_root root = {
+            .value = 7, .other = 3, .flag = true};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_submit_target_v1 legacy = {0};
+        vxml_submit_target_v2 submit = {0};
+        const vxml_cmeta_session_data *runtime;
+        const vxml_cmeta_session_root *committed;
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        memset(source, 'x', sizeof(source) - 1u);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_SUBMITTING);
+
+        check_equal(
+            vxml_session_submit(&session, &legacy),
+            VXML_UNSUPPORTED_FEATURE);
+        check_equal(
+            vxml_session_submit_v2(&session, &submit),
+            VXML_OK);
+        check_equal(
+            submit.abi_version, VXML_SUBMIT_TARGET_ABI_V2);
+        check_equal(
+            submit.struct_size, sizeof(vxml_submit_target_v2));
+        check_equal(
+            submit.method, VXML_SUBMIT_METHOD_POST);
+        check_equal(
+            submit.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
+        check_equal(
+            submit.uri_size, sizeof("result.vxml") - 1u);
+        check_equal(
+            memcmp(
+                submit.uri, "result.vxml",
+                submit.uri_size), 0);
+        check_equal(submit.field_count, (size_t)2u);
+        check_not_null(submit.fields);
+        if (submit.fields != NULL &&
+            submit.field_count == 2u) {
+            check_equal(
+                submit.fields[0].name_size,
+                sizeof("value") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[0].name, "value",
+                    submit.fields[0].name_size), 0);
+            check_equal(
+                submit.fields[0].value_size,
+                sizeof("7") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[0].value, "7",
+                    submit.fields[0].value_size), 0);
+            check_equal(
+                submit.fields[1].name_size,
+                sizeof("flag") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[1].name, "flag",
+                    submit.fields[1].name_size), 0);
+            check_equal(
+                submit.fields[1].value_size,
+                sizeof("true") - 1u);
+            check_equal(
+                memcmp(
+                    submit.fields[1].value, "true",
+                    submit.fields[1].value_size), 0);
+        }
+
+        runtime = session_data(&session);
+        check_not_null(runtime);
+        committed = runtime != NULL
+            ? (const vxml_cmeta_session_root *)
+                runtime->committed_root.storage
+            : NULL;
+        check_not_null(committed);
+        if (committed != NULL)
+            check_equal(committed->other, 3);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("publishes canonical zero-field GET submit") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='query.vxml'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        const vxml_cmeta_session_root root = {.value = 1};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_submit_target_v1 legacy = {0};
+        vxml_submit_target_v2 submit = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(
+            vxml_session_submit_v2(&session, &submit),
+            VXML_OK);
+        check_equal(
+            submit.method, VXML_SUBMIT_METHOD_GET);
+        check_equal(
+            submit.enctype, VXML_SUBMIT_ENCTYPE_URLENCODED);
+        check_null(submit.fields);
+        check_equal(submit.field_count, (size_t)0u);
+        check_equal(
+            vxml_session_submit(&session, &legacy),
+            VXML_OK);
+        check_equal(legacy.uri_size, submit.uri_size);
+        check_equal(
+            memcmp(legacy.uri, submit.uri, submit.uri_size), 0);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("keeps typed submit fail-closed without the append-only compile tail") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x.vxml'/>"
+            "</block></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        vxml_program program = {0};
+
+        compile.struct_size =
+            offsetof(
+                vxml_cmeta_compile_options_v1,
+                max_submit_fields);
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_CONTRACT);
+        check_null(program.impl);
+    }
+
+    it("rejects duplicate and unknown typed submit names during compile") {
+        static const char duplicate[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' namelist='value value'/>"
+            "</block></form></vxml>";
+        static const char unknown[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' namelist='missing'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        vxml_program program = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                duplicate, sizeof(duplicate) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_INVALID_STRUCTURE);
+        check_null(program.impl);
+        check_equal(
+            vxml_compile_cmeta(
+                unknown, sizeof(unknown) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
+    }
+
+    it("fails unsupported float submit value before publishing the handoff") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' namelist='ratio'/>"
+            "</block></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        const vxml_cmeta_session_root root = {.ratio = 1.25};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+        vxml_submit_target_v2 submit = {0};
+
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_SEMANTIC_ERROR);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+        check_equal(
+            vxml_session_submit_v2(&session, &submit),
+            VXML_INVALID_STATE);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
+    it("fails submit value snapshot overflow before publication") {
+        static const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
+            "datamodel='cmeta'><form><block>"
+            "<submit next='x' namelist='value'/>"
+            "</block></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile =
+            submit_compile_options();
+        const vxml_cmeta_session_root root = {.value = 123};
+        const vxml_cmeta_session_options_v1 options =
+            session_options(&root);
+        vxml_program program = {0};
+        vxml_session session = {0};
+
+        compile.max_submit_value_bytes = 2u;
+        check_equal(
+            vxml_compile_cmeta(
+                source, sizeof(source) - 1u, NULL,
+                &compile, &program, NULL),
+            VXML_OK);
+        check_equal(
+            vxml_session_init_cmeta(
+                &session, &program, &options),
+            VXML_OK);
+        check_equal(
+            vxml_session_start(&session),
+            VXML_LIMIT_EXCEEDED);
+        check_equal(
+            vxml_session_get_state(&session),
+            VXML_SESSION_FAILED);
+
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+
     it("selects and transactionally owns a bounded transfer provider request") {
         char source[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "

@@ -35,7 +35,10 @@ int main(void) {
         .max_prompt_expanded_segments = 16u,
         .max_prompt_foreach_depth = 2u,
         .max_data_namelist_fields = 4u,
-        .max_data_request_value_bytes = 256u
+        .max_data_request_value_bytes = 256u,
+        .max_submit_fields = 4u,
+        .max_submit_value_bytes = 256u,
+        .max_submit_uri_bytes = 128u
     };
     const vxml_cmeta_session_options_v1 session_options = {
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1,

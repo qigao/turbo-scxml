@@ -3117,7 +3117,7 @@ spec("VoiceXML CMeta program compiler") {
         }
     }
 
-    it("explicitly rejects deferred syntax and implicit prompt text") {
+    it("explicitly rejects disabled or deferred syntax and implicit prompt text") {
         static const char *const bodies[] = {
             "<form><block><value expr='value'/></block></form>",
             "<form><block><log>text</log></block></form>",
@@ -3153,7 +3153,8 @@ spec("VoiceXML CMeta program compiler") {
             check_true(written > 0 && (size_t)written < sizeof(source));
             {
                 const vxml_status expected =
-                    index == 10u || index == 11u || index == 16u
+                    index == 10u || index == 11u ||
+                    index == 12u || index == 16u
                         ? VXML_INVALID_CONTRACT
                         : index == 3u || index == 4u ||
                           index == 5u ||
