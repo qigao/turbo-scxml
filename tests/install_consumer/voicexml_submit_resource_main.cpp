@@ -49,6 +49,10 @@ int main() {
            multipart.struct_size == sizeof(multipart) &&
            multipart.parts == nullptr &&
            multipart.part_count == 0u &&
+           !request.has_timeout &&
+           request.timeout_us == UINT64_C(0) &&
+           !multipart.has_timeout &&
+           multipart.timeout_us == UINT64_C(0) &&
            execute_fn != nullptr && multipart_fn != nullptr &&
            close_fn != nullptr
         ? 0 : 1;
