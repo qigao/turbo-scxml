@@ -124,7 +124,7 @@ int main(void) {
     const int result = voicexml_fuzz_run(
         VOICEXML_CMETA_FUZZ_CORPUS_DIR,
         seeds, sizeof(seeds) / sizeof(seeds[0]),
-        32u, 4096u, run_case, NULL);
+        16u, 4096u, run_case, NULL);
     if (result != 0)
         fprintf(stderr, "VoiceXML CMeta fuzz smoke failed\n");
     return result;
