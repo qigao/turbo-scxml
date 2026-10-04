@@ -685,12 +685,10 @@ vxml_document_store_status vxml_document_store_compile_source(
     vxml_status voice_status;
 
     if (impl == NULL || source == NULL || source_size == 0u ||
-        source_size > impl->max_document_bytes ||
         out_program == NULL || out_program->impl != NULL)
-        return source_size > (impl != NULL
-                ? impl->max_document_bytes : SIZE_MAX)
-            ? VXML_DOCUMENT_STORE_LIMIT_EXCEEDED
-            : VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+        return VXML_DOCUMENT_STORE_INVALID_ARGUMENT;
+    if (source_size > impl->max_document_bytes)
+        return VXML_DOCUMENT_STORE_LIMIT_EXCEEDED;
 
     if (diagnostic != NULL)
         *diagnostic = (vxml_diagnostic){0};
