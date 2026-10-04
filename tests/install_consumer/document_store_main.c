@@ -22,10 +22,16 @@ int main(void) {
     vxml_document_store store = {0};
     vxml_document_ref ref = {0};
     vxml_document_store_stats stats = {0};
+    vxml_document_store_status (*compile_source_fn)(
+        const vxml_document_store *,
+        const void *, size_t,
+        vxml_program *, vxml_diagnostic *) =
+        vxml_document_store_compile_source;
 
     config.compiler = &compiler;
     config.compiler_user = NULL;
-    if (config.compiler->compile == NULL)
+    if (config.compiler->compile == NULL ||
+        compile_source_fn == NULL)
         return 1;
     if (store.impl != NULL)
         return 2;
