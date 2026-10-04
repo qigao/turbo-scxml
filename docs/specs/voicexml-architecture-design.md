@@ -1,389 +1,381 @@
-# VoiceXML 2.1 Incubating Architecture Design
+# VoiceXML architecture
 
-## Status and standards profile
+## Status
 
-TurboSCXML provides an SCXML execution engine, a bounded CCXML profile, and a
-separate non-media `TurboSCXML::VoiceXML` engine. CCXML can prepare, start, and
-terminate VoiceXML-capable dialogs, but the attached telephony provider still
-owns document retrieval, engine attachment, prompt and recognition media, and
-result Events.
+TurboSCXML provides an **incubating, bounded VoiceXML 2.0/2.1 runtime**. It is
+not a claim of full VoiceXML conformance. The supported surface is defined by
+executable tests, explicit profile contracts, installed target dependencies,
+and the support/conformance work tracked by issue #51.
 
-The standards baseline is VoiceXML 2.1, which incorporates VoiceXML 2.0 and
-adds orthogonal features. The first release is explicitly an incubating profile,
-not a claim of complete VoiceXML conformance. It accepts only documented
-subsets and rejects unsupported elements or attributes instead of approximating
-their behavior.
+The architecture has moved beyond the original non-media MVP. The canonical
+runtime now includes:
 
-Normative references:
+- immutable base VoiceXML Program/Session execution;
+- typed CMeta executable content and FIA;
+- optional QuickJS script/data execution;
+- prompt/media, grammar/collect, menu/initial, subdialog, record, transfer;
+- DocumentStore, ScriptResource and one-attempt SubmitResource;
+- external navigation and typed submit response continuation;
+- CCXML DialogManager integration;
+- optional CHTTP adapters that remain outside the VoiceXML core.
 
-- VoiceXML 2.0 and the Form Interpretation Algorithm (FIA):
-  <https://www.w3.org/TR/voicexml20/>
-- VoiceXML 2.1 additions and conformance rules:
-  <https://www.w3.org/TR/voicexml21/>
-- CCXML dialog integration and returned Events:
-  <https://www.w3.org/TR/ccxml/#dialogstart>
+Unsupported language or provider capabilities fail explicitly. TurboSCXML does
+not silently approximate DOM/ECMAScript semantics, provider behavior, retry
+semantics, or ownership.
 
-The VoiceXML namespace is `http://www.w3.org/2001/vxml`. The compiler accepts
-root versions `2.0` and `2.1`, while each implementation slice publishes its
-exact supported surface. XPath is not introduced. ECMAScript is not silently
-reinterpreted as CMeta: the typed extension requires explicit
-`datamodel="cmeta"`. QuickJS/ECMAScript remains a future, separately selected
-profile rather than an implicit compatibility mode.
+## Core invariants
 
-## Dependency and ownership boundaries
+1. **Program is immutable.** Compilers retain all request/control metadata in
+   Program-owned storage. Runtime state never mutates the Program.
+2. **Session is single-owner and synchronous.** Async providers publish through
+   bounded generation-safe mailboxes/tickets; serialized Session progress owns
+   state mutation.
+3. **Profiles are explicit.** Literal, CMeta, and QuickJS behavior do not
+   silently reinterpret each other.
+4. **Providers are capability-gated.** Missing capability is rejected before
+   provider admission or mapped to the exact runtime Event required by the
+   implemented profile.
+5. **Resource ownership is explicit.** Every provider-owned lease has one
+   owner and one exact settlement path.
+6. **POST is one-attempt.** SubmitResource never retries a request after
+   provider admission; `POSSIBLY_PROCESSED` is terminal.
+7. **No transport implementation enters the core.** CHTTP is an optional
+   installed adapter package boundary.
+8. **All retained/scratch data is bounded.** URI, source, expression, prompt,
+   snapshot, recording, multipart and result storage have explicit limits.
+
+## Installed target graph
+
+```mermaid
+flowchart TD
+  VX["TurboSCXML::VoiceXML"]
+  DS["TurboSCXML::VoiceXMLDocumentStore"]
+  SR["TurboSCXML::VoiceXMLScriptResource"]
+  SUB["TurboSCXML::VoiceXMLSubmitResource"]
+  DM["TurboSCXML::VoiceXMLDialogManager"]
+  CM["TurboSCXML::VoiceXMLCMeta"]
+  QJ["TurboSCXML::VoiceXMLQuickJS"]
+  SD["TurboSCXML::VoiceXMLSubdialogOwner"]
+  CH["TurboSCXML::VoiceXMLCHttpResource"]
+  CC["TurboSCXML::CCXML"]
+  META["Salts::CMeta"]
+  DB["Salts DataBind / adapters"]
+  QJS["quickjs-ng"]
+  CHTTP["installed CHTTP package"]
+
+  VX --> DS
+  DS --> SR
+  DS --> SUB
+  VX --> DM
+  DS --> DM
+  SUB --> DM
+  CC --> DM
+
+  VX --> CM
+  META --> CM
+  DB --> CM
+  CM --> SD
+  DS --> SD
+
+  VX --> QJ
+  META --> QJ
+  QJS --> QJ
+  SR --> QJ
+
+  DS --> CH
+  CHTTP --> CH
+```
+
+Important dependency rules:
+
+- `TurboSCXML::VoiceXML` does not link CMeta, DataBind, QuickJS or CHTTP.
+- `VoiceXMLCMeta` owns typed/DataBind integration.
+- `VoiceXMLQuickJS` owns QuickJS and the private transactional CMeta bridge.
+- `VoiceXMLDialogManager` does not link CMeta or QuickJS.
+- CHTTP adapters consume the installed CHTTP package; TurboSCXML does not
+  duplicate CHTTP's private llhttp/TLS/DNS dependency graph.
+
+## Compiler and Program model
+
+### Base VoiceXML
+
+The base compiler owns profile-neutral immutable structure and handoffs:
+
+- document/form/block layout;
+- literal exit/goto/submit/script descriptors;
+- profile-neutral data request metadata when an explicit profile feature
+  enables it;
+- navigation, submit and script control-transfer records.
+
+The base public compiler remains fail-closed for profile-specific surfaces it
+cannot execute.
+
+### CMeta profile
+
+`TurboSCXML::VoiceXMLCMeta` adds a typed compiled layer over the same
+VoiceXML Program lifecycle.
+
+It owns:
+
+- document/form/block lexical CMeta scopes;
+- `var`, `assign`, `clear`, guards and typed namelists;
+- transactional staged/committed root and local scope state;
+- Event handlers and retry counters;
+- fields, menus and initial mixed-initiative collection;
+- prompt/media rows, marks and bounded prompt `foreach`;
+- typed external `data` through DataBind;
+- subdialog, record and transfer form items;
+- typed submit scalar/recording projection.
+
+DataBind owns typed format decoding. CMeta Session ownership does not extend
+into transport providers.
+
+### QuickJS profile
+
+`TurboSCXML::VoiceXMLQuickJS` is an opt-in ECMAScript surface built on the
+private hardened QuickJS sandbox.
+
+It owns:
+
+- compile-time validation for supported dynamic expressions;
+- fresh hardened QuickJS contexts;
+- bounded heap/stack/result storage and monotonic wall-clock deadline;
+- external `script@src` / `script@srcexpr` acquisition and execution;
+- transactional import/export through the private CMeta bridge;
+- no-DOM `<data>` request side effects.
+
+The supported safety contract does **not** claim a deterministic QuickJS
+bytecode-instruction quota when the pinned engine ABI cannot provide one.
+
+QuickJS `<data>` deliberately discards response bytes. It does not create a
+DOM facade or persistent arbitrary JS object graph.
+
+## Session execution and FIA
+
+The CMeta Session is the main typed FIA owner:
 
 ```text
-VoiceXML XML bytes
-    -> VoiceXML compiler (Salts::XmlParser)
-    -> immutable bounded vxml_program
-    -> single-owner synchronous FIA core
-       -> typed datamodel adapter
-       -> future prompt/collect/resource adapters
-       -> terminal result
-    -> optional serial dialog manager
-       -> asynchronous media/fetch completions
-       -> CCXML dialog provider decorator
-       -> dialog.prepared / dialog.started / dialog.exit / error.dialog.*
+document initializers
+  -> enter form
+  -> form initializers / initial
+  -> select directed item
+  -> prompt / collect / provider handoff
+  -> process completion
+  -> local filled / form filled
+  -> reselect or terminal/control transfer
 ```
 
-The FIA is a specialized deterministic interpreter. VoiceXML documents are not
-translated into SCXML documents: doing so would obscure prompt counters,
-form-item guards, collect/process phases, and VoiceXML event-handler scope.
-Future asynchronous adapters may reuse CFlow effect tickets and executor
-conventions, but VoiceXML semantics remain owned by the VoiceXML module.
+Generation-safe provider contracts ensure stale completion cannot mutate a
+newer activation.
 
-The current core is deliberately single-owner and synchronous and runs to a
-terminal state; it has no platform-wait ABI. A future asynchronous host must
-serialize `start`, completion, cancel, and destroy operations. The later dialog
-manager supplies that serialization with a borrowed `cflow_executor`; the FIA
-core does not create a hidden worker or block an executor waiting for itself.
+Implemented directed/control surfaces include:
 
-## Products and files
+- field collect and scoped noinput/nomatch recovery;
+- menu/choice and generated/explicit grammar paths;
+- initial mixed-initiative collection;
+- subdialog child lifecycle;
+- record provider + Session-owned recording result lease;
+- transfer provider + exact result/Event mapping;
+- exit/return/disconnect terminal snapshots.
 
-The first product is a static library:
+Async item kinds have explicit prepare/commit/discard/cancel/quiesce
+boundaries. Completion ingress distinguishes accepted, stale, incompatible,
+full and closed states where applicable.
 
-- target: `turbo_voicexml`
-- installed alias: `TurboSCXML::VoiceXML`
-- public header: `include/voicexml/voicexml.h`
-- compiler: `src/voicexml_program.c`
-- runtime: `src/voicexml_session.c`
-- private representation: `src/voicexml_internal.h`
+## Prompt and media boundary
 
-Its public header exposes C11 opaque program and session handles. It uses
-`salts_xml_limits`/`salts_xml_location` for bounded compiler configuration and
-diagnostics, so `Salts::XmlParser` is its only public dependency. CFlow becomes
-a dependency only when an asynchronous adapter slice needs effect tickets.
-`TurboSCXML::VoiceXML` does not link CCXML; the later bridge depends one-way on
-both `TurboSCXML::CCXML` and `TurboSCXML::VoiceXML`.
+TurboSCXML does not implement TTS/ASR/media transport internally.
 
-Both fixed-size handles are single-owner and non-copyable despite their C struct
-representation. Reuse requires destruction first. Ownership may be moved only
-by copying the complete handle into an empty destination and immediately
-zeroing the source, so exactly one handle remains responsible for destruction.
+The prompt/media provider boundary receives immutable/bounded projections for:
 
-The typed data slice is an independently discoverable static library, enabled
-by `TURBOSCXML_ENABLE_VOICEXML_CMETA`:
+- text;
+- SSML;
+- audio with fallback;
+- marks;
+- prompt `foreach` expansion;
+- generation-owned dynamic mark names.
 
-- target: `turbo_voicexml_cmeta`;
-- installed alias: `TurboSCXML::VoiceXMLCMeta`;
-- public header: `include/voicexml/cmeta.h`;
-- public closure: `TurboSCXML::VoiceXML` and `Salts::CMeta`;
-- private static closure: `Salts::QueryVM` and the installed
-  `TurboSCXML::_CMetaRuntime` implementation target.
+Provider elapsed timing may be reported through the supported observation
+contract. TurboSCXML does not invent playback time when the provider did not
+report it.
 
-An explicit `COMPONENTS VoiceXMLCMeta` request validates only
-`Salts::XmlParser`, `Salts::CMeta`, and `Salts::QueryVM`. Its link closure does
-not add `TurboSCXML::SCXML` or require Salts CFlow/CSerde/CBind, QuickJS,
-networking, or media packages. A no-component `find_package(TurboSCXML)` is
-deliberately package-wide instead: it follows the broader existing SCXML
-closure and every enabled optional product, including QuickJS or CHTTP when
-present. A base-only install reports a required `VoiceXMLCMeta` component as
-unavailable; an optional request leaves `TurboSCXML_VoiceXMLCMeta_FOUND` false
-and does not create the target. The base `TurboSCXML::VoiceXML` target remains
-exactly XmlParser-only in either build.
+Barge-in, completion and cancellation are generation-affine and settle one
+active provider generation exactly once.
 
-Optional products are introduced only by their owning roadmap slices:
+## Grammar and collect boundary
 
-- `TurboSCXML::VoiceXMLDialogManager`: serial asynchronous session registry
-  and CCXML telephony-adapter decorator;
-- `TurboSCXML::VoiceXMLCHttpResource`: URI retrieval policy backed by
-  `Salts::CHTTP` without making CHTTP a core dependency;
-- optional QuickJS datamodel support guarded by the existing project option.
+Grammar/recognition is an external capability-gated provider surface.
 
-## Core MVP document profile
+The current typed profile supports the implemented static and dynamic grammar
+forms, including VoiceXML 2.1 `grammar@srcexpr`, menu exact/approximate speech
+policy, initial multi-slot completion and recorded-utterance result ownership.
 
-The first executable slice accepts:
+Dynamic expressions are compiled/validated once and evaluated at the specified
+activation phase. Provider requests receive bounded Session-owned or
+Program-owned views only.
 
-```xml
-<vxml xmlns="http://www.w3.org/2001/vxml" version="2.1">
-  <form id="main">
-    <block>
-      <exit/>
-    </block>
-  </form>
-</vxml>
+## Resource boundaries
+
+### VoiceXMLDocumentStore
+
+DocumentStore owns:
+
+- URI resolution;
+- bounded document acquisition;
+- source copying/cache lifetime;
+- generation-safe cache borrows;
+- one configured compiler adapter.
+
+`vxml_document_store_compile_source()` uses the same compiler for borrowed
+submit-response bytes without fetching or caching them. This keeps one compiler
+owner for initial/navigation/submit-response Programs.
+
+### VoiceXMLScriptResource
+
+ScriptResource is the acquisition boundary for external QuickJS source. A
+successful lease is closed exactly once after execution/validation completes.
+
+### VoiceXMLSubmitResource
+
+SubmitResource owns transport-neutral request encoding and the one-attempt
+provider call.
+
+Supported generic handoffs include:
+
+- V1 literal zero-field urlencoded submit;
+- V2 ordered scalar fields;
+- V3 timeout/fetchaudio policy;
+- V4 ordered scalar + explicit recording multipart views.
+
+Multipart uses one global ordered part-ref array so interleaved scalar and
+recording namelist order is preserved. Recording payload bytes are borrowed
+from the Session-owned lease; SubmitResource neither copies nor releases that
+lease.
+
+```mermaid
+flowchart LR
+  C["CMeta transaction"]
+  S["Session V4 submit handoff"]
+  D["DialogManager"]
+  R["SubmitResource"]
+  P["provider execute / execute_v2"]
+  X["response lease"]
+
+  C -->|"scalar snapshot + borrowed recording views"| S
+  S --> D
+  D -->|"urlencoded or segmented multipart"| R
+  R -->|"one attempt"| P
+  P --> X
+  X -->|"compile via DocumentStore compiler"| D
 ```
 
-The root contains one or more `form` elements. A form has an optional unique
-XML NCName `id` and contains one or more `block` control items. A block is empty
-or contains one explicit `exit` action. This deliberately small slice proves
-document admission, ordered control-item traversal, and terminal lifecycle
-without defining any media API. `prompt`, `audio`, grammar, recognition,
-recording, transfer, and their callbacks remain unsupported until explicitly
-requested.
+Timeout/fetchaudio policy is represented in the generic Session handoff.
+DialogManager owns URI resolution, fetch-audio bracketing and provider
+execution; CMeta only projects policy.
 
-Root, form, block, and exit attributes outside the profile are rejected,
-except `form@id`. Duplicate form
-IDs, foreign namespace elements, invalid UTF-8, and non-whitespace content in
-`exit` are rejected with source-located diagnostics. The first form is the
-entry dialog. Multiple forms are compiled now so later `goto` support does not
-require a program representation change; the MVP does not navigate away from
-the first form.
+## DialogManager and CCXML
 
-The compiler produces tables for forms, blocks, and actions plus one immutable
-string arena. Rows use indices and byte offsets rather than pointers during
-measurement. The final allocation is overflow-checked and performed once.
-Every retained string consumes its decoded byte length plus one trailing NUL.
+`TurboSCXML::VoiceXMLDialogManager` is the serialized CCXML bridge.
 
-The configurable defaults are:
+It owns dialog rows, document borrows, current Session, navigation/submit hop
+budget, response Program lifetime and Event publication.
 
-- XML limits: `salts_xml_default_limits()`;
-- `max_forms = 64`;
-- `max_blocks = 1024`;
-- `max_actions = 4096`;
-- `max_name_bytes = 256 * 1024`.
+Store-backed managers use two profile-neutral boundaries:
 
-Every limit must be positive. Compile failure leaves the output program empty
-and destroys the XML document and every temporary allocation exactly once.
+1. DocumentStore's configured compiler;
+2. optional `vxml_session_factory_v1` for the matching runtime profile.
 
-## Core MVP runtime protocol
+This means an application can pair a CMeta or QuickJS compiler/runtime without
+DialogManager linking either target or switching on profile names.
 
-The public session states are `READY`, `RUNNING`, `EXITED`, `FAILED`, and
-`CLOSED`. A successful initialization borrows the immutable program, which
-must outlive the session.
+Initial documents, external navigation targets and submit-response Programs use
+the same compiler/runtime pair.
 
-`vxml_session_start` is legal only in `READY`. The interpreter selects the
-first form and visits its blocks in document order. An explicit `exit`, an
-empty block followed by exhaustion, or exhaustion of the entry form changes
-the session to `EXITED`. Repeated start and all operations after close are
-rejected deterministically. There is no callback, ticket, token, wait state,
-thread, executor, or media object in this slice.
+## Ownership table
 
-An explicit `exit` or exhaustion of the entry form changes the session to
-`EXITED`. The base MVP result contains no data. The separately selected CMeta
-profile extends the same opaque session with `exit@namelist` and `exit@expr`
-terminal data; CCXML mapping remains outside this non-media slice.
+| Resource | Owner | Borrowed by | Settlement |
+| --- | --- | --- | --- |
+| immutable Program | compiler caller / DocumentStore entry | Session | destroy after Session/borrow ends |
+| document source lease | document provider | DocumentStore acquire | close exactly once after copy |
+| external script lease | script provider | QuickJS execution | close exactly once |
+| data resource lease | data provider | CMeta/QuickJS request | close exactly once |
+| prompt/collect ticket | media/recognition provider | Session generation | commit/discard/cancel/quiesce |
+| record result lease | CMeta Session | submit multipart view, query APIs | Session release only |
+| transfer/subdialog completion | provider mailbox | Session generation | quiesce/cancel by lifecycle |
+| submit response lease | submit provider | DialogManager | close exactly once after compile/decision |
 
-`vxml_session_close` is legal from every non-destroyed state and idempotent.
-Destruction releases session storage without touching the borrowed program.
+No generic transport component releases a recording lease.
 
-## Typed CMeta data profile
+## VoiceXML 2.1 delivered surface
 
-`vxml_compile_cmeta` requires root `datamodel="cmeta"`; the base compiler
-rejects that attribute. Before the first form, root `var` declarations create
-document variables. Before the first block, form `var` declarations create
-form/dialog variables. A block may carry `name`, Boolean initialization
-`expr`, and Boolean eligibility `cond`; its executable body accepts `var`,
-`assign`, `clear`, nested `if`/`elseif`/`else`, and `exit`. Executable `var`
-creates or revisits an anonymous-block binding, `assign` requires a typed
-location and expression, and `clear` accepts either no attribute or a nonempty
-space-separated `namelist`. `elseif` and `else` are empty branch markers;
-`exit` is empty, has one scalar `expr`, or has an ordered scalar `namelist`,
-with the latter two forms mutually exclusive. Any defined `block@expr` result,
-including false, makes that form item initially ineligible.
+The tracked VoiceXML 2.1 delivery includes executable positive/negative tests
+for:
 
-The host-supplied root struct is both the application-scope initializer and
-the type catalog for source variables. Every `var@name` matches one top-level
-root field and inherits its semantic CMeta type. Dotted paths may end at a
-supported Boolean, signed/unsigned integer, floating-point, or string scalar.
-Descriptor compatibility uses `cmeta_type_equal`, never pointer identity, so
-semantically equal metadata from separate translation units is accepted.
-Lexical lookup is anonymous block, form/dialog, document, then application.
-Every slot has three observable states: undeclared, declared but undefined,
-and defined; zero, false, and empty string are defined values. An executable
-declaration in an untaken branch stays undeclared. Anonymous-block storage
-persists across `clear`-driven visits and is released only when dialog
-execution ends.
+- dynamic grammar `srcexpr`;
+- external QuickJS `script@srcexpr`;
+- `mark@nameexpr` and last-result mark metadata;
+- dynamic/static `data` request semantics;
+- bounded prompt `foreach`;
+- static `property@fetchaudio` inheritance;
+- `transfer@type`;
+- recorded-utterance metadata and recording shadows;
+- typed CMeta submit with urlencoded and explicit-recording multipart paths.
 
-Initialization copies application fields, evaluates document variables in
-source order, enters the first form, then evaluates form variables and
-`block@expr` values in source order. The non-media FIA repeatedly selects the
-first block in document order whose form-item variable is undefined and whose
-`cond` is true. It marks that item before running the body. An `if` evaluates
-once and runs the first matching branch. Named `clear` makes the closest user
-binding or named block item undefined; empty `clear` resets every block item in
-the form without clearing ordinary variables. Selection and action steps both
-consume `max_execution_steps`, bounding deliberate self-revisit loops.
+VoiceXML 2.0 base behavior remains separately tested; 2.1-only constructs are
+version-gated rather than approximated in 2.0 documents.
 
-One selected block is one failure-atomic transaction across application,
-document, form/dialog, form-item, and active anonymous frames. All mutation and
-exit-result preparation occurs in staging; success moves the staged values and
-publishes an owned terminal snapshot. Evaluation, conversion, allocation, or
-limit failure destroys staging, leaves committed bytes and bound bits intact,
-and moves the session to `FAILED`. This whole-block rollback is a deliberate,
-nonstandard CMeta safety deviation: standard VoiceXML imperative executable
-content does not undo earlier writes when a later element throws. Scoped event
-handling must explicitly preserve or revise this boundary before catches can
-observe failures.
+## Failure model
 
-The v1 compile/session options use ABI version plus `struct_size`; unknown
-versions and undersized required prefixes fail, while bytes beyond a complete
-v1 prefix are ignored for forward-tail compatibility. All hard limits are
-positive: the base XML/form/block/action/name limits plus expression bytes,
-instructions, operands and depth; path depth; literal and string bytes; scope
-slots and storage; conditional depth; transaction bytes; and execution steps.
-Exact-limit inputs are admitted and one-over inputs fail explicitly.
+TurboSCXML uses fail-fast semantics:
 
-The program borrows the root and reachable descriptors until program
-destruction. It copies the `semantic_data` pointer array but continues to
-borrow those descriptor objects. `initial_root` is borrowed only during
-session initialization and each field is copied into session-owned storage.
-A public string read is copied into session-owned scratch and remains valid
-until the next read, any mutating session operation, close, or destruction.
-Exit-result names and string bytes are session-owned until close or
-destruction.
+- malformed descriptors: invalid structure/contract;
+- missing provider capability: unsupported before callback or exact Event;
+- stale generation: rejected without mutation;
+- full bounded ingress: explicit FULL result;
+- closed Session/provider ingress: explicit CLOSED result;
+- allocation/size bound: deterministic limit/allocation failure;
+- provider may-have-processed POST: terminal `POSSIBLY_PROCESSED`;
+- unsupported CMeta/QuickJS value shape: reject before provider admission.
 
-The profile does not expose qualified `application.x`, `document.x`,
-`dialog.x`, or `session.x` scope objects, nor application-root/document
-aliasing. It rejects QuickJS/ECMAScript, DOM objects, `script`, `data`, resource
-retrieval, prompt/audio/SSML and all media callbacks, grammar/recognition,
-`field`, `filled`, `record`, and `transfer`. Those surfaces remain deferred;
-the profile makes no full VoiceXML-conformance claim.
+There is no implicit fallback from a newer provider contract to an older one
+when doing so would discard required semantics.
 
-## Future adapter and memory protocol
+## Platform and package qualification
 
-This protocol is deferred with the media roadmap slice and is not present in
-the core ABI. When that slice is requested, one prompt will be in flight per
-core session. There is one producer and one
-consumer at the core boundary because the caller serializes operations. The
-request contains a token and a borrowed program-owned text view valid only for
-the prepare callback. Accepted prepare moves exactly one effect ticket to the
-core; non-accepted prepare moves none. Every accepted ticket reaches exactly
-one terminal operation: commit on successful admission or discard when the
-callback contract is invalid before publication.
+Native SDK qualification is the release standard:
 
-The core never retains provider output. The adapter owns in-flight media and
-must remain alive through quiescence. `close` rejects new playback and requests
-cancellation; native completion remains authoritative within the adapter, but
-the closed core rejects all later completion delivery. Capacity exhaustion and
-provider refusal are explicit `VXML_ADAPTER_ERROR` outcomes. There is no silent
-drop, retry, hidden allocation, or blocking wait.
+- Windows x64;
+- Linux x64 Release;
+- Linux ASan + UBSan;
+- macOS;
+- Android arm64-v8a;
+- installed C and C++ consumers;
+- feature-OFF / Plugin-disabled package checks where applicable.
 
-The asynchronous dialog manager adds a fixed-capacity dialog registry and a
-bounded MPSC completion ingress. A committed CCXML dialog operation owns one
-registry row. Completion ingress copies `{dialog_generation, prompt_token,
-result}`; full returns a visible rejection to the media producer. Generation
-checking suppresses late completions after termination or row reuse. Shutdown
-order is: stop admission, close sessions, drain or cancel native work, observe
-all adapters quiescent, destroy sessions, then destroy executor and backends.
+Dependencies from GitHub packages are consumed as released/latest package
+artifacts; consumer CMake must not require pinned exact package versions.
 
-## CCXML integration
+## Conformance and security
 
-The dialog manager is a decorator around an existing
-`ccxml_telephony_adapter_v1`, not a replacement for call and conference
-control. It copies an upstream adapter and user pointer, forwards non-dialog
-operations unchanged, and owns the four dialog tail operations:
+TurboSCXML remains an incubating profile. Issue #51 owns the remaining
+evidence/hardening work:
 
-- `prepare_dialog_prepare` creates a reserved dialog row and begins resource
-  preparation only after ticket commit;
-- `prepare_dialog_start` creates and starts a direct-source row;
-- `prepare_prepared_dialog_start` starts an existing prepared row on the
-  supplied connection;
-- `prepare_dialog_terminate` delivers
-  `connection.disconnect.hangup`, then performs normal VoiceXML shutdown.
+- VoiceXML-specific conformance/support matrix;
+- upstream provenance and executable witnesses;
+- parser/runtime fuzzing and minimized regressions;
+- supported option-matrix qualification;
+- URI/script/recording/logging security policy;
+- default redaction of sensitive prompt/input/recording data.
 
-The bridge must preserve the current CCXML rule that returned dialog IDs are
-visible in the CCXML datamodel before provider publication. It reports
-`dialog.prepared`, `dialog.started`, `dialog.exit`, or `error.dialog.*` through
-a host-owned bounded CCXML Event sink; it never recursively calls
-`ccxml_session_dispatch` from a VoiceXML executor callback.
+Do not infer VoiceXML conformance from the SCXML W3C manifest; they are
+different language surfaces.
 
-Direct CCXML calls currently carry URI and connection bytes only during the
-prepare callback. The manager copies all retained fields into the reserved
-dialog row. Prepared rows retain the fetched program and source identity until
-start, termination, or manager shutdown. Registry full, duplicate operation,
-invalid generation, resource error, and Event sink full are explicit outcomes
-with exact ownership cleanup.
+## Source of truth
 
-## Directed FIA growth
+This file is the canonical high-level VoiceXML architecture.
 
-The delivered CMeta profile covers bounded non-media block selection and does
-not create prompt counters. Future directed form items extend that explicit
-datamodel boundary; they do not reach into SCXML private expression headers or
-silently substitute ECMAScript behavior.
+Detailed feature specs under `docs/specs/` remain authoritative for their
+individual contracts. GitHub issues track delivery and qualification evidence.
 
-Directed form support follows the normative FIA phases:
-
-1. initialize form variables and prompt counters;
-2. select the first eligible form item in document order;
-3. queue prompts, activate grammars, and collect input or an Event;
-4. map recognition results into form-item variables;
-5. execute applicable `filled` handlers in document order;
-6. resolve scoped catches or return to selection.
-
-Prompt/media, recognition/grammar, resource retrieval, and outbound navigation
-remain separate versioned adapters. SRGS, SSML, codecs, TTS, and ASR engines
-are provider capabilities, not algorithms hidden in CMeta or the FIA.
-
-## GitHub-tracked roadmap slices
-
-Each slice receives its own design/implementation plan before code changes and
-must end in a runnable test boundary:
-
-Umbrella: [GitHub issue #41](https://github.com/qigao/turbo-scxml/issues/41).
-
-1. [#42](https://github.com/qigao/turbo-scxml/issues/42): core MVP compiler
-   and non-media `form/block/exit` runtime.
-2. [#43](https://github.com/qigao/turbo-scxml/issues/43): serial dialog manager
-   and CCXML prepare/start/terminate bridge.
-3. [#44](https://github.com/qigao/turbo-scxml/issues/44): delivered typed CMeta
-   datamodel with `var/assign/clear/if`, block guards, exit data, and
-   transactional scopes. Prompt-only `value` and prompt counters remain with
-   the media roadmap.
-4. [#45](https://github.com/qigao/turbo-scxml/issues/45): directed FIA fields,
-   grammar/collect adapter, semantic results, and `filled`.
-5. [#46](https://github.com/qigao/turbo-scxml/issues/46): scoped event handling,
-   `catch/throw/help/noinput/nomatch/reprompt`, and tapered prompt counters.
-6. [#47](https://github.com/qigao/turbo-scxml/issues/47): prompt queue,
-   SSML/audio provider surface, timing, and barge-in cancellation.
-7. [#48](https://github.com/qigao/turbo-scxml/issues/48): URI resource policy,
-   CHTTP adapter, application/document navigation, `goto`, `submit`, `data`,
-   and optional script resources.
-8. [#49](https://github.com/qigao/turbo-scxml/issues/49): menus and advanced
-   form items: `choice`, `subdialog`, `record`, and `transfer`.
-9. [#50](https://github.com/qigao/turbo-scxml/issues/50): remaining VoiceXML
-   2.1 additions, including dynamic resources, prompt foreach, and marks.
-10. [#51](https://github.com/qigao/turbo-scxml/issues/51): conformance manifest,
-    fuzzing, security hardening, and the published support matrix.
-
-## Explicit non-goals
-
-- No complete-conformance claim during the incubating profile.
-- No XPath dependency or DOM/XPath compatibility layer.
-- No implicit network access in the core library.
-- No bundled TTS, ASR, SIP, RTP, codec, or audio-device backend.
-- No unbounded DOM retention, queues, retry loops, recursion, or string growth.
-- No hidden worker threads or callback waits on the owning serial executor.
-- No approximation of unsupported VoiceXML elements or ECMAScript expressions.
-- No change to existing SCXML or CCXML behavior in the core-MVP slice.
-
-## Verification strategy
-
-Every slice starts with focused TinyTest RED/GREEN coverage and then runs the
-Release preset. Parser tests cover namespace/version/structure diagnostics,
-UTF-8, duplicate IDs, source independence, checked limits, and failure cleanup.
-Core runtime tests cover document order, explicit and implied exit, invalid
-state transitions, close, and allocation-failure cleanup. Future adapter and
-manager tests add registry full, late completion,
-generation reuse, Event sink backpressure, prepared/direct start parity, and
-normal termination.
-
-Changes to targets or installation additionally run the install preset and
-external C and C++ consumers for both
-`find_package(TurboSCXML COMPONENTS VoiceXML)` and `VoiceXMLCMeta`. Package
-isolation uses independent XmlParser-only and CMeta fixtures; the latter omits
-SCXML/CFlow/CSerde/CBind. Optional CHTTP and QuickJS builds are tested both
-disabled and enabled. A conformance manifest records every upstream-derived
-case as `PASS`,
-`UNSUPPORTED`, or `N/A`; rows move to `PASS` only with an executable local
-witness that preserves the normative assertion.
+Historical implementation plans are not architectural truth and should not be
+used to infer current support or dependencies.
