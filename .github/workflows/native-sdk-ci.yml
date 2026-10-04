@@ -124,6 +124,10 @@ jobs:
           export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$CHTTP_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           ctest --test-dir build/ci --no-tests=error --output-on-failure
 
+      - name: Qualify supported VoiceXML option profiles
+        shell: bash
+        run: bash cmake/ci/qualify-voicexml-profiles.sh
+
       - name: Qualify Plugin-disabled core package
         shell: bash
         run: |
