@@ -214,6 +214,10 @@ vxml_status vxml_session_init_profile(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -261,6 +265,10 @@ vxml_status vxml_session_start(vxml_session *session) {
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
@@ -319,6 +327,10 @@ vxml_status vxml_session_start_at_form(
     impl->submit_fetchaudio_delay_us = UINT64_C(0);
     impl->submit_has_fetchaudio_minimum = false;
     impl->submit_fetchaudio_minimum_us = UINT64_C(0);
+    impl->submit_recordings = NULL;
+    impl->submit_recording_count = 0u;
+    impl->submit_parts = NULL;
+    impl->submit_part_count = 0u;
     impl->script_src = NULL;
     impl->script_src_size = 0u;
     impl->script_charset = NULL;
