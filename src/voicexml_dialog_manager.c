@@ -83,8 +83,6 @@ typedef struct vxml_dialog_row {
     vxml_session session;
     bool session_live;
     vxml_status voice_status;
-    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
-    bool fetch_audio_started = false;
 } vxml_dialog_row;
 
 struct vxml_dialog_manager_impl {
@@ -965,6 +963,8 @@ static vxml_dialog_manager_status follow_one_submit(
     vxml_program next_program = {0};
     vxml_diagnostic diagnostic = {0};
     vxml_status voice_status;
+    vxml_fetch_audio_ticket_v1 fetch_audio_ticket = {0};
+    bool fetch_audio_started = false;
 
     if (row == NULL || row->owner == NULL)
         return VXML_DIALOG_MANAGER_INVALID_ARGUMENT;
