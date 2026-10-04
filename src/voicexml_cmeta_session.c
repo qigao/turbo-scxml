@@ -3764,25 +3764,61 @@ static vxml_status submit_recording_view(
             record_index >= session->record_result_count)
             return VXML_INVALID_STRUCTURE;
         result = &session->record_results[record_index];
-        if (!result->live ||
-            result->outcome !=
-                VXML_CMETA_RECORD_OUTCOME_SUCCESS ||
-            result->recording.data == NULL ||
-            result->recording.size == 0u ||
-            result->recording.lease == NULL ||
-            result->media_type == NULL ||
-            result->media_type_size == 0u)
-            return VXML_INVALID_STATE;
-        *out = (vxml_submit_recording_field_v1){
-            .name = name,
-            .name_size = name_size,
-            .filename = NULL,
-            .filename_size = 0u,
-            .media_type = result->media_type,
-            .media_type_size = result->media_type_size,
-            .data = result->recording.data,
-            .size = result->recording.size};
-        return VXML_OK;
+        if (result->live &&
+            result->outcome ==
+                VXML_CMETA_RECORD_OUTCOME_SUCCESS &&
+            result->recording.data != NULL &&
+            result->recording.size != 0u &&
+            result->recording.lease != NULL &&
+            result->media_type != NULL &&
+            result->media_type_size != 0u) {
+            *out = (vxml_submit_recording_field_v1){
+                .name = name,
+                .name_size = name_size,
+                .filename = NULL,
+                .filename_size = 0u,
+                .media_type = result->media_type,
+                .media_type_size = result->media_type_size,
+                .data = result->recording.data,
+                .size = result->recording.size};
+            return VXML_OK;
+        }
+
+        /*
+         * During this record's own <filled> transaction the accepted lease is
+         * still in the WRITING mailbox. On successful commit the existing
+         * record completion path moves that exact lease into result[] before
+         * the generic submit handoff is consumed. Borrow the same payload
+         * here; do not duplicate or release it.
+         */
+        if (record_index == session->active_record &&
+            atomic_load_explicit(
+                &session->record_mailbox.state,
+                memory_order_acquire) ==
+                    VXML_CMETA_RECORD_MAILBOX_WRITING &&
+            session->record_mailbox.outcome ==
+                VXML_CMETA_RECORD_OUTCOME_SUCCESS &&
+            session->record_mailbox.recording.data != NULL &&
+            session->record_mailbox.recording.size != 0u &&
+            session->record_mailbox.recording.lease != NULL &&
+            session->record_mailbox.media_type != NULL &&
+            session->record_mailbox.media_type_size != 0u) {
+            *out = (vxml_submit_recording_field_v1){
+                .name = name,
+                .name_size = name_size,
+                .filename = NULL,
+                .filename_size = 0u,
+                .media_type =
+                    session->record_mailbox.media_type,
+                .media_type_size =
+                    session->record_mailbox.media_type_size,
+                .data =
+                    session->record_mailbox.recording.data,
+                .size =
+                    session->record_mailbox.recording.size};
+            return VXML_OK;
+        }
+        return VXML_INVALID_STATE;
     }
 
     /* application.lastresult$.recording */
