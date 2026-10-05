@@ -2619,6 +2619,89 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         scxml_program_destroy(&program);
     }
 
+    it("closes combined Event I/O and Invoke providers exactly once across destroy retry") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='done'>"
+            "<final id='done'/>"
+            "<state id='unused'><onentry>"
+            "<send event='out' target='peer'/>"
+            "</onentry><invoke id='job'/></state></scxml>";
+        scxml_program program = {0};
+        scxml_session session = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executor = {0};
+        scxml_adapter_probe event_probe = {0};
+        scxml_invoke_probe invoke_probe = {0};
+        scxml_event_io_adapter event_adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND,
+            .prepare_send = scxml_adapter_prepare_send,
+            .prepare_cancel = scxml_adapter_prepare_cancel,
+            .close = scxml_adapter_close,
+            .is_quiescent = scxml_adapter_is_quiescent};
+        scxml_invoke_adapter invoke_adapter = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_invoke_adapter),
+            .capabilities = SCXML_INVOKE_CAP_START |
+                SCXML_INVOKE_CAP_CANCEL,
+            .prepare_start = scxml_invoke_prepare_start,
+            .prepare_cancel = scxml_invoke_prepare_cancel,
+            .prepare_forward = scxml_invoke_prepare_forward,
+            .close = scxml_invoke_close,
+            .is_quiescent = scxml_invoke_is_quiescent};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 2u,
+            .microstep_limit = 16u,
+            .effect_capacity = 2u,
+            .adapter_internal_event_capacity = 2u,
+            .event_io = &event_adapter,
+            .adapter_user = &event_probe,
+            .invocation_capacity = 1u,
+            .invoke = &invoke_adapter,
+            .invoke_user = &invoke_probe};
+
+        check_equal(compile_status(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_session_init(&session, &config),
+                    CFLOW_STATECHART_INSTANCE_OK);
+
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
+        check_not_null(session.impl);
+        check_equal(event_probe.close_calls, (size_t)1u);
+        check_equal(invoke_probe.close_calls, (size_t)1u);
+
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
+        check_not_null(session.impl);
+        check_equal(event_probe.close_calls, (size_t)1u);
+        check_equal(invoke_probe.close_calls, (size_t)1u);
+
+        event_probe.quiescent = true;
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
+        check_not_null(session.impl);
+        check_equal(event_probe.close_calls, (size_t)1u);
+        check_equal(invoke_probe.close_calls, (size_t)1u);
+
+        invoke_probe.quiescent = true;
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_null(session.impl);
+        check_equal(event_probe.close_calls, (size_t)1u);
+        check_equal(invoke_probe.close_calls, (size_t)1u);
+
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("starts only stable invocations and cancels the committed exit") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
