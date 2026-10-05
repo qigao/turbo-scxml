@@ -522,5 +522,173 @@ spec("TurboSCXML Plugin bridge") {
             SALTS_PLUGIN_OK);
     }
 
+
+    it("keeps Plugin provider leases outside a live SCXML Session") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "initial='done'>"
+            "<final id='done'/>"
+            "<state id='unused'><onentry>"
+            "<send event='out' target='peer'/>"
+            "</onentry>"
+            "<invoke id='job' type='urn:test' src='worker://one'/>"
+            "</state></scxml>";
+        salts_plugin_registry registry = {0};
+        const salts_plugin_registry_config registry_config = {
+            .capacity = 1u};
+        salts_plugin_ref ref = {0};
+        salts_plugin_lifecycle_info lifecycle = {0};
+        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        scxml_plugin_event_io_provider event_provider = {0};
+        scxml_plugin_invoke_provider invoke_provider = {0};
+        scxml_plugin_provider_v1 event_binding =
+            SCXML_PLUGIN_PROVIDER_V1_INIT;
+        scxml_plugin_provider_v1 invoke_binding =
+            SCXML_PLUGIN_PROVIDER_V1_INIT;
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        scxml_session_config config = {0};
+        uint32_t requirements = 0u;
+        bool quiescent = false;
+
+        check_equal(
+            salts_plugin_registry_init(&registry, &registry_config),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_load(
+                &registry, plugin_fixture_path(), &ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_start(&registry, ref),
+            SALTS_PLUGIN_OK);
+
+        event_binding.plugin = ref;
+        event_binding.export_id = "test.scxml.provider.event-io";
+        event_binding.contract_id = "test.scxml.event-io";
+        event_binding.contract_version = 1u;
+        event_binding.required_capabilities = SCXML_EVENT_IO_CAP_SEND;
+        check_equal(
+            scxml_plugin_event_io_provider_open(
+                &event_provider, &registry, &event_binding, &plugin_status),
+            SCXML_PLUGIN_OK);
+
+        invoke_binding.plugin = ref;
+        invoke_binding.export_id = "test.scxml.provider.invoke";
+        invoke_binding.contract_id = "test.scxml.invoke";
+        invoke_binding.contract_version = 1u;
+        invoke_binding.required_capabilities =
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL;
+        check_equal(
+            scxml_plugin_invoke_provider_open(
+                &invoke_provider, &registry, &invoke_binding, &plugin_status),
+            SCXML_PLUGIN_OK);
+
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)2u);
+
+        check_equal(
+            scxml_compile(
+                &program, source, sizeof(source) - 1u,
+                NULL, &diagnostic),
+            SCXML_OK);
+        check_true(
+            scxml_program_requirements(&program, &requirements));
+        check_true(
+            (requirements & SCXML_REQUIREMENT_EVENT_IO) != 0u);
+        check_true(
+            (requirements & SCXML_REQUIREMENT_INVOKE) != 0u);
+
+        check_true(cflow_executor_serial_init(&executor));
+        config = (scxml_session_config){
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 1u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 1u,
+            .microstep_limit = 16u,
+            .effect_capacity = 4u,
+            .adapter_internal_event_capacity = 2u,
+            .event_io =
+                scxml_plugin_event_io_provider_adapter(&event_provider),
+            .adapter_user =
+                scxml_plugin_event_io_provider_user(&event_provider),
+            .invocation_capacity = 1u,
+            .invoke =
+                scxml_plugin_invoke_provider_adapter(&invoke_provider),
+            .invoke_user =
+                scxml_plugin_invoke_provider_user(&invoke_provider)};
+        check_equal(
+            scxml_session_init(&session, &config),
+            CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+
+        check_equal(
+            salts_plugin_registry_request_stop(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)2u);
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_false(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, ref),
+            SALTS_PLUGIN_BUSY);
+
+        check_equal(
+            scxml_session_destroy(&session),
+            CFLOW_STATECHART_INSTANCE_OK);
+        check_null(session.impl);
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)2u);
+
+        check_equal(
+            scxml_plugin_invoke_provider_destroy(
+                &invoke_provider, &plugin_status),
+            SCXML_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)1u);
+
+        check_equal(
+            scxml_plugin_event_io_provider_destroy(
+                &event_provider, &plugin_status),
+            SCXML_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_get_lifecycle(
+                &registry, ref, &lifecycle),
+            SALTS_PLUGIN_OK);
+        check_equal(lifecycle.active_leases, (size_t)0u);
+
+        check_equal(
+            salts_plugin_registry_poll_quiescent(
+                &registry, ref, &quiescent),
+            SALTS_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(
+            salts_plugin_registry_unload(&registry, ref),
+            SALTS_PLUGIN_OK);
+        check_equal(
+            salts_plugin_registry_destroy(&registry),
+            SALTS_PLUGIN_OK);
+    }
+
 }
 
