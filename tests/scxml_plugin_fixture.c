@@ -115,7 +115,7 @@ static const scxml_event_io_provider_vtable event_vtable = {
 
 static const scxml_invoke_provider_vtable invoke_vtable = {
     .implementation = "fixture_invoke",
-    .capabilities = SCXML_INVOKE_CAP_START,
+    .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
     .prepare_start = fixture_invoke_start,
     .prepare_cancel = fixture_invoke_cancel,
     .prepare_forward = fixture_invoke_forward,
@@ -173,7 +173,7 @@ salts_plugin_query(uint32_t host_abi) {
         .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
         .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
         .contract_version = 1u,
-        .capabilities = SCXML_INVOKE_CAP_START,
+        .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
         .export_id = "test.scxml.provider.invoke",
         .contract_id = "test.scxml.invoke",
         .value.interface = {
