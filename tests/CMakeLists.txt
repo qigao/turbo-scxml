@@ -21,6 +21,40 @@ function(turboscxml_add_test target source)
   add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+add_executable(
+  voicexml_base_fuzz_smoke
+  fuzz/voicexml_base_fuzz_smoke.c
+  fuzz/voicexml_fuzz_common.c)
+target_compile_features(voicexml_base_fuzz_smoke PRIVATE c_std_11)
+set_target_properties(voicexml_base_fuzz_smoke PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+  C_EXTENSIONS OFF)
+target_include_directories(voicexml_base_fuzz_smoke PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
+target_compile_definitions(voicexml_base_fuzz_smoke PRIVATE
+  VOICEXML_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/base")
+target_link_libraries(voicexml_base_fuzz_smoke PRIVATE
+  TurboSCXML::VoiceXML)
+
+if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+  add_executable(
+    voicexml_cmeta_fuzz_smoke
+    fuzz/voicexml_cmeta_fuzz_smoke.c
+    fuzz/voicexml_fuzz_common.c)
+  target_compile_features(voicexml_cmeta_fuzz_smoke PRIVATE c_std_11)
+  set_target_properties(voicexml_cmeta_fuzz_smoke PROPERTIES
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    C_EXTENSIONS OFF)
+  target_include_directories(voicexml_cmeta_fuzz_smoke PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/fuzz)
+  target_compile_definitions(voicexml_cmeta_fuzz_smoke PRIVATE
+    VOICEXML_CMETA_FUZZ_CORPUS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/cmeta")
+  target_link_libraries(voicexml_cmeta_fuzz_smoke PRIVATE
+    TurboSCXML::VoiceXMLCMeta)
+endif()
+
 add_executable(voicexml_api_test voicexml/test_voicexml_api.c)
 target_compile_features(voicexml_api_test PRIVATE c_std_11)
 set_target_properties(voicexml_api_test PROPERTIES
