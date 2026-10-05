@@ -3185,6 +3185,80 @@ spec("TurboSCXML public CMeta data model") {
         }
     }
 
+    it("balances managed CMeta root lifecycle when Session init fails after staging") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='cmeta'><datamodel>"
+            "<data id='enabled' expr='true'/>"
+            "</datamodel><state id='armed'><onentry>"
+            "<send event='out' target='peer' namelist='count'/>"
+            "</onentry></state></scxml>";
+        const scxml_event_io_adapter event_io = {
+            .abi_version = SCXML_ADAPTER_ABI,
+            .struct_size = sizeof(scxml_event_io_adapter),
+            .capabilities = SCXML_EVENT_IO_CAP_SEND |
+                SCXML_EVENT_IO_CAP_PAYLOAD,
+            .prepare_send = payload_prepare_send,
+            .close = dynamic_adapter_close,
+            .is_quiescent = dynamic_adapter_quiescent};
+        payload_adapter_probe probe = {
+            .send_status = SCXML_ADAPTER_ACCEPTED,
+            .invalid_send_ticket = true};
+        const scxml_public_data initial = {
+            false, 7, SCXML_PUBLIC_SOURCE_GOOD};
+        const scxml_cmeta_session_options_v1 data = {
+            .abi_version = SCXML_CMETA_SESSION_OPTIONS_ABI_V1,
+            .struct_size = sizeof(data),
+            .initial_state = &initial};
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        cflow_executor executor = {0};
+        scxml_session_config config = {
+            .program = &program,
+            .executor = &executor,
+            .external_event_capacity = 2u,
+            .internal_event_capacity = 2u,
+            .completion_capacity = 2u,
+            .microstep_limit = 16u,
+            .effect_capacity = 2u,
+            .adapter_internal_event_capacity = 2u,
+            .event_io = &event_io,
+            .adapter_user = &probe};
+        size_t copies;
+        size_t moves;
+        size_t destroys;
+
+        check_equal(compile_cmeta(source, &program, &diagnostic),
+                    SCXML_OK);
+        check_true(cflow_executor_serial_init(&executor));
+
+        atomic_store_explicit(
+            &public_data_copy_count, 0u, memory_order_relaxed);
+        atomic_store_explicit(
+            &public_data_move_count, 0u, memory_order_relaxed);
+        atomic_store_explicit(
+            &public_data_destroy_count, 0u, memory_order_relaxed);
+
+        check_equal(scxml_session_init_cmeta(&session, &config, &data),
+                    CFLOW_STATECHART_INSTANCE_ACTION_FAILED);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_null(session.impl);
+        check_equal(probe.sends, (size_t)1u);
+
+        copies = atomic_load_explicit(
+            &public_data_copy_count, memory_order_relaxed);
+        moves = atomic_load_explicit(
+            &public_data_move_count, memory_order_relaxed);
+        destroys = atomic_load_explicit(
+            &public_data_destroy_count, memory_order_relaxed);
+        check_true(copies + moves > 0u);
+        check_equal(copies + moves, destroys);
+
+        cflow_executor_destroy(&executor);
+        scxml_program_destroy(&program);
+    }
+
     it("requires an exact payload-capable session contract") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
