@@ -303,7 +303,7 @@ consumer event SHA and restores the exact Salts 3.0 prerelease
 It verifies package SHA256
 `682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
 and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
-`9de20e8aa3d333543f4c691150300b0dbfd07b8c` is rebuilt against that SDK;
+`1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b` is rebuilt against that SDK;
 the workflow does not use stable first-party binaries for this candidate.
 
 The DSO test executes real SCXML send effects in old/new sessions, checks generation capacity and closed admission, and verifies each provider closes once before scope retirement and module unload. A session borrows its adapter bridge; destroy the session before its provider bridge and scope. Installed consumers explicitly request `Component`, which requires `Salts::ComponentPlugin`; Plugin handles use the canonical `cmeta_plugin_*` SDK types.
