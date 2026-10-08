@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.20)
 
 project(TurboSCXMLInstallConsumer LANGUAGES C CXX)
 
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT
+  "Require and exercise the installed Component bridge" OFF)
+
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE
   "Require and exercise the installed CHttpResource component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE
@@ -158,6 +161,9 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS AND
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS Plugin)
+endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS Component)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLDialogManager)
@@ -339,12 +345,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
       Salts::XmlParser
       Salts::CMeta
       Salts::CSerde
-      Salts::DataBindCore
       Salts::DataBind
-      Salts::DataBindJsonAdapter
-      Salts::DataBindYamlAdapter
-      Salts::DataBindCsvAdapter
-      Salts::DataBindXmlAdapter
       Salts::QueryVM)
     if(NOT TARGET ${TURBOSCXML_EXPECTED_TARGET})
       message(FATAL_ERROR
@@ -355,7 +356,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
     TURBOSCXML_VOICEXML_CMETA_LINKS
     TurboSCXML::VoiceXMLCMeta INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOSCXML_VOICEXML_CMETA_LINKS STREQUAL
-     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBindCore>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+     "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
     message(FATAL_ERROR
       "Unexpected VoiceXMLCMeta link closure: "
       "${TURBOSCXML_VOICEXML_CMETA_LINKS}")
@@ -626,3 +627,23 @@ if(NOT TURBOSCXML_INSTALL_CONSUMER_VOICEXML_ONLY AND
   message(FATAL_ERROR
     "Core-only install unexpectedly exposes a CHTTP component")
 endif()
+
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
+  add_executable(turboscxml_component_install_consumer component_main.c)
+  target_compile_features(turboscxml_component_install_consumer PRIVATE c_std_11)
+  target_link_libraries(turboscxml_component_install_consumer PRIVATE TurboSCXML::Component)
+endif()
+
+# Run the existing package consumers as executable behavior checks.
+enable_testing()
+foreach(consumer IN ITEMS
+    turboscxml_install_consumer
+    turboscxml_provider_install_consumer turboscxml_provider_install_consumer_cpp
+    turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp
+    turboscxml_plugin_install_consumer turboscxml_plugin_install_consumer_cpp
+    turboscxml_component_install_consumer)
+  if(TARGET ${consumer})
+    add_test(NAME ${consumer} COMMAND ${consumer})
+    set_tests_properties(${consumer} PROPERTIES TIMEOUT 60)
+  endif()
+endforeach()

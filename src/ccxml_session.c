@@ -940,9 +940,9 @@ ccxml_status ccxml_session_init(
     impl = (ccxml_session_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return CCXML_ALLOCATION_FAILED;
     if (program->uses_send_id) {
-        salts_uuid_t uuid;
-        if (salts_uuid_v4_generate(&uuid) != SALTS_OK ||
-            salts_uuid_format(
+        cmeta_uuid_t uuid;
+        if (cmeta_uuid_v4_generate(&uuid) != SALTS_OK ||
+            cmeta_uuid_format(
                 &uuid, impl->send_namespace,
                 sizeof(impl->send_namespace)) != SALTS_OK) {
             free(impl);

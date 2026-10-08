@@ -32,7 +32,7 @@ typedef enum scxml_plugin_status {
  */
 typedef struct scxml_plugin_action_v1 {
     size_t struct_size;
-    salts_plugin_ref plugin;
+    cmeta_plugin_ref plugin;
     const char *export_id;
     const char *contract_id;
     uint32_t contract_version;
@@ -56,7 +56,7 @@ typedef struct scxml_plugin_action_v1 {
 typedef struct scxml_plugin_compile_options_v1 {
     uint32_t abi_version;
     size_t struct_size;
-    salts_plugin_registry *registry;
+    cmeta_plugin_registry *registry;
     const scxml_cmeta_compile_options_v4 *cmeta;
     const scxml_plugin_action_v1 *plugin_actions;
     size_t plugin_action_count;
@@ -81,7 +81,7 @@ typedef struct scxml_plugin_program {
  */
 typedef struct scxml_plugin_provider_v1 {
     size_t struct_size;
-    salts_plugin_ref plugin;
+    cmeta_plugin_ref plugin;
     const char *export_id;
     const char *contract_id;
     uint32_t contract_version;
@@ -103,9 +103,9 @@ const char *scxml_plugin_status_string(scxml_plugin_status status);
 
 scxml_plugin_status scxml_plugin_event_io_provider_open(
     scxml_plugin_event_io_provider *out,
-    salts_plugin_registry *registry,
+    cmeta_plugin_registry *registry,
     const scxml_plugin_provider_v1 *binding,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 const scxml_event_io_adapter *scxml_plugin_event_io_provider_adapter(
     const scxml_plugin_event_io_provider *provider);
@@ -115,13 +115,13 @@ void *scxml_plugin_event_io_provider_user(
 
 scxml_plugin_status scxml_plugin_event_io_provider_destroy(
     scxml_plugin_event_io_provider *provider,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 scxml_plugin_status scxml_plugin_invoke_provider_open(
     scxml_plugin_invoke_provider *out,
-    salts_plugin_registry *registry,
+    cmeta_plugin_registry *registry,
     const scxml_plugin_provider_v1 *binding,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 const scxml_invoke_adapter *scxml_plugin_invoke_provider_adapter(
     const scxml_plugin_invoke_provider *provider);
@@ -131,7 +131,7 @@ void *scxml_plugin_invoke_provider_user(
 
 scxml_plugin_status scxml_plugin_invoke_provider_destroy(
     scxml_plugin_invoke_provider *provider,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 /**
  * Compile one CMeta SCXML Program from static and Plugin Function actions.
@@ -147,7 +147,7 @@ scxml_plugin_status scxml_plugin_compile_cmeta_v1(
     const scxml_limits *limits,
     const scxml_plugin_compile_options_v1 *options,
     scxml_diagnostic *diagnostic,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 /** Borrow the wrapped core Program. It remains owned by program. */
 const scxml_program *scxml_plugin_program_core(
@@ -159,7 +159,7 @@ const scxml_program *scxml_plugin_program_core(
  */
 scxml_plugin_status scxml_plugin_program_destroy(
     scxml_plugin_program *program,
-    salts_plugin_status *out_plugin_status);
+    cmeta_plugin_status *out_plugin_status);
 
 #ifdef __cplusplus
 }

@@ -294,3 +294,20 @@ This profile integrates VoiceXML data-model behavior with CMeta while preserving
 ---
 
 **Salts CFlow provides the Statechart machine. TurboSCXML provides W3C SCXML semantics on top of it.**
+
+## Salts 3 development integration
+
+Source and installed SDK consumers require Salts 3. Component composition uses one generation scope for event IO and invoke provider bindings. Destroy sessions and provider bindings before releasing the scope; retained bindings keep release and DSO retirement BUSY. The formal DSO test executes old/new SCXML send effects, checks closed admission and capacity, and verifies teardown before module unload.
+
+Utils is still under development. This draft does not publish either SDK or assign a new release version. CI rebuilds a recorded Utils source revision against the released Salts SDK, runs the complete configured CTest graph and the existing installed Component consumer, and archives identities and results. The Component preset excludes optional CHTTP and QuickJS adapters; those profiles require separate acceptance. Rebuild all consumers and providers for Salts 3, and roll back the matching SDK graph together.
+
+```sh
+cmake --preset ci-component-release-user
+cmake --build --preset ci-component-release-user -j2
+ctest --preset ci-component-release-user --no-tests=error --output-on-failure
+cmake --build --preset install-ci-component-release-user -j2
+cd tests/install_consumer
+cmake --preset ci-component-installed-user
+cmake --build --preset ci-component-installed-user -j2
+ctest --preset ci-component-installed-user --no-tests=error --output-on-failure
+```

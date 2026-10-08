@@ -13,7 +13,7 @@
 #include <string.h>
 
 typedef struct wire_probe {
-    salts_mutex_t lock;
+    cmeta_mutex_t lock;
     size_t requests;
     unsigned int response_status;
     uint32_t response_delay_ms;
@@ -119,7 +119,7 @@ static int peer_handler(
     unsigned int response_status;
     uint32_t delay_ms;
     size_t body_size;
-    salts_mutex_lock(&probe->lock);
+    cmeta_mutex_lock(&probe->lock);
     ++probe->requests;
     probe->method = request->method;
     (void)snprintf(probe->target, sizeof(probe->target), "%s",
@@ -136,7 +136,7 @@ static int peer_handler(
     }
     response_status = probe->response_status;
     delay_ms = probe->response_delay_ms;
-    salts_mutex_unlock(&probe->lock);
+    cmeta_mutex_unlock(&probe->lock);
     if (delay_ms != 0u) salts_sleep_ms(delay_ms);
     return chttp_server_reply(response, response_status, NULL, NULL, 0u);
 }
@@ -215,7 +215,7 @@ static bool fixture_init_source(
     scxml_diagnostic diagnostic = {0};
     uint16_t port = 0u;
     memset(fixture, 0, sizeof(*fixture));
-    salts_mutex_init(&fixture->wire.lock);
+    cmeta_mutex_init(&fixture->wire.lock);
     if (fixture->wire.lock == NULL) return false;
     fixture->wire.response_status = 204u;
     if (chttp_server_init(&fixture->peer, &peer_config) != SALTS_OK ||
@@ -319,14 +319,14 @@ static void fixture_destroy(egress_fixture *fixture) {
     }
     if (fixture->executor_live) cflow_executor_destroy(&fixture->executor);
     if (fixture->program.impl != NULL) scxml_program_destroy(&fixture->program);
-    if (fixture->wire.lock != NULL) salts_mutex_destroy(&fixture->wire.lock);
+    if (fixture->wire.lock != NULL) cmeta_mutex_destroy(&fixture->wire.lock);
 }
 
 static size_t wire_requests(egress_fixture *fixture) {
     size_t requests;
-    salts_mutex_lock(&fixture->wire.lock);
+    cmeta_mutex_lock(&fixture->wire.lock);
     requests = fixture->wire.requests;
-    salts_mutex_unlock(&fixture->wire.lock);
+    cmeta_mutex_unlock(&fixture->wire.lock);
     return requests;
 }
 
@@ -420,7 +420,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         if (ticket.commit != NULL) ticket.commit(ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 1000u));
         check_equal(wire_requests(&fixture), (size_t)1u);
-        salts_mutex_lock(&fixture.wire.lock);
+        cmeta_mutex_lock(&fixture.wire.lock);
         check_equal(fixture.wire.method, CHTTP_METHOD_POST);
         check_equal(strcmp(fixture.wire.target, "/sink"), 0);
         check_not_null(strstr(fixture.wire.host, "127.0.0.1:"));
@@ -430,7 +430,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         check_equal(strcmp(
                         fixture.wire.bodies[0],
                         "_scxmleventname=order+ready&customer=A%26B&qty=2"), 0);
-        salts_mutex_unlock(&fixture.wire.lock);
+        cmeta_mutex_unlock(&fixture.wire.lock);
         {
             scxml_chttp_processor_stats stats = {0};
             check_true(scxml_chttp_processor_get_stats(
@@ -641,11 +641,11 @@ spec("TurboSCXML CHTTP transactional egress") {
         second_ticket.commit(second_ticket.user);
         other_ticket.commit(other_ticket.user);
         check_true(wait_for_terminal(&fixture, 3u, 1500u));
-        salts_mutex_lock(&fixture.wire.lock);
+        cmeta_mutex_lock(&fixture.wire.lock);
         check_not_null(strstr(fixture.wire.bodies[0], "=other&"));
         check_not_null(strstr(fixture.wire.bodies[1], "=first&"));
         check_not_null(strstr(fixture.wire.bodies[2], "=second&"));
-        salts_mutex_unlock(&fixture.wire.lock);
+        cmeta_mutex_unlock(&fixture.wire.lock);
         check_equal(scxml_session_destroy(&second_session),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_chttp_binding_destroy(&second_binding), SALTS_OK);
@@ -663,9 +663,9 @@ spec("TurboSCXML CHTTP transactional egress") {
         const uint64_t deadline = salts_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
-        salts_mutex_lock(&fixture.wire.lock);
+        cmeta_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_delay_ms = 200u;
-        salts_mutex_unlock(&fixture.wire.lock);
+        cmeta_mutex_unlock(&fixture.wire.lock);
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -706,9 +706,9 @@ spec("TurboSCXML CHTTP transactional egress") {
         const uint64_t deadline = salts_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
-        salts_mutex_lock(&fixture.wire.lock);
+        cmeta_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_delay_ms = 300u;
-        salts_mutex_unlock(&fixture.wire.lock);
+        cmeta_mutex_unlock(&fixture.wire.lock);
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -785,9 +785,9 @@ spec("TurboSCXML CHTTP transactional egress") {
 
         check_true(fixture_init(&fixture, 2u));
         adapter = scxml_chttp_binding_event_io_adapter(&fixture.binding);
-        salts_mutex_lock(&fixture.wire.lock);
+        cmeta_mutex_lock(&fixture.wire.lock);
         fixture.wire.response_status = 404u;
-        salts_mutex_unlock(&fixture.wire.lock);
+        cmeta_mutex_unlock(&fixture.wire.lock);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);

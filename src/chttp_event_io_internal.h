@@ -4,7 +4,7 @@
 #include <scxml/chttp_event_io.h>
 
 #include <salts/thread.h>
-#include <salts_uuid.h>
+#include <cmeta_uuid.h>
 
 typedef enum scxml_chttp_processor_state {
     SCXML_CHTTP_PROCESSOR_INITIALIZED = 1,
@@ -72,9 +72,9 @@ struct scxml_chttp_processor_impl {
     scxml_chttp_processor_config_v1 config;
     chttp_server server;
     chttp_async_client client;
-    salts_mutex_t lock;
-    salts_cond_t wake;
-    salts_thread_t worker;
+    cmeta_mutex_t lock;
+    cmeta_cond_t wake;
+    cmeta_thread_t worker;
     scxml_chttp_processor_state state;
     bool stop_active;
     bool stop_requested;

@@ -10,7 +10,7 @@ int scxml_plugin_fixture_check(int value) {
     return value * 2;
 }
 
-static bool SALTS_PLUGIN_CALL fixture_invoke(
+static bool CMETA_PLUGIN_CALL fixture_invoke(
     void *context,
     void *return_storage,
     void *const *params,
@@ -124,20 +124,20 @@ static const scxml_invoke_provider_vtable invoke_vtable = {
 
 static scxml_event_io_provider event_provider;
 static scxml_invoke_provider invoke_provider;
-static salts_plugin_export fixture_exports[3];
+static cmeta_plugin_export fixture_exports[3];
 
-static const salts_plugin_manifest fixture_manifest = {
-    .struct_size = SALTS_PLUGIN_MANIFEST_SIZE,
-    .abi_version = SALTS_PLUGIN_ABI_VERSION,
+static const cmeta_plugin_manifest fixture_manifest = {
+    .struct_size = CMETA_PLUGIN_MANIFEST_SIZE,
+    .abi_version = CMETA_PLUGIN_ABI_VERSION,
     .plugin_id = "test.scxml.plugin",
     .version = {1u, 0u, 0u},
     .exports = fixture_exports,
     .export_count = 3u};
 
-SALTS_PLUGIN_QUERY_EXPORT
-const salts_plugin_manifest *SALTS_PLUGIN_CALL
-salts_plugin_query(uint32_t host_abi) {
-    if (host_abi != SALTS_PLUGIN_ABI_VERSION)
+CMETA_PLUGIN_QUERY_EXPORT
+const cmeta_plugin_manifest *CMETA_PLUGIN_CALL
+cmeta_plugin_query(uint32_t host_abi) {
+    if (host_abi != CMETA_PLUGIN_ABI_VERSION)
         return NULL;
 
     event_provider =
@@ -145,9 +145,9 @@ salts_plugin_query(uint32_t host_abi) {
     invoke_provider =
         scxml_invoke_provider_bind(&invoke_state, &invoke_vtable);
 
-    fixture_exports[0] = (salts_plugin_export){
-        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-        .kind = SALTS_PLUGIN_EXPORT_FUNCTION,
+    fixture_exports[0] = (cmeta_plugin_export){
+        .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+        .kind = CMETA_PLUGIN_EXPORT_FUNCTION,
         .contract_version = 1u,
         .capabilities = UINT64_C(1),
         .export_id = "test.scxml.action.check",
@@ -158,9 +158,9 @@ salts_plugin_query(uint32_t host_abi) {
             .context = NULL,
             .invoke = fixture_invoke}};
 
-    fixture_exports[1] = (salts_plugin_export){
-        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-        .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+    fixture_exports[1] = (cmeta_plugin_export){
+        .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+        .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
         .contract_version = 1u,
         .capabilities = SCXML_EVENT_IO_CAP_SEND,
         .export_id = "test.scxml.provider.event-io",
@@ -169,9 +169,9 @@ salts_plugin_query(uint32_t host_abi) {
             .desc = scxml_event_io_provider_interface(),
             .value = &event_provider}};
 
-    fixture_exports[2] = (salts_plugin_export){
-        .struct_size = SALTS_PLUGIN_EXPORT_SIZE,
-        .kind = SALTS_PLUGIN_EXPORT_INTERFACE,
+    fixture_exports[2] = (cmeta_plugin_export){
+        .struct_size = CMETA_PLUGIN_EXPORT_SIZE,
+        .kind = CMETA_PLUGIN_EXPORT_INTERFACE,
         .contract_version = 1u,
         .capabilities = SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL,
         .export_id = "test.scxml.provider.invoke",

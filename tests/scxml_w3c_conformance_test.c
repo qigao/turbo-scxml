@@ -4,7 +4,8 @@
 #include <scxml/chttp_event_io.h>
 #endif
 #include <cflow/statechart_instance.h>
-#include <salts_cmeta_data.h>
+#include <cmeta/data.h>
+#include <cmeta_cmeta_data.h>
 #include <cstl/typed.h>
 #include <tlog.h>
 
@@ -1369,7 +1370,7 @@ static scxml_adapter_status w3c_capture_cmeta_send(
 static void w3c_block_executor(void *user) {
     w3c_executor_blocker *blocker = (w3c_executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) salts_thread_yield();
+    while (!atomic_load(&blocker->release)) cmeta_thread_yield();
 }
 
 static bool w3c_admit_external_event(
@@ -1490,7 +1491,7 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
 }
 
 static void w3c_capture_invoke_cancellation_log(
-    const salts_log_entry_t *entry, void *user_data) {
+    const cmeta_log_entry_t *entry, void *user_data) {
     static const char component[] = "cflow.scxml";
     w3c_invoke_cancellation_log *capture =
         (w3c_invoke_cancellation_log *)user_data;
@@ -2417,7 +2418,7 @@ static bool run_w3c_copy_fixture(const char *fixture_name) {
             &receiver_executor, w3c_block_executor, &blocker) !=
         CFLOW_ADMISSION_ACCEPTED)
         goto cleanup;
-    while (!atomic_load(&blocker.entered)) salts_thread_yield();
+    while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
     metadata.data = (scxml_content_view){
         .kind = SCXML_CONTENT_CMETA,
         .schema = &w3c_copy_payload_desc,
@@ -2923,7 +2924,7 @@ static bool run_w3c_invoke_cancellation_fixture(
     uint64_t expected_returned_rejected = 0u;
     tlog_t *previous_logger = tlog_peek_default();
     tlog_t *logger = NULL;
-    salts_log_sink_t *sink = NULL;
+    cmeta_log_sink_t *sink = NULL;
     bool require_exit_logs = false;
     bool parent_executor_initialized = false;
     bool child_executor_initialized = false;
@@ -2955,7 +2956,7 @@ static bool run_w3c_invoke_cancellation_fixture(
         require_exit_logs = true;
         logger = tlog_create(&log_config);
         if (logger == NULL) goto cleanup;
-        sink = salts_sink_callback_create(
+        sink = cmeta_sink_callback_create(
             w3c_capture_invoke_cancellation_log, &cancellation_log);
         if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
         sink = NULL;
@@ -3126,7 +3127,7 @@ cleanup:
         cflow_executor_destroy(&child_executor);
     if (logger != NULL) tlog_flush(logger);
     tlog_set_default(previous_logger);
-    if (sink != NULL) salts_sink_destroy(sink);
+    if (sink != NULL) cmeta_sink_destroy(sink);
     if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&parent_program);
     scxml_program_destroy(&child_program);
@@ -3842,7 +3843,7 @@ static bool run_w3c_cmeta_fixture_with_schema(
                 &executor, w3c_block_executor, &blocker) !=
             CFLOW_ADMISSION_ACCEPTED)
             goto cleanup;
-        while (!atomic_load(&blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
     }
     if (options != NULL && options->external_event != NULL) {
         if (!w3c_admit_external_event(
@@ -5354,7 +5355,7 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
     if (strcmp(fixture_name, "test513.scxml") == 0)
         probe.manual_status = w3c_chttp_post(
             &probe, "_scxmleventname=test&key1=value1");
-    deadline = salts_monotonic_ms() + UINT64_C(3000);
+    deadline = cmeta_monotonic_ms() + UINT64_C(3000);
     do {
         if (!cflow_executor_wait_idle(&probe.executor)) goto cleanup;
         if (probe.downstream_ready > probe.downstream_delivered) {
@@ -5371,8 +5372,8 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         if (session_stats.done && probe.result.commits == 1u &&
             (!expects_egress || processor_stats.egress_completed == 1u))
             break;
-        salts_sleep_ms(1u);
-    } while (salts_monotonic_ms() < deadline);
+        cmeta_sleep_ms(1u);
+    } while (cmeta_monotonic_ms() < deadline);
     if (!session_stats.done || probe.result.commits != 1u ||
         session_stats.errored ||
         !cflow_executor_wait_idle(&probe.executor))
@@ -5384,12 +5385,12 @@ cleanup:
         chttp_client_destroy(&probe.client, 1000u) != SALTS_OK)
         cleaned = false;
     if (session_initialized) {
-        deadline = salts_monotonic_ms() + UINT64_C(2000);
+        deadline = cmeta_monotonic_ms() + UINT64_C(2000);
         do {
             status = (int)scxml_session_destroy(&probe.session);
             if (status == CFLOW_STATECHART_INSTANCE_OK) break;
-            salts_sleep_ms(1u);
-        } while (salts_monotonic_ms() < deadline);
+            cmeta_sleep_ms(1u);
+        } while (cmeta_monotonic_ms() < deadline);
         if (status != CFLOW_STATECHART_INSTANCE_OK) cleaned = false;
     } else if (probe.binding.impl != NULL) {
         scxml_chttp_binding_event_io_adapter(&probe.binding)->close(

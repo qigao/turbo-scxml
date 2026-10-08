@@ -183,7 +183,7 @@ static scxml_chttp_decode_status test_decode(
     probe->entries = ingress->entry_count;
     if (atomic_load(&probe->block)) {
         atomic_store(&probe->entered, true);
-        while (!atomic_load(&probe->release)) salts_thread_yield();
+        while (!atomic_load(&probe->release)) cmeta_thread_yield();
     }
     if (probe->status != SCXML_CHTTP_DECODE_OK) return probe->status;
     if (!probe->return_cmeta) {
@@ -205,7 +205,7 @@ static scxml_chttp_decode_status test_decode(
 static void block_executor(void *user) {
     executor_blocker *blocker = (executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) salts_thread_yield();
+    while (!atomic_load(&blocker->release)) cmeta_thread_yield();
 }
 
 static bool split_access_uri(ingress_fixture *fixture) {
@@ -393,7 +393,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &fixture.executor, block_executor, &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
         check_equal(post(&fixture, fixture.target,
                         "application/x-www-form-urlencoded", "param1=2"),
                     204u);
@@ -425,7 +425,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &cmeta.executor, block_executor, &cmeta_blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&cmeta_blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&cmeta_blocker.entered)) cmeta_thread_yield();
         check_equal(post(&cmeta, cmeta.target,
                         "application/x-www-form-urlencoded", "param1=2"),
                     204u);
@@ -440,7 +440,7 @@ spec("TurboSCXML CHTTP ingress") {
         check_equal(cflow_executor_try_post(
                         &raw.executor, block_executor, &raw_blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&raw_blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&raw_blocker.entered)) cmeta_thread_yield();
         check_equal(post_bytes(&raw, raw.target,
                         "text/plain; charset=utf-8",
                         raw_body, sizeof(raw_body) - 1u), 204u);
@@ -504,19 +504,19 @@ spec("TurboSCXML CHTTP ingress") {
     it("keeps session destruction behind an active decoder callback") {
         ingress_fixture fixture;
         blocking_call call = {0};
-        salts_thread_t http_thread = NULL;
+        cmeta_thread_t http_thread = NULL;
         check_true(fixture_init(&fixture, true, true, false));
         call.fixture = &fixture;
         atomic_store(&fixture.decode.block, true);
-        check_equal(salts_thread_create(
+        check_equal(cmeta_thread_create(
                         &http_thread, blocking_http, &call), SALTS_OK);
-        while (!atomic_load(&fixture.decode.entered)) salts_thread_yield();
+        while (!atomic_load(&fixture.decode.entered)) cmeta_thread_yield();
         check_equal(scxml_session_destroy(&fixture.session),
                     CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
         check_not_null(fixture.session.impl);
         atomic_store(&fixture.decode.release, true);
-        check_equal(salts_thread_join(&http_thread), SALTS_OK);
-        salts_thread_destroy(&http_thread);
+        check_equal(cmeta_thread_join(&http_thread), SALTS_OK);
+        cmeta_thread_destroy(&http_thread);
         check_equal(call.status, 410u);
         check_equal(scxml_session_destroy(&fixture.session),
                     CFLOW_STATECHART_INSTANCE_OK);
