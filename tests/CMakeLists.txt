@@ -264,6 +264,7 @@ if(TURBOSCXML_ENABLE_COMPONENT)
       SCXML_COMPONENT_DSO_TWO="$<TARGET_FILE:scxml_component_dso_2>")
   add_dependencies(scxml_component_dso_test
     scxml_component_dso_1 scxml_component_dso_2)
+  set_tests_properties(scxml_component_dso_test PROPERTIES TIMEOUT 60)
   turboscxml_add_test(
     scxml_component_test
     scxml_component_test.c

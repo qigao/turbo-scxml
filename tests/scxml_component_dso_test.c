@@ -62,7 +62,7 @@ static bool cleanup(dso_test *test) {
                 &test->scopes[i]) == SCXML_COMPONENT_OK && ok;
     }
     scxml_program_destroy(&test->program);
-    if (test->runtime.initialized) {
+    if (test->runtime.initialized && test->runtime.current != NULL) {
         salts_component_plugin_generation *previous = NULL;
         ok = salts_component_plugin_runtime_close(
             &test->runtime, &previous) == SALTS_COMPONENT_PLUGIN_OK && ok;
