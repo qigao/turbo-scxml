@@ -5,6 +5,7 @@
 #endif
 #include <cflow/statechart_instance.h>
 #include <cmeta/data.h>
+#include <cmeta_cmeta_data.h>
 #include <cstl/typed.h>
 #include <tlog.h>
 
