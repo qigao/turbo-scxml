@@ -733,7 +733,7 @@ struct scxml_session_impl {
     scxml_expr_system_values system_values;
     scxml_event_io_adapter event_io;
     void *adapter_user;
-    salts_mutex_t registry_lock;
+    cmeta_mutex_t registry_lock;
     scxml_delayed_send *delayed_sends;
     size_t delayed_send_capacity;
     scxml_prepared_effect *prepared_effects;
