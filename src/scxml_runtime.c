@@ -2557,7 +2557,7 @@ static scxml_expr_status apply_raw_external_data_initializer(
             session, uri, uri_size,
             SCXML_DATA_RESOURCE_DIAGNOSTIC_NATIVE_BIND,
             SCXML_RESOURCE_INVALID_DATA, true, resource.format,
-            failure_status, bind_diagnostic.source_status,
+            failure_status, bind_diagnostic.endpoint_status,
             bind_diagnostic.error.message[0] != '\0'
                 ? &bind_diagnostic.error : NULL,
             diagnostic != NULL && diagnostic->message[0] != '\0'
@@ -2649,7 +2649,7 @@ static scxml_expr_status apply_external_data_initializer(
             session, uri, uri_size,
             SCXML_DATA_RESOURCE_DIAGNOSTIC_NATIVE_BIND,
             SCXML_RESOURCE_INVALID_DATA, false, DATA_BIND_FORMAT_BINARY,
-            failure_status, bind_diagnostic.source_status,
+            failure_status, bind_diagnostic.endpoint_status,
             bind_diagnostic.error.message[0] != '\0'
                 ? &bind_diagnostic.error : NULL,
             diagnostic != NULL && diagnostic->message[0] != '\0'
