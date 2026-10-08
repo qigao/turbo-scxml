@@ -35,6 +35,18 @@ static void close_provider(void *self) {
     *(int *)self += 10;
 }
 
+/* CMeta requires a complete dispatch table even for unadvertised methods.
+ * This fixture supports SEND only and explicitly rejects cancellation. */
+static scxml_adapter_status reject_cancel(
+    void *self, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *ticket, const char **error) {
+    (void)self;
+    (void)request;
+    if (ticket != NULL) memset(ticket, 0, sizeof(*ticket));
+    if (error != NULL) *error = NULL;
+    return SCXML_ADAPTER_INVALID_CONTRACT;
+}
+
 static bool is_quiescent(void *self) {
     return self != NULL;
 }
@@ -42,6 +54,7 @@ static bool is_quiescent(void *self) {
 CMETA_IMPLEMENTS(scxml_event_io_provider, event_impl,
     SCXML_EVENT_IO_CAP_SEND,
     .prepare_send = prepare_send,
+    .prepare_cancel = reject_cancel,
     .close = close_provider,
     .is_quiescent = is_quiescent);
 
