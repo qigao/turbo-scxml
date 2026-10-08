@@ -22,7 +22,7 @@ jobs:
       - name: Checkout TurboSCXML integration branch
         uses: actions/checkout@v4
         with:
-          ref: feature/component-runtime-conformance
+          ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
 
@@ -45,40 +45,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config
 
-      - name: Restore published SaltsUtils SDK
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euxo pipefail
-          config="$RUNNER_TEMP/NuGet.Config"
-          packages="$RUNNER_TEMP/turboscxml-component-sdks"
-          project="$RUNNER_TEMP/turboscxml-component-dependencies.csproj"
-          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
-          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          dotnet add "$project" package SaltsUtils.Native
-          dotnet restore "$project" --configfile "$config"             --packages "$packages" --no-cache
-
-          roots=()
-          while IFS= read -r root; do roots+=("$root"); done < <(
-            find "$packages/saltsutils.native" -mindepth 3 -maxdepth 3               -type d -path '*/sdk/linux-x64' -print
-          )
-          test "${#roots[@]}" -eq 1
-          echo "SALTS_UTILS_ROOT=${roots[0]}" >> "$GITHUB_ENV"
-
       # Fail closed: only the exact published prerelease and attested source SHA are valid.
       # Never check out, compile or fall back to a stable Salts tree here.
       - name: Restore exact Salts.Native Component candidate
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SALTS_CANDIDATE_VERSION: '2.1.2-cmeta.f235fa23b09547d65bb99f15f00b0220b4920820'
-          SALTS_CANDIDATE_SHA: 'f235fa23b09547d65bb99f15f00b0220b4920820'
+          SALTS_CANDIDATE_VERSION: '3.0.0-cmeta.06fa2b10b418f997c38f123ddefa00e448897617'
+          SALTS_CANDIDATE_SHA: '06fa2b10b418f997c38f123ddefa00e448897617'
+          SALTS_CANDIDATE_SHA256: '682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca'
         run: |
           set -euo pipefail
           test -n "$GITHUB_TOKEN"
@@ -99,6 +74,8 @@ jobs:
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages" \
             --no-cache --force-evaluate
+          package="$packages/salts.native/$SALTS_CANDIDATE_VERSION/salts.native.$SALTS_CANDIDATE_VERSION.nupkg"
+          printf '%s  %s\n' "$SALTS_CANDIDATE_SHA256" "$package" | sha256sum --check --strict
           root="$packages/salts.native/$SALTS_CANDIDATE_VERSION/sdk/linux-x64"
           manifest="$root/salts-sdk-manifest.txt"
           test -f "$root/lib/cmake/Salts/SaltsConfig.cmake"
@@ -126,27 +103,66 @@ jobs:
           echo "LD_LIBRARY_PATH=$ld_path" >> "$GITHUB_ENV"
           echo "Selected exact Salts.Native $SALTS_CANDIDATE_VERSION ($SALTS_CANDIDATE_SHA)"
           
-      - name: Configure focused TurboSCXML Component profile
-        shell: bash
-        run: |
-          set -euxo pipefail
-          cmake -S . -B build/component-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_COMPONENT=ON             -DTURBOSCXML_ENABLE_PLUGIN=OFF             -DTURBOSCXML_ENABLE_QUICKJS=OFF             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF
+      - name: Checkout SaltsUtils dependency source
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: 9de20e8aa3d333543f4c691150300b0dbfd07b8c
+          path: _deps/salts-utils
+          persist-credentials: false
 
-      - name: Build Component provider conformance
+      - name: Rebuild SaltsUtils against the exact candidate
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QIGAO_TARGET_TRIPLET: x64-linux
+          QIGAO_SDK_RID: linux-x64
+        working-directory: _deps/salts-utils
         run: |
-          set -euxo pipefail
-          cmake --build build/component-runtime --target             scxml_component_test -j2
+          set -euo pipefail
+          cmake --preset ci-sdk-release-user
+          cmake --build --preset ci-sdk-release-user -j2
+          cmake --build --preset install-ci-sdk-release-user -j2
+          root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
+          printf 'source=%s\nsalts_commit=%s\nsalts_package_sha256=%s\nrid=linux-x64\nprofile=release\n' \
+            "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > "$root/component-dependency-manifest.txt"
+          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
+          echo "DATABIND_ROOT=$root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
 
-      - name: Run Component provider conformance
+      - name: Configure the complete conformance graph
         shell: bash
-        run: |
-          set -euxo pipefail
-          ctest --test-dir build/component-runtime             -R '^scxml_component_test$'             --no-tests=error --output-on-failure
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cmake --preset ci-component-release-user
 
-      - name: Verify exact integration branch
+      - name: Build the complete conformance graph
+        run: cmake --build --preset ci-component-release-user -j2
+
+      - name: Run Component and adjacent business tests
+        run: >-
+          ctest --preset ci-component-release-user
+          -R '^(scxml_component_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test)$'
+          --no-tests=error --output-on-failure
+          --output-junit build/component-runtime/component-results.xml
+
+      - name: Record acceptance identities
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          test "$(git branch --show-current)" = "feature/component-runtime-conformance"
+          mkdir -p build/component-runtime
+          printf 'consumer_commit=%s\nsalts_commit=%s\nsalts_package_sha256=%s\n' \
+            "$(git rev-parse HEAD)" "06fa2b10b418f997c38f123ddefa00e448897617" "682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca" > build/component-runtime/acceptance.txt
+          if [ -n "${SALTS_UTILS_ROOT:-}" ]; then
+            cat "$SALTS_UTILS_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
+          fi
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-acceptance-linux-x64
+          path: |
+            build/component-runtime/acceptance.txt
+            build/component-runtime/component-results.xml
+            build/component-runtime/Testing/Temporary/LastTest.log
