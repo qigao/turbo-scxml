@@ -123,7 +123,7 @@ static bool quickjs_slow_text_is_zero(const void *object) {
 static cmeta_status quickjs_slow_text_assign(
     void *object, const unsigned char *data, size_t size, size_t max_bytes) {
     quickjs_slow_text *text = (quickjs_slow_text *)object;
-    salts_sleep_ms(QUICKJS_SLOW_ASSIGN_MILLISECONDS);
+    cmeta_sleep_ms(QUICKJS_SLOW_ASSIGN_MILLISECONDS);
     if (text == NULL || (size != 0u && data == NULL))
         return CMETA_INVALID_ARGUMENT;
     if (size > max_bytes || size > QUICKJS_SLOW_TEXT_CAPACITY)

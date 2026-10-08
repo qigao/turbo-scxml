@@ -6,7 +6,8 @@
 #include <cflow/executor.h>
 #include <tinytest.h>
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 #include <salts/thread.h>
 
 #include <stdio.h>
@@ -137,7 +138,7 @@ static int peer_handler(
     response_status = probe->response_status;
     delay_ms = probe->response_delay_ms;
     cmeta_mutex_unlock(&probe->lock);
-    if (delay_ms != 0u) salts_sleep_ms(delay_ms);
+    if (delay_ms != 0u) cmeta_sleep_ms(delay_ms);
     return chttp_server_reply(response, response_status, NULL, NULL, 0u);
 }
 
@@ -332,15 +333,15 @@ static size_t wire_requests(egress_fixture *fixture) {
 
 static bool wait_for_terminal(
     egress_fixture *fixture, uint64_t count, uint32_t timeout_ms) {
-    const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+    const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
     do {
         scxml_chttp_processor_stats stats = {0};
         if (scxml_chttp_processor_get_stats(&fixture->processor, &stats) &&
             stats.egress_completed + stats.egress_failed +
                 stats.egress_cancelled >= count)
             return true;
-        salts_sleep_ms(1u);
-    } while (salts_monotonic_ms() < deadline);
+        cmeta_sleep_ms(1u);
+    } while (cmeta_monotonic_ms() < deadline);
     return false;
 }
 
@@ -384,7 +385,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
                         &request, &first, &error), SCXML_ADAPTER_ACCEPTED);
-        salts_sleep_ms(20u);
+        cmeta_sleep_ms(20u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(adapter->prepare_send(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -523,7 +524,7 @@ spec("TurboSCXML CHTTP transactional egress") {
 
         check_true(fixture_init_source(&fixture, 1u, source));
         check_true(wait_for_terminal(&fixture, 1u, 500u));
-        salts_sleep_ms(175u);
+        cmeta_sleep_ms(175u);
         check_equal(wire_requests(&fixture), (size_t)0u);
         check_equal(fixture.downstream.cancels, (size_t)0u);
         check_true(scxml_chttp_processor_get_stats(
@@ -558,7 +559,7 @@ spec("TurboSCXML CHTTP transactional egress") {
                     SCXML_ADAPTER_ACCEPTED);
         check_equal(fixture.downstream.cancels, (size_t)0u);
         cancel_ticket.commit(cancel_ticket.user);
-        salts_sleep_ms(225u);
+        cmeta_sleep_ms(225u);
         check_true(scxml_chttp_processor_get_stats(
             &fixture.processor, &stats));
         check_equal(stats.invariant_failures, UINT64_C(0));
@@ -660,7 +661,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         cflow_statechart_effect_ticket cancel_ticket = {0};
         const scxml_event_io_adapter *adapter;
         const char *error = NULL;
-        const uint64_t deadline = salts_monotonic_ms() + 1000u;
+        const uint64_t deadline = cmeta_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
         cmeta_mutex_lock(&fixture.wire.lock);
@@ -672,8 +673,8 @@ spec("TurboSCXML CHTTP transactional egress") {
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         send_ticket.commit(send_ticket.user);
         while (wire_requests(&fixture) == 0u &&
-               salts_monotonic_ms() < deadline)
-            salts_sleep_ms(1u);
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
         check_equal(wire_requests(&fixture), (size_t)1u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -703,7 +704,7 @@ spec("TurboSCXML CHTTP transactional egress") {
         const scxml_event_io_adapter *adapter;
         const char *error = NULL;
         scxml_chttp_processor_stats stats = {0};
-        const uint64_t deadline = salts_monotonic_ms() + 1000u;
+        const uint64_t deadline = cmeta_monotonic_ms() + 1000u;
 
         check_true(fixture_init(&fixture, 1u));
         cmeta_mutex_lock(&fixture.wire.lock);
@@ -715,8 +716,8 @@ spec("TurboSCXML CHTTP transactional egress") {
                         &request, &send_ticket, &error), SCXML_ADAPTER_ACCEPTED);
         send_ticket.commit(send_ticket.user);
         while (wire_requests(&fixture) == 0u &&
-               salts_monotonic_ms() < deadline)
-            salts_sleep_ms(1u);
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
         check_equal(wire_requests(&fixture), (size_t)1u);
         check_equal(adapter->prepare_cancel(
                         scxml_chttp_binding_adapter_user(&fixture.binding),
@@ -765,10 +766,10 @@ spec("TurboSCXML CHTTP transactional egress") {
             check_equal(stats.egress_failed, UINT64_C(1));
         }
         {
-            const uint64_t deadline = salts_monotonic_ms() + 1000u;
+            const uint64_t deadline = cmeta_monotonic_ms() + 1000u;
             while (current_state(&fixture) != fixture.failed_id &&
-                   salts_monotonic_ms() < deadline)
-                salts_sleep_ms(1u);
+                   cmeta_monotonic_ms() < deadline)
+                cmeta_sleep_ms(1u);
         }
         check_equal(current_state(&fixture), fixture.failed_id);
         fixture_destroy(&fixture);
@@ -794,10 +795,10 @@ spec("TurboSCXML CHTTP transactional egress") {
         if (ticket.commit != NULL) ticket.commit(ticket.user);
         check_true(wait_for_terminal(&fixture, 1u, 1000u));
         {
-            const uint64_t deadline = salts_monotonic_ms() + 1000u;
+            const uint64_t deadline = cmeta_monotonic_ms() + 1000u;
             while (current_state(&fixture) != fixture.failed_id &&
-                   salts_monotonic_ms() < deadline)
-                salts_sleep_ms(1u);
+                   cmeta_monotonic_ms() < deadline)
+                cmeta_sleep_ms(1u);
         }
         check_equal(current_state(&fixture), fixture.failed_id);
         delegated.type = "vendor:custom";

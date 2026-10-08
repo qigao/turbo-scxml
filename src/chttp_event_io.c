@@ -1,7 +1,8 @@
 #include "chttp_event_io_internal.h"
 
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdio.h>
 #include <stdatomic.h>
@@ -225,7 +226,7 @@ static bool downstream_adapter_valid(
 }
 
 static uint64_t stop_deadline(uint32_t timeout_ms) {
-    const uint64_t now = salts_monotonic_ms();
+    const uint64_t now = cmeta_monotonic_ms();
     return timeout_ms == 0u ? UINT64_MAX :
         now > UINT64_MAX - timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
@@ -239,7 +240,7 @@ static bool remaining_timeout_ms(
         *out_timeout_ms = 0u;
         return true;
     }
-    now = salts_monotonic_ms();
+    now = cmeta_monotonic_ms();
     if (now >= deadline_ms) return false;
     remaining = deadline_ms - now;
     *out_timeout_ms = remaining > UINT32_MAX
