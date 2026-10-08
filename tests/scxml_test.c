@@ -17,7 +17,7 @@
 
 typedef struct scxml_log_capture {
     size_t count;
-    salts_log_level_t levels[SCXML_LOG_CAPTURE_CAPACITY];
+    cmeta_log_level_t levels[SCXML_LOG_CAPTURE_CAPACITY];
     char components[SCXML_LOG_CAPTURE_CAPACITY]
                    [SCXML_LOG_COMPONENT_CAPACITY];
     char messages[SCXML_LOG_CAPTURE_CAPACITY][SCXML_LOG_MESSAGE_CAPACITY];
@@ -27,7 +27,7 @@ static scxml_status compile_status(
     const char *source, scxml_program *program,
     scxml_diagnostic *diagnostic);
 
-static void capture_scxml_log(const salts_log_entry_t *entry,
+static void capture_scxml_log(const cmeta_log_entry_t *entry,
                               void *user_data) {
     scxml_log_capture *capture = (scxml_log_capture *)user_data;
     size_t index;
@@ -66,7 +66,7 @@ static bool run_log_program(const char *source, bool install_logger,
     cflow_statechart_instance_stats stats = {0};
     tlog_t *previous_logger = tlog_peek_default();
     tlog_t *logger = NULL;
-    salts_log_sink_t *sink = NULL;
+    cmeta_log_sink_t *sink = NULL;
     bool executor_initialized = false;
     bool instance_initialized = false;
     bool succeeded = false;
@@ -81,7 +81,7 @@ static bool run_log_program(const char *source, bool install_logger,
             .min_level = SALTS_LOG_LEVEL_DEBUG, .buffer_size = 0u};
         logger = tlog_create(&log_config);
         if (logger == NULL) goto cleanup;
-        sink = salts_sink_callback_create(capture_scxml_log, capture);
+        sink = cmeta_sink_callback_create(capture_scxml_log, capture);
         if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
         sink = NULL;
         tlog_set_default(logger);
@@ -124,7 +124,7 @@ cleanup:
     if (executor_initialized) cflow_executor_destroy(&executor);
     if (logger != NULL) tlog_flush(logger);
     tlog_set_default(previous_logger);
-    if (sink != NULL) salts_sink_destroy(sink);
+    if (sink != NULL) cmeta_sink_destroy(sink);
     if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&program);
     return succeeded;
@@ -2917,7 +2917,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
             .min_level = SALTS_LOG_LEVEL_DEBUG, .buffer_size = 0u};
         tlog_t *previous_logger = tlog_peek_default();
         tlog_t *logger = tlog_create(&log_config);
-        salts_log_sink_t *sink = salts_sink_callback_create(
+        cmeta_log_sink_t *sink = cmeta_sink_callback_create(
             capture_scxml_log, &capture);
         cflow_event_view tick = {0};
         cflow_event_view done = {0};
@@ -2987,7 +2987,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         cflow_executor_destroy(&executor);
         scxml_program_destroy(&program);
         tlog_set_default(previous_logger);
-        if (sink != NULL) salts_sink_destroy(sink);
+        if (sink != NULL) cmeta_sink_destroy(sink);
         tlog_destroy(logger);
     }
 

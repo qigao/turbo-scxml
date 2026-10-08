@@ -1490,7 +1490,7 @@ static scxml_adapter_status w3c_capture_invoke_completion_cancel(
 }
 
 static void w3c_capture_invoke_cancellation_log(
-    const salts_log_entry_t *entry, void *user_data) {
+    const cmeta_log_entry_t *entry, void *user_data) {
     static const char component[] = "cflow.scxml";
     w3c_invoke_cancellation_log *capture =
         (w3c_invoke_cancellation_log *)user_data;
@@ -2923,7 +2923,7 @@ static bool run_w3c_invoke_cancellation_fixture(
     uint64_t expected_returned_rejected = 0u;
     tlog_t *previous_logger = tlog_peek_default();
     tlog_t *logger = NULL;
-    salts_log_sink_t *sink = NULL;
+    cmeta_log_sink_t *sink = NULL;
     bool require_exit_logs = false;
     bool parent_executor_initialized = false;
     bool child_executor_initialized = false;
@@ -2955,7 +2955,7 @@ static bool run_w3c_invoke_cancellation_fixture(
         require_exit_logs = true;
         logger = tlog_create(&log_config);
         if (logger == NULL) goto cleanup;
-        sink = salts_sink_callback_create(
+        sink = cmeta_sink_callback_create(
             w3c_capture_invoke_cancellation_log, &cancellation_log);
         if (sink == NULL || tlog_add_sink(logger, sink) != 0) goto cleanup;
         sink = NULL;
@@ -3126,7 +3126,7 @@ cleanup:
         cflow_executor_destroy(&child_executor);
     if (logger != NULL) tlog_flush(logger);
     tlog_set_default(previous_logger);
-    if (sink != NULL) salts_sink_destroy(sink);
+    if (sink != NULL) cmeta_sink_destroy(sink);
     if (logger != NULL) tlog_destroy(logger);
     scxml_program_destroy(&parent_program);
     scxml_program_destroy(&child_program);
