@@ -37,7 +37,9 @@ jobs:
           mode: read
 
       - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@v0.0.11
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.18.0
 
       - name: Restore Salts host re2c
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
