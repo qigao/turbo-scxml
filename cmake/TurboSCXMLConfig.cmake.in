@@ -93,11 +93,8 @@ if(_TURBOSCXML_NEEDS_SCXML)
   set(_TURBOSCXML_MISSING_DATABIND_TARGETS)
   foreach(_TURBOSCXML_REQUIRED_TARGET IN ITEMS
       Salts::DataBind
-      Salts::DataBindCore
-      Salts::DataBindJsonAdapter
-      Salts::DataBindYamlAdapter
-      Salts::DataBindCsvAdapter
-      Salts::DataBindXmlAdapter)
+      Salts::XmlParser
+      Salts::QueryVM)
     if(NOT TARGET ${_TURBOSCXML_REQUIRED_TARGET})
       list(APPEND _TURBOSCXML_MISSING_DATABIND_TARGETS
         ${_TURBOSCXML_REQUIRED_TARGET})
@@ -269,12 +266,7 @@ if(_TURBOSCXML_NEEDS_VOICEXML_CMETA AND
       Salts::XmlParser
       Salts::CMeta
       Salts::CSerde
-      Salts::DataBindCore
       Salts::DataBind
-      Salts::DataBindJsonAdapter
-      Salts::DataBindYamlAdapter
-      Salts::DataBindCsvAdapter
-      Salts::DataBindXmlAdapter
       Salts::QueryVM)
     if(NOT TARGET ${_TURBOSCXML_REQUIRED_TARGET})
       list(APPEND _TURBOSCXML_MISSING_VOICEXML_CMETA_TARGETS
