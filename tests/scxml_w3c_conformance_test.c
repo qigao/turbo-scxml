@@ -4,7 +4,7 @@
 #include <scxml/chttp_event_io.h>
 #endif
 #include <cflow/statechart_instance.h>
-#include <salts_cmeta_data.h>
+#include <cmeta/data.h>
 #include <cstl/typed.h>
 #include <tlog.h>
 
@@ -5354,7 +5354,7 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
     if (strcmp(fixture_name, "test513.scxml") == 0)
         probe.manual_status = w3c_chttp_post(
             &probe, "_scxmleventname=test&key1=value1");
-    deadline = salts_monotonic_ms() + UINT64_C(3000);
+    deadline = cmeta_monotonic_ms() + UINT64_C(3000);
     do {
         if (!cflow_executor_wait_idle(&probe.executor)) goto cleanup;
         if (probe.downstream_ready > probe.downstream_delivered) {
@@ -5371,8 +5371,8 @@ static bool run_w3c_chttp_fixture(const char *fixture_name) {
         if (session_stats.done && probe.result.commits == 1u &&
             (!expects_egress || processor_stats.egress_completed == 1u))
             break;
-        salts_sleep_ms(1u);
-    } while (salts_monotonic_ms() < deadline);
+        cmeta_sleep_ms(1u);
+    } while (cmeta_monotonic_ms() < deadline);
     if (!session_stats.done || probe.result.commits != 1u ||
         session_stats.errored ||
         !cflow_executor_wait_idle(&probe.executor))
@@ -5384,12 +5384,12 @@ cleanup:
         chttp_client_destroy(&probe.client, 1000u) != SALTS_OK)
         cleaned = false;
     if (session_initialized) {
-        deadline = salts_monotonic_ms() + UINT64_C(2000);
+        deadline = cmeta_monotonic_ms() + UINT64_C(2000);
         do {
             status = (int)scxml_session_destroy(&probe.session);
             if (status == CFLOW_STATECHART_INSTANCE_OK) break;
-            salts_sleep_ms(1u);
-        } while (salts_monotonic_ms() < deadline);
+            cmeta_sleep_ms(1u);
+        } while (cmeta_monotonic_ms() < deadline);
         if (status != CFLOW_STATECHART_INSTANCE_OK) cleaned = false;
     } else if (probe.binding.impl != NULL) {
         scxml_chttp_binding_event_io_adapter(&probe.binding)->close(

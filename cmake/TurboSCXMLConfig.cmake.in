@@ -51,7 +51,7 @@ endif()
 set(_TURBOSCXML_NEEDS_SCXML ${_TURBOSCXML_PACKAGE_WIDE})
 foreach(_TURBOSCXML_COMPONENT IN ITEMS
     SCXML CCXML VoiceXMLDialogManager VoiceXMLCHttpResource
-    QuickJS Plugin CHttpResource CHttpEventIO)
+    QuickJS Plugin Component CHttpResource CHttpEventIO)
   if(_TURBOSCXML_COMPONENT IN_LIST TurboSCXML_FIND_COMPONENTS)
     set(_TURBOSCXML_NEEDS_SCXML TRUE)
   endif()
@@ -154,6 +154,22 @@ set(TurboSCXML_QuickJS_FOUND @TURBOSCXML_PACKAGE_HAS_QUICKJS@)
 set(TurboSCXML_VoiceXMLQuickJS_FOUND
   @TURBOSCXML_PACKAGE_HAS_VOICEXML_QUICKJS@)
 set(TurboSCXML_Plugin_FOUND @TURBOSCXML_PACKAGE_HAS_PLUGIN@)
+set(TurboSCXML_Component_FOUND @TURBOSCXML_PACKAGE_HAS_COMPONENT@)
+if(Component IN_LIST TurboSCXML_FIND_COMPONENTS AND
+   NOT TurboSCXML_Component_FOUND AND
+   TurboSCXML_FIND_REQUIRED_Component)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "This TurboSCXML package does not include the Component component")
+  return()
+endif()
+if(TurboSCXML_Component_FOUND AND NOT TARGET Salts::ComponentPlugin)
+  set(TurboSCXML_Component_FOUND FALSE)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "The Component component requires Salts::ComponentPlugin from the selected Salts SDK")
+  return()
+endif()
 set(TurboSCXML_CHttpResource_FOUND
   @TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE@)
 set(TurboSCXML_CHttpEventIO_FOUND
