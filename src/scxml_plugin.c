@@ -10,36 +10,36 @@
      sizeof(((cmeta_sig_desc *)0)->params[0]))
 
 typedef struct scxml_plugin_lease_row {
-    salts_plugin_ref ref;
-    salts_plugin_lease lease;
-    const salts_plugin_manifest *manifest;
+    cmeta_plugin_ref ref;
+    cmeta_plugin_lease lease;
+    const cmeta_plugin_manifest *manifest;
 } scxml_plugin_lease_row;
 
 typedef struct scxml_plugin_callable_capture {
-    const salts_plugin_function_export *function;
+    const cmeta_plugin_function_export *function;
 } scxml_plugin_callable_capture;
 
 typedef struct scxml_plugin_program_impl {
     scxml_program core;
-    salts_plugin_registry *registry;
+    cmeta_plugin_registry *registry;
     scxml_plugin_lease_row *leases;
     size_t lease_count;
 } scxml_plugin_program_impl;
 
 typedef struct scxml_plugin_event_io_provider_impl {
-    salts_plugin_registry *registry;
-    salts_plugin_lease lease;
+    cmeta_plugin_registry *registry;
+    cmeta_plugin_lease lease;
     scxml_event_io_adapter_bridge bridge;
 } scxml_plugin_event_io_provider_impl;
 
 typedef struct scxml_plugin_invoke_provider_impl {
-    salts_plugin_registry *registry;
-    salts_plugin_lease lease;
+    cmeta_plugin_registry *registry;
+    cmeta_plugin_lease lease;
     scxml_invoke_adapter_bridge bridge;
 } scxml_plugin_invoke_provider_impl;
 
 static bool plugin_ref_equal(
-    salts_plugin_ref left, salts_plugin_ref right) {
+    cmeta_plugin_ref left, cmeta_plugin_ref right) {
     return left.slot == right.slot &&
            left.generation == right.generation;
 }
@@ -48,7 +48,7 @@ static bool plugin_action_valid(
     const scxml_plugin_action_v1 *action) {
     return action != NULL &&
            action->struct_size >= sizeof(*action) &&
-           salts_plugin_ref_valid(action->plugin) &&
+           cmeta_plugin_ref_valid(action->plugin) &&
            action->export_id != NULL &&
            action->export_id[0] != '\0' &&
            action->contract_id != NULL &&
@@ -131,7 +131,7 @@ static bool plugin_callable_invoke(
 }
 
 static bool plugin_callable(
-    const salts_plugin_function_export *function,
+    const cmeta_plugin_function_export *function,
     cmeta_callable *out) {
     scxml_plugin_callable_capture capture;
     cmeta_callable value = {0};
@@ -154,7 +154,7 @@ static bool plugin_callable(
 static scxml_plugin_lease_row *find_lease(
     scxml_plugin_lease_row *rows,
     size_t count,
-    salts_plugin_ref ref) {
+    cmeta_plugin_ref ref) {
     size_t index;
     for (index = 0u; index < count; ++index)
         if (plugin_ref_equal(rows[index].ref, ref))
@@ -162,27 +162,27 @@ static scxml_plugin_lease_row *find_lease(
     return NULL;
 }
 
-static salts_plugin_status acquire_manifest(
-    salts_plugin_registry *registry,
+static cmeta_plugin_status acquire_manifest(
+    cmeta_plugin_registry *registry,
     scxml_plugin_lease_row *rows,
     size_t *count,
-    salts_plugin_ref ref,
-    const salts_plugin_manifest **out_manifest) {
+    cmeta_plugin_ref ref,
+    const cmeta_plugin_manifest **out_manifest) {
     scxml_plugin_lease_row *existing;
-    salts_plugin_lease lease = {0};
-    const salts_plugin_manifest *manifest = NULL;
-    salts_plugin_status status;
+    cmeta_plugin_lease lease = {0};
+    const cmeta_plugin_manifest *manifest = NULL;
+    cmeta_plugin_status status;
     if (registry == NULL || rows == NULL || count == NULL ||
         out_manifest == NULL)
-        return SALTS_PLUGIN_INVALID_ARGUMENT;
+        return CMETA_PLUGIN_INVALID_ARGUMENT;
     existing = find_lease(rows, *count, ref);
     if (existing != NULL) {
         *out_manifest = existing->manifest;
-        return SALTS_PLUGIN_OK;
+        return CMETA_PLUGIN_OK;
     }
-    status = salts_plugin_registry_acquire(
+    status = cmeta_plugin_registry_acquire(
         registry, ref, &lease, &manifest);
-    if (status != SALTS_PLUGIN_OK)
+    if (status != CMETA_PLUGIN_OK)
         return status;
     rows[*count] = (scxml_plugin_lease_row){
         .ref = ref,
@@ -190,23 +190,23 @@ static salts_plugin_status acquire_manifest(
         .manifest = manifest};
     ++*count;
     *out_manifest = manifest;
-    return SALTS_PLUGIN_OK;
+    return CMETA_PLUGIN_OK;
 }
 
-static salts_plugin_status release_leases(
-    salts_plugin_registry *registry,
+static cmeta_plugin_status release_leases(
+    cmeta_plugin_registry *registry,
     scxml_plugin_lease_row *rows,
     size_t count) {
-    salts_plugin_status first = SALTS_PLUGIN_OK;
+    cmeta_plugin_status first = CMETA_PLUGIN_OK;
     while (count != 0u) {
-        salts_plugin_status status;
+        cmeta_plugin_status status;
         --count;
-        if (!salts_plugin_lease_valid(rows[count].lease))
+        if (!cmeta_plugin_lease_valid(rows[count].lease))
             continue;
-        status = salts_plugin_registry_release(
+        status = cmeta_plugin_registry_release(
             registry, &rows[count].lease);
-        if (first == SALTS_PLUGIN_OK &&
-            status != SALTS_PLUGIN_OK)
+        if (first == CMETA_PLUGIN_OK &&
+            status != CMETA_PLUGIN_OK)
             first = status;
     }
     return first;
@@ -216,50 +216,50 @@ static bool plugin_provider_binding_valid(
     const scxml_plugin_provider_v1 *binding) {
     return binding != NULL &&
            binding->struct_size >= sizeof(*binding) &&
-           salts_plugin_ref_valid(binding->plugin) &&
+           cmeta_plugin_ref_valid(binding->plugin) &&
            binding->export_id != NULL &&
            binding->export_id[0] != '\0' &&
            binding->contract_id != NULL &&
            binding->contract_id[0] != '\0';
 }
 
-static salts_plugin_status acquire_interface_export(
-    salts_plugin_registry *registry,
+static cmeta_plugin_status acquire_interface_export(
+    cmeta_plugin_registry *registry,
     const scxml_plugin_provider_v1 *binding,
     const cmeta_interface_desc *expected,
-    salts_plugin_lease *out_lease,
-    const salts_plugin_export **out_entry) {
-    salts_plugin_lease lease = {0};
-    const salts_plugin_manifest *manifest = NULL;
-    const salts_plugin_export *entry = NULL;
-    salts_plugin_status status;
+    cmeta_plugin_lease *out_lease,
+    const cmeta_plugin_export **out_entry) {
+    cmeta_plugin_lease lease = {0};
+    const cmeta_plugin_manifest *manifest = NULL;
+    const cmeta_plugin_export *entry = NULL;
+    cmeta_plugin_status status;
     if (registry == NULL || !plugin_provider_binding_valid(binding) ||
         !cmeta_interface_desc_valid(expected) ||
         out_lease == NULL || out_entry == NULL)
-        return SALTS_PLUGIN_INVALID_ARGUMENT;
-    *out_lease = (salts_plugin_lease){0};
+        return CMETA_PLUGIN_INVALID_ARGUMENT;
+    *out_lease = (cmeta_plugin_lease){0};
     *out_entry = NULL;
-    status = salts_plugin_registry_acquire(
+    status = cmeta_plugin_registry_acquire(
         registry, binding->plugin, &lease, &manifest);
-    if (status != SALTS_PLUGIN_OK)
+    if (status != CMETA_PLUGIN_OK)
         return status;
-    status = salts_plugin_manifest_find_export(
+    status = cmeta_plugin_manifest_find_export(
         manifest, binding->export_id, &entry);
-    if (status == SALTS_PLUGIN_OK)
-        status = salts_plugin_export_require_interface(
+    if (status == CMETA_PLUGIN_OK)
+        status = cmeta_plugin_export_require_interface(
             entry, binding->contract_id,
             binding->contract_version,
             binding->required_capabilities,
             expected);
-    if (status != SALTS_PLUGIN_OK) {
-        const salts_plugin_status release_status =
-            salts_plugin_registry_release(registry, &lease);
-        return release_status == SALTS_PLUGIN_OK
+    if (status != CMETA_PLUGIN_OK) {
+        const cmeta_plugin_status release_status =
+            cmeta_plugin_registry_release(registry, &lease);
+        return release_status == CMETA_PLUGIN_OK
             ? status : release_status;
     }
     *out_lease = lease;
     *out_entry = entry;
-    return SALTS_PLUGIN_OK;
+    return CMETA_PLUGIN_OK;
 }
 
 const char *scxml_plugin_status_string(
@@ -284,17 +284,17 @@ const char *scxml_plugin_status_string(
 
 scxml_plugin_status scxml_plugin_event_io_provider_open(
     scxml_plugin_event_io_provider *out,
-    salts_plugin_registry *registry,
+    cmeta_plugin_registry *registry,
     const scxml_plugin_provider_v1 *binding,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_event_io_provider_impl *impl;
-    salts_plugin_lease lease = {0};
-    const salts_plugin_export *entry = NULL;
+    cmeta_plugin_lease lease = {0};
+    const cmeta_plugin_export *entry = NULL;
     const scxml_event_io_provider *provider;
-    salts_plugin_status plugin_status;
+    cmeta_plugin_status plugin_status;
 
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (out == NULL || out->impl != NULL ||
         registry == NULL || !plugin_provider_binding_valid(binding))
         return SCXML_PLUGIN_INVALID_ARGUMENT;
@@ -302,7 +302,7 @@ scxml_plugin_status scxml_plugin_event_io_provider_open(
     plugin_status = acquire_interface_export(
         registry, binding, scxml_event_io_provider_interface(),
         &lease, &entry);
-    if (plugin_status != SALTS_PLUGIN_OK) {
+    if (plugin_status != CMETA_PLUGIN_OK) {
         if (out_plugin_status != NULL)
             *out_plugin_status = plugin_status;
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
@@ -314,25 +314,25 @@ scxml_plugin_status scxml_plugin_event_io_provider_open(
     if (!scxml_event_io_provider_valid(provider) ||
         !scxml_event_io_provider_has(
             provider, binding->required_capabilities)) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
-            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
-                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+            *out_plugin_status = plugin_status == CMETA_PLUGIN_OK
+                ? CMETA_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
     }
 
     impl = (scxml_plugin_event_io_provider_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
             *out_plugin_status = plugin_status;
         return SCXML_PLUGIN_ALLOCATION_FAILED;
     }
     if (!scxml_event_io_adapter_bridge_init(&impl->bridge, provider)) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
-            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
-                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+            *out_plugin_status = plugin_status == CMETA_PLUGIN_OK
+                ? CMETA_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
         free(impl);
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
     }
@@ -366,19 +366,19 @@ void *scxml_plugin_event_io_provider_user(
 
 scxml_plugin_status scxml_plugin_event_io_provider_destroy(
     scxml_plugin_event_io_provider *provider,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_event_io_provider_impl *impl;
-    salts_plugin_status status;
+    cmeta_plugin_status status;
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (provider == NULL || provider->impl == NULL)
         return SCXML_PLUGIN_INVALID_ARGUMENT;
     impl = (scxml_plugin_event_io_provider_impl *)provider->impl;
-    status = salts_plugin_registry_release(
+    status = cmeta_plugin_registry_release(
         impl->registry, &impl->lease);
     if (out_plugin_status != NULL)
         *out_plugin_status = status;
-    if (status != SALTS_PLUGIN_OK)
+    if (status != CMETA_PLUGIN_OK)
         return SCXML_PLUGIN_PLUGIN_ERROR;
     free(impl);
     provider->impl = NULL;
@@ -387,17 +387,17 @@ scxml_plugin_status scxml_plugin_event_io_provider_destroy(
 
 scxml_plugin_status scxml_plugin_invoke_provider_open(
     scxml_plugin_invoke_provider *out,
-    salts_plugin_registry *registry,
+    cmeta_plugin_registry *registry,
     const scxml_plugin_provider_v1 *binding,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_invoke_provider_impl *impl;
-    salts_plugin_lease lease = {0};
-    const salts_plugin_export *entry = NULL;
+    cmeta_plugin_lease lease = {0};
+    const cmeta_plugin_export *entry = NULL;
     const scxml_invoke_provider *provider;
-    salts_plugin_status plugin_status;
+    cmeta_plugin_status plugin_status;
 
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (out == NULL || out->impl != NULL ||
         registry == NULL || !plugin_provider_binding_valid(binding))
         return SCXML_PLUGIN_INVALID_ARGUMENT;
@@ -405,7 +405,7 @@ scxml_plugin_status scxml_plugin_invoke_provider_open(
     plugin_status = acquire_interface_export(
         registry, binding, scxml_invoke_provider_interface(),
         &lease, &entry);
-    if (plugin_status != SALTS_PLUGIN_OK) {
+    if (plugin_status != CMETA_PLUGIN_OK) {
         if (out_plugin_status != NULL)
             *out_plugin_status = plugin_status;
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
@@ -417,25 +417,25 @@ scxml_plugin_status scxml_plugin_invoke_provider_open(
     if (!scxml_invoke_provider_valid(provider) ||
         !scxml_invoke_provider_has(
             provider, binding->required_capabilities)) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
-            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
-                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+            *out_plugin_status = plugin_status == CMETA_PLUGIN_OK
+                ? CMETA_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
     }
 
     impl = (scxml_plugin_invoke_provider_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
             *out_plugin_status = plugin_status;
         return SCXML_PLUGIN_ALLOCATION_FAILED;
     }
     if (!scxml_invoke_adapter_bridge_init(&impl->bridge, provider)) {
-        plugin_status = salts_plugin_registry_release(registry, &lease);
+        plugin_status = cmeta_plugin_registry_release(registry, &lease);
         if (out_plugin_status != NULL)
-            *out_plugin_status = plugin_status == SALTS_PLUGIN_OK
-                ? SALTS_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
+            *out_plugin_status = plugin_status == CMETA_PLUGIN_OK
+                ? CMETA_PLUGIN_INCOMPATIBLE_CONTRACT : plugin_status;
         free(impl);
         return SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
     }
@@ -469,19 +469,19 @@ void *scxml_plugin_invoke_provider_user(
 
 scxml_plugin_status scxml_plugin_invoke_provider_destroy(
     scxml_plugin_invoke_provider *provider,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_invoke_provider_impl *impl;
-    salts_plugin_status status;
+    cmeta_plugin_status status;
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (provider == NULL || provider->impl == NULL)
         return SCXML_PLUGIN_INVALID_ARGUMENT;
     impl = (scxml_plugin_invoke_provider_impl *)provider->impl;
-    status = salts_plugin_registry_release(
+    status = cmeta_plugin_registry_release(
         impl->registry, &impl->lease);
     if (out_plugin_status != NULL)
         *out_plugin_status = status;
-    if (status != SALTS_PLUGIN_OK)
+    if (status != CMETA_PLUGIN_OK)
         return SCXML_PLUGIN_PLUGIN_ERROR;
     free(impl);
     provider->impl = NULL;
@@ -495,7 +495,7 @@ scxml_plugin_status scxml_plugin_compile_cmeta_v1(
     const scxml_limits *limits,
     const scxml_plugin_compile_options_v1 *options,
     scxml_diagnostic *diagnostic,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_program_impl *impl = NULL;
     scxml_plugin_lease_row *leases = NULL;
     scxml_cmeta_custom_action_v2 *actions = NULL;
@@ -505,11 +505,11 @@ scxml_plugin_status scxml_plugin_compile_cmeta_v1(
     size_t lease_count = 0u;
     size_t index;
     scxml_status compile_status;
-    salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+    cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
     scxml_plugin_status status = SCXML_PLUGIN_INVALID_ARGUMENT;
 
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (out == NULL || out->impl != NULL ||
         input == NULL || input_size == 0u ||
         options == NULL ||
@@ -553,8 +553,8 @@ scxml_plugin_status scxml_plugin_compile_cmeta_v1(
     for (index = 0u; index < options->plugin_action_count; ++index) {
         const scxml_plugin_action_v1 *mapping =
             &options->plugin_actions[index];
-        const salts_plugin_manifest *manifest = NULL;
-        const salts_plugin_export *entry = NULL;
+        const cmeta_plugin_manifest *manifest = NULL;
+        const cmeta_plugin_export *entry = NULL;
         cmeta_callable callable = {0};
 
         if (!plugin_action_valid(mapping)) {
@@ -564,25 +564,25 @@ scxml_plugin_status scxml_plugin_compile_cmeta_v1(
         plugin_status = acquire_manifest(
             options->registry, leases, &lease_count,
             mapping->plugin, &manifest);
-        if (plugin_status != SALTS_PLUGIN_OK) {
+        if (plugin_status != CMETA_PLUGIN_OK) {
             status = SCXML_PLUGIN_PLUGIN_ERROR;
             goto fail;
         }
-        plugin_status = salts_plugin_manifest_find_export(
+        plugin_status = cmeta_plugin_manifest_find_export(
             manifest, mapping->export_id, &entry);
-        if (plugin_status != SALTS_PLUGIN_OK) {
+        if (plugin_status != CMETA_PLUGIN_OK) {
             status = SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
             goto fail;
         }
-        plugin_status = salts_plugin_export_require_function(
+        plugin_status = cmeta_plugin_export_require_function(
             entry, mapping->contract_id,
             mapping->contract_version,
             mapping->required_capabilities);
-        if (plugin_status != SALTS_PLUGIN_OK ||
+        if (plugin_status != CMETA_PLUGIN_OK ||
             entry == NULL ||
             !plugin_callable(&entry->value.function, &callable)) {
-            if (plugin_status == SALTS_PLUGIN_OK)
-                plugin_status = SALTS_PLUGIN_INCOMPATIBLE_CONTRACT;
+            if (plugin_status == CMETA_PLUGIN_OK)
+                plugin_status = CMETA_PLUGIN_INCOMPATIBLE_CONTRACT;
             status = SCXML_PLUGIN_INCOMPATIBLE_EXPORT;
             goto fail;
         }
@@ -623,12 +623,12 @@ fail:
     if (impl != NULL)
         scxml_program_destroy(&impl->core);
     if (leases != NULL) {
-        const salts_plugin_status release_status =
+        const cmeta_plugin_status release_status =
             release_leases(options != NULL ? options->registry : NULL,
                            leases, lease_count);
-        if (release_status != SALTS_PLUGIN_OK &&
+        if (release_status != CMETA_PLUGIN_OK &&
             out_plugin_status != NULL &&
-            *out_plugin_status == SALTS_PLUGIN_OK)
+            *out_plugin_status == CMETA_PLUGIN_OK)
             *out_plugin_status = release_status;
     }
     free(actions);
@@ -648,11 +648,11 @@ const scxml_program *scxml_plugin_program_core(
 
 scxml_plugin_status scxml_plugin_program_destroy(
     scxml_plugin_program *program,
-    salts_plugin_status *out_plugin_status) {
+    cmeta_plugin_status *out_plugin_status) {
     scxml_plugin_program_impl *impl;
-    salts_plugin_status plugin_status;
+    cmeta_plugin_status plugin_status;
     if (out_plugin_status != NULL)
-        *out_plugin_status = SALTS_PLUGIN_OK;
+        *out_plugin_status = CMETA_PLUGIN_OK;
     if (program == NULL || program->impl == NULL)
         return SCXML_PLUGIN_INVALID_ARGUMENT;
     impl = (scxml_plugin_program_impl *)program->impl;
@@ -661,7 +661,7 @@ scxml_plugin_status scxml_plugin_program_destroy(
         impl->registry, impl->leases, impl->lease_count);
     if (out_plugin_status != NULL)
         *out_plugin_status = plugin_status;
-    if (plugin_status != SALTS_PLUGIN_OK)
+    if (plugin_status != CMETA_PLUGIN_OK)
         return SCXML_PLUGIN_PLUGIN_ERROR;
     free(impl->leases);
     free(impl);

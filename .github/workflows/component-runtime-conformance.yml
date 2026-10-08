@@ -142,7 +142,7 @@ jobs:
       - name: Run Component and adjacent business tests
         run: >-
           ctest --preset ci-component-release-user
-          -R '^(scxml_component_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test)$'
+          -R '^(scxml_component_test|scxml_component_dso_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test)$'
           --no-tests=error --output-on-failure
           --output-junit build/component-runtime/component-results.xml
 

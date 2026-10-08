@@ -1369,7 +1369,7 @@ static scxml_adapter_status w3c_capture_cmeta_send(
 static void w3c_block_executor(void *user) {
     w3c_executor_blocker *blocker = (w3c_executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) salts_thread_yield();
+    while (!atomic_load(&blocker->release)) cmeta_thread_yield();
 }
 
 static bool w3c_admit_external_event(
@@ -2417,7 +2417,7 @@ static bool run_w3c_copy_fixture(const char *fixture_name) {
             &receiver_executor, w3c_block_executor, &blocker) !=
         CFLOW_ADMISSION_ACCEPTED)
         goto cleanup;
-    while (!atomic_load(&blocker.entered)) salts_thread_yield();
+    while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
     metadata.data = (scxml_content_view){
         .kind = SCXML_CONTENT_CMETA,
         .schema = &w3c_copy_payload_desc,
@@ -3842,7 +3842,7 @@ static bool run_w3c_cmeta_fixture_with_schema(
                 &executor, w3c_block_executor, &blocker) !=
             CFLOW_ADMISSION_ACCEPTED)
             goto cleanup;
-        while (!atomic_load(&blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
     }
     if (options != NULL && options->external_event != NULL) {
         if (!w3c_admit_external_event(

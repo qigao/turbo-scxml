@@ -458,7 +458,7 @@ typedef struct scxml_executor_blocker {
 static void scxml_block_executor(void *user) {
     scxml_executor_blocker *blocker = (scxml_executor_blocker *)user;
     atomic_store(&blocker->entered, true);
-    while (!atomic_load(&blocker->release)) salts_thread_yield();
+    while (!atomic_load(&blocker->release)) cmeta_thread_yield();
 }
 
 static const cflow_statechart_state *find_state(
@@ -3041,7 +3041,7 @@ suite("SCXML Core to native CFlow Statechart compiler") {
         check_equal(cflow_executor_try_post(
                         &executor, scxml_block_executor, &blocker),
                     CFLOW_ADMISSION_ACCEPTED);
-        while (!atomic_load(&blocker.entered)) salts_thread_yield();
+        while (!atomic_load(&blocker.entered)) cmeta_thread_yield();
         check_equal(scxml_session_try_send(&session, &leave),
                     CFLOW_MAILBOX_OK);
         check_equal(scxml_session_report_invoke_done(

@@ -403,7 +403,7 @@ static int loopback_slow(
     const uint64_t deadline = salts_monotonic_ms() + 50u;
     (void)user;
     (void)request;
-    while (salts_monotonic_ms() < deadline) salts_thread_yield();
+    while (salts_monotonic_ms() < deadline) cmeta_thread_yield();
     return chttp_server_reply(
         response, 200u, "application/json", "7", 1u);
 }

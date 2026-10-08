@@ -61,12 +61,12 @@ spec("TurboSCXML Plugin bridge") {
             "<p:check value='count + 1'/>"
             "</onentry><transition target='done'/></state>"
             "<final id='done'/></scxml>";
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 2u};
-        salts_plugin_ref ref = {0};
-        salts_plugin_lifecycle_info lifecycle = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref ref = {0};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         bool quiescent = false;
         scxml_plugin_program program = {0};
         const scxml_program *core;
@@ -98,15 +98,15 @@ spec("TurboSCXML Plugin bridge") {
             .initial_state = &initial};
 
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, ref),
+            CMETA_PLUGIN_OK);
 
         mapped_action.plugin = ref;
         options.registry = &registry;
@@ -119,14 +119,14 @@ spec("TurboSCXML Plugin bridge") {
                 &program, source, sizeof(source) - 1u,
                 NULL, &options, &diagnostic, &plugin_status),
             SCXML_PLUGIN_OK);
-        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        check_equal(plugin_status, CMETA_PLUGIN_OK);
         core = scxml_plugin_program_core(&program);
         check_not_null(core);
 
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)1u);
 
         check_true(cflow_executor_serial_init(&executor));
@@ -150,34 +150,34 @@ spec("TurboSCXML Plugin bridge") {
         cflow_executor_destroy(&executor);
 
         check_equal(
-            salts_plugin_registry_request_stop(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_false(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_BUSY);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_BUSY);
 
         check_equal(
             scxml_plugin_program_destroy(&program, &plugin_status),
             SCXML_PLUGIN_OK);
-        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        check_equal(plugin_status, CMETA_PLUGIN_OK);
         check_null(scxml_plugin_program_core(&program));
 
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
     it("releases its lease when export contract admission fails") {
@@ -186,12 +186,12 @@ spec("TurboSCXML Plugin bridge") {
             "xmlns:p='urn:test:plugin' version='1.0' datamodel='cmeta'>"
             "<state id='active'><onentry><p:check value='count'/></onentry>"
             "</state></scxml>";
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 1u};
-        salts_plugin_ref ref = {0};
-        salts_plugin_lifecycle_info lifecycle = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref ref = {0};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         bool quiescent = false;
         scxml_plugin_program program = {0};
         scxml_cmeta_compile_options_v4 cmeta =
@@ -211,15 +211,15 @@ spec("TurboSCXML Plugin bridge") {
         scxml_diagnostic diagnostic = {0};
 
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, ref),
+            CMETA_PLUGIN_OK);
         action.plugin = ref;
         options.registry = &registry;
         options.cmeta = &cmeta;
@@ -232,28 +232,28 @@ spec("TurboSCXML Plugin bridge") {
                 NULL, &options, &diagnostic, &plugin_status),
             SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
         check_equal(
-            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+            plugin_status, CMETA_PLUGIN_INCOMPATIBLE_CONTRACT);
         check_null(scxml_plugin_program_core(&program));
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)0u);
 
         check_equal(
-            salts_plugin_registry_request_stop(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
     it("fails closed when a Plugin ref became stale before compilation") {
@@ -262,11 +262,11 @@ spec("TurboSCXML Plugin bridge") {
             "xmlns:p='urn:test:plugin' version='1.0' datamodel='cmeta'>"
             "<state id='active'><onentry><p:check value='count'/></onentry>"
             "</state></scxml>";
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 1u};
-        salts_plugin_ref stale_ref = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref stale_ref = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         bool quiescent = false;
         scxml_plugin_program program = {0};
         scxml_cmeta_compile_options_v4 cmeta =
@@ -286,26 +286,26 @@ spec("TurboSCXML Plugin bridge") {
 
         check_not_null(plugin_fixture_path());
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &stale_ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, stale_ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, stale_ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_request_stop(&registry, stale_ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, stale_ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, stale_ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, stale_ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, stale_ref),
+            CMETA_PLUGIN_OK);
 
         action.plugin = stale_ref;
         options.registry = &registry;
@@ -317,20 +317,20 @@ spec("TurboSCXML Plugin bridge") {
                 &program, source, sizeof(source) - 1u,
                 NULL, &options, NULL, &plugin_status),
             SCXML_PLUGIN_PLUGIN_ERROR);
-        check_equal(plugin_status, SALTS_PLUGIN_STALE);
+        check_equal(plugin_status, CMETA_PLUGIN_STALE);
         check_null(scxml_plugin_program_core(&program));
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
     it("bridges a Plugin Event I/O Interface export with a lease-safe adapter") {
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 1u};
-        salts_plugin_ref ref = {0};
-        salts_plugin_lifecycle_info lifecycle = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref ref = {0};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         scxml_plugin_event_io_provider provider = {0};
         scxml_plugin_event_io_provider mismatch_provider = {0};
         scxml_plugin_provider_v1 binding =
@@ -342,15 +342,15 @@ spec("TurboSCXML Plugin bridge") {
         bool quiescent = false;
 
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, ref),
+            CMETA_PLUGIN_OK);
 
         binding.plugin = ref;
         binding.export_id = "test.scxml.provider.event-io";
@@ -362,7 +362,7 @@ spec("TurboSCXML Plugin bridge") {
             scxml_plugin_event_io_provider_open(
                 &provider, &registry, &binding, &plugin_status),
             SCXML_PLUGIN_OK);
-        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        check_equal(plugin_status, CMETA_PLUGIN_OK);
         adapter = scxml_plugin_event_io_provider_adapter(&provider);
         check_not_null(adapter);
         check_true(
@@ -375,15 +375,15 @@ spec("TurboSCXML Plugin bridge") {
         check_not_null(error);
 
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)1u);
 
         /*
          * Descriptor mismatch must be tested while the plugin is STARTED.
          * Once request_stop() transitions it to STOPPING, Plugin correctly
-         * rejects new lease admission with SALTS_PLUGIN_INVALID_STATE before
+         * rejects new lease admission with CMETA_PLUGIN_INVALID_STATE before
          * export/interface admission is reached.
          */
         binding.export_id = "test.scxml.provider.invoke";
@@ -394,60 +394,60 @@ spec("TurboSCXML Plugin bridge") {
                 &mismatch_provider, &registry, &binding, &plugin_status),
             SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
         check_equal(
-            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+            plugin_status, CMETA_PLUGIN_INCOMPATIBLE_CONTRACT);
         check_null(
             scxml_plugin_event_io_provider_adapter(&mismatch_provider));
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)1u);
 
         check_equal(
-            salts_plugin_registry_request_stop(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_false(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_BUSY);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_BUSY);
 
         check_equal(
             scxml_plugin_event_io_provider_destroy(
                 &provider, &plugin_status),
             SCXML_PLUGIN_OK);
-        check_equal(plugin_status, SALTS_PLUGIN_OK);
+        check_equal(plugin_status, CMETA_PLUGIN_OK);
         check_null(scxml_plugin_event_io_provider_adapter(&provider));
 
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)0u);
 
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
     it("bridges a Plugin Invoke Interface export and rejects capability mismatch") {
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 1u};
-        salts_plugin_ref ref = {0};
-        salts_plugin_lifecycle_info lifecycle = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref ref = {0};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         scxml_plugin_invoke_provider provider = {0};
         scxml_plugin_provider_v1 binding =
             SCXML_PLUGIN_PROVIDER_V1_INIT;
@@ -458,15 +458,15 @@ spec("TurboSCXML Plugin bridge") {
         bool quiescent = false;
 
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, ref),
+            CMETA_PLUGIN_OK);
 
         binding.plugin = ref;
         binding.export_id = "test.scxml.provider.invoke";
@@ -499,27 +499,27 @@ spec("TurboSCXML Plugin bridge") {
                 &provider, &registry, &binding, &plugin_status),
             SCXML_PLUGIN_INCOMPATIBLE_EXPORT);
         check_equal(
-            plugin_status, SALTS_PLUGIN_INCOMPATIBLE_CONTRACT);
+            plugin_status, CMETA_PLUGIN_INCOMPATIBLE_CONTRACT);
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)0u);
 
         check_equal(
-            salts_plugin_registry_request_stop(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
 
@@ -533,12 +533,12 @@ spec("TurboSCXML Plugin bridge") {
             "</onentry>"
             "<invoke id='job' type='urn:test' src='worker://one'/>"
             "</state></scxml>";
-        salts_plugin_registry registry = {0};
-        const salts_plugin_registry_config registry_config = {
+        cmeta_plugin_registry registry = {0};
+        const cmeta_plugin_registry_config registry_config = {
             .capacity = 1u};
-        salts_plugin_ref ref = {0};
-        salts_plugin_lifecycle_info lifecycle = {0};
-        salts_plugin_status plugin_status = SALTS_PLUGIN_OK;
+        cmeta_plugin_ref ref = {0};
+        cmeta_plugin_lifecycle_info lifecycle = {0};
+        cmeta_plugin_status plugin_status = CMETA_PLUGIN_OK;
         scxml_plugin_event_io_provider event_provider = {0};
         scxml_plugin_invoke_provider invoke_provider = {0};
         scxml_plugin_provider_v1 event_binding =
@@ -554,15 +554,15 @@ spec("TurboSCXML Plugin bridge") {
         bool quiescent = false;
 
         check_equal(
-            salts_plugin_registry_init(&registry, &registry_config),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_init(&registry, &registry_config),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_load(
+            cmeta_plugin_registry_load(
                 &registry, plugin_fixture_path(), &ref),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_start(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_start(&registry, ref),
+            CMETA_PLUGIN_OK);
 
         event_binding.plugin = ref;
         event_binding.export_id = "test.scxml.provider.event-io";
@@ -586,9 +586,9 @@ spec("TurboSCXML Plugin bridge") {
             SCXML_PLUGIN_OK);
 
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)2u);
 
         check_equal(
@@ -628,21 +628,21 @@ spec("TurboSCXML Plugin bridge") {
         check_true(cflow_executor_wait_idle(&executor));
 
         check_equal(
-            salts_plugin_registry_request_stop(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_request_stop(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)2u);
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_false(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_BUSY);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_BUSY);
 
         check_equal(
             scxml_session_destroy(&session),
@@ -652,9 +652,9 @@ spec("TurboSCXML Plugin bridge") {
         scxml_program_destroy(&program);
 
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)2u);
 
         check_equal(
@@ -662,9 +662,9 @@ spec("TurboSCXML Plugin bridge") {
                 &invoke_provider, &plugin_status),
             SCXML_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)1u);
 
         check_equal(
@@ -672,22 +672,22 @@ spec("TurboSCXML Plugin bridge") {
                 &event_provider, &plugin_status),
             SCXML_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_get_lifecycle(
+            cmeta_plugin_registry_get_lifecycle(
                 &registry, ref, &lifecycle),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_equal(lifecycle.active_leases, (size_t)0u);
 
         check_equal(
-            salts_plugin_registry_poll_quiescent(
+            cmeta_plugin_registry_poll_quiescent(
                 &registry, ref, &quiescent),
-            SALTS_PLUGIN_OK);
+            CMETA_PLUGIN_OK);
         check_true(quiescent);
         check_equal(
-            salts_plugin_registry_unload(&registry, ref),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_unload(&registry, ref),
+            CMETA_PLUGIN_OK);
         check_equal(
-            salts_plugin_registry_destroy(&registry),
-            SALTS_PLUGIN_OK);
+            cmeta_plugin_registry_destroy(&registry),
+            CMETA_PLUGIN_OK);
     }
 
 }
