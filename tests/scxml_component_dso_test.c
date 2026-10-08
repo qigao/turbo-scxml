@@ -205,7 +205,7 @@ spec("Component DSO-backed SCXML sessions") {
         check_equal(salts_component_plugin_runtime_close(&test.runtime, &previous),
                     SALTS_COMPONENT_PLUGIN_OK);
         check_equal(scxml_component_scope_acquire(&rejected, &test.runtime),
-                    SCXML_COMPONENT_UNAVAILABLE);
+                    SCXML_COMPONENT_ERROR);
         check_false(rejected.live);
         check_true(fire(&test, 0u, "finish"));
         check_true(scxml_session_get_stats(&test.sessions[0], &stats));

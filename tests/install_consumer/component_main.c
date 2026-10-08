@@ -5,7 +5,7 @@ int main(void) {
     scxml_component_scope scope = {0};
     if (salts_component_plugin_runtime_init(&runtime) != SALTS_COMPONENT_PLUGIN_OK)
         return 1;
-    if (scxml_component_scope_acquire(&scope, &runtime) != SCXML_COMPONENT_UNAVAILABLE ||
+    if (scxml_component_scope_acquire(&scope, &runtime) != SCXML_COMPONENT_ERROR ||
         scope.live || scxml_component_scope_generation_id(&scope) != 0u) {
         salts_component_plugin_runtime_destroy(&runtime);
         return 2;
