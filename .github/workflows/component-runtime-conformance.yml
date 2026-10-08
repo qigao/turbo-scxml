@@ -1,0 +1,118 @@
+name: Component runtime conformance
+
+on:
+  push:
+    branches:
+      - feature/component-runtime-conformance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: turbo-scxml-component-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  component-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout TurboSCXML integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/component-runtime-conformance
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Configure shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore Salts host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+
+      - name: Restore published SaltsUtils SDK
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-component-sdks"
+          project="$RUNNER_TEMP/turboscxml-component-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json             --name github --username qigao --password "$GITHUB_TOKEN"             --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+          </Project>
+          EOF
+          dotnet add "$project" package SaltsUtils.Native
+          dotnet restore "$project" --configfile "$config"             --packages "$packages" --no-cache
+
+          roots=()
+          while IFS= read -r root; do roots+=("$root"); done < <(
+            find "$packages/saltsutils.native" -mindepth 3 -maxdepth 3               -type d -path '*/sdk/linux-x64' -print
+          )
+          test "${#roots[@]}" -eq 1
+          echo "SALTS_UTILS_ROOT=${roots[0]}" >> "$GITHUB_ENV"
+
+      - name: Checkout Salts Component integration branch
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: feature/cmeta-pattern-component-runtime
+          path: .integration/salts
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Build and install Salts Component integration SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          salts_root="$RUNNER_TEMP/salts-component-sdk"
+          cmake --preset release-linux-ninja             -S .integration/salts             -DBUILD_TESTS=OFF             -DBUILD_BENCHMARKS=OFF             -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE"             -DVCPKG_OVERLAY_PORTS="$VCPKG_OVERLAY_PORTS"             -DVCPKG_OVERLAY_TRIPLETS="$VCPKG_OVERLAY_TRIPLETS"
+          cmake --build .integration/salts/build/linux-gcc-release -j2
+          cmake --install .integration/salts/build/linux-gcc-release             --prefix "$salts_root"
+          test -f "$salts_root/include/salts/component_plugin.h"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$salts_root/lib:$SALTS_UTILS_ROOT/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Configure focused TurboSCXML Component profile
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake -S . -B build/component-runtime -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_COMPONENT=ON             -DTURBOSCXML_ENABLE_PLUGIN=OFF             -DTURBOSCXML_ENABLE_QUICKJS=OFF             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET=x64-linux             -DVCPKG_MANIFEST_MODE=OFF
+
+      - name: Build Component provider conformance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build/component-runtime --target             scxml_component_test -j2
+
+      - name: Run Component provider conformance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ctest --test-dir build/component-runtime             -R '^scxml_component_test$'             --no-tests=error --output-on-failure
+
+      - name: Verify exact integration branch
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "feature/component-runtime-conformance"
