@@ -39,6 +39,11 @@ jobs:
   linux:
     name: Linux x64 released SDK
     runs-on: ubuntu-24.04
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turboscxml-native-linux-x64-release-v1
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +51,9 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
+
+      - name: Set up sccache for Ninja builds
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -178,6 +186,11 @@ jobs:
   linux-sanitizers:
     name: Linux x64 ASan + UBSan
     runs-on: ubuntu-24.04
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turboscxml-native-linux-x64-sanitizers-v1
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
       - uses: actions/checkout@v4
 
@@ -185,6 +198,9 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
+
+      - name: Set up sccache for Ninja builds
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -394,6 +410,11 @@ jobs:
   macos:
     name: macOS released SDK
     runs-on: macos-15
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turboscxml-native-macos-release-v1
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
       - uses: actions/checkout@v4
 
@@ -401,6 +422,9 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
+
+      - name: Set up sccache for Ninja builds
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -510,6 +534,10 @@ jobs:
     env:
       NATIVE_SDK_RID: android-arm64-v8a
       VCPKG_TARGET_TRIPLET: arm64-android
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turboscxml-native-android-arm64-release-v1
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
       - uses: actions/checkout@v4
 
@@ -517,6 +545,9 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
+
+      - name: Set up sccache for Ninja builds
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: actions/setup-dotnet@v4
         with:

@@ -18,6 +18,11 @@ jobs:
   component-runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: turboscxml-component-linux-x64-v1
+      CMAKE_C_COMPILER_LAUNCHER: sccache
+      CMAKE_CXX_COMPILER_LAUNCHER: sccache
     steps:
       - name: Checkout TurboSCXML integration branch
         uses: actions/checkout@v4
@@ -30,6 +35,9 @@ jobs:
         uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
         with:
           mode: read
+
+      - name: Set up sccache for Ninja builds
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Restore Salts host re2c
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
@@ -161,6 +169,13 @@ jobs:
           ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
 
+      - name: Record sccache statistics
+        if: always() && env.SCCACHE_PATH != ''
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          "$SCCACHE_PATH" --show-stats | tee build/component-runtime/sccache-stats.txt
+
       - name: Record acceptance identities
         if: always()
         shell: bash
@@ -183,6 +198,7 @@ jobs:
           name: component-acceptance-linux-x64
           path: |
             build/component-runtime/acceptance.txt
+            build/component-runtime/sccache-stats.txt
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
             build/component-runtime/Testing/Temporary/LastTest.log
