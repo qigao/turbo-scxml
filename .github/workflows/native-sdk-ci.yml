@@ -14,7 +14,7 @@ on:
       - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
   push:
-    branches: [main]
+    branches: [main, feature/component-runtime-conformance]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -27,6 +27,8 @@ on:
       - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
 
+  workflow_dispatch:
+
 permissions:
   contents: read
   packages: read
@@ -36,14 +38,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  linux:
-    name: Linux x64 released SDK
-    runs-on: ubuntu-24.04
+  native-sdk:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-release
+            label: Linux x64 released SDK
+            family: linux
+            runner: ubuntu-24.04
+            rid: linux-x64
+            triplet: x64-linux
+            use_sccache: true
+            cache_namespace: turboscxml-native-linux-x64-release-v1
+          - id: linux-sanitizers
+            label: Linux x64 ASan + UBSan
+            family: linux
+            runner: ubuntu-24.04
+            rid: linux-x64
+            triplet: x64-linux
+            use_sccache: true
+            cache_namespace: turboscxml-native-linux-x64-sanitizers-v1
+          - id: windows
+            label: Windows x64 released SDK
+            family: windows
+            runner: windows-2022
+            rid: windows-x64
+            triplet: x64-windows
+            use_sccache: false
+            cache_namespace: turboscxml-native-windows-x64-release-v1
+          - id: macos
+            label: macOS released SDK
+            family: macos
+            runner: macos-15
+            rid: ""
+            triplet: ""
+            use_sccache: true
+            cache_namespace: turboscxml-native-macos-release-v1
+          - id: android
+            label: Android arm64-v8a released SDK
+            family: android
+            runner: ubuntu-24.04
+            rid: android-arm64-v8a
+            triplet: arm64-android
+            use_sccache: true
+            cache_namespace: turboscxml-native-android-arm64-release-v1
     env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-native-linux-x64-release-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      NATIVE_SDK_RID: ${{ matrix.rid }}
+      VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
+      SCCACHE_GHA_ENABLED: ${{ matrix.use_sccache && 'true' || 'false' }}
+      SCCACHE_GHA_VERSION: ${{ matrix.cache_namespace }}
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +102,7 @@ jobs:
           mode: read
 
       - name: Set up sccache for Ninja builds
+        if: matrix.use_sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.18.0
@@ -62,6 +112,7 @@ jobs:
           dotnet-version: "8.0.x"
 
       - name: Prepare build tools
+        if: matrix.family == 'linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -69,6 +120,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
 
       - name: Restore current published native SDK graph
+        if: matrix.family == 'linux'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -114,6 +166,7 @@ jobs:
           echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
+        if: matrix.family == 'linux'
         shell: bash
         run: |
           set -euo pipefail
@@ -121,12 +174,14 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --only-binarycaching
 
       - name: Configure
+        if: matrix.id == 'linux-release'
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DBUILD_TESTING=ON -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
 
       - name: Build and test
+        if: matrix.id == 'linux-release'
         shell: bash
         run: |
           set -euo pipefail
@@ -135,10 +190,12 @@ jobs:
           ctest --test-dir build/ci --no-tests=error --output-on-failure
 
       - name: Qualify supported VoiceXML option profiles
+        if: matrix.id == 'linux-release'
         shell: bash
         run: bash cmake/ci/qualify-voicexml-profiles.sh
 
       - name: Qualify Plugin-disabled core package
+        if: matrix.id == 'linux-release'
         shell: bash
         run: |
           set -euo pipefail
@@ -171,6 +228,7 @@ jobs:
           cmake --build build/consumer-no-plugin --parallel 2
 
       - name: Install and verify installed consumers
+        if: matrix.id == 'linux-release'
         shell: bash
         run: |
           set -euo pipefail
@@ -184,92 +242,8 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-linux -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" -DVCPKG_MANIFEST_MODE=OFF -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
           cmake --build build/consumer-voicexml-quickjs --parallel 2
 
-
-  linux-sanitizers:
-    name: Linux x64 ASan + UBSan
-    runs-on: ubuntu-24.04
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-native-linux-x64-sanitizers-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-      - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.18.0
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Prepare build tools
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
-
-      - name: Restore current published native SDK graph
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          config="$RUNNER_TEMP/NuGet.Config"
-          packages="$RUNNER_TEMP/turboscxml-native-sdks"
-          project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
-          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
-          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
-          sdk_root() {
-            local package="$1"
-            local rid="$2"
-            local roots=()
-            local root
-            while IFS= read -r root; do
-              roots+=("$root")
-            done < <(
-              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d \
-                -path "*/sdk/$rid" -print
-            )
-            if [ "${#roots[@]}" -ne 1 ]; then
-              printf 'expected exactly one restored %s SDK for %s, found %s\n' \
-                "$package" "$rid" "${#roots[@]}" >&2
-              return 1
-            fi
-            printf '%s' "${roots[0]}"
-          }
-          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
-
-      - name: Restore third-party dependencies from shared cache only
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --only-binarycaching
-
       - name: Configure sanitizer build
+        if: matrix.id == 'linux-sanitizers'
         shell: bash
         run: |
           set -euo pipefail
@@ -291,6 +265,7 @@ jobs:
             -DCMAKE_SHARED_LINKER_FLAGS="$sanitizer_flags"
 
       - name: Build and run sanitizer tests
+        if: matrix.id == 'linux-sanitizers'
         shell: bash
         env:
           ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
@@ -300,22 +275,8 @@ jobs:
           cmake --build build/ci-sanitizers --parallel 2
           bash cmake/ci/run-sanitizer-tests.sh
 
-  windows:
-    name: Windows x64 released SDK
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
       - name: Restore current published native SDK graph
+        if: matrix.id == 'windows'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -366,6 +327,7 @@ jobs:
           "CHTTP_ROOT=$chttpRoot" >> $env:GITHUB_ENV
 
       - name: Restore third-party dependencies from shared cache only
+        if: matrix.id == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -374,6 +336,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "vcpkg cache-only restore failed" }
 
       - name: Configure
+        if: matrix.id == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -381,6 +344,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "configure failed" }
 
       - name: Build and test
+        if: matrix.id == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -391,6 +355,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "CTest failed" }
 
       - name: Install and verify installed consumers
+        if: matrix.id == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -411,32 +376,8 @@ jobs:
           cmake --build build/consumer-voicexml-quickjs --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "VoiceXMLQuickJS consumer build failed" }
 
-  macos:
-    name: macOS released SDK
-    runs-on: macos-15
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-native-macos-release-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-      - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.18.0
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
       - name: Prepare toolchain
+        if: matrix.id == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -459,6 +400,7 @@ jobs:
           echo "VCPKG_TARGET_TRIPLET=$triplet" >> "$GITHUB_ENV"
 
       - name: Restore current published native SDK graph
+        if: matrix.id == 'macos'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -502,6 +444,7 @@ jobs:
           echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
+        if: matrix.id == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -509,12 +452,14 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
 
       - name: Configure
+        if: matrix.id == 'macos'
         shell: bash
         run: |
           set -euo pipefail
           cmake -S . -B build/ci-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DBUILD_TESTING=ON             -DTURBOSCXML_ENABLE_VOICEXML_CMETA=ON             -DTURBOSCXML_ENABLE_CHTTP_RESOURCE=ON             -DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=ON             -DTURBOSCXML_ENABLE_QUICKJS=ON -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/stage/turboscxml"
 
       - name: Build and test
+        if: matrix.id == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -523,6 +468,7 @@ jobs:
           ctest --test-dir build/ci-macos --no-tests=error --output-on-failure
 
       - name: Install and verify installed consumers
+        if: matrix.id == 'macos'
         shell: bash
         run: |
           set -euo pipefail
@@ -534,34 +480,8 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
           cmake --build build/consumer-voicexml-quickjs-macos --parallel 2
 
-  android:
-    name: Android arm64-v8a released SDK
-    runs-on: ubuntu-24.04
-    env:
-      NATIVE_SDK_RID: android-arm64-v8a
-      VCPKG_TARGET_TRIPLET: arm64-android
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-native-android-arm64-release-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure shared vcpkg binary cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
-        with:
-          mode: read
-
-      - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.18.0
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-
       - name: Prepare toolchain
+        if: matrix.id == 'android'
         shell: bash
         run: |
           set -euo pipefail
@@ -571,6 +491,7 @@ jobs:
           test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
 
       - name: Restore current published native SDK graph
+        if: matrix.id == 'android'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -614,6 +535,7 @@ jobs:
           echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
+        if: matrix.id == 'android'
         shell: bash
         run: |
           set -euo pipefail
@@ -621,6 +543,7 @@ jobs:
           "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
 
       - name: Configure and build
+        if: matrix.id == 'android'
         shell: bash
         run: |
           set -euo pipefail
@@ -629,6 +552,7 @@ jobs:
           cmake --install build/ci-android
 
       - name: Verify installed C/C++ consumers build
+        if: matrix.id == 'android'
         shell: bash
         run: |
           set -euo pipefail
@@ -636,3 +560,15 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
           cmake --build build/consumer-android --parallel 2
 
+  result:
+    name: Native SDK CI result
+    needs: native-sdk
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected platform to pass
+        env:
+          NATIVE_RESULT: ${{ needs.native-sdk.result }}
+        shell: bash
+        run: test "$NATIVE_RESULT" = success
