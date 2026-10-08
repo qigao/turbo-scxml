@@ -243,6 +243,13 @@ turboscxml_add_test(
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
+if(TURBOSCXML_ENABLE_COMPONENT)
+  turboscxml_add_test(
+    scxml_component_test
+    scxml_component_test.c
+    LIBS TurboSCXML::Component)
+endif()
+
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
