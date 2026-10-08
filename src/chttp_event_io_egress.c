@@ -1,7 +1,8 @@
 #include "chttp_event_io_internal.h"
 
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdatomic.h>
 #include <string.h>
@@ -61,14 +62,14 @@ static void reset_row_locked(scxml_chttp_egress_row *row) {
 
 static void abort_reserved(scxml_chttp_egress_row *row) {
     scxml_chttp_processor_impl *processor = row->processor;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (row->state == SCXML_CHTTP_EGRESS_RESERVED) {
         if (processor->queued_egress != 0u) --processor->queued_egress;
         reset_row_locked(row);
     } else {
         ++processor->invariant_failures;
     }
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
 }
 
 static void egress_commit(void *user) {
@@ -77,11 +78,11 @@ static void egress_commit(void *user) {
     uint64_t now;
     if (row == NULL || row->processor == NULL) return;
     processor = row->processor;
-    now = salts_monotonic_ms();
-    salts_mutex_lock(&processor->lock);
+    now = cmeta_monotonic_ms();
+    cmeta_mutex_lock(&processor->lock);
     if (row->state != SCXML_CHTTP_EGRESS_RESERVED || row->binding == NULL) {
         ++processor->invariant_failures;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return;
     }
     if (processor->state != SCXML_CHTTP_PROCESSOR_RUNNING ||
@@ -89,7 +90,7 @@ static void egress_commit(void *user) {
          row->binding->state != SCXML_CHTTP_BINDING_ACTIVE)) {
         if (processor->queued_egress != 0u) --processor->queued_egress;
         reset_row_locked(row);
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return;
     }
     row->state = SCXML_CHTTP_EGRESS_READY;
@@ -98,8 +99,8 @@ static void egress_commit(void *user) {
         row->binding->next_commit_sequence = 1u;
     row->due_ms = row->delay_ms > UINT64_MAX - now
         ? UINT64_MAX : now + row->delay_ms;
-    salts_cond_signal(&processor->wake);
-    salts_mutex_unlock(&processor->lock);
+    cmeta_cond_signal(&processor->wake);
+    cmeta_mutex_unlock(&processor->lock);
 }
 
 static void egress_discard(void *user) {
@@ -107,14 +108,14 @@ static void egress_discard(void *user) {
     scxml_chttp_processor_impl *processor;
     if (row == NULL || row->processor == NULL) return;
     processor = row->processor;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (row->state == SCXML_CHTTP_EGRESS_RESERVED) {
         if (processor->queued_egress != 0u) --processor->queued_egress;
         reset_row_locked(row);
     } else {
         ++processor->invariant_failures;
     }
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
 }
 
 scxml_adapter_status scxml_chttp_egress_prepare_send(
@@ -148,11 +149,11 @@ scxml_adapter_status scxml_chttp_egress_prepare_send(
         request->id_size > SCXML_EVENT_METADATA_CAPACITY)
         return SCXML_ADAPTER_INVALID_CONTRACT;
     processor = binding->processor;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (processor->state != SCXML_CHTTP_PROCESSOR_RUNNING ||
         (binding->state != SCXML_CHTTP_BINDING_RESERVED &&
          binding->state != SCXML_CHTTP_BINDING_ACTIVE)) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_CLOSED;
     }
     for (index = 0u; index < processor->config.egress_capacity; ++index) {
@@ -162,7 +163,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_send(
         }
     }
     if (row == NULL) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_FULL;
     }
     ++row->generation;
@@ -176,7 +177,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_send(
     row->send_id_size = request->id_size;
     ++binding->outbound_references;
     ++processor->queued_egress;
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
 
     resolve_status = processor->config.resolve(
         processor->config.resolve_user,
@@ -217,7 +218,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_send(
     row->body_size = encoded.body_size;
     row->media_type = encoded.media_type;
     row->media_type_size = encoded.media_type_size;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (row->state != SCXML_CHTTP_EGRESS_RESERVED ||
         (binding->state != SCXML_CHTTP_BINDING_RESERVED &&
          binding->state != SCXML_CHTTP_BINDING_ACTIVE)) {
@@ -225,13 +226,13 @@ scxml_adapter_status scxml_chttp_egress_prepare_send(
             if (processor->queued_egress != 0u) --processor->queued_egress;
             reset_row_locked(row);
         }
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_CLOSED;
     }
     ++processor->egress_accepted;
     *out_ticket = (cflow_statechart_effect_ticket){
         egress_commit, egress_discard, row};
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     return SCXML_ADAPTER_ACCEPTED;
 }
 
@@ -239,12 +240,12 @@ static void cancel_discard(void *user) {
     scxml_chttp_cancel_ticket *ticket =
         (scxml_chttp_cancel_ticket *)user;
     if (ticket == NULL || ticket->processor == NULL) return;
-    salts_mutex_lock(&ticket->processor->lock);
+    cmeta_mutex_lock(&ticket->processor->lock);
     if (ticket->reserved)
         ticket->reserved = false;
     else
         ++ticket->processor->invariant_failures;
-    salts_mutex_unlock(&ticket->processor->lock);
+    cmeta_mutex_unlock(&ticket->processor->lock);
 }
 
 static void cancel_commit(void *user) {
@@ -254,17 +255,17 @@ static void cancel_commit(void *user) {
     scxml_chttp_egress_row *row;
     if (ticket == NULL || ticket->processor == NULL) return;
     processor = ticket->processor;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (!ticket->reserved ||
         ticket->target_index >= processor->config.egress_capacity) {
         ++processor->invariant_failures;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return;
     }
     ticket->reserved = false;
     row = &processor->egress[ticket->target_index];
     if (row->generation != ticket->target_generation) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return;
     }
     if (row->state == SCXML_CHTTP_EGRESS_READY) {
@@ -274,9 +275,9 @@ static void cancel_commit(void *user) {
     } else if (row->state == SCXML_CHTTP_EGRESS_SUBMITTING ||
                row->state == SCXML_CHTTP_EGRESS_SUBMITTED) {
         row->cancel_requested = true;
-        salts_cond_signal(&processor->wake);
+        cmeta_cond_signal(&processor->wake);
     }
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
 }
 
 scxml_adapter_status scxml_chttp_egress_prepare_cancel(
@@ -298,11 +299,11 @@ scxml_adapter_status scxml_chttp_egress_prepare_cancel(
         (request->send_id == NULL && request->send_id_size != 0u))
         return SCXML_ADAPTER_INVALID_CONTRACT;
     processor = binding->processor;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (processor->state != SCXML_CHTTP_PROCESSOR_RUNNING ||
         (binding->state != SCXML_CHTTP_BINDING_RESERVED &&
          binding->state != SCXML_CHTTP_BINDING_ACTIVE)) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_CLOSED;
     }
     for (index = 0u; index < processor->config.egress_capacity; ++index) {
@@ -322,7 +323,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_cancel(
         }
     }
     if (target == NULL) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_ACCEPTED;
     }
     *out_handled = true;
@@ -333,7 +334,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_cancel(
         }
     }
     if (ticket == NULL) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return SCXML_ADAPTER_FULL;
     }
     ticket->target_index = target_index;
@@ -341,7 +342,7 @@ scxml_adapter_status scxml_chttp_egress_prepare_cancel(
     ticket->reserved = true;
     *out_ticket = (cflow_statechart_effect_ticket){
         cancel_commit, cancel_discard, ticket};
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     return SCXML_ADAPTER_ACCEPTED;
 }
 
@@ -363,7 +364,7 @@ void scxml_chttp_egress_close_binding_locked(
             row->cancel_requested = true;
         }
     }
-    salts_cond_signal(&processor->wake);
+    cmeta_cond_signal(&processor->wake);
 }
 
 static bool earlier_row_blocks_locked(
@@ -407,12 +408,12 @@ static void complete_row(
     bool report_send_done;
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t send_id_size;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if ((row->state != SCXML_CHTTP_EGRESS_SUBMITTED &&
          row->state != SCXML_CHTTP_EGRESS_SUBMITTING) ||
         row->binding == NULL) {
         ++processor->invariant_failures;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return;
     }
     row->state = SCXML_CHTTP_EGRESS_COMPLETING;
@@ -433,11 +434,11 @@ static void complete_row(
     if (send_id_size != 0u)
         memcpy(send_id, row->send_id, send_id_size);
     send_id[send_id_size] = '\0';
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     {
         const uint32_t delay_ms = atomic_exchange_explicit(
             &DELAY_NEXT_COMPLETION_RELEASE_MS, 0u, memory_order_acq_rel);
-        if (delay_ms != 0u) salts_sleep_ms(delay_ms);
+        if (delay_ms != 0u) cmeta_sleep_ms(delay_ms);
     }
     if (report_error)
         (void)scxml_session_report_adapter_error(
@@ -445,12 +446,12 @@ static void complete_row(
     if (report_send_done)
         (void)scxml_session_report_send_done(
             session, send_id, send_id_size);
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (row->state == SCXML_CHTTP_EGRESS_COMPLETING)
         reset_row_locked(row);
     else
         ++processor->invariant_failures;
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
 }
 
 static void request_complete(
@@ -476,7 +477,7 @@ bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor) {
     int status;
     size_t index;
     if (processor == NULL) return false;
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     for (index = 0u; index < processor->config.egress_capacity; ++index) {
         if (processor->egress[index].state ==
                 SCXML_CHTTP_EGRESS_SUBMITTED &&
@@ -487,7 +488,7 @@ bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor) {
             break;
         }
     }
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     if (row == NULL) return false;
     status = atomic_exchange_explicit(
                  &FAIL_NEXT_CANCEL_ADMISSION, false, memory_order_acq_rel)
@@ -495,17 +496,17 @@ bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor) {
         : chttp_async_request_cancel(&processor->client, request);
     if (status == SALTS_OK || status == SALTS_EALREADY) return true;
     if (status == SALTS_ENOENT) {
-        salts_mutex_lock(&processor->lock);
+        cmeta_mutex_lock(&processor->lock);
         if (row->state == SCXML_CHTTP_EGRESS_SUBMITTED &&
             row->request.slot == request.slot &&
             row->request.generation == request.generation)
             ++processor->invariant_failures;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         complete_row(row, SCXML_CHTTP_EGRESS_CANCELLED);
         return true;
     }
     {
-        salts_mutex_lock(&processor->lock);
+        cmeta_mutex_lock(&processor->lock);
         if (row->state == SCXML_CHTTP_EGRESS_SUBMITTED &&
             row->request.slot == request.slot &&
             row->request.generation == request.generation) {
@@ -513,7 +514,7 @@ bool scxml_chttp_egress_cancel_one(scxml_chttp_processor_impl *processor) {
             if (status != SALTS_ENOBUFS && status != SALTS_EBUSY)
                 ++processor->invariant_failures;
         }
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         /* Let the client make progress before retrying a rejected close. */
         return false;
     }
@@ -536,10 +537,10 @@ bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor) {
     chttp_request request = {0};
     int status;
     if (processor == NULL) return false;
-    salts_mutex_lock(&processor->lock);
-    row = select_ready_locked(processor, salts_monotonic_ms());
+    cmeta_mutex_lock(&processor->lock);
+    row = select_ready_locked(processor, cmeta_monotonic_ms());
     if (row == NULL) {
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return false;
     }
     row->state = SCXML_CHTTP_EGRESS_SUBMITTING;
@@ -557,14 +558,14 @@ bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor) {
         .body_size = row->body_size,
         .on_complete = request_complete,
         .user = row};
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     status = chttp_async_client_submit(&processor->client, &options, &request);
-    salts_mutex_lock(&processor->lock);
+    cmeta_mutex_lock(&processor->lock);
     if (status == SALTS_OK &&
         row->state == SCXML_CHTTP_EGRESS_SUBMITTING) {
         row->request = request;
         row->state = SCXML_CHTTP_EGRESS_SUBMITTED;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return true;
     }
     if (status == SALTS_ENOBUFS &&
@@ -573,10 +574,10 @@ bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor) {
         ++processor->queued_egress;
         if (processor->in_flight_egress != 0u)
             --processor->in_flight_egress;
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         return false;
     }
-    salts_mutex_unlock(&processor->lock);
+    cmeta_mutex_unlock(&processor->lock);
     complete_row(row, SCXML_CHTTP_EGRESS_FAILED);
     return true;
 }

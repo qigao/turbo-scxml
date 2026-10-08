@@ -948,7 +948,7 @@ scxml_expr_status scxml_assign_apply_external_diagnostic(
                 decode_storage_size, &clear_diagnostic);
         memset(decode_storage, 0, type->size);
         if (out_bind_diagnostic != NULL) {
-            out_bind_diagnostic->source_status = reader_status;
+            out_bind_diagnostic->endpoint_status = reader_status;
             out_bind_diagnostic->error.code =
                 reader_status == CSERDE_LIMIT_EXCEEDED
                     ? DATA_BIND_ERR_LIMIT : DATA_BIND_ERR_PARSE;

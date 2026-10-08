@@ -3,6 +3,7 @@
 
 #include <scxml/scxml.h>
 #include <cmeta/interface.h>
+#include <cmeta/object_interface.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,6 +72,12 @@ CMETA_INTERFACE(
 CMETA_INTERFACE(
     scxml_text_resource_provider,
     SCXML_TEXT_RESOURCE_PROVIDER_METHODS);
+
+/* Canonical ObjectRef projections used by Salts Component generations. */
+CMETA_OBJECT_INTERFACE_ADAPTER(scxml_event_io_provider);
+CMETA_OBJECT_INTERFACE_ADAPTER(scxml_invoke_provider);
+CMETA_OBJECT_INTERFACE_ADAPTER(scxml_data_resource_provider);
+CMETA_OBJECT_INTERFACE_ADAPTER(scxml_text_resource_provider);
 
 /*
  * Static adapter -> canonical CMeta Interface bridge.

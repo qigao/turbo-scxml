@@ -243,6 +243,34 @@ turboscxml_add_test(
   DEFINITIONS
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
+if(TURBOSCXML_ENABLE_COMPONENT)
+  foreach(generation IN ITEMS 1 2)
+    add_library(scxml_component_dso_${generation} MODULE
+      scxml_component_dso_fixture.c)
+    target_link_libraries(scxml_component_dso_${generation} PRIVATE
+      TurboSCXML::SCXML Salts::ComponentPluginABI Salts::PluginABI)
+    target_compile_features(scxml_component_dso_${generation} PRIVATE c_std_11)
+    target_compile_definitions(scxml_component_dso_${generation} PRIVATE
+      SCXML_COMPONENT_DSO_MARKER=${generation}00
+      SCXML_COMPONENT_DSO_ID="test.scxml.component.${generation}")
+    set_target_properties(scxml_component_dso_${generation} PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+      FOLDER "tests/fixtures")
+  endforeach()
+  turboscxml_add_test(scxml_component_dso_test scxml_component_dso_test.c
+    LIBS TurboSCXML::Component
+    DEFINITIONS
+      SCXML_COMPONENT_DSO_ONE="$<TARGET_FILE:scxml_component_dso_1>"
+      SCXML_COMPONENT_DSO_TWO="$<TARGET_FILE:scxml_component_dso_2>")
+  add_dependencies(scxml_component_dso_test
+    scxml_component_dso_1 scxml_component_dso_2)
+  set_tests_properties(scxml_component_dso_test PROPERTIES TIMEOUT 60)
+  turboscxml_add_test(
+    scxml_component_test
+    scxml_component_test.c
+    LIBS TurboSCXML::Component)
+endif()
+
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c

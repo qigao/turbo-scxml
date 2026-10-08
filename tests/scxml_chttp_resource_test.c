@@ -400,10 +400,10 @@ static int loopback_large(
 static int loopback_slow(
     void *user, const chttp_server_request_view *request,
     chttp_server_response *response) {
-    const uint64_t deadline = salts_monotonic_ms() + 50u;
+    const uint64_t deadline = cmeta_monotonic_ms() + 50u;
     (void)user;
     (void)request;
-    while (salts_monotonic_ms() < deadline) salts_thread_yield();
+    while (cmeta_monotonic_ms() < deadline) cmeta_thread_yield();
     return chttp_server_reply(
         response, 200u, "application/json", "7", 1u);
 }

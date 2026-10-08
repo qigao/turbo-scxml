@@ -52,7 +52,7 @@ bool quickjs_sandbox_deadline_expired(
     quickjs_sandbox_runtime *runtime) {
     if (runtime == NULL || runtime->deadline_ms == 0u)
         return false;
-    if (salts_monotonic_ms() < runtime->deadline_ms)
+    if (cmeta_monotonic_ms() < runtime->deadline_ms)
         return false;
     runtime->interrupted = true;
     return true;
@@ -78,7 +78,7 @@ bool quickjs_sandbox_deadline_begin(
 #endif
     if (runtime->deadline_ms != 0u)
         return false;
-    now = salts_monotonic_ms();
+    now = cmeta_monotonic_ms();
     runtime->deadline_ms =
         now > UINT64_MAX - milliseconds
             ? UINT64_MAX : now + milliseconds;

@@ -2,7 +2,7 @@
 #define TURBO_CCXML_INTERNAL_H
 
 #include <ccxml/ccxml.h>
-#include <salts_uuid.h>
+#include <cmeta_uuid.h>
 
 #include "scxml_foreach.h"
 #include "scxml_scope.h"

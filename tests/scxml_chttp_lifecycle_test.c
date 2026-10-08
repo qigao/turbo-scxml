@@ -5,7 +5,8 @@
 #include <cflow/executor.h>
 #include <tinytest.h>
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -452,10 +453,10 @@ spec("TurboSCXML CHTTP processor and binding lifecycle") {
         check_equal(scxml_chttp_processor_init(&processor, &config), SALTS_OK);
         check_equal(scxml_chttp_processor_start(&processor), SALTS_OK);
         scxml_chttp_test_delay_next_worker_exit(250u);
-        started_ms = salts_monotonic_ms();
+        started_ms = cmeta_monotonic_ms();
         check_equal(scxml_chttp_processor_stop(&processor, 1u),
                     SALTS_ETIMEDOUT);
-        check(salts_monotonic_ms() - started_ms < 200u);
+        check(cmeta_monotonic_ms() - started_ms < 200u);
         check_equal(scxml_chttp_processor_stop(&processor, 1000u), SALTS_OK);
         check_equal(scxml_chttp_processor_destroy(&processor), SALTS_OK);
     }

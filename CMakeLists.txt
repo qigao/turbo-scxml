@@ -16,6 +16,8 @@ option(TURBOSCXML_ENABLE_VOICEXML_CMETA
   "Build and install the optional VoiceXML CMeta profile" ON)
 option(TURBOSCXML_ENABLE_PLUGIN
   "Build and install the optional Salts Plugin composition bridge" ON)
+option(TURBOSCXML_ENABLE_COMPONENT
+  "Build the optional Salts Component provider composition bridge" OFF)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 
 if(ENABLE_SANITIZER_ADDRESS)
@@ -45,7 +47,7 @@ endif()
 
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_package(Salts CONFIG REQUIRED
+find_package(Salts 3 CONFIG REQUIRED
   PATHS "${SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
@@ -81,16 +83,15 @@ if(TURBOSCXML_ENABLE_PLUGIN AND NOT TARGET Salts::Plugin)
   message(FATAL_ERROR
     "TURBOSCXML_ENABLE_PLUGIN requires Salts::Plugin")
 endif()
+if(TURBOSCXML_ENABLE_COMPONENT AND NOT TARGET Salts::ComponentPlugin)
+  message(FATAL_ERROR
+    "TURBOSCXML_ENABLE_COMPONENT requires Salts::ComponentPlugin")
+endif()
 
 foreach(required_target IN ITEMS
     Salts::XmlParser
     Salts::QueryVM
-    Salts::DataBind
-    Salts::DataBindCore
-    Salts::DataBindJsonAdapter
-    Salts::DataBindYamlAdapter
-    Salts::DataBindCsvAdapter
-    Salts::DataBindXmlAdapter)
+    Salts::DataBind)
   if(NOT TARGET ${required_target})
     message(FATAL_ERROR
       "SaltsUtils SDK does not provide required target: ${required_target}")
@@ -179,14 +180,9 @@ target_link_libraries(turbo_scxml
     Salts::CMeta
     Salts::CSerde
     Salts::XmlParser
-    Salts::DataBindCore
+    Salts::DataBind
   PRIVATE
     Salts::Core
-    Salts::DataBind
-    Salts::DataBindJsonAdapter
-    Salts::DataBindYamlAdapter
-    Salts::DataBindCsvAdapter
-    Salts::DataBindXmlAdapter
     Salts::QueryVM
     TurboSCXML::_CMetaRuntime)
 target_compile_definitions(turbo_scxml
@@ -258,6 +254,26 @@ if(TURBOSCXML_ENABLE_PLUGIN)
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(turbo_scxml_plugin
     PUBLIC TurboSCXML::SCXML Salts::Plugin)
+endif()
+
+if(TURBOSCXML_ENABLE_COMPONENT)
+  add_library(turbo_scxml_component STATIC
+    src/scxml_component.c)
+  add_library(TurboSCXML::Component ALIAS turbo_scxml_component)
+  set_target_properties(turbo_scxml_component PROPERTIES
+    EXPORT_NAME Component
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_scxml_component PUBLIC c_std_11)
+  target_compile_options(turbo_scxml_component
+    PUBLIC
+      $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
+  target_include_directories(turbo_scxml_component
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_scxml_component
+    PUBLIC TurboSCXML::SCXML Salts::ComponentPlugin)
 endif()
 
 add_library(turbo_ccxml STATIC
@@ -439,12 +455,7 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
   target_link_libraries(turbo_voicexml_cmeta
     PUBLIC TurboSCXML::VoiceXML Salts::CMeta
     PRIVATE
-      Salts::DataBindCore
       Salts::DataBind
-      Salts::DataBindJsonAdapter
-      Salts::DataBindYamlAdapter
-      Salts::DataBindCsvAdapter
-      Salts::DataBindXmlAdapter
       Salts::QueryVM
       TurboSCXML::_CMetaRuntime)
 
@@ -558,7 +569,7 @@ if(BUILD_TESTING)
   get_target_property(
     TURBOSCXML_PUBLIC_LINKS turbo_scxml INTERFACE_LINK_LIBRARIES)
   set(TURBOSCXML_EXPECTED_LINKS
-    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBindCore;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+    "Salts::CFlow;Salts::CMeta;Salts::CSerde;Salts::XmlParser;Salts::DataBind;$<LINK_ONLY:Salts::Core>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
   if(TURBOSCXML_ENABLE_QUICKJS)
     string(APPEND TURBOSCXML_EXPECTED_LINKS
       ";$<LINK_ONLY:TurboSCXML::_QuickJSSandbox>")
@@ -600,6 +611,17 @@ if(BUILD_TESTING)
        "TurboSCXML::SCXML;Salts::Plugin")
       message(FATAL_ERROR
         "TurboSCXML::Plugin dependency contract changed")
+    endif()
+  endif()
+
+  if(TURBOSCXML_ENABLE_COMPONENT)
+    get_target_property(
+      TURBOSCXML_COMPONENT_PUBLIC_LINKS
+      turbo_scxml_component INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_COMPONENT_PUBLIC_LINKS STREQUAL
+       "TurboSCXML::SCXML;Salts::ComponentPlugin")
+      message(FATAL_ERROR
+        "TurboSCXML::Component dependency contract changed")
     endif()
   endif()
 
@@ -671,7 +693,7 @@ if(BUILD_TESTING)
       TURBOVOICEXML_CMETA_PUBLIC_LINKS
       turbo_voicexml_cmeta INTERFACE_LINK_LIBRARIES)
     if(NOT TURBOVOICEXML_CMETA_PUBLIC_LINKS STREQUAL
-       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBindCore>;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::DataBindJsonAdapter>;$<LINK_ONLY:Salts::DataBindYamlAdapter>;$<LINK_ONLY:Salts::DataBindCsvAdapter>;$<LINK_ONLY:Salts::DataBindXmlAdapter>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
+       "TurboSCXML::VoiceXML;Salts::CMeta;$<LINK_ONLY:Salts::DataBind>;$<LINK_ONLY:Salts::QueryVM>;$<LINK_ONLY:TurboSCXML::_CMetaRuntime>")
       message(FATAL_ERROR
         "TurboSCXML::VoiceXMLCMeta dependency contract changed")
     endif()
@@ -768,6 +790,15 @@ if(TURBOSCXML_ENABLE_PLUGIN)
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
+
+if(TURBOSCXML_ENABLE_COMPONENT)
+  install(TARGETS turbo_scxml_component
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(TARGETS turbo_ccxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -854,6 +885,12 @@ if(TURBOSCXML_ENABLE_PLUGIN)
     FILES include/scxml/plugin.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
+
+if(TURBOSCXML_ENABLE_COMPONENT)
+  install(
+    FILES include/scxml/component.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+endif()
 install(
   FILES include/ccxml/ccxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
@@ -895,6 +932,8 @@ endif()
 
 set(TURBOSCXML_PACKAGE_HAS_PLUGIN
   ${TURBOSCXML_ENABLE_PLUGIN})
+set(TURBOSCXML_PACKAGE_HAS_COMPONENT
+  ${TURBOSCXML_ENABLE_COMPONENT})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
 set(TURBOSCXML_PACKAGE_HAS_VOICEXML_CHTTP_RESOURCE

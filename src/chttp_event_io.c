@@ -1,7 +1,8 @@
 #include "chttp_event_io_internal.h"
 
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdio.h>
 #include <stdatomic.h>
@@ -225,7 +226,7 @@ static bool downstream_adapter_valid(
 }
 
 static uint64_t stop_deadline(uint32_t timeout_ms) {
-    const uint64_t now = salts_monotonic_ms();
+    const uint64_t now = cmeta_monotonic_ms();
     return timeout_ms == 0u ? UINT64_MAX :
         now > UINT64_MAX - timeout_ms ? UINT64_MAX : now + timeout_ms;
 }
@@ -239,7 +240,7 @@ static bool remaining_timeout_ms(
         *out_timeout_ms = 0u;
         return true;
     }
-    now = salts_monotonic_ms();
+    now = cmeta_monotonic_ms();
     if (now >= deadline_ms) return false;
     remaining = deadline_ms - now;
     *out_timeout_ms = remaining > UINT32_MAX
@@ -308,7 +309,7 @@ static void processor_worker(void *user) {
     for (;;) {
         size_t completions = 0u;
         int poll_status;
-        salts_mutex_lock(&processor->lock);
+        cmeta_mutex_lock(&processor->lock);
         if (processor->stop_requested) {
             const uint64_t generation = processor->stop_generation;
             const uint64_t deadline_ms = processor->stop_deadline_ms;
@@ -316,11 +317,11 @@ static void processor_worker(void *user) {
             bool client_destroyed = processor->client_destroyed;
             uint32_t remaining_ms;
             int stop_status;
-            salts_mutex_unlock(&processor->lock);
+            cmeta_mutex_unlock(&processor->lock);
             {
                 const uint32_t delay_ms = atomic_exchange_explicit(
                     &DELAY_NEXT_WORKER_EXIT_MS, 0u, memory_order_acq_rel);
-                if (delay_ms != 0u) salts_sleep_ms(delay_ms);
+                if (delay_ms != 0u) cmeta_sleep_ms(delay_ms);
             }
             if (!client_stopped) {
                 stop_status = remaining_timeout_ms(
@@ -336,43 +337,43 @@ static void processor_worker(void *user) {
                 stop_status = chttp_async_client_destroy(&processor->client);
                 if (stop_status == SALTS_OK) client_destroyed = true;
             }
-            salts_mutex_lock(&processor->lock);
+            cmeta_mutex_lock(&processor->lock);
             processor->client_stopped = client_stopped;
             processor->client_destroyed = client_destroyed;
             if (stop_status == SALTS_OK) {
                 processor->worker_stop_status = SALTS_OK;
                 processor->stop_attempt_complete = true;
                 processor->worker_exited = true;
-                salts_cond_broadcast(&processor->wake);
-                salts_mutex_unlock(&processor->lock);
+                cmeta_cond_broadcast(&processor->wake);
+                cmeta_mutex_unlock(&processor->lock);
                 return;
             }
             if (processor->stop_generation == generation) {
                 processor->worker_stop_status = stop_status;
                 processor->stop_attempt_complete = true;
-                salts_cond_broadcast(&processor->wake);
+                cmeta_cond_broadcast(&processor->wake);
                 while (processor->stop_generation == generation)
-                    salts_cond_wait(&processor->wake, &processor->lock);
+                    cmeta_cond_wait(&processor->wake, &processor->lock);
             }
-            salts_mutex_unlock(&processor->lock);
+            cmeta_mutex_unlock(&processor->lock);
             continue;
         }
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
         while (scxml_chttp_egress_cancel_one(processor)) {}
         (void)scxml_chttp_egress_submit_one(processor);
         poll_status = chttp_async_client_poll(
             &processor->client, 0u, &completions);
         if (poll_status != SALTS_OK && poll_status != SALTS_ESHUTDOWN) {
-            salts_mutex_lock(&processor->lock);
+            cmeta_mutex_lock(&processor->lock);
             ++processor->invariant_failures;
-            salts_mutex_unlock(&processor->lock);
+            cmeta_mutex_unlock(&processor->lock);
         }
-        salts_mutex_lock(&processor->lock);
+        cmeta_mutex_lock(&processor->lock);
         if (!processor->stop_requested)
-            (void)salts_cond_timedwait(
+            (void)cmeta_cond_timedwait(
                 &processor->wake, &processor->lock,
                 (uint64_t)processor->config.worker_poll_ms * UINT64_C(1000000));
-        salts_mutex_unlock(&processor->lock);
+        cmeta_mutex_unlock(&processor->lock);
     }
 }
 
@@ -453,15 +454,15 @@ int scxml_chttp_processor_init(
                      index * config->max_encoded_body_bytes);
         impl->cancel_tickets[index].processor = impl;
     }
-    salts_mutex_init(&impl->lock);
+    cmeta_mutex_init(&impl->lock);
     if (impl->lock == NULL) {
         free(impl->storage);
         free(impl);
         return SALTS_ENOMEM;
     }
-    salts_cond_init(&impl->wake);
+    cmeta_cond_init(&impl->wake);
     if (impl->wake == NULL) {
-        salts_mutex_destroy(&impl->lock);
+        cmeta_mutex_destroy(&impl->lock);
         free(impl->storage);
         free(impl);
         return SALTS_ENOMEM;
@@ -483,8 +484,8 @@ int scxml_chttp_processor_init(
     return SALTS_OK;
 
 fail:
-    salts_cond_destroy(&impl->wake);
-    salts_mutex_destroy(&impl->lock);
+    cmeta_cond_destroy(&impl->wake);
+    cmeta_mutex_destroy(&impl->lock);
     free(impl->storage);
     free(impl);
     return status;
@@ -495,16 +496,16 @@ int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     int status;
     if (processor == NULL || processor->impl == NULL) return SALTS_EINVAL;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    salts_mutex_lock(&impl->lock);
+    cmeta_mutex_lock(&impl->lock);
     if (impl->state != SCXML_CHTTP_PROCESSOR_INITIALIZED) {
         status = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING
             ? SALTS_EALREADY : SALTS_EBUSY;
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return status;
     }
     status = chttp_server_start(&impl->server);
     if (status != SALTS_OK) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return status;
     }
     impl->server_started = true;
@@ -515,11 +516,11 @@ int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     status = atomic_exchange_explicit(
                  &FAIL_NEXT_WORKER_CREATE, false, memory_order_acq_rel)
         ? SALTS_ENOMEM
-        : salts_thread_create(&impl->worker, processor_worker, impl);
+        : cmeta_thread_create(&impl->worker, processor_worker, impl);
     if (status != SALTS_OK) goto stop_server;
     impl->worker_started = true;
     impl->state = SCXML_CHTTP_PROCESSOR_RUNNING;
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     return SALTS_OK;
 
 stop_server:
@@ -540,7 +541,7 @@ stop_server:
             ? SCXML_CHTTP_PROCESSOR_STOPPED
             : SCXML_CHTTP_PROCESSOR_STOPPING;
     }
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     return status;
 }
 
@@ -553,26 +554,26 @@ int scxml_chttp_processor_stop(
     int status;
     if (processor == NULL || processor->impl == NULL) return SALTS_EINVAL;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    salts_mutex_lock(&impl->lock);
+    cmeta_mutex_lock(&impl->lock);
     if (impl->live_bindings != 0u) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return SALTS_EBUSY;
     }
     if (impl->stop_active) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return SALTS_EBUSY;
     }
     if (impl->state == SCXML_CHTTP_PROCESSOR_STOPPED) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return SALTS_EALREADY;
     }
     if (impl->state == SCXML_CHTTP_PROCESSOR_INITIALIZED) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return SALTS_EBUSY;
     }
     impl->stop_active = true;
     impl->state = SCXML_CHTTP_PROCESSOR_STOPPING;
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     if (impl->server_started && !impl->server_stopped) {
         chttp_server_stats server_stats;
         const bool force_terminal_error = atomic_exchange_explicit(
@@ -597,30 +598,30 @@ int scxml_chttp_processor_stop(
         impl->server_stopped = true;
     }
     if (impl->worker_started) {
-        salts_mutex_lock(&impl->lock);
+        cmeta_mutex_lock(&impl->lock);
         if (!impl->worker_exited) {
             ++impl->stop_generation;
             if (impl->stop_generation == 0u) ++impl->stop_generation;
             impl->stop_deadline_ms = deadline_ms;
             impl->stop_attempt_complete = false;
             impl->stop_requested = true;
-            salts_cond_broadcast(&impl->wake);
+            cmeta_cond_broadcast(&impl->wake);
         }
         while (!impl->stop_attempt_complete && !impl->worker_exited) {
             if (deadline_ms == UINT64_MAX) {
-                salts_cond_wait(&impl->wake, &impl->lock);
+                cmeta_cond_wait(&impl->wake, &impl->lock);
             } else {
                 if (!remaining_timeout_ms(deadline_ms, &remaining_ms)) {
-                    salts_mutex_unlock(&impl->lock);
+                    cmeta_mutex_unlock(&impl->lock);
                     status = SALTS_ETIMEDOUT;
                     goto finish;
                 }
-                status = salts_cond_timedwait(
+                status = cmeta_cond_timedwait(
                     &impl->wake, &impl->lock,
                     (uint64_t)remaining_ms * UINT64_C(1000000));
                 if (status != SALTS_OK && !impl->stop_attempt_complete &&
                     !impl->worker_exited) {
-                    salts_mutex_unlock(&impl->lock);
+                    cmeta_mutex_unlock(&impl->lock);
                     status = SALTS_ETIMEDOUT;
                     goto finish;
                 }
@@ -628,17 +629,17 @@ int scxml_chttp_processor_stop(
         }
         status = impl->worker_exited
             ? SALTS_OK : impl->worker_stop_status;
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         if (status != SALTS_OK) goto finish;
-        status = salts_thread_join(&impl->worker);
+        status = cmeta_thread_join(&impl->worker);
         if (status != SALTS_OK) goto finish;
-        salts_thread_destroy(&impl->worker);
+        cmeta_thread_destroy(&impl->worker);
         impl->worker_started = false;
     }
     status = first_status;
 
 finish:
-    salts_mutex_lock(&impl->lock);
+    cmeta_mutex_lock(&impl->lock);
     if (impl->server_stopped && !impl->worker_started &&
         impl->client_destroyed) {
         impl->state = SCXML_CHTTP_PROCESSOR_STOPPED;
@@ -646,7 +647,7 @@ finish:
             status = impl->shutdown_terminal_status;
     }
     impl->stop_active = false;
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     return status;
 }
 
@@ -657,20 +658,20 @@ int scxml_chttp_processor_destroy(scxml_chttp_processor *processor) {
     if (processor == NULL) return SALTS_EINVAL;
     if (processor->impl == NULL) return SALTS_OK;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    salts_mutex_lock(&impl->lock);
+    cmeta_mutex_lock(&impl->lock);
     if (impl->state != SCXML_CHTTP_PROCESSOR_STOPPED ||
         impl->live_bindings != 0u) {
-        salts_mutex_unlock(&impl->lock);
+        cmeta_mutex_unlock(&impl->lock);
         return SALTS_EBUSY;
     }
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     client_status = impl->client_destroyed
         ? SALTS_OK : chttp_async_client_destroy(&impl->client);
     server_status = chttp_server_destroy(&impl->server);
     if (client_status != SALTS_OK) return client_status;
     if (server_status != SALTS_OK) return server_status;
-    salts_cond_destroy(&impl->wake);
-    salts_mutex_destroy(&impl->lock);
+    cmeta_cond_destroy(&impl->wake);
+    cmeta_mutex_destroy(&impl->lock);
     free(impl->storage);
     free(impl);
     processor->impl = NULL;
@@ -687,10 +688,10 @@ static scxml_adapter_status composite_prepare_send(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     memset(out_ticket, 0, sizeof(*out_ticket));
     *out_error = NULL;
-    salts_mutex_lock(&binding->processor->lock);
+    cmeta_mutex_lock(&binding->processor->lock);
     open = binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE;
-    salts_mutex_unlock(&binding->processor->lock);
+    cmeta_mutex_unlock(&binding->processor->lock);
     if (!open) return SCXML_ADAPTER_CLOSED;
     if (text_equal(
             request->type, request->type_size,
@@ -714,10 +715,10 @@ static scxml_adapter_status composite_prepare_cancel(
         return SCXML_ADAPTER_INVALID_CONTRACT;
     memset(out_ticket, 0, sizeof(*out_ticket));
     *out_error = NULL;
-    salts_mutex_lock(&binding->processor->lock);
+    cmeta_mutex_lock(&binding->processor->lock);
     open = binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE;
-    salts_mutex_unlock(&binding->processor->lock);
+    cmeta_mutex_unlock(&binding->processor->lock);
     if (!open) return SCXML_ADAPTER_CLOSED;
     if ((binding->downstream.capabilities & SCXML_EVENT_IO_CAP_CANCEL) == 0u ||
         binding->downstream.prepare_cancel == NULL)
@@ -733,7 +734,7 @@ static void composite_close(void *user) {
     scxml_chttp_binding_impl *binding = (scxml_chttp_binding_impl *)user;
     bool close_downstream = false;
     if (binding == NULL || binding->processor == NULL) return;
-    salts_mutex_lock(&binding->processor->lock);
+    cmeta_mutex_lock(&binding->processor->lock);
     if (binding->state == SCXML_CHTTP_BINDING_RESERVED ||
         binding->state == SCXML_CHTTP_BINDING_ACTIVE) {
         binding->state = SCXML_CHTTP_BINDING_CLOSING;
@@ -743,7 +744,7 @@ static void composite_close(void *user) {
         binding->downstream_close_called = true;
         close_downstream = true;
     }
-    salts_mutex_unlock(&binding->processor->lock);
+    cmeta_mutex_unlock(&binding->processor->lock);
     if (close_downstream)
         binding->downstream.close(binding->downstream_user);
 }
@@ -753,19 +754,19 @@ static bool composite_is_quiescent(void *user) {
     bool downstream_quiescent;
     bool quiescent;
     if (binding == NULL || binding->processor == NULL) return false;
-    salts_mutex_lock(&binding->processor->lock);
+    cmeta_mutex_lock(&binding->processor->lock);
     if (binding->state == SCXML_CHTTP_BINDING_QUIESCENT) {
-        salts_mutex_unlock(&binding->processor->lock);
+        cmeta_mutex_unlock(&binding->processor->lock);
         return true;
     }
     if (binding->state != SCXML_CHTTP_BINDING_CLOSING) {
-        salts_mutex_unlock(&binding->processor->lock);
+        cmeta_mutex_unlock(&binding->processor->lock);
         return false;
     }
-    salts_mutex_unlock(&binding->processor->lock);
+    cmeta_mutex_unlock(&binding->processor->lock);
     downstream_quiescent =
         binding->downstream.is_quiescent(binding->downstream_user);
-    salts_mutex_lock(&binding->processor->lock);
+    cmeta_mutex_lock(&binding->processor->lock);
     quiescent = binding->state == SCXML_CHTTP_BINDING_CLOSING &&
         downstream_quiescent && binding->active_callbacks == 0u &&
         binding->outbound_references == 0u;
@@ -774,7 +775,7 @@ static bool composite_is_quiescent(void *user) {
         binding->session = NULL;
         binding->program = NULL;
     }
-    salts_mutex_unlock(&binding->processor->lock);
+    cmeta_mutex_unlock(&binding->processor->lock);
     return quiescent;
 }
 
@@ -784,7 +785,7 @@ int scxml_chttp_binding_init(
     scxml_chttp_processor_impl *processor_impl;
     scxml_chttp_binding_impl *impl;
     scxml_chttp_endpoint_row *endpoint = NULL;
-    salts_uuid_t uuid;
+    cmeta_uuid_t uuid;
     uint64_t composite_capabilities;
     size_t index;
     int status;
@@ -796,14 +797,14 @@ int scxml_chttp_binding_init(
         config->struct_size < sizeof(*config) ||
         !downstream_adapter_valid(config->scxml_adapter))
         return SALTS_EINVAL;
-    status = salts_uuid_v4_generate(&uuid);
+    status = cmeta_uuid_v4_generate(&uuid);
     if (status != SALTS_OK) return status;
     impl = (scxml_chttp_binding_impl *)calloc(1u, sizeof(*impl));
     if (impl == NULL) return SALTS_ENOMEM;
     processor_impl = (scxml_chttp_processor_impl *)processor->impl;
-    salts_mutex_lock(&processor_impl->lock);
+    cmeta_mutex_lock(&processor_impl->lock);
     if (processor_impl->state != SCXML_CHTTP_PROCESSOR_RUNNING) {
-        salts_mutex_unlock(&processor_impl->lock);
+        cmeta_mutex_unlock(&processor_impl->lock);
         free(impl);
         return SALTS_EBUSY;
     }
@@ -815,16 +816,16 @@ int scxml_chttp_binding_init(
         }
     }
     if (endpoint == NULL) {
-        salts_mutex_unlock(&processor_impl->lock);
+        cmeta_mutex_unlock(&processor_impl->lock);
         free(impl);
         return SALTS_ENOBUFS;
     }
     ++endpoint->generation;
     if (endpoint->generation == 0u) ++endpoint->generation;
-    status = salts_uuid_format(
+    status = cmeta_uuid_format(
         &uuid, endpoint->endpoint, sizeof(endpoint->endpoint));
     if (status != SALTS_OK) {
-        salts_mutex_unlock(&processor_impl->lock);
+        cmeta_mutex_unlock(&processor_impl->lock);
         free(impl);
         return status;
     }
@@ -859,13 +860,13 @@ int scxml_chttp_binding_init(
         endpoint->endpoint[0] = '\0';
         endpoint->access_uri[0] = '\0';
         endpoint->access_uri_size = 0u;
-        salts_mutex_unlock(&processor_impl->lock);
+        cmeta_mutex_unlock(&processor_impl->lock);
         free(impl);
         return status;
     }
     ++processor_impl->live_bindings;
     binding->impl = impl;
-    salts_mutex_unlock(&processor_impl->lock);
+    cmeta_mutex_unlock(&processor_impl->lock);
     return SALTS_OK;
 }
 
@@ -890,7 +891,7 @@ bool scxml_chttp_binding_ioprocessor(
     if (binding == NULL || binding->impl == NULL || out_descriptor == NULL)
         return false;
     impl = (scxml_chttp_binding_impl *)binding->impl;
-    salts_mutex_lock(&impl->processor->lock);
+    cmeta_mutex_lock(&impl->processor->lock);
     endpoint = &impl->processor->endpoints[impl->endpoint_index];
     available = endpoint->binding == impl &&
         endpoint->generation == impl->endpoint_generation &&
@@ -903,7 +904,7 @@ bool scxml_chttp_binding_ioprocessor(
             sizeof(SCXML_BASIC_HTTP_EVENT_PROCESSOR_URI) - 1u,
             endpoint->access_uri, endpoint->access_uri_size};
     }
-    salts_mutex_unlock(&impl->processor->lock);
+    cmeta_mutex_unlock(&impl->processor->lock);
     return available;
 }
 
@@ -921,7 +922,7 @@ int scxml_chttp_binding_activate(
         !scxml_session_matches_event_io(
             session, program, &impl->composite, impl, &descriptor))
         return SALTS_EINVAL;
-    salts_mutex_lock(&impl->processor->lock);
+    cmeta_mutex_lock(&impl->processor->lock);
     if (impl->state == SCXML_CHTTP_BINDING_ACTIVE)
         status = SALTS_EALREADY;
     else if (impl->state != SCXML_CHTTP_BINDING_RESERVED ||
@@ -931,9 +932,9 @@ int scxml_chttp_binding_activate(
         impl->session = session;
         impl->program = program;
         impl->state = SCXML_CHTTP_BINDING_ACTIVE;
-        salts_cond_signal(&impl->processor->wake);
+        cmeta_cond_signal(&impl->processor->wake);
     }
-    salts_mutex_unlock(&impl->processor->lock);
+    cmeta_mutex_unlock(&impl->processor->lock);
     return status;
 }
 
@@ -944,12 +945,12 @@ int scxml_chttp_binding_destroy(scxml_chttp_binding *binding) {
     if (binding->impl == NULL) return SALTS_OK;
     impl = (scxml_chttp_binding_impl *)binding->impl;
     if (!composite_is_quiescent(impl)) return SALTS_EBUSY;
-    salts_mutex_lock(&impl->processor->lock);
+    cmeta_mutex_lock(&impl->processor->lock);
     endpoint = &impl->processor->endpoints[impl->endpoint_index];
     if (endpoint->binding != impl ||
         endpoint->generation != impl->endpoint_generation) {
         ++impl->processor->invariant_failures;
-        salts_mutex_unlock(&impl->processor->lock);
+        cmeta_mutex_unlock(&impl->processor->lock);
         return SALTS_EIO;
     }
     endpoint->binding = NULL;
@@ -957,7 +958,7 @@ int scxml_chttp_binding_destroy(scxml_chttp_binding *binding) {
     endpoint->access_uri[0] = '\0';
     endpoint->access_uri_size = 0u;
     --impl->processor->live_bindings;
-    salts_mutex_unlock(&impl->processor->lock);
+    cmeta_mutex_unlock(&impl->processor->lock);
     free(impl);
     binding->impl = NULL;
     return SALTS_OK;
@@ -974,7 +975,7 @@ bool scxml_chttp_processor_get_stats(
     if (processor == NULL || processor->impl == NULL || out_stats == NULL)
         return false;
     impl = (scxml_chttp_processor_impl *)processor->impl;
-    salts_mutex_lock(&impl->lock);
+    cmeta_mutex_lock(&impl->lock);
     for (index = 0u; index < impl->config.endpoint_capacity; ++index) {
         const scxml_chttp_binding_impl *binding = impl->endpoints[index].binding;
         if (binding != NULL) {
@@ -998,6 +999,6 @@ bool scxml_chttp_processor_get_stats(
         .outbound_references = outbound_references,
         .running = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING,
         .stopping = impl->state == SCXML_CHTTP_PROCESSOR_STOPPING};
-    salts_mutex_unlock(&impl->lock);
+    cmeta_mutex_unlock(&impl->lock);
     return true;
 }
