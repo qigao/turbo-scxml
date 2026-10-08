@@ -4,7 +4,7 @@
 #include <scxml/scxml.h>
 #include <tlog.h>
 #include <salts/thread.h>
-#include <salts_uuid.h>
+#include <cmeta_uuid.h>
 
 #include "scxml_expr.h"
 #include "scxml_assign.h"
