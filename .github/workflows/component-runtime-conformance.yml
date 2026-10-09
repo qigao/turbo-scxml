@@ -135,7 +135,8 @@ jobs:
             echo "Validating resolved SDK manifest: $manifest"
             grep -E '^(version|commit|profile|rid)=' "$manifest" || true
             grep -Fxq 'profile=release' "$manifest" || { echo "SDK profile must be release" >&2; exit 1; }
-            grep -Eq '^commit=[0-9a-f]{40}
+            grep -Eq '^commit=[[:xdigit:]]{40}' "$manifest" || { echo "Invalid SDK source SHA in $manifest" >&2; exit 1; }
+          done
           grep -Fq "version=$salts_version" "$salts_manifest"
           grep -Fq "version=$utils_version" "$utils_manifest"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
