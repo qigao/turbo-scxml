@@ -426,14 +426,16 @@ int scxml_host_router_abort(scxml_host_router *router,
         if ((refs_equal(row->source, ref) ||
              refs_equal(row->target, ref)) &&
             (row->state == SCXML_HOST_ROW_RESERVED ||
-             row->state == SCXML_HOST_ROW_INFLIGHT)) {
+             row->state == SCXML_HOST_ROW_INFLIGHT ||
+             row->state == SCXML_HOST_ROW_FIRING)) {
             cmeta_mutex_unlock(&impl->lock);
             return SALTS_EBUSY;
         }
     }
     for (i = 0u; i < impl->event_capacity; ++i) {
         scxml_host_row *row = &impl->rows[i];
-        if (row->state == SCXML_HOST_ROW_READY &&
+        if ((row->state == SCXML_HOST_ROW_READY ||
+             row->state == SCXML_HOST_ROW_DELAYED) &&
             (refs_equal(row->source, ref) ||
              refs_equal(row->target, ref))) {
             release_locked(impl, row);
@@ -523,6 +525,13 @@ int scxml_host_router_detach(scxml_host_router *router,
         if (row->state != SCXML_HOST_ROW_FREE &&
             (refs_equal(row->target, target) ||
              refs_equal(row->source, target))) {
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_EBUSY;
+        }
+    }
+    for (i = 0u; i < impl->cancel_capacity; ++i) {
+        const scxml_host_cancel_row *intent = &impl->cancel_rows[i];
+        if (intent->in_use && refs_equal(intent->source, target)) {
             cmeta_mutex_unlock(&impl->lock);
             return SALTS_EBUSY;
         }
@@ -1338,7 +1347,8 @@ int scxml_host_router_cancel_source(
     }
     for (i = 0u; i < impl->event_capacity; ++i) {
         scxml_host_row *row = &impl->rows[i];
-        if (row->state == SCXML_HOST_ROW_READY &&
+        if ((row->state == SCXML_HOST_ROW_READY ||
+             row->state == SCXML_HOST_ROW_DELAYED) &&
             refs_equal(row->source, source)) {
             release_locked(impl, row);
             ++impl->cancelled;
@@ -1367,6 +1377,15 @@ bool scxml_host_router_source_is_quiescent(
                 refs_equal(row->source, source)) {
                 quiescent = false;
                 break;
+            }
+        }
+        if (quiescent) {
+            for (i = 0u; i < impl->cancel_capacity; ++i) {
+                if (impl->cancel_rows[i].in_use &&
+                    refs_equal(impl->cancel_rows[i].source, source)) {
+                    quiescent = false;
+                    break;
+                }
             }
         }
     }
@@ -1423,7 +1442,10 @@ int scxml_host_router_close(scxml_host_router *router) {
     }
     impl->closed = true;
     for (i = 0u; i < impl->event_capacity; ++i) {
-        if (impl->rows[i].state == SCXML_HOST_ROW_READY) {
+        if (impl->rows[i].state == SCXML_HOST_ROW_READY ||
+            impl->rows[i].state == SCXML_HOST_ROW_DELAYED) {
+            if (impl->rows[i].state == SCXML_HOST_ROW_DELAYED)
+                ++impl->timer_cancelled;
             release_locked(impl, &impl->rows[i]);
             ++impl->cancelled;
         }
