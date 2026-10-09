@@ -23,9 +23,11 @@ extern "C" {
  * Failed session_init requires binding close and quiescence, then
  * host_router_abort after explicit unlink of parent/invoke relationships.
  *
- * This first Host adapter advertises SEND only (no general arbitrary
- * payload, content, delayed sends or cancel). Empty type chooses the
- * canonical W3C SCXML Event Processor; unsupported type/targets fail closed.
+ * This Host adapter advertises SEND + bounded CONTENT, accepting only
+ * TEXT_UTF8 and XML_UTF8 byte content. Named/scalar/CMETA content, delayed
+ * sends and cancellation are not advertised or silently accepted.
+ * Empty type chooses the canonical W3C SCXML Event Processor;
+ * unsupported types/targets and over-limit content fail closed.
  * It does not claim complete W3C SCXML Event I/O specification coverage.
  */
 typedef struct scxml_host_event_io_binding { void *impl; }
