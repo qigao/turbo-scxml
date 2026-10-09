@@ -131,10 +131,104 @@ jobs:
           salts_manifest="$salts_root/salts-sdk-manifest.txt"
           utils_manifest="$utils_root/salts-utils-sdk-manifest.txt"
           for manifest in "$salts_manifest" "$utils_manifest"; do
-            test -f "$manifest"
-            grep -Fxq 'profile=release' "$manifest"
-            grep -Fxq 'rid=linux-x64' "$manifest"
-            grep -Eq '^commit=[0-9a-f]{40}$' "$manifest"
+            test -f "$manifest" || { echo "Missing SDK manifest: $manifest" >&2; exit 1; }
+            echo "Validating resolved SDK manifest: $manifest"
+            grep -E '^(version|commit|profile|rid)=' "$manifest" || true
+            grep -Fxq 'profile=release' "$manifest" || { echo "SDK profile must be release" >&2; exit 1; }
+            grep -Eq '^commit=[0-9a-f]{40}
+          grep -Fq "version=$salts_version" "$salts_manifest"
+          grep -Fq "version=$utils_version" "$utils_manifest"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$salts_root/include/salts/component_plugin.h"
+          test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          grep -Fq 'Salts::ComponentPlugin' "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
+
+          # Record the concrete NuGet versions and immutable source SHAs selected
+          # by the requested floating ranges for review and eventual exact pins.
+          {
+            printf 'salts_package=%s\n' "$salts_version"
+            printf 'saltsutils_package=%s\n' "$utils_version"
+            sed -n '/^commit=/p' "$salts_manifest" | sed 's/^/salts_/'
+            sed -n '/^commit=/p' "$utils_manifest" | sed 's/^/saltsutils_/'
+            printf 'sdk_rid=linux-x64\n'
+            printf 'sdk_profile=release\n'
+          } > build/component-runtime/sdk-graph.txt
+
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "DATABIND_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$utils_root/lib:$utils_root/bin:$salts_root/lib:$salts_root/bin:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          cat build/component-runtime/sdk-graph.txt
+
+      - name: Configure the complete conformance graph
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cmake --preset ci-component-release-user
+
+      - name: Build the complete conformance graph
+        run: cmake --build --preset ci-component-release-user -j2
+
+      - name: Run Component and adjacent business tests
+        run: >-
+          ctest --preset ci-component-release-user
+          -R '^(scxml_component_test|scxml_component_dso_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test)$'
+          --no-tests=error --output-on-failure
+          --output-junit "$GITHUB_WORKSPACE/build/component-runtime/component-results.xml"
+
+      - name: Install the qualified consumer SDK
+        run: cmake --build --preset install-ci-component-release-user -j2
+
+      - name: Verify the installed SDK consumer
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        working-directory: tests/install_consumer
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-installed-user
+          cmake --build --preset ci-component-installed-user -j2
+          ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
+
+      - name: Record ccache statistics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee build/component-runtime/ccache-stats.txt
+          else
+            printf 'ccache tool unavailable before build\n' > build/component-runtime/ccache-stats.txt
+          fi
+
+      - name: Record acceptance identities
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)" > build/component-runtime/acceptance.txt
+          if [ -f build/component-runtime/sdk-graph.txt ]; then
+            cat build/component-runtime/sdk-graph.txt >> build/component-runtime/acceptance.txt
+          fi
+
+          printf 'runner_os=%s\nrunner_arch=%s\ncompiler=%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$(gcc -dumpfullversion)" >> build/component-runtime/acceptance.txt
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-acceptance-linux-x64
+          path: |
+            build/component-runtime/acceptance.txt
+            build/component-runtime/sdk-graph.txt
+            build/component-runtime/ccache-stats.txt
+            build/component-runtime/component-results.xml
+            build/component-runtime/installed-results.xml
+            build/component-runtime/Testing/Temporary/LastTest.log
+            tests/install_consumer/build/component-installed/Testing/Temporary/LastTest.log
+ "$manifest" || { echo "Invalid SDK source SHA in $manifest" >&2; exit 1; }
           done
           grep -Fq "version=$salts_version" "$salts_manifest"
           grep -Fq "version=$utils_version" "$utils_manifest"
