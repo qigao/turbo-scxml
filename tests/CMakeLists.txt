@@ -271,6 +271,14 @@ if(TURBOSCXML_ENABLE_COMPONENT)
     LIBS TurboSCXML::Component)
 endif()
 
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  turboscxml_add_test(
+    scxml_cnet_ingress_test
+    scxml_cnet_ingress_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_ingress_test PROPERTIES TIMEOUT 40)
+endif()
+
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
