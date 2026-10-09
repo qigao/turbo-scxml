@@ -285,7 +285,9 @@ endif()
 if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
   add_library(turbo_scxml_cnet_event_io STATIC
     src/scxml_cnet_ingress.c
-    src/scxml_cnet_egress.c)
+    src/scxml_cnet_egress.c
+    src/scxml_host_router.c
+    src/scxml_cnet_frame_ingress.c)
   add_library(TurboSCXML::CNetEventIO ALIAS turbo_scxml_cnet_event_io)
   set_target_properties(turbo_scxml_cnet_event_io PROPERTIES
     EXPORT_NAME CNetEventIO
@@ -939,6 +941,8 @@ if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
     FILES
       include/scxml/cnet_ingress.h
       include/scxml/cnet_egress.h
+      include/scxml/host_router.h
+      include/scxml/cnet_frame_ingress.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
 install(
