@@ -774,6 +774,7 @@ int scxml_host_router_prepare_target(
     const char *name, size_t name_size,
     const char *send_id, size_t send_id_size,
     const scxml_content_view *content,
+    uint64_t delay_ms,
     cflow_statechart_effect_ticket *out_ticket) {
     scxml_host_router_impl *impl = router_impl(router);
     scxml_host_session_ref resolved = {0};
@@ -787,7 +788,10 @@ int scxml_host_router_prepare_target(
         (target_size != 0u && target == NULL) ||
         send_id_size > SCXML_EVENT_METADATA_CAPACITY ||
         (send_id_size != 0u &&
-         (send_id == NULL || memchr(send_id, '\0', send_id_size) != NULL)))
+         (send_id == NULL || memchr(send_id, '\0', send_id_size) != NULL)) ||
+        (delay_ms != 0u &&
+         (send_id_size == 0u || impl->clock == NULL ||
+          impl->timer_capacity == 0u)))
         return SALTS_EINVAL;
     if (content != NULL) {
         kind = content->kind;
@@ -813,12 +817,37 @@ int scxml_host_router_prepare_target(
         cmeta_mutex_unlock(&impl->lock);
         return status;
     }
+    if (delay_ms != 0u) {
+        size_t i;
+        if (impl->timer_pending >= impl->timer_capacity) {
+            ++impl->rejected_full;
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_ENOBUFS;
+        }
+        /* A sendid may only identify one not-yet-fired delayed send from the
+           same Session. READY rows were already claimed by the clock owner. */
+        for (i = 0u; i < impl->event_capacity; ++i) {
+            const scxml_host_row *pending = &impl->rows[i];
+            if (pending->delay_ms != 0u &&
+                (pending->state == SCXML_HOST_ROW_RESERVED ||
+                 pending->state == SCXML_HOST_ROW_DELAYED ||
+                 pending->state == SCXML_HOST_ROW_FIRING) &&
+                refs_equal(pending->source, source) &&
+                pending->send_id_size == send_id_size &&
+                memcmp(pending->send_id, send_id, send_id_size) == 0) {
+                cmeta_mutex_unlock(&impl->lock);
+                return SALTS_EALREADY;
+            }
+        }
+    }
     row = reserve_locked(impl, resolved, name, name_size, text, text_size);
     if (row == NULL) {
         cmeta_mutex_unlock(&impl->lock);
         return SALTS_ENOBUFS;
     }
     row->source = source;
+    row->delay_ms = delay_ms;
+    if (delay_ms != 0u) ++impl->timer_pending;
     row->content_kind = kind;
     if (send_id_size != 0u) memcpy(row->send_id, send_id, send_id_size);
     row->send_id[send_id_size] = '\0';
