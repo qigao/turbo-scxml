@@ -37,6 +37,19 @@ int scxml_host_event_io_binding_init(
     scxml_host_event_io_binding *binding, scxml_host_router *router,
     scxml_host_session_ref source);
 
+/* Explicitly opt in to the existing SCXML delayed-send/sendid cancellation
+ * contract. Requires a borrowed valid CFlow Clock, positive timer_capacity
+ * and positive cancel_capacity in the owning Host Router. No fallback to
+ * system wall-clock or a second Scheduler.
+ * Use scxml_host_event_io_binding_delayed_adapter() in Session config;
+ * the base adapter continues advertising only SEND|CONTENT.
+ */
+int scxml_host_event_io_binding_init_delayed(
+    scxml_host_event_io_binding *binding, scxml_host_router *router,
+    scxml_host_session_ref source);
+const scxml_event_io_adapter *
+scxml_host_event_io_binding_delayed_adapter(void);
+
 /* A canonical adapter with one versioned, exact shape. */
 const scxml_event_io_adapter *scxml_host_event_io_binding_adapter(void);
 void *scxml_host_event_io_binding_user(
