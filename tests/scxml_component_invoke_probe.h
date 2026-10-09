@@ -7,6 +7,7 @@
 #include <cnet/cnet.h>
 #include <cmeta/object_interface.h>
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -23,9 +24,19 @@ typedef struct scxml_test_cnet_observer_stats {
     bool invoke_closed;
 } scxml_test_cnet_observer_stats;
 
+/* Host-owned, address-stable C11 atomic rendezvous. The DSO borrows this
+ * test-only gate until the selected CNet owner callback returns. */
+typedef struct scxml_test_cnet_callback_gate {
+    atomic_int entered;
+    atomic_int release;
+    atomic_int timed_out;
+} scxml_test_cnet_callback_gate;
+
 #define SCXML_TEST_CNET_PROBE_METHODS(X, I) \
     X(I, R1, bool, get_observer, cnet_observer *, out) \
-    X(I, R1, bool, snapshot, scxml_test_cnet_observer_stats *, out)
+    X(I, R1, bool, snapshot, scxml_test_cnet_observer_stats *, out) \
+    X(I, R1, bool, arm_send_gate, scxml_test_cnet_callback_gate *, gate) \
+    X(I, R1, bool, arm_terminal_gate, scxml_test_cnet_callback_gate *, gate)
 
 CMETA_INTERFACE(scxml_test_cnet_probe, SCXML_TEST_CNET_PROBE_METHODS);
 CMETA_OBJECT_INTERFACE_ADAPTER(scxml_test_cnet_probe);
