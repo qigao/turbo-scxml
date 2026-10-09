@@ -279,9 +279,8 @@ spec("CNet transactional outbound raw-byte profile") {
         check_equal(stats.pending, (size_t)0u);
         check_false(stats.failed);
 
-        /* Closing the Session ends outbound admissions, not the CNet owner. */
-        scxml_session_cancel(&session);
-        check_true(cflow_executor_wait_idle(&executor));
+        /* The domain host drains its real CNet owners before the Session
+           attempts close/quiescence. Requesting exit is not I/O terminal. */
         check_equal(cnet_close(&sender, outgoing), SALTS_OK);
         check_equal(cnet_close(&receiver, incoming), SALTS_OK);
         deadline = cmeta_monotonic_ms() + EGRESS_TEST_TIMEOUT_MS;
@@ -291,6 +290,10 @@ spec("CNet transactional outbound raw-byte profile") {
             if (scxml_cnet_egress_is_quiescent(&egress) && probe.terminal)
                 break;
         }
+        check_true(scxml_cnet_egress_get_stats(&egress, &stats));
+        check_true(stats.terminal);
+        scxml_session_cancel(&session);
+        check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_cnet_egress_is_quiescent(&egress));
         check_equal(scxml_session_destroy(&session),
                     CFLOW_STATECHART_INSTANCE_OK);
