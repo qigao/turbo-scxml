@@ -12,6 +12,7 @@ typedef struct scxml_host_endpoint {
     char location[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t location_size;
     bool live;
+    bool active;
     bool accessible;
 } scxml_host_endpoint;
 
@@ -254,6 +255,122 @@ int scxml_host_router_init(scxml_host_router *router,
     return SALTS_OK;
 }
 
+int scxml_host_router_reserve(scxml_host_router *router,
+                              scxml_host_session_ref *out_ref) {
+    scxml_host_router_impl *impl = router_impl(router);
+    size_t i;
+    if (out_ref != NULL) *out_ref = (scxml_host_session_ref){0};
+    if (impl == NULL || out_ref == NULL) return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    for (i = 0u; i < impl->endpoint_capacity; ++i) {
+        scxml_host_endpoint *p = &impl->endpoints[i];
+        if (!p->live && p->generation != UINT32_MAX) {
+            const uint32_t new_generation = p->generation + 1u;
+            memset(p, 0, sizeof(*p));
+            p->generation = new_generation;
+            p->live = true;
+            p->active = false;
+            ++impl->endpoint_count;
+            *out_ref = (scxml_host_session_ref){(uint32_t)i, new_generation};
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_OK;
+        }
+    }
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_ENOBUFS;
+}
+
+int scxml_host_router_activate(scxml_host_router *router,
+                                scxml_host_session_ref ref,
+                                scxml_session *session) {
+    scxml_host_router_impl *impl = router_impl(router);
+    char location[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t required = 0u, i;
+    scxml_host_endpoint *p;
+    if (impl == NULL || session == NULL || session->impl == NULL)
+        return SALTS_EINVAL;
+    if (scxml_session_copy_location(session, location, sizeof(location),
+                                    &required) != SCXML_LOCATION_OK ||
+        required <= 1u || required > sizeof(location))
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (!matches(impl, ref)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    p = &impl->endpoints[ref.slot];
+    if (p->active || p->session != NULL) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_EALREADY;
+    }
+    for (i = 0u; i < impl->endpoint_capacity; ++i) {
+        const scxml_host_endpoint *other = &impl->endpoints[i];
+        if (other->active &&
+            (other->session == session ||
+             (other->location_size == required - 1u &&
+              memcmp(other->location, location, required - 1u) == 0))) {
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_EALREADY;
+        }
+    }
+    p->session = session;
+    p->active = true;
+    p->location_size = required - 1u;
+    memcpy(p->location, location, required);
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+int scxml_host_router_abort(scxml_host_router *router,
+                             scxml_host_session_ref ref) {
+    scxml_host_router_impl *impl = router_impl(router);
+    size_t i;
+    if (impl == NULL) return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (!matches(impl, ref)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    if (impl->endpoints[ref.slot].active) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
+    }
+    /* Check BEFORE dropping anything so a live move-only ticket is never
+       hidden by a partial rollback. INFLIGHT may not be force-cancelled. */
+    for (i = 0u; i < impl->event_capacity; ++i) {
+        const scxml_host_row *row = &impl->rows[i];
+        if ((refs_equal(row->source, ref) ||
+             refs_equal(row->target, ref)) &&
+            (row->state == SCXML_HOST_ROW_RESERVED ||
+             row->state == SCXML_HOST_ROW_INFLIGHT)) {
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_EBUSY;
+        }
+    }
+    for (i = 0u; i < impl->event_capacity; ++i) {
+        scxml_host_row *row = &impl->rows[i];
+        if (row->state == SCXML_HOST_ROW_READY &&
+            (refs_equal(row->source, ref) ||
+             refs_equal(row->target, ref))) {
+            release_locked(impl, row);
+            ++impl->cancelled;
+        }
+    }
+    cmeta_mutex_unlock(&impl->lock);
+    /* Caller must first unlink parent/invoke bindings; detach enforces it. */
+    return scxml_host_router_detach(router, ref);
+}
+
 int scxml_host_router_attach(scxml_host_router *router,
                              scxml_session *session,
                              scxml_host_session_ref *out_ref) {
@@ -295,6 +412,7 @@ int scxml_host_router_attach(scxml_host_router *router,
             /* Keep generation monotonically increasing, never wrap/reuse a
                retired generation's Session identity. */
             endpoint->live = true;
+            endpoint->active = true;
             endpoint->session = session;
             endpoint->parent = (scxml_host_session_ref){0};
             endpoint->accessible = false;
@@ -353,6 +471,7 @@ int scxml_host_router_detach(scxml_host_router *router,
     }
     endpoint = &impl->endpoints[target.slot];
     endpoint->live = false;
+    endpoint->active = false;
     endpoint->session = NULL;
     endpoint->parent = (scxml_host_session_ref){0};
     endpoint->accessible = false;
@@ -745,11 +864,23 @@ cflow_mailbox_status scxml_host_router_drain(
             cmeta_mutex_unlock(&impl->lock);
             break;
         }
+        /* Reserved endpoints may receive committed initial-entry effects,
+           but no host may dispatch them until their Session is published. */
+        if (!impl->endpoints[row->target.slot].active) {
+            result = CFLOW_MAILBOX_FULL;
+            cmeta_mutex_unlock(&impl->lock);
+            break;
+        }
         if (row->source.generation != 0u) {
             if (!matches(impl, row->source)) {
                 ++impl->stale_refs;
                 ++impl->delivery_errors;
                 result = CFLOW_MAILBOX_INVALID_ARGUMENT;
+                cmeta_mutex_unlock(&impl->lock);
+                break;
+            }
+            if (!impl->endpoints[row->source.slot].active) {
+                result = CFLOW_MAILBOX_FULL;
                 cmeta_mutex_unlock(&impl->lock);
                 break;
             }
