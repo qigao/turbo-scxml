@@ -4,7 +4,7 @@ name: Native SDK CI
 # ACE 2.3 integration branch uses its separate exact-candidate conformance CI.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feature/component-runtime-conformance]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -107,9 +107,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.turboscxml-ccache
-          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-${{ github.sha }}
+          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
           restore-keys: |
-            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
             turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-
 
       - uses: actions/setup-dotnet@v4
@@ -142,18 +142,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -170,6 +160,22 @@ jobs:
                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
           echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
@@ -299,24 +305,8 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
-          @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          '@ | Set-Content -LiteralPath $project
-          Push-Location $env:RUNNER_TEMP
-          try {
-            dotnet add $project package Salts.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
-            dotnet add $project package SaltsUtils.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
-            dotnet add $project package CHttp.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve CHttp.Native" }
-          }
-          finally {
-            Pop-Location
-          }
-          dotnet restore $project --configfile $config --packages $packages --no-cache
+          Copy-Item -LiteralPath "cmake/ci/native-sdk-dependencies.csproj" -Destination $project
+          dotnet restore $project --configfile $config --packages $packages --no-cache -p:IncludeCHttpNative=true
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
           function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
             $packageRoot = Join-Path $packages $packageName
@@ -328,6 +318,23 @@ jobs:
             if ($roots.Count -ne 1) {
               throw "expected exactly one restored $packageName SDK for $rid, found $($roots.Count)"
             }
+            $version = Split-Path (Split-Path (Split-Path $roots[0] -Parent) -Parent) -Leaf
+            if (($packageName -eq "salts.native" -and $version -notmatch '^2\.3\.0-') -or
+                ($packageName -eq "saltsutils.native" -and $version -notmatch '^4\.3\.0-') -or
+                ($packageName -eq "chttp.native" -and $version -ne '2.0.0')) {
+              throw "Unexpected NuGet SDK: $packageName $version"
+            }
+            if ($packageName -eq "salts.native" -or $packageName -eq "saltsutils.native") {
+              $manifestName = if ($packageName -eq "salts.native") { "salts-sdk-manifest.txt" } else { "salts-utils-sdk-manifest.txt" }
+              $manifest = Join-Path $roots[0] $manifestName
+              if (!(Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "SDK manifest missing: $manifest" }
+              $rows = @(Get-Content -LiteralPath $manifest)
+              if (-not ($rows -match ('version=' + [regex]::Escape($version))) -or
+                  -not ($rows -contains 'profile=release')) {
+                throw "SDK manifest mismatch: $packageName $version"
+              }
+            }
+            Write-Host "Restored $packageName version=$version rid=$rid"
             return ($roots[0] -replace '\\', '/')
           }
           $saltsRoot = Get-RestoredSdkRoot "salts.native" "windows-x64"
@@ -424,18 +431,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -450,6 +447,22 @@ jobs:
               printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
           echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
@@ -505,18 +518,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -531,6 +534,22 @@ jobs:
               printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
           echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
