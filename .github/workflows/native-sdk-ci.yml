@@ -85,7 +85,7 @@ jobs:
       NATIVE_SDK_RID: ${{ matrix.rid }}
       VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
       # The MSVC Visual Studio generator remains native; Ninja host/cross builds use ccache.
-      CCACHE_DIR: ${{ runner.temp }}/turboscxml-ccache
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-ccache
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPILERCHECK: content
       CCACHE_MAXSIZE: 1G
@@ -105,7 +105,7 @@ jobs:
         if: matrix.cache == 'ccache'
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/turboscxml-ccache
+          path: ${{ github.workspace }}/.turboscxml-ccache
           key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-${{ github.sha }}
           restore-keys: |
             turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-
