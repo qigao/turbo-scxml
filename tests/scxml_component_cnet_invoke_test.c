@@ -1,5 +1,6 @@
 #include <scxml/component.h>
 #include <scxml/cnet_domain_fence.h>
+#include "scxml_component_invoke_probe.h"
 
 #include <cnet/cnet.h>
 #include <salts/clock.h>
@@ -54,8 +55,11 @@ typedef struct joint_fixture {
     cnet_listener listener;
     cnet_connection outbound;
     cnet_connection inbound;
+    cnet_connection outbound_next;
+    cnet_connection inbound_next;
     net_sender_probe sender_probe;
     net_receiver_probe receiver_probe;
+    net_receiver_probe receiver_probe_next;
 } joint_fixture;
 
 typedef struct native_scope_probe {
@@ -204,6 +208,68 @@ static bool retire_real_generation(void *user) {
     return status == SALTS_COMPONENT_PLUGIN_OK;
 }
 
+/* This test uses CMeta's *typed* ObjectRef projection as the only path to
+ * DSO-resident CNet callback pointers and terminal snapshots. A borrowed
+ * pointer is NEVER called after the authoritative Component Scope is released.
+ */
+typedef struct joint_dso_native_observer {
+    joint_fixture *fixture;
+    scxml_test_cnet_probe adapter;
+    size_t generation_slot;
+    size_t expected_sends;
+    bool saw_native_terminal;
+    bool saw_scope_busy;
+} joint_dso_native_observer;
+
+static bool dso_native_observer_from_scope(
+    const scxml_component_scope *scope, scxml_test_cnet_probe *out) {
+    salts_component_service service = {0};
+    if (out != NULL) *out = scxml_test_cnet_probe_bind(NULL, NULL);
+    if (scope == NULL || !scope->live || out == NULL ||
+        salts_component_plugin_scope_find_service_from(
+            &scope->component_scope, "ScxmlInvokeDsoFixture",
+            scxml_test_cnet_probe_interface(), &service) !=
+                SALTS_COMPONENT_PLUGIN_OK ||
+        service.object == NULL || service.interfaces == NULL)
+        return false;
+    return scxml_test_cnet_probe_borrow_from_object(
+        service.object, service.interfaces, out) == CMETA_OK &&
+        scxml_test_cnet_probe_valid(out);
+}
+
+static bool native_dso_snapshot(
+    scxml_test_cnet_probe *adapter,
+    scxml_test_cnet_probe_snapshot *out) {
+    return adapter != NULL && scxml_test_cnet_probe_valid(adapter) &&
+        out != NULL && scxml_test_cnet_probe_snapshot(adapter, out);
+}
+
+static bool retire_native_dso_generation(void *user) {
+    joint_dso_native_observer *probe = (joint_dso_native_observer *)user;
+    scxml_test_cnet_probe_snapshot state = {0};
+    salts_component_plugin_status status;
+    if (probe == NULL || probe->fixture == NULL ||
+        probe->generation_slot >= SESSIONS)
+        return false;
+    if (probe->fixture->scopes[probe->generation_slot].live) {
+        if (!native_dso_snapshot(&probe->adapter, &state) ||
+            state.native_sends < probe->expected_sends ||
+            !state.native_terminal)
+            return false;
+        /* Immutable evidence copied from the *real* DSO on_state callback,
+           while that callback's module is still Scope-pinned. The adapter
+           function pointer is NOT dereferenced again after Scope release. */
+        probe->saw_native_terminal = true;
+    }
+    if (!probe->saw_native_terminal) return false;
+    status = salts_component_plugin_generation_drain(
+        &probe->fixture->runtime,
+        &probe->fixture->generations[probe->generation_slot].generation);
+    if (status == SALTS_COMPONENT_PLUGIN_BUSY)
+        probe->saw_scope_busy = true;
+    return status == SALTS_COMPONENT_PLUGIN_OK;
+}
+
 static bool signal(joint_fixture *fixture, size_t slot, const char *name) {
     const scxml_event_metadata metadata = {
         .abi_version = SCXML_EVENT_METADATA_ABI,
@@ -224,8 +290,12 @@ static bool fixture_cleanup(joint_fixture *f) {
        before touching Session/Plugin callback code. */
     if (f->outbound.generation != 0u)
         (void)cnet_close(&f->sender, f->outbound);
+    if (f->outbound_next.generation != 0u)
+        (void)cnet_close(&f->sender, f->outbound_next);
     if (f->inbound.generation != 0u)
         (void)cnet_close(&f->receiver, f->inbound);
+    if (f->inbound_next.generation != 0u)
+        (void)cnet_close(&f->receiver, f->inbound_next);
     if (f->sender.impl != NULL)
         ok = cnet_client_stop(&f->sender, 1000u) == SALTS_OK && ok;
     if (f->receiver.impl != NULL)
