@@ -240,14 +240,14 @@ static bool dso_native_observer_from_scope(
 
 static bool native_dso_snapshot(
     scxml_test_cnet_probe *adapter,
-    scxml_test_cnet_probe_snapshot *out) {
+    scxml_test_cnet_observer_stats *out) {
     return adapter != NULL && scxml_test_cnet_probe_valid(adapter) &&
         out != NULL && scxml_test_cnet_probe_snapshot(adapter, out);
 }
 
 static bool retire_native_dso_generation(void *user) {
     joint_dso_native_observer *probe = (joint_dso_native_observer *)user;
-    scxml_test_cnet_probe_snapshot state = {0};
+    scxml_test_cnet_observer_stats state = {0};
     salts_component_plugin_status status;
     if (probe == NULL || probe->fixture == NULL ||
         probe->generation_slot >= SESSIONS)
@@ -723,7 +723,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
               .user = &f.receiver_probe_next }
         };
         scxml_test_cnet_probe probes[SESSIONS] = {{0}, {0}};
-        scxml_test_cnet_probe_snapshot native[SESSIONS] = {{0}, {0}};
+        scxml_test_cnet_observer_stats native[SESSIONS] = {{0}, {0}};
         joint_dso_native_observer draining[SESSIONS] = {
             { .fixture = &f, .generation_slot = 0u, .expected_sends = 1u },
             { .fixture = &f, .generation_slot = 1u, .expected_sends = 2u }
