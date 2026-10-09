@@ -3,6 +3,7 @@
 #include <scxml/host_router.h>
 #include <scxml/host_event_io.h>
 #include <scxml/cnet_frame_ingress.h>
+#include <scxml/cnet_domain_fence.h>
 #include <salts/error_codes.h>
 
 int main() {
@@ -23,6 +24,8 @@ int main() {
         transport->prepare_cancel != NULL ||
         transport->capabilities != (SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_CONTENT) ||
         scxml_cnet_egress_destroy(&outbound) != SALTS_OK) return 4;
+    scxml_cnet_domain_fence fence = {};
+    if (scxml_cnet_domain_fence_destroy(&fence) != SALTS_OK) return 7;
     scxml_cnet_ingress ingress = {};
     scxml_cnet_ingress_config config = {};
     if (scxml_cnet_ingress_init(&ingress, &config) != SALTS_EINVAL)
