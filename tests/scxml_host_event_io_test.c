@@ -51,7 +51,8 @@ spec("Staged Host Session and canonical SCXML SEND composition") {
         size_t delivered = 0u;
 
         check_not_null(adapter);
-        check_equal(adapter->capabilities, SCXML_EVENT_IO_CAP_SEND);
+        check_equal(adapter->capabilities,
+                    SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_CONTENT);
         check_null(adapter->prepare_cancel);
         check_equal(scxml_compile(&programs[0], parent_source,
                     sizeof(parent_source) - 1u, NULL, &diagnostics[0]),
@@ -177,13 +178,13 @@ spec("Staged Host Session and canonical SCXML SEND composition") {
             &binding, &router, pending), SALTS_OK);
         check_equal(scxml_host_router_prepare_target(
             &router, pending, NULL, 0u,
-            "go", 2u, NULL, 0u, NULL, 0u, &ticket), SALTS_OK);
+            "go", 2u, NULL, 0u, NULL, &ticket), SALTS_OK);
         check_equal(scxml_host_router_abort(&router, pending), SALTS_EBUSY);
         ticket.discard(ticket.user);
         check_true(scxml_host_router_source_is_quiescent(&router, pending));
         check_equal(scxml_host_router_prepare_target(
             &router, pending, NULL, 0u,
-            "go", 2u, NULL, 0u, NULL, 0u, &ticket), SALTS_OK);
+            "go", 2u, NULL, 0u, NULL, &ticket), SALTS_OK);
         ticket.commit(ticket.user);
         check_equal(scxml_host_event_io_binding_destroy(&binding), SALTS_EBUSY);
         adapter->close(scxml_host_event_io_binding_user(&binding));
