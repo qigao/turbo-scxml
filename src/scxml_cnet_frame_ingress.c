@@ -277,8 +277,12 @@ int scxml_cnet_frame_ingress_process(
         impl->chunk_size = 0u;
         impl->chunk_pos = 0u;
     }
-    if (impl->terminal &&
-        (impl->header_size != 0u || impl->frame_expected != 0u)) {
+    /* A terminal is not a truncated frame while owned receive bytes still
+       await decoding, or while a complete frame waits for Host credit. */
+    if (impl->terminal && impl->chunk_size == 0u &&
+        ((impl->frame_expected == 0u && impl->header_size != 0u) ||
+         (impl->frame_expected != 0u &&
+          impl->frame_size != impl->frame_expected))) {
         mark_error(impl, SALTS_EPROTO);
         *out_accepted = accepted;
         return impl->first_error;
