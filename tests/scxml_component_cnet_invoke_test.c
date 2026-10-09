@@ -1100,6 +1100,14 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(fence_stats.current_generation, gen[1]);
         check_equal(fence_stats.draining_generation, UINT64_C(0));
 
+        /* Build an actual ComponentPlugin candidate from the live DSO
+           before attempting to activate its exclusive CNet capability.
+           The candidate is never published after failed domain admission;
+           it must be discarded without replacing or draining gN+1. */
+        check_equal(generation_build(
+            &f, 2u, 1u, gen[1] + UINT64_C(1)), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
+
         /* A failed EXCLUSIVE-I/O candidate activation must never displace
            the still-live gN+1 Invoke/DSO and its real CNet connection.
            Roll back the staged domain admission, not the current provider. */
@@ -1116,6 +1124,8 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.fence, gen[1] + UINT64_C(1), send_one, &write_b), SALTS_EPERM);
         check_equal(scxml_cnet_domain_fence_retire(
             &f.fence, gen[1] + UINT64_C(1), NULL, NULL), SALTS_OK);
+        check_equal(salts_component_plugin_generation_discard(
+            &f.generations[2].generation), SALTS_COMPONENT_PLUGIN_OK);
         check_equal(scxml_cnet_domain_fence_attach(
             &f.fence, gen[1] + UINT64_C(1)), SALTS_EALREADY);
         check_equal(scxml_cnet_domain_fence_get_stats(
