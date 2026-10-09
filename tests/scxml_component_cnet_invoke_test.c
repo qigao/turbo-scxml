@@ -801,6 +801,8 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         char uri[64];
         const unsigned char a = 'A', b = 'B', c = 'C';
         fenced_cnet_write write_a, write_b, write_c;
+        salts_component_plugin_generation *rejected_previous = NULL;
+        scxml_component_scope unchanged_scope = {0};
         scxml_test_cnet_callback_gate send_gate, terminal_gate;
         scxml_test_cnet_callback_gate overlap_send_gate, cancel_gate;
         invoke_native_overlap overlap = {0};
@@ -1005,6 +1007,35 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         write_b = (fenced_cnet_write){&f, &b, 1u, f.outbound_next};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen[1], send_one, &write_b), SALTS_OK);
+
+        /* With both real ComponentPlugin generations attached, the old gN
+           still owns a live Invoke and DSO callback, and the new gN+1 has
+           accepted an actual CNet send. A *built* third-generation candidate
+           must be rejected by the authoritative runtime publication gate,
+           not merely by a test-local epoch check. Failure must leave gN+1
+           current and must not settle or migrate either native operation. */
+        check_equal(generation_build(
+            &f, 2u, 1u, gen[1] + UINT64_C(1)), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[2].generation, &rejected_previous),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_null(rejected_previous);
+        check_equal(f.generations[2].generation.state,
+                    SALTS_COMPONENT_PLUGIN_GENERATION_BUILT);
+        check_equal(scxml_component_scope_acquire(
+            &unchanged_scope, &f.runtime), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_generation_id(&unchanged_scope),
+                    gen[1]);
+        check_equal(scxml_component_scope_release(
+            &unchanged_scope), SCXML_COMPONENT_OK);
+        /* The real rejected candidate must discard its provider/module
+           lease explicitly; it never obtains a CNet listener or replaces
+           the live gN+1 Invoke. No automatic publish retry or fallback. */
+        check_equal(salts_component_plugin_generation_discard(
+            &f.generations[2].generation), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[1]), CMETA_PLUGIN_BUSY);
+        check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
 
         /* Poll both CNet connections through the same owner. Each callback
            executes inside its own DSO, not in this executable. */
