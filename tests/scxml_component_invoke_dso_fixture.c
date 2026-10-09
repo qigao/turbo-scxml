@@ -34,6 +34,7 @@ typedef struct invoke_fixture_state {
     size_t stale_callbacks;
     scxml_test_cnet_callback_gate *send_gate;
     scxml_test_cnet_callback_gate *terminal_gate;
+    scxml_test_cnet_callback_gate *cancel_gate;
 } invoke_fixture_state;
 
 static invoke_fixture_state state = {
@@ -93,6 +94,8 @@ static scxml_adapter_status prepare_start(
     return SCXML_ADAPTER_ACCEPTED;
 }
 
+static void callback_gate_wait(scxml_test_cnet_callback_gate **selected);
+
 static scxml_adapter_status prepare_cancel(
     void *user, const scxml_invoke_cancel_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
@@ -107,6 +110,9 @@ static scxml_adapter_status prepare_cancel(
         request->id == NULL || request->id_size != 6u ||
         memcmp(request->id, "worker", 6u) != 0)
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    /* Pause the actual DSO ACT cancellation callback while CNet's real
+       native terminal is dispatched independently on its owner lane. */
+    callback_gate_wait(&fixture->cancel_gate);
     fixture->cancel_reserved = true;
     *out_ticket = (cflow_statechart_effect_ticket){
         cancel_commit, cancel_discard, fixture
@@ -269,11 +275,23 @@ static bool probe_arm_terminal_gate(
     return true;
 }
 
+static bool probe_arm_cancel_gate(
+    void *self, scxml_test_cnet_callback_gate *gate) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)self;
+    if (fixture == NULL || gate == NULL || fixture->closed ||
+        fixture->active_token == 0u || fixture->cancel_reserved ||
+        fixture->cancel_gate != NULL)
+        return false;
+    fixture->cancel_gate = gate;
+    return true;
+}
+
 CMETA_IMPLEMENTS(scxml_test_cnet_probe, probe_impl, 0u,
     .get_observer = probe_get_observer,
     .snapshot = probe_snapshot,
     .arm_send_gate = probe_arm_send_gate,
-    .arm_terminal_gate = probe_arm_terminal_gate);
+    .arm_terminal_gate = probe_arm_terminal_gate,
+    .arm_cancel_gate = probe_arm_cancel_gate);
 
 static cmeta_status project(
     void *context, const cmeta_object_ref *object,
