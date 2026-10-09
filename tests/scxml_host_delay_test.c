@@ -251,4 +251,91 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         cflow_clock_destroy(&clock);
         scxml_program_destroy(&program);
     }
+    it("recognizes a fire-won cancel reservation but rejects a truly missing sendid") {
+        /* Deterministic model of the brief window between CFlow's registry
+           cancel commit and its Host cancel-ticket callback. A Host due claim
+           won first, but report_send_done finds the registry already empty.
+           Its still-live cancel intent proves the race instead of treating
+           that result as an unrelated/invalid delayed send. */
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='waiting'>"
+            "<state id='waiting'><transition event='later' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        scxml_host_router router = {0};
+        scxml_host_session_ref ref = {0};
+        cflow_executor executor = {0};
+        cflow_clock clock = {0};
+        cflow_statechart_effect_ticket send_ticket = {0};
+        cflow_statechart_effect_ticket cancel_ticket = {0};
+        scxml_host_router_stats stats = {0};
+        cflow_statechart_instance_stats machine = {0};
+        size_t fired = 0u, delivered = 0u;
+
+        check_true(cflow_clock_virtual_init(&clock, (cflow_instant){0u}));
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_compile(&program, source, sizeof(source)-1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        check_equal(scxml_session_init(&session, &(scxml_session_config){
+            .program = &program, .executor = &executor,
+            .external_event_capacity = 2u, .internal_event_capacity = 2u,
+            .completion_capacity = 2u, .microstep_limit = 16u
+        }), CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_host_router_init(
+            &router, &(scxml_host_router_config){
+                .endpoint_capacity = 1u, .event_capacity = 2u,
+                .max_text_bytes = 8u, .clock = &clock,
+                .timer_capacity = 1u, .cancel_capacity = 1u
+            }), SALTS_OK);
+        check_equal(scxml_host_router_attach(&router, &session, &ref), SALTS_OK);
+        check_equal(scxml_host_router_prepare_target(
+            &router, ref, NULL, 0u, "later", 5u,
+            "cancel-race", 11u, NULL, 5u, &send_ticket), SALTS_OK);
+        send_ticket.commit(send_ticket.user);
+        check_equal(scxml_host_router_prepare_cancel(
+            &router, ref, "cancel-race", 11u, &cancel_ticket), SALTS_OK);
+        check_true(cflow_clock_advance(&clock, cflow_duration_from_ms(5u)));
+        check_equal(scxml_host_router_run_due(&router, 1u, &fired), SALTS_OK);
+        check_equal(fired, (size_t)1u);
+        /* Cancel ticket completes after Host already owns the event. */
+        cancel_ticket.commit(cancel_ticket.user);
+        check_equal(scxml_host_router_drain(&router, 1u, &delivered),
+                    CFLOW_MAILBOX_OK);
+        check_equal(delivered, (size_t)1u);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_session_get_stats(&session, &machine));
+        check_true(machine.done);
+        check_false(machine.errored);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.timer_fired, UINT64_C(1));
+        check_equal(stats.cancel_fire_won, UINT64_C(1));
+        check_equal(stats.timer_done_failed, UINT64_C(0));
+        check_equal(stats.pending, (size_t)0u);
+
+        /* Without a CFlow sendid registry AND without a real cancel intent,
+           an invalid deadline must fail closed rather than invent success. */
+        check_equal(scxml_host_router_prepare_target(
+            &router, ref, NULL, 0u, "orphan", 6u,
+            "orphan-id", 9u, NULL, 5u, &send_ticket), SALTS_OK);
+        send_ticket.commit(send_ticket.user);
+        check_true(cflow_clock_advance(&clock, cflow_duration_from_ms(5u)));
+        check_equal(scxml_host_router_run_due(&router, 1u, &fired),
+                    SALTS_EPROTO);
+        check_equal(fired, (size_t)0u);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.timer_done_failed, UINT64_C(1));
+        check_equal(stats.pending, (size_t)0u);
+        check_equal(scxml_host_router_detach(&router, ref), SALTS_OK);
+        check_equal(scxml_host_router_close(&router), SALTS_OK);
+        check_equal(scxml_host_router_destroy(&router), SALTS_OK);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        cflow_clock_destroy(&clock);
+        scxml_program_destroy(&program);
+    }
+
 }
