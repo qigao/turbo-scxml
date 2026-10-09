@@ -213,6 +213,71 @@ jobs:
             --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/sanitizer-results.xml"
 
+      # Separate runtime/build from ASan+UBSan: TSan cannot share a process
+      # with ASan. This instruments the local CNet/Host adapters and test DSOs;
+      # imported prerelease Salts SDK libraries are not rebuilt with TSan.
+      - name: Run Linux concurrent Component and CNet TSan gate
+        shell: bash
+        env:
+          TSAN_OPTIONS: halt_on_error=1:exitcode=66
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-release-user \
+            -S "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/component-tsan" \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build/component-tsan --parallel 2
+          ctest --test-dir build/component-tsan \
+            -R '^(scxml_cnet_domain_fence_test|scxml_component_cnet_invoke_test)        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee build/component-runtime/ccache-stats.txt
+          else
+            printf 'ccache tool unavailable before build\n' > build/component-runtime/ccache-stats.txt
+          fi
+
+      - name: Record acceptance identities
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-runtime
+          printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)" > build/component-runtime/acceptance.txt
+          if [ -f build/component-runtime/sdk-graph.txt ]; then
+            cat build/component-runtime/sdk-graph.txt >> build/component-runtime/acceptance.txt
+          fi
+
+          printf 'runner_os=%s\nrunner_arch=%s\ncompiler=%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$(gcc -dumpfullversion)" >> build/component-runtime/acceptance.txt
+
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-acceptance-linux-x64
+          path: |
+            build/component-runtime/acceptance.txt
+            build/component-runtime/sdk-graph.txt
+            build/component-runtime/ccache-stats.txt
+            build/component-runtime/component-results.xml
+            build/component-runtime/installed-results.xml
+            build/component-runtime/sanitizer-results.xml
+            build/component-runtime/tsan-results.xml
+            build/component-tsan/Testing/Temporary/LastTest.log
+            build/component-sanitized/Testing/Temporary/LastTest.log
+            build/component-runtime/Testing/Temporary/LastTest.log
+            tests/install_consumer/build/component-installed/Testing/Temporary/LastTest.log
+ \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/tsan-results.xml"
+
       - name: Record ccache statistics
         if: always()
         shell: bash
