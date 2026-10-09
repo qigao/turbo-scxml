@@ -61,6 +61,25 @@ typedef struct scxml_host_router_stats {
 
 int scxml_host_router_init(scxml_host_router *router,
                            const scxml_host_router_config *config);
+/* Reserve an endpoint before Session initialization, for initial onentry
+ * <send> tickets. The reserved ref is routable source-relative but not
+ * externally accessible or deliverable until activation succeeds. */
+int scxml_host_router_reserve(
+    scxml_host_router *router, scxml_host_session_ref *out_ref);
+/* Publish the real generated location after successful Session init. */
+int scxml_host_router_activate(
+    scxml_host_router *router, scxml_host_session_ref ref,
+    scxml_session *session);
+/* Abort a never-activated endpoint after failed Session init. READY rows
+ * involving it are cancelled; RESERVED tickets must first discard/commit.
+ * Relation bindings must be explicitly unlinked before abortion.
+ */
+int scxml_host_router_abort(
+    scxml_host_router *router, scxml_host_session_ref ref);
+
+/* Shortcut for a Session that was already fully initialized and has no
+ * initial Host-published effects. Distinct from reserve -> activate.
+ */
 int scxml_host_router_attach(scxml_host_router *router, scxml_session *session,
                              scxml_host_session_ref *out_ref);
 /* BUSY if any accepted/ticket/in-flight Event or another live endpoint's
@@ -155,6 +174,15 @@ cflow_mailbox_status scxml_host_router_drain(
 int scxml_host_router_cancel(scxml_host_router *router,
                              scxml_host_session_ref target,
                              size_t *out_cancelled);
+/* Close a source's Event I/O binding without cancelling unrelated targets:
+ * drop only READY rows from this exact sending Session. RESERVED tickets
+ * and INFLIGHT delivery remain authoritative and must settle separately. */
+int scxml_host_router_cancel_source(
+    scxml_host_router *router, scxml_host_session_ref source,
+    size_t *out_cancelled);
+/* Returns true iff this source has no RESERVED/READY/INFLIGHT rows. */
+bool scxml_host_router_source_is_quiescent(
+    const scxml_host_router *router, scxml_host_session_ref source);
 bool scxml_host_router_get_stats(const scxml_host_router *router,
                                  scxml_host_router_stats *out);
 int scxml_host_router_close(scxml_host_router *router);
