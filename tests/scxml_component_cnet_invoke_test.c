@@ -1063,6 +1063,32 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.registry, f.plugins[1]), CMETA_PLUGIN_BUSY);
         check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
 
+        /* A copied Scope is not an owning lease: its address-stable Salts
+           owner identity still points at the original object. Neither the
+           copy's release attempt nor a legitimate release while the Invoke
+           adapter remains bound may decrement the real generation lease. */
+        {
+            scxml_component_scope copied_scope = f.scopes[1];
+            const size_t generation_before =
+                f.generations[1].generation.active_scopes;
+            const size_t runtime_before = f.runtime.active_scopes;
+            check_true(generation_before > 0u);
+            check_true(runtime_before >= generation_before);
+            check_equal(scxml_component_scope_generation_id(
+                &copied_scope), UINT64_C(0));
+            check_equal(scxml_component_scope_release(
+                &copied_scope), SCXML_COMPONENT_INVALID_ARGUMENT);
+            check_equal(scxml_component_scope_release(
+                &f.scopes[1]), SCXML_COMPONENT_BUSY);
+            check_equal(f.generations[1].generation.active_scopes,
+                        generation_before);
+            check_equal(f.runtime.active_scopes, runtime_before);
+            check_equal(scxml_component_scope_generation_id(
+                &f.scopes[1]), gen[1]);
+            check_equal(cmeta_plugin_registry_unload(
+                &f.registry, f.plugins[1]), CMETA_PLUGIN_BUSY);
+        }
+
         /* Poll both CNet connections through the same owner. Each callback
            executes inside its own DSO, not in this executable. */
         deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
