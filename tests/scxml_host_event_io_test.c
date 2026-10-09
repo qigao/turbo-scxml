@@ -181,15 +181,15 @@ spec("Staged Host Session and canonical SCXML SEND composition") {
         check_equal(scxml_host_router_abort(&router, pending), SALTS_EBUSY);
         ticket.discard(ticket.user);
         check_true(scxml_host_router_source_is_quiescent(&router, pending));
-        adapter->close(scxml_host_event_io_binding_user(&binding));
-        check_true(adapter->is_quiescent(
-            scxml_host_event_io_binding_user(&binding)));
-        check_equal(scxml_host_event_io_binding_destroy(&binding), SALTS_OK);
-
         check_equal(scxml_host_router_prepare_target(
             &router, pending, NULL, 0u,
             "go", 2u, NULL, 0u, NULL, 0u, &ticket), SALTS_OK);
         ticket.commit(ticket.user);
+        check_equal(scxml_host_event_io_binding_destroy(&binding), SALTS_EBUSY);
+        adapter->close(scxml_host_event_io_binding_user(&binding));
+        check_true(adapter->is_quiescent(
+            scxml_host_event_io_binding_user(&binding)));
+        check_equal(scxml_host_event_io_binding_destroy(&binding), SALTS_OK);
         check_equal(scxml_host_router_abort(&router, pending), SALTS_OK);
         check_true(scxml_host_router_get_stats(&router, &stats));
         check_equal(stats.cancelled, UINT64_C(1));
