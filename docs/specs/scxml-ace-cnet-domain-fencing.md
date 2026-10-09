@@ -44,9 +44,48 @@ The joint test qualifies two orderings. First, gN's native write completes but i
 
 [Exact-head Linux qualification (2026-10-10)](https://github.com/qigao/turbo-scxml/actions/runs/37971670736) for commit `c51f1e4`: **15/15** focused Release tests, **12/12** installed C11/C++17 SDK consumers and **8/8** targeted Linux ASan+UBSan tests; based on `Salts.Native 2.3.0-rc.1` and `SaltsUtils.Native 4.3.0-rc.1`.
 
+## Real DSO-resident CNet callbacks and safe unload (qualified slice)
+
+The strengthened joint test `scxml_component_cnet_invoke_test` now adds a
+second test within the original DSO-backed Invoke + CNet fixture. Both DSOs
+implement a **test-only CMeta Object Interface**
+(`tests/scxml_component_invoke_probe.h`) that explicitly projects a CNet
+observer and returns copied completion/terminal statistics. The observer's
+`on_state` and `on_send` function pointers reside **inside the corresponding
+DSO**, not in the test executable. The test obtains each callback through an
+authoritative live `scxml_component_scope`; there is no `dlsym`, direct
+Plugin registry handle bypass or new production ABI.
+
+gN and gN+1 have separate CNet connections/Observers on the **same** domain
+CNet owner and **same** bound TCP listener. After a send under gN is admitted,
+publication switches the fence to gN+1; the gN send still completes through
+its original DSO callback while fresh gN writes fail. gN+1's independent
+DSO callback and Invoke remain active. Attempting to drain or unload gN
+before real `on_state(CLOSED/FAILED)` is observed returns BUSY. After old
+CNet terminal, Invoke token completion and Scope release, the original DSO
+unloads successfully. The test then sends a new byte through gN+1 **after
+gN's code is unloaded**, ensuring the new generation is independent.
+
+The reverse ordering is also covered on gN+1: an accepted CNet write is
+pending when its DSO-backed Invoke cancels/exits. It cannot retire before
+`on_send`; it still cannot retire after `on_send` but before real
+`on_state(CLOSED/FAILED)` and existing Component Scope release. Generation
+drain relies on `salts_component_plugin_generation_drain`, not a synthetic
+scope flag. The CNet terminal evidence is a value copied from the live
+DSO's CMeta snapshot **before** Scope release; its code pointers are never
+called after unload.
+
+**Exact-code Linux CI:** [#37974124859](https://github.com/qigao/turbo-scxml/actions/runs/37974124859),
+commit `cbd5bca37286d19251c28bb9b8a13df944b94178`: **15/15**
+focused Release tests, **12/12** installed C11/C++17 consumers and **8/8**
+ASan+UBSan CNet/Host/DSO tests, `Salts.Native 2.3.0-rc.1` and
+`SaltsUtils.Native 4.3.0-rc.1`. `ccache`: 173/179 compilation hits.
+The CNet/CMeta observer interface exists only in test sources, not the
+installed TurboSCXML API.
+
 ## Remaining conformance
 
-- Qualify true DSO-executed CNet callback code or an explicitly retained DSO Provider wrapper for every accepted native I/O callback; the joint test's CNet observer functions still live in the test executable, while the Invoke and Scope code genuinely live in separate DSOs. Do not claim full callback-unload fencing yet.
+- **Qualified on Linux (controlled order):** DSO-resident CNet on_send/on_state executes through a live CMeta-projected Scope, and old DSO unload remains BUSY until authentic CNet terminal and Invoke/Scope quiescence. Full **simultaneous** callback execution versus Scope/unload on multiple threads still needs a separately controlled TSan race test; no claim of concurrent unload safety outside the single-owner serialization proof.
 - Adversarial controlled races for true simultaneous ACT cancel versus kernel completion, Session restart/request-slot reuse, and failed live Component candidate activation with rollback; preserve exactly-once effect-ticket and `done.invoke.*` behavior.
 - TSan where supported, Windows IOCP and macOS Kqueue runtime and exact installed Salts 2.3/SaltsUtils 4.3 multi-RID release qualification. Linux ASan+UBSan is qualified only for the focused tests listed above.
 - No automatic retry or fallback generation, and no release/merge authorization implied by one Linux gate.
