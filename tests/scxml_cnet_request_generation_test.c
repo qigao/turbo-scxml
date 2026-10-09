@@ -308,7 +308,7 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         operation = (native_io_operation){
             .kind = NATIVE_IO_OPERATION_STREAM_RECV,
             .endpoint = endpoint, .buffer = &first_byte,
-            .length = 1u, .user_data = UINTPTR_C(41)
+            .length = 1u, .user_data = (uintptr_t)41u
         };
         check_equal(native_io_backend_submit(&io, &operation, &request),
                     SALTS_OK);
