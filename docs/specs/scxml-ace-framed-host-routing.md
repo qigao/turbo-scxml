@@ -4,8 +4,11 @@ Tracks TurboSCXML #297, #298 and #299 in Draft PR #307. **DO NOT MERGE / DO NOT 
 
 ## One semantic owner per Session
 
-`TurboSCXML::CNetEventIO` adds a bounded Host router, not another Actor or
-Statechart. A Host endpoint is `{slot, generation}`, paired with a borrowed
+`TurboSCXML::Host` owns the bounded Session Host router and its
+SEND/CONTENT SCXML Event I/O adapter. It links only `TurboSCXML::SCXML`,
+without CNet or a second Actor/Statechart. `TurboSCXML::CNetEventIO`
+depends on Host plus `Salts::CNet` and owns optional network ingress/egress.
+A Host endpoint is `{slot, generation}`, paired with a borrowed
 `scxml_session`; CFlow remains its only Statechart instance and SerialExecutor.
 The router retains accepted, not-yet-transferred external Events. Its
 endpoint generation advances on slot reuse and stale IDs are rejected.
@@ -64,6 +67,11 @@ transport terminal if Host capacity becomes available.
 - Real CNet close/terminal precedes decoder observer destruction; Session
   and Host endpoint remain live through the final Host delivery or cancel.
 - CHttp continues to own HTTP; there is no HTTP parser in this profile.
+
+The installed SDK is qualified with **independent C11/C++17 Host-only consumers**
+and CNet consumers. An explicit CMake option enables Host; CNetEventIO
+requires Host rather than providing an implicit fallback. Core SCXML remains
+provider- and transport-neutral.
 
 Tests validate two independent Session destinations and generation slot reuse,
 microstep ticket commit/discard, a blocked executor causing true external
