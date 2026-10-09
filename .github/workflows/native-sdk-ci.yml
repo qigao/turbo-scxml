@@ -1,7 +1,10 @@
 name: Native SDK CI
 
+# Published-SDK qualification runs only for the stable branch. The unmerged
+# ACE 2.3 integration branch uses its separate exact-candidate conformance CI.
 on:
   pull_request:
+    branches: [main]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -11,10 +14,9 @@ on:
       - "vcpkg.json"
       - "CMakeUserPresets.json"
       - "presets/**"
-      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
   push:
-    branches: [main, feature/component-runtime-conformance]
+    branches: [main]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -24,7 +26,6 @@ on:
       - "vcpkg.json"
       - "CMakeUserPresets.json"
       - "presets/**"
-      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
 
   workflow_dispatch:
