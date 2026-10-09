@@ -1,5 +1,6 @@
 #include <scxml/provider.h>
 #include "scxml_component_invoke_probe.h"
+#include <salts/clock.h>
 #include <salts/component_plugin_abi.h>
 #include <salts/plugin_decl.h>
 
@@ -31,6 +32,8 @@ typedef struct invoke_fixture_state {
     size_t native_send_bytes;
     size_t native_state_callbacks;
     size_t stale_callbacks;
+    scxml_test_cnet_callback_gate *send_gate;
+    scxml_test_cnet_callback_gate *terminal_gate;
 } invoke_fixture_state;
 
 static invoke_fixture_state state = {
@@ -157,6 +160,24 @@ static bool native_connection_matches(invoke_fixture_state *fixture,
         fixture->native_connection.generation == connection.generation;
 }
 
+/* The two-thread test pauses INSIDE actual DSO instructions invoked by
+ * CNet's owner lane. Only C11 atomics are touched by the foreign unload
+ * thread: all provider and native state remains owner-only. */
+static void callback_gate_wait(scxml_test_cnet_callback_gate **selected) {
+    scxml_test_cnet_callback_gate *gate;
+    uint64_t deadline;
+    if (selected == NULL || *selected == NULL) return;
+    gate = *selected;
+    deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+    atomic_store_explicit(&gate->entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&gate->release, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (!atomic_load_explicit(&gate->release, memory_order_acquire))
+        atomic_store_explicit(&gate->timed_out, 1, memory_order_release);
+    *selected = NULL; /* Host may retire the gate only after callback exit. */
+}
+
 static void dso_native_state(
     void *user, cnet_connection connection,
     cnet_connection_state value, const cnet_error *error) {
@@ -167,6 +188,8 @@ static void dso_native_state(
         ++fixture->stale_callbacks;
         return;
     }
+    if (value == CNET_CONNECTION_CLOSED || value == CNET_CONNECTION_FAILED)
+        callback_gate_wait(&fixture->terminal_gate);
     ++fixture->native_state_callbacks;
     if (value == CNET_CONNECTION_CONNECTED) {
         fixture->native_connected = true;
@@ -188,6 +211,7 @@ static void dso_native_send(
         ++fixture->stale_callbacks;
         return;
     }
+    callback_gate_wait(&fixture->send_gate);
     ++fixture->native_sends;
     fixture->native_send_bytes += bytes;
 }
@@ -225,9 +249,31 @@ static bool probe_snapshot(void *self,
     return true;
 }
 
+static bool probe_arm_send_gate(
+    void *self, scxml_test_cnet_callback_gate *gate) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)self;
+    if (fixture == NULL || gate == NULL || !fixture->native_connected ||
+        fixture->native_terminal || fixture->send_gate != NULL)
+        return false;
+    fixture->send_gate = gate;
+    return true;
+}
+
+static bool probe_arm_terminal_gate(
+    void *self, scxml_test_cnet_callback_gate *gate) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)self;
+    if (fixture == NULL || gate == NULL || !fixture->native_connected ||
+        fixture->native_terminal || fixture->terminal_gate != NULL)
+        return false;
+    fixture->terminal_gate = gate;
+    return true;
+}
+
 CMETA_IMPLEMENTS(scxml_test_cnet_probe, probe_impl, 0u,
     .get_observer = probe_get_observer,
-    .snapshot = probe_snapshot);
+    .snapshot = probe_snapshot,
+    .arm_send_gate = probe_arm_send_gate,
+    .arm_terminal_gate = probe_arm_terminal_gate);
 
 static cmeta_status project(
     void *context, const cmeta_object_ref *object,
