@@ -4,6 +4,8 @@ project(TurboSCXMLInstallConsumer LANGUAGES C CXX)
 
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT
   "Require and exercise the installed Component bridge" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST
+  "Require and exercise the provider-neutral Host component" OFF)
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO
   "Require and exercise the installed CNetEventIO component" OFF)
 
@@ -166,6 +168,9 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS Component)
+endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS Host)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CNetEventIO)
@@ -639,6 +644,26 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
   target_link_libraries(turboscxml_component_install_consumer PRIVATE TurboSCXML::Component)
 endif()
 
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST)
+  if(NOT TARGET TurboSCXML::Host)
+    message(FATAL_ERROR "Expected installed TurboSCXML::Host")
+  endif()
+  get_target_property(TURBOSCXML_HOST_LINKS
+    TurboSCXML::Host INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_HOST_LINKS STREQUAL "TurboSCXML::SCXML")
+    message(FATAL_ERROR
+      "Unexpected provider-neutral Host links: ${TURBOSCXML_HOST_LINKS}")
+  endif()
+  add_executable(turboscxml_host_install_consumer host_main.c)
+  target_compile_features(turboscxml_host_install_consumer PRIVATE c_std_11)
+  target_link_libraries(turboscxml_host_install_consumer PRIVATE
+    TurboSCXML::Host)
+  add_executable(turboscxml_host_install_consumer_cpp host_main.cpp)
+  target_compile_features(turboscxml_host_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(turboscxml_host_install_consumer_cpp PRIVATE
+    TurboSCXML::Host)
+endif()
+
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO)
   if(NOT TARGET TurboSCXML::CNetEventIO OR NOT TARGET Salts::CNet)
     message(FATAL_ERROR "Expected installed CNetEventIO and Salts::CNet")
@@ -646,7 +671,7 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO)
   get_target_property(TURBOSCXML_CNET_LINKS
     TurboSCXML::CNetEventIO INTERFACE_LINK_LIBRARIES)
   if(NOT TURBOSCXML_CNET_LINKS STREQUAL
-     "TurboSCXML::SCXML;Salts::CNet")
+     "TurboSCXML::Host;Salts::CNet")
     message(FATAL_ERROR
       "Unexpected installed CNetEventIO link closure: ${TURBOSCXML_CNET_LINKS}")
   endif()
@@ -669,6 +694,7 @@ foreach(consumer IN ITEMS
     turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp
     turboscxml_plugin_install_consumer turboscxml_plugin_install_consumer_cpp
     turboscxml_component_install_consumer
+    turboscxml_host_install_consumer turboscxml_host_install_consumer_cpp
     turboscxml_cnet_install_consumer turboscxml_cnet_install_consumer_cpp)
   if(TARGET ${consumer})
     add_test(NAME ${consumer} COMMAND ${consumer})
