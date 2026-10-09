@@ -9,11 +9,12 @@
 
 static scxml_session_config timed_session_config(
     scxml_program *program, cflow_executor *executor,
-    scxml_host_event_io_binding *binding, cflow_clock *clock) {
+    scxml_host_event_io_binding *binding) {
     scxml_session_config config = {0};
     config.program = program;
     config.executor = executor;
-    config.clock = clock;
+    /* CFlow's Statechart does not own the Host deadline ledger. A second
+       Statechart timer queue would duplicate the Host clock authority. */
     config.external_event_capacity = 2u;
     config.internal_event_capacity = 2u;
     config.completion_capacity = 2u;
@@ -64,7 +65,7 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
             &binding, &router, ref), SALTS_OK);
         {
             scxml_session_config config =
-                timed_session_config(&program, &executor, &binding, &clock);
+                timed_session_config(&program, &executor, &binding);
             check_equal(scxml_session_init(&session, &config),
                         CFLOW_STATECHART_INSTANCE_OK);
         }
@@ -152,7 +153,7 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
             &binding, &router, ref), SALTS_OK);
         {
             scxml_session_config config =
-                timed_session_config(&program, &executor, &binding, &clock);
+                timed_session_config(&program, &executor, &binding);
             check_equal(scxml_session_init(&session, &config),
                         CFLOW_STATECHART_INSTANCE_OK);
         }
