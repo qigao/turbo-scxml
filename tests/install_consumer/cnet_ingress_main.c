@@ -10,7 +10,8 @@ int main(void) {
     const scxml_event_io_adapter *host_ops = scxml_host_event_io_binding_adapter();
     if (host_ops == NULL || host_ops->prepare_send == NULL ||
         host_ops->prepare_cancel != NULL ||
-        host_ops->capabilities != SCXML_EVENT_IO_CAP_SEND ||
+        host_ops->capabilities !=
+            (SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_CONTENT) ||
         scxml_host_event_io_binding_destroy(&host) != SALTS_OK) return 6;
     scxml_host_router router = {0};
     scxml_cnet_frame_ingress frame = {0};
