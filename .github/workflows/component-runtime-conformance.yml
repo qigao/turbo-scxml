@@ -17,6 +17,16 @@ on:
   push:
     branches:
       - feature/component-runtime-conformance
+    paths:
+      - ".github/workflows/component-runtime-conformance.yml"
+      - "CMakeLists.txt"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - "presets/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
   workflow_dispatch:
 
 permissions:
