@@ -47,6 +47,8 @@ typedef struct scxml_host_row {
     uint64_t identity;
     uint64_t delay_ms;
     uint64_t deadline_ns;
+    /* Host won deadline while a prepared cancel raced with Session registry. */
+    bool fire_won_cancel;
     size_t name_size;
     size_t text_size;
     scxml_content_kind content_kind;
@@ -168,6 +170,7 @@ static void release_locked(scxml_host_router_impl *impl, scxml_host_row *row) {
     row->identity = 0u;
     row->delay_ms = 0u;
     row->deadline_ns = 0u;
+    row->fire_won_cancel = false;
     row->name_size = 0u;
     row->text_size = 0u;
     row->content_kind = SCXML_CONTENT_INVALID;
@@ -902,8 +905,11 @@ static void cancel_commit(void *user) {
             ++impl->cancelled;
             release_locked(impl, row);
         } else {
-            /* Once the owner has claimed deadline FIRING, cancellation is
-               terminally lost. A recycled row is protected by identity. */
+            /* The Host due claim won. Preserve this witness until the Host
+               re-enters its lock after reporting SCXML sendid completion. */
+            if (row != NULL && row->identity == intent->target_identity &&
+                row->state == SCXML_HOST_ROW_FIRING)
+                row->fire_won_cancel = true;
             ++impl->cancel_fire_won;
         }
         ++impl->cancel_committed;
@@ -1068,18 +1074,32 @@ int scxml_host_router_run_due(
             source_session, row->send_id, row->send_id_size);
 
         cmeta_mutex_lock(&impl->lock);
-        if (row->state != SCXML_HOST_ROW_FIRING) {
-            ++impl->invariant_failures;
-            result = SALTS_EPROTO;
-        } else if (!settled || impl->closed) {
-            if (!settled) {
-                ++impl->timer_done_failed;
-                result = SALTS_EPROTO;
+        /* Session's registry clears a CANCEL_RESERVED row before calling
+           the adapter cancel ticket. A race may therefore make report_done
+           return false *after* Host FIRING won but *before* its cancel ticket
+           commits. The stable row identity and still-owned cancel intent
+           distinguish that race from a genuinely missing/invalid sendid. */
+        {
+            bool cancel_raced = row->fire_won_cancel;
+            size_t j;
+            for (j = 0u; !cancel_raced && j < impl->cancel_capacity; ++j) {
+                const scxml_host_cancel_row *intent = &impl->cancel_rows[j];
+                if (intent->in_use && intent->target == row &&
+                    intent->target_identity == row->identity)
+                    cancel_raced = true;
             }
-            ++impl->timer_cancelled;
-            ++impl->cancelled;
-            release_locked(impl, row);
-        } else {
+            if (row->state != SCXML_HOST_ROW_FIRING) {
+                ++impl->invariant_failures;
+                result = SALTS_EPROTO;
+            } else if ((!settled && !cancel_raced) || impl->closed) {
+                if (!settled && !cancel_raced) {
+                    ++impl->timer_done_failed;
+                    result = SALTS_EPROTO;
+                }
+                ++impl->timer_cancelled;
+                ++impl->cancelled;
+                release_locked(impl, row);
+            } else {
             if (impl->timer_pending == 0u) {
                 ++impl->invariant_failures;
                 result = SALTS_EPROTO;
@@ -1090,6 +1110,7 @@ int scxml_host_router_run_due(
                 ++impl->timer_fired;
                 ++count;
             }
+        }
         }
         cmeta_mutex_unlock(&impl->lock);
         if (result != SALTS_OK) break;
