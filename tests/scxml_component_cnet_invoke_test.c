@@ -940,6 +940,14 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         } while (!native[1].native_connected &&
                  cmeta_monotonic_ms() < deadline);
         check_true(native[1].native_connected);
+        /* Connection callbacks and the old send may arrive in either order.
+           Keep polling the authoritative owner until the DSO entry barrier
+           actually fired; joining early would accidentally skip the race. */
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!atomic_load_explicit(
+                   &send_gate.entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
         check_equal(cmeta_thread_join(&send_thread), SALTS_OK);
         cmeta_thread_destroy(&send_thread);
         check_true(send_race.reached_callback);
