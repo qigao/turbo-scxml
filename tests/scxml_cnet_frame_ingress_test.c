@@ -233,17 +233,18 @@ spec("Bounded CNet frame reassembly into generation-safe Host Mailbox") {
         check_equal(stats.accepted_frames, UINT64_C(2));
 
         /* An invalid (over-limit) frame is not truncated into an Event. */
+        const uint64_t chunks_before_oversize = stats.received_chunks;
         check_equal(scxml_cnet_frame_ingress_arm(&ingress), SALTS_OK);
         check_equal(send_bytes(&sender, outbound, oversize_header,
                                sizeof(oversize_header)), SALTS_OK);
         deadline = cmeta_monotonic_ms() + FRAMED_TEST_TIMEOUT_MS;
-        while (stats.received_chunks < UINT64_C(3) &&
+        while (stats.received_chunks == chunks_before_oversize &&
                cmeta_monotonic_ms() < deadline) {
             check_equal(cnet_client_poll(&sender, 1u, &events), SALTS_OK);
             check_equal(cnet_client_poll(&receiver, 1u, &events), SALTS_OK);
             check_true(scxml_cnet_frame_ingress_get_stats(&ingress, &stats));
         }
-        check_true(stats.received_chunks >= UINT64_C(3));
+        check_true(stats.received_chunks > chunks_before_oversize);
         check_equal(scxml_cnet_frame_ingress_process(&ingress, 2u, &count),
                     SALTS_EMSGSIZE);
         check_true(scxml_cnet_frame_ingress_get_stats(&ingress, &stats));
