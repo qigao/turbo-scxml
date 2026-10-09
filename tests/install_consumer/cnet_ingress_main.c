@@ -1,10 +1,17 @@
 #include <scxml/cnet_ingress.h>
 #include <scxml/cnet_egress.h>
 #include <scxml/host_router.h>
+#include <scxml/host_event_io.h>
 #include <scxml/cnet_frame_ingress.h>
 #include <salts/error_codes.h>
 
 int main(void) {
+    scxml_host_event_io_binding host = {0};
+    const scxml_event_io_adapter *host_ops = scxml_host_event_io_binding_adapter();
+    if (host_ops == NULL || host_ops->prepare_send == NULL ||
+        host_ops->prepare_cancel != NULL ||
+        host_ops->capabilities != SCXML_EVENT_IO_CAP_SEND ||
+        scxml_host_event_io_binding_destroy(&host) != SALTS_OK) return 6;
     scxml_host_router router = {0};
     scxml_cnet_frame_ingress frame = {0};
     if (scxml_host_router_destroy(&router) != SALTS_OK ||
