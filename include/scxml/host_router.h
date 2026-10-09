@@ -36,6 +36,8 @@ typedef struct scxml_host_router_config {
     size_t event_capacity;
     /* 1..SCXML_EVENT_METADATA_CAPACITY; bounds copied TEXT_UTF8 data. */
     size_t max_text_bytes;
+    /* Zero disables invocation aliases; positive bound allocates exact rows. */
+    size_t invoke_capacity;
 } scxml_host_router_config;
 
 typedef struct scxml_host_router_stats {
@@ -43,7 +45,9 @@ typedef struct scxml_host_router_stats {
     size_t pending;
     size_t reserved;
     size_t high_water;
+    size_t invoke_bindings;
     bool closed;
+    bool draining;
     uint64_t prepared;
     uint64_t committed;
     uint64_t discarded;
@@ -59,9 +63,62 @@ int scxml_host_router_init(scxml_host_router *router,
                            const scxml_host_router_config *config);
 int scxml_host_router_attach(scxml_host_router *router, scxml_session *session,
                              scxml_host_session_ref *out_ref);
-/* BUSY if an accepted or reserved Event still borrows the old Session. */
+/* BUSY if any accepted/ticket/in-flight Event or another live endpoint's
+ * parent/Invoke routing binding still borrows this exact Session generation.
+ * Unlink relations first; a returned SUCCESS permits Session destruction.
+ */
 int scxml_host_router_detach(scxml_host_router *router,
                              scxml_host_session_ref ref);
+
+/* Define an optional relative parent relationship. Passing {0,0} as parent
+ * clears it. Identities are pinned, so slot reuse cannot redirect a child.
+ * A parent cannot be detached while this relationship remains live.
+ */
+int scxml_host_router_set_parent(scxml_host_router *router,
+                                 scxml_host_session_ref child,
+                                 scxml_host_session_ref parent);
+
+/* Explicitly opt an attached Session into global #_scxml_<sessionid>
+ * location lookup. Source-relative #_parent, #_<invokeid> and self routing
+ * do not rely on this external-access flag.
+ */
+int scxml_host_router_set_external_access(
+    scxml_host_router *router, scxml_host_session_ref ref, bool enabled);
+
+/* Bind one invoke id (without "#_") on source to a target Session.
+ * The table is finite: config.invoke_capacity; duplicate owner/id returns
+ * EALREADY. The target/owner must both unlink before either can detach.
+ */
+int scxml_host_router_bind_invoke(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *invoke_id, size_t invoke_id_size,
+    scxml_host_session_ref target);
+int scxml_host_router_unbind_invoke(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *invoke_id, size_t invoke_id_size);
+
+/* Resolve empty (self), #_parent, #_<invokeid>, or the exact *public*
+ * #_scxml_<sessionid> location. An inaccessible or stale target is ENOENT.
+ * No generic URI parser, redirect or unqualified fallback is installed.
+ */
+int scxml_host_router_resolve(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *target, size_t target_size, scxml_host_session_ref *out_target);
+
+/* One SCXML source-relative send effect, atomically resolving its target
+ * and copying name, optional sendid and TEXT_UTF8 content into a RESERVED
+ * Host row. The returned ticket transfers into the CFlow effect journal.
+ * The source and target references remain pinned until final Host delivery
+ * or explicit cancel/discard. Nonempty send_id is bounded by metadata size.
+ * No network I/O or target Session admission occurs during prepare/commit.
+ */
+int scxml_host_router_prepare_target(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *target, size_t target_size,
+    const char *name, size_t name_size,
+    const char *send_id, size_t send_id_size,
+    const char *text, size_t text_size,
+    cflow_statechart_effect_ticket *out_ticket);
 
 /*
  * Copy one complete Event and UTF-8 body into bounded Host storage. No Event
