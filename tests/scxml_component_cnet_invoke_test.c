@@ -353,15 +353,14 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         scxml_invoke_stats invoke_stats = {0};
         cflow_statechart_instance_stats session_stats = {0};
         native_scope_probe old_probe = {&f, 1u, 0u, false, false};
-        native_scope_probe next_probe = {&f, 2u, 1u, false, false};
-        fenced_cnet_write write_a, write_b;
-        cmeta_plugin_lifecycle_info lifecycle = {0};
+        native_scope_probe next_probe = {&f, 3u, 1u, false, false};
+        fenced_cnet_write write_a, write_b, write_c;
         uint16_t port = 0u;
         uint64_t deadline, gen1, gen2;
         char uri[64];
         int token1, token2, ready = 0;
         size_t events = 0u;
-        const unsigned char a = 'A', b = 'B';
+        const unsigned char a = 'A', b = 'B', c = 'C';
 
         check_equal(cmeta_plugin_registry_init(&f.registry, &registry_config),
                     CMETA_PLUGIN_OK);
@@ -566,8 +565,14 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
         f.plugins[0] = (cmeta_plugin_ref){0};
 
-        /* gN+1's Invoke remains independent while gN was released/unloaded.
-           Exiting gN+1 cancels only its own token; stale completion rejected. */
+        /* The reverse ACT race: admit another real CNet operation under gN+1,
+           then cancel its Invoke before polling the native completion. The
+           original Component Scope must remain retained until that callback. */
+        check_equal(cnet_receive(&f.receiver, f.inbound, 1u), SALTS_OK);
+        write_c = (fenced_cnet_write){&f, &c, 1u};
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen2, send_one, &write_c), SALTS_OK);
+        check_equal(f.sender_probe.sends_done, (size_t)2u);
         check_true(signal(&f, 1u, "finish"));
         check_true(scxml_session_get_stats(&f.sessions[1], &session_stats));
         check_true(session_stats.done);
@@ -575,18 +580,51 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(scxml_session_report_invoke_done(
             &f.sessions[1], (uint64_t)token2),
             CFLOW_MAILBOX_INVALID_ARGUMENT);
+        /* Onexit Invoke cancellation is a DSO callback, not a fabricated
+           "done.invoke" or a CNet native terminal. */
+        check_equal(invoke_token_from_scope(&f.scopes[1]), -token2);
         check_equal(scxml_session_destroy(&f.sessions[1]),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_component_invoke_provider_destroy(&f.invoke[1]),
-                    SCXML_COMPONENT_OK);
-        check_equal(scxml_component_scope_release(&f.scopes[1]),
                     SCXML_COMPONENT_OK);
         check_equal(salts_component_plugin_runtime_close(
             &f.runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
         check_true(previous == &f.generations[1].generation);
         check_equal(scxml_cnet_domain_fence_close(&f.fence), SALTS_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
         check_equal(scxml_cnet_domain_fence_retire(
-            &f.fence, gen2, retire_real_generation, &next_probe), SALTS_OK);
+            &f.fence, gen2, retire_real_generation, &next_probe),
+            SALTS_EBUSY);
+        check_false(next_probe.saw_native_terminal);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[1]), CMETA_PLUGIN_BUSY);
+
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while ((f.sender_probe.sends_done < 3u ||
+                f.receiver_probe.received < 3u) &&
+               cmeta_monotonic_ms() < deadline) {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+        }
+        check_equal(f.sender_probe.sends_done, (size_t)3u);
+        check_equal(f.receiver_probe.received, (size_t)3u);
+        check_true(memcmp(f.receiver_probe.bytes, "ABC", 3u) == 0);
+        check_false(f.receiver_probe.failed);
+        /* Nativeio delivery is now terminal, but the DSO Scope is still live:
+           the generation MUST remain BUSY until that authoritative lease
+           retires, independent from Session Invocation completion. */
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen2, retire_real_generation, &next_probe),
+            SALTS_EBUSY);
+        check_true(next_probe.saw_native_terminal);
+        check_true(next_probe.saw_scope_busy);
+        check_equal(scxml_component_scope_release(&f.scopes[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen2, retire_real_generation, &next_probe),
+            SALTS_OK);
         check_equal(scxml_cnet_domain_fence_destroy(&f.fence), SALTS_OK);
     }
 }
