@@ -331,7 +331,7 @@ static void release_simultaneous_invoke_native(void *user) {
                           memory_order_release);
 }
 
-static bool signal(joint_fixture *fixture, size_t slot, const char *name) {
+static bool session_send_signal(joint_fixture *fixture, size_t slot, const char *name) {
     const scxml_event_metadata metadata = {
         .abi_version = SCXML_EVENT_METADATA_ABI,
         .struct_size = sizeof(scxml_event_metadata)
@@ -704,7 +704,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen2, send_one, &write_c), SALTS_OK);
         check_equal(f.sender_probe.sends_done, (size_t)2u);
-        check_true(signal(&f, 1u, "finish"));
+        check_true(session_send_signal(&f, 1u, "finish"));
         check_true(scxml_session_get_stats(&f.sessions[1], &session_stats));
         check_true(session_stats.done);
         check_false(session_stats.errored);
