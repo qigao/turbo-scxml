@@ -303,6 +303,34 @@ static void foreign_unload_during_callback(void *user) {
     atomic_store_explicit(&race->gate->release, 1, memory_order_release);
 }
 
+typedef struct invoke_native_overlap {
+    scxml_test_cnet_callback_gate *cancel_gate;
+    scxml_test_cnet_callback_gate *send_gate;
+    bool both_entered;
+} invoke_native_overlap;
+
+/* CFlow's SerialExecutor and CNet's poll owner execute different actual DSO
+ * callback instructions. They must BOTH enter before either is released. */
+static void release_simultaneous_invoke_native(void *user) {
+    invoke_native_overlap *race = (invoke_native_overlap *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(10000);
+    while ((!atomic_load_explicit(&race->cancel_gate->entered,
+                                   memory_order_acquire) ||
+            !atomic_load_explicit(&race->send_gate->entered,
+                                   memory_order_acquire)) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    race->both_entered =
+        atomic_load_explicit(&race->cancel_gate->entered,
+                             memory_order_acquire) != 0 &&
+        atomic_load_explicit(&race->send_gate->entered,
+                             memory_order_acquire) != 0;
+    atomic_store_explicit(&race->send_gate->release, 1,
+                          memory_order_release);
+    atomic_store_explicit(&race->cancel_gate->release, 1,
+                          memory_order_release);
+}
+
 static bool signal(joint_fixture *fixture, size_t slot, const char *name) {
     const scxml_event_metadata metadata = {
         .abi_version = SCXML_EVENT_METADATA_ABI,
@@ -774,11 +802,20 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         const unsigned char a = 'A', b = 'B', c = 'C';
         fenced_cnet_write write_a, write_b, write_c;
         scxml_test_cnet_callback_gate send_gate, terminal_gate;
+        scxml_test_cnet_callback_gate overlap_send_gate, cancel_gate;
+        invoke_native_overlap overlap = {0};
+        cmeta_thread_t overlap_thread = NULL;
+        const scxml_event_metadata cancel_metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata)
+        };
         dso_concurrent_unload send_race = {0}, terminal_race = {0};
         cmeta_thread_t send_thread = NULL, terminal_thread = NULL;
 
         callback_gate_init(&send_gate);
         callback_gate_init(&terminal_gate);
+        callback_gate_init(&overlap_send_gate);
+        callback_gate_init(&cancel_gate);
         check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
                     CMETA_PLUGIN_OK);
         f.registry_live = true;
@@ -1063,15 +1100,42 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(fence_stats.current_generation, gen[1]);
         check_equal(fence_stats.draining_generation, UINT64_C(0));
         check_equal(cnet_receive(&f.receiver, f.inbound_next, 1u), SALTS_OK);
+        /* Both instructions are in the same live DSO but execute on
+           independent CFlow SerialExecutor and CNet owner lanes. This
+           overlaps real cancellation preparation with native completion. */
+        check_true(scxml_test_cnet_probe_arm_send_gate(
+            &probes[1], &overlap_send_gate));
+        check_true(scxml_test_cnet_probe_arm_cancel_gate(
+            &probes[1], &cancel_gate));
         write_c = (fenced_cnet_write){&f, &c, 1u, f.outbound_next};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen[1], send_one, &write_c), SALTS_OK);
         check_true(native_dso_snapshot(&probes[1], &native[1]));
         check_equal(native[1].native_sends, (size_t)1u);
 
-        /* Reverse ordering: Invoke cancellation retires the Statechart
-           ticket BEFORE the CNet native send terminal, not vice versa. */
-        check_true(signal(&f, 1u, "finish"));
+        overlap.cancel_gate = &cancel_gate;
+        overlap.send_gate = &overlap_send_gate;
+        check_equal(cmeta_thread_create(
+            &overlap_thread, release_simultaneous_invoke_native, &overlap),
+            SALTS_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &f.sessions[1], "finish", 6u, &cancel_metadata),
+            CFLOW_MAILBOX_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!atomic_load_explicit(
+                   &overlap_send_gate.entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+        check_equal(cmeta_thread_join(&overlap_thread), SALTS_OK);
+        cmeta_thread_destroy(&overlap_thread);
+        check_true(overlap.both_entered);
+        check_equal(atomic_load_explicit(
+            &overlap_send_gate.timed_out, memory_order_acquire), 0);
+        check_equal(atomic_load_explicit(
+            &cancel_gate.timed_out, memory_order_acquire), 0);
+        check_true(cflow_executor_wait_idle(&f.executors[1]));
+        check_true(native_dso_snapshot(&probes[1], &native[1]));
+        check_equal(native[1].native_sends, (size_t)2u);
         check_equal(invoke_token_from_scope(&f.scopes[1]), -token[1]);
         check_equal(scxml_session_report_invoke_done(
             &f.sessions[1], (uint64_t)token[1]),
