@@ -5,6 +5,7 @@
 #include <salts/thread.h>
 #include <tinytest.h>
 
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -153,6 +154,42 @@ static void foreign_thread(void *arg) {
     foreign_owner_attempt *ctx = (foreign_owner_attempt *)arg;
     ctx->status = scxml_cnet_domain_fence_try_submit(
         ctx->fence, UINT64_C(11), accept_noop, NULL);
+}
+
+/* Coordinate two *real* threads without reading test flags concurrently.
+ * The domain remains single-owner: foreign publication must fail while an
+ * admitted operation is inside the serialized owner lane. */
+typedef struct concurrent_publication {
+    scxml_cnet_domain_fence *fence;
+    atomic_int entered;
+    atomic_int finished;
+    int foreign_status;
+} concurrent_publication;
+
+static int owner_admission_pause(void *user) {
+    concurrent_publication *race = (concurrent_publication *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+    atomic_store_explicit(&race->entered, 1, memory_order_release);
+    while (atomic_load_explicit(&race->finished, memory_order_acquire) == 0 &&
+           cmeta_monotonic_ms() < deadline) {
+        /* Controlled bounded overlap; no foreign write to fence state. */
+    }
+    return atomic_load_explicit(&race->finished, memory_order_acquire)
+        ? SALTS_OK : SALTS_EBUSY;
+}
+
+static void foreign_publication_thread(void *arg) {
+    concurrent_publication *race = (concurrent_publication *)arg;
+    const uint64_t deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+    while (atomic_load_explicit(&race->entered, memory_order_acquire) == 0 &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (atomic_load_explicit(&race->entered, memory_order_acquire))
+        race->foreign_status = scxml_cnet_domain_fence_activate(
+            race->fence, UINT64_C(12));
+    else
+        race->foreign_status = SALTS_EBUSY;
+    atomic_store_explicit(&race->finished, 1, memory_order_release);
 }
 
 spec("ACE CNet domain exclusive owner and Component generation fencing") {
@@ -314,6 +351,46 @@ spec("ACE CNet domain exclusive owner and Component generation fencing") {
         check_equal(cnet_client_destroy(&sender), SALTS_OK);
         check_equal(cnet_listener_close(&listener), SALTS_OK);
         check_equal(cnet_listener_destroy(&listener), SALTS_OK);
+    }
+
+    it("rejects simultaneous off-owner activation during serialized admission") {
+        scxml_cnet_domain_fence fence = {0};
+        scxml_cnet_domain_fence_stats stats = {0};
+        concurrent_publication race = {0};
+        cmeta_thread_t thread = NULL;
+        atomic_init(&race.entered, 0);
+        atomic_init(&race.finished, 0);
+        race.fence = &fence;
+        check_equal(scxml_cnet_domain_fence_init(&fence), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, UINT64_C(11)), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, UINT64_C(12)), SALTS_OK);
+        check_equal(cmeta_thread_create(
+            &thread, foreign_publication_thread, &race), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, UINT64_C(11), owner_admission_pause, &race), SALTS_OK);
+        check_equal(cmeta_thread_join(&thread), SALTS_OK);
+        cmeta_thread_destroy(&thread);
+        check_equal(race.foreign_status, SALTS_EINVAL);
+        check_true(scxml_cnet_domain_fence_get_stats(&fence, &stats));
+        check_equal(stats.current_generation, UINT64_C(11));
+        check_equal(stats.staged_generation, UINT64_C(12));
+        check_equal(stats.accepted, UINT64_C(1));
+        /* The owner can switch only after the accepted command returned. */
+        check_equal(scxml_cnet_domain_fence_activate(
+            &fence, UINT64_C(12)), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, UINT64_C(11), accept_noop, NULL), SALTS_EPERM);
+        check_equal(scxml_cnet_domain_fence_close(&fence), SALTS_OK);
+        {
+            fence_quiescence ready = {true, true};
+            check_equal(scxml_cnet_domain_fence_retire(
+                &fence, UINT64_C(11), check_quiescence, &ready), SALTS_OK);
+            check_equal(scxml_cnet_domain_fence_retire(
+                &fence, UINT64_C(12), check_quiescence, &ready), SALTS_OK);
+        }
+        check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_OK);
     }
 
     it("rejects cross-owner submit without borrowing the Component generation") {
