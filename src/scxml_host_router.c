@@ -14,7 +14,8 @@ typedef struct scxml_host_endpoint {
 typedef enum scxml_host_row_state {
     SCXML_HOST_ROW_FREE = 0,
     SCXML_HOST_ROW_RESERVED,
-    SCXML_HOST_ROW_READY
+    SCXML_HOST_ROW_READY,
+    SCXML_HOST_ROW_INFLIGHT
 } scxml_host_row_state;
 
 typedef struct scxml_host_router_impl scxml_host_router_impl;
@@ -52,6 +53,8 @@ struct scxml_host_router_impl {
     uint64_t delivery_errors;
     uint64_t invariant_failures;
     bool closed;
+    /* One host drain lane; Session admission must not run under lock. */
+    bool draining;
 };
 
 static scxml_host_router_impl *router_impl(scxml_host_router *router) {
@@ -340,29 +343,61 @@ cflow_mailbox_status scxml_host_router_drain(
     scxml_host_router *router, size_t max_events, size_t *out_delivered) {
     scxml_host_router_impl *impl = router_impl(router);
     size_t count = 0u;
+    cflow_mailbox_status result = CFLOW_MAILBOX_EMPTY;
     if (out_delivered != NULL) *out_delivered = 0u;
     if (impl == NULL || out_delivered == NULL || max_events == 0u)
         return CFLOW_MAILBOX_INVALID_ARGUMENT;
+
     cmeta_mutex_lock(&impl->lock);
+    /* A second drainer cannot reinterpret READY/INFLIGHT identity or reorder
+       already-accepted external Events; this is a Host-lane contract error. */
+    if (impl->draining) {
+        cmeta_mutex_unlock(&impl->lock);
+        return CFLOW_MAILBOX_INVALID_ARGUMENT;
+    }
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return CFLOW_MAILBOX_CLOSED;
+    }
+    impl->draining = true;
+    cmeta_mutex_unlock(&impl->lock);
+
     while (count < max_events) {
         scxml_host_row *row = NULL;
+        scxml_session *session;
         scxml_event_metadata metadata;
         cflow_mailbox_status status;
         size_t i;
+
+        cmeta_mutex_lock(&impl->lock);
+        if (impl->closed) {
+            result = CFLOW_MAILBOX_CLOSED;
+            cmeta_mutex_unlock(&impl->lock);
+            break;
+        }
         for (i = 0u; i < impl->event_capacity; ++i) {
             scxml_host_row *candidate = &impl->rows[i];
             if (candidate->state == SCXML_HOST_ROW_READY &&
                 (row == NULL || candidate->sequence < row->sequence))
                 row = candidate;
         }
-        if (row == NULL) break;
+        if (row == NULL) {
+            cmeta_mutex_unlock(&impl->lock);
+            break;
+        }
         if (!matches(impl, row->target)) {
             ++impl->stale_refs;
             ++impl->delivery_errors;
-            *out_delivered = count;
+            result = CFLOW_MAILBOX_INVALID_ARGUMENT;
             cmeta_mutex_unlock(&impl->lock);
-            return CFLOW_MAILBOX_INVALID_ARGUMENT;
+            break;
         }
+        /* The row and matching Session reference stay borrowed while marked
+           INFLIGHT. Detach, close and cancel may not recycle this row. */
+        session = impl->endpoints[row->target.slot].session;
+        row->state = SCXML_HOST_ROW_INFLIGHT;
+        cmeta_mutex_unlock(&impl->lock);
+
         metadata = (scxml_event_metadata){
             .abi_version = SCXML_EVENT_METADATA_ABI,
             .struct_size = sizeof(scxml_event_metadata),
@@ -372,23 +407,39 @@ cflow_mailbox_status scxml_host_router_drain(
                 .byte_count = row->text_size
             }
         };
-        /* Finite try_send, not Statechart execution: keep one semantic owner. */
+        /* May take CFlow's own locks; NEVER hold the Host router mutex here. */
         status = scxml_session_try_send_named_with_metadata(
-            impl->endpoints[row->target.slot].session, row->name,
-            row->name_size, &metadata);
-        if (status != CFLOW_MAILBOX_OK) {
+            session, row->name, row->name_size, &metadata);
+
+        cmeta_mutex_lock(&impl->lock);
+        if (row->state != SCXML_HOST_ROW_INFLIGHT) {
+            ++impl->invariant_failures;
+            result = CFLOW_MAILBOX_INVALID_ARGUMENT;
+        } else if (status == CFLOW_MAILBOX_OK) {
+            release_locked(impl, row);
+            ++impl->delivered;
+            ++count;
+            result = CFLOW_MAILBOX_OK;
+        } else if (impl->closed) {
+            /* Close may cancel READY rows while a foreign try_send executes.
+               This INFLIGHT row completes once and is never re-published. */
+            ++impl->cancelled;
+            release_locked(impl, row);
+            result = CFLOW_MAILBOX_CLOSED;
+        } else {
+            row->state = SCXML_HOST_ROW_READY;
             if (status != CFLOW_MAILBOX_FULL) ++impl->delivery_errors;
-            *out_delivered = count;
-            cmeta_mutex_unlock(&impl->lock);
-            return status;
+            result = status;
         }
-        release_locked(impl, row);
-        ++impl->delivered;
-        ++count;
+        cmeta_mutex_unlock(&impl->lock);
+        if (status != CFLOW_MAILBOX_OK || result != CFLOW_MAILBOX_OK) break;
     }
-    *out_delivered = count;
+
+    cmeta_mutex_lock(&impl->lock);
+    impl->draining = false;
     cmeta_mutex_unlock(&impl->lock);
-    return count != 0u ? CFLOW_MAILBOX_OK : CFLOW_MAILBOX_EMPTY;
+    *out_delivered = count;
+    return result;
 }
 
 int scxml_host_router_cancel(scxml_host_router *router,
