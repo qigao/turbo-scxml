@@ -20,7 +20,9 @@ static scxml_adapter_status host_prepare_send(
     static const char invalid_type[] =
         "Host only accepts the canonical SCXML Event Processor URI";
     static const char invalid_payload[] =
-        "Host SEND-only profile does not admit payload/content or delay";
+        "Host Event I/O only supports bounded TEXT_UTF8/XML_UTF8 content";
+    static const char invalid_delay[] =
+        "Host Event I/O does not advertise delayed sends";
     static const char invalid_target[] =
         "Missing or inaccessible SCXML Session target";
 
@@ -44,19 +46,31 @@ static scxml_adapter_status host_prepare_send(
         *out_error = invalid_type;
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
-    if (request->delay_ms != 0u ||
-        request->payload.kind != SCXML_PAYLOAD_NONE) {
-        *out_error = invalid_payload;
+    if (request->delay_ms != 0u) {
+        *out_error = invalid_delay;
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
+    {
+        const scxml_content_view *content = NULL;
+        if (request->payload.kind == SCXML_PAYLOAD_CONTENT) {
+            content = &request->payload.content;
+            if (content->kind != SCXML_CONTENT_TEXT_UTF8 &&
+                content->kind != SCXML_CONTENT_XML_UTF8) {
+                *out_error = invalid_payload;
+                return SCXML_ADAPTER_ERROR_EXECUTION;
+            }
+        } else if (request->payload.kind != SCXML_PAYLOAD_NONE) {
+            *out_error = invalid_payload;
+            return SCXML_ADAPTER_ERROR_EXECUTION;
+        }
 
-    /* Atomically resolve source-relative target and reserve Host delivery.
-       SCXML's move-only effect journal will commit/discard the ticket once. */
-    status = scxml_host_router_prepare_target(
-        impl->router, impl->source, request->target, request->target_size,
-        request->event, request->event_size,
-        request->id, request->id_size,
-        NULL, 0u, out_ticket);
+        /* Atomically resolve and copy call-scoped content. No target Session
+           admission until the source microstep commits its effect ticket. */
+        status = scxml_host_router_prepare_target(
+            impl->router, impl->source, request->target, request->target_size,
+            request->event, request->event_size,
+            request->id, request->id_size, content, out_ticket);
+    }
     switch (status) {
         case SALTS_OK:
             return SCXML_ADAPTER_ACCEPTED;
@@ -67,6 +81,12 @@ static scxml_adapter_status host_prepare_send(
         case SALTS_ENOENT:
             *out_error = invalid_target;
             return SCXML_ADAPTER_ERROR_COMMUNICATION;
+        case SALTS_EMSGSIZE:
+            *out_error = "Host content exceeds configured storage bound";
+            return SCXML_ADAPTER_ERROR_EXECUTION;
+        case SALTS_ENOTSUP:
+            *out_error = invalid_payload;
+            return SCXML_ADAPTER_ERROR_EXECUTION;
         case SALTS_EINVAL:
             return SCXML_ADAPTER_INVALID_CONTRACT;
         default:
@@ -98,7 +118,7 @@ static bool host_quiescent(void *user) {
 static const scxml_event_io_adapter HOST_ADAPTER = {
     .abi_version = SCXML_ADAPTER_ABI,
     .struct_size = sizeof(scxml_event_io_adapter),
-    .capabilities = SCXML_EVENT_IO_CAP_SEND,
+    .capabilities = SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_CONTENT,
     .prepare_send = host_prepare_send,
     .prepare_cancel = NULL,
     .close = host_close,
