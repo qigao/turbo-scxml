@@ -363,6 +363,266 @@ int scxml_host_router_detach(scxml_host_router *router,
     return SALTS_OK;
 }
 
+int scxml_host_router_set_parent(scxml_host_router *router,
+                                 scxml_host_session_ref child,
+                                 scxml_host_session_ref parent) {
+    scxml_host_router_impl *impl = router_impl(router);
+    scxml_host_session_ref ancestor;
+    size_t steps;
+    const bool clear = parent.slot == 0u && parent.generation == 0u;
+    if (impl == NULL || (!clear && refs_equal(child, parent)))
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (!matches(impl, child) || (!clear && !matches(impl, parent))) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    if (!clear) {
+        /* No parent cycles, and no dependence on retired generations. */
+        ancestor = parent;
+        for (steps = 0u; ancestor.generation != 0u &&
+                         steps < impl->endpoint_capacity; ++steps) {
+            if (refs_equal(ancestor, child)) {
+                cmeta_mutex_unlock(&impl->lock);
+                return SALTS_EINVAL;
+            }
+            if (!matches(impl, ancestor)) {
+                ++impl->stale_refs;
+                cmeta_mutex_unlock(&impl->lock);
+                return SALTS_ENOENT;
+            }
+            ancestor = impl->endpoints[ancestor.slot].parent;
+        }
+        if (ancestor.generation != 0u) {
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_EINVAL;
+        }
+    }
+    impl->endpoints[child.slot].parent =
+        clear ? (scxml_host_session_ref){0} : parent;
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+int scxml_host_router_set_external_access(
+    scxml_host_router *router, scxml_host_session_ref ref, bool enabled) {
+    scxml_host_router_impl *impl = router_impl(router);
+    if (impl == NULL) return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (!matches(impl, ref)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    impl->endpoints[ref.slot].accessible = enabled;
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+int scxml_host_router_bind_invoke(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *invoke_id, size_t invoke_id_size,
+    scxml_host_session_ref target) {
+    scxml_host_router_impl *impl = router_impl(router);
+    scxml_host_invoke_route *free_route = NULL;
+    size_t i;
+    if (impl == NULL || !valid_invoke_id(invoke_id, invoke_id_size) ||
+        refs_equal(source, target))
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (!matches(impl, source) || !matches(impl, target)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    for (i = 0u; i < impl->invoke_capacity; ++i) {
+        scxml_host_invoke_route *route = &impl->invoke_routes[i];
+        if (!route->live) {
+            if (free_route == NULL) free_route = route;
+        } else if (refs_equal(route->owner, source) &&
+                   route->id_size == invoke_id_size &&
+                   memcmp(route->id, invoke_id, invoke_id_size) == 0) {
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_EALREADY;
+        }
+    }
+    if (free_route == NULL) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOBUFS;
+    }
+    *free_route = (scxml_host_invoke_route){
+        .owner = source, .target = target,
+        .id_size = invoke_id_size, .live = true
+    };
+    memcpy(free_route->id, invoke_id, invoke_id_size);
+    free_route->id[invoke_id_size] = '\0';
+    ++impl->invoke_count;
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+int scxml_host_router_unbind_invoke(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *invoke_id, size_t invoke_id_size) {
+    scxml_host_router_impl *impl = router_impl(router);
+    size_t i;
+    if (impl == NULL || !valid_invoke_id(invoke_id, invoke_id_size))
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (!matches(impl, source)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    for (i = 0u; i < impl->invoke_capacity; ++i) {
+        scxml_host_invoke_route *route = &impl->invoke_routes[i];
+        if (route->live && refs_equal(route->owner, source) &&
+            route->id_size == invoke_id_size &&
+            memcmp(route->id, invoke_id, invoke_id_size) == 0) {
+            memset(route, 0, sizeof(*route));
+            --impl->invoke_count;
+            cmeta_mutex_unlock(&impl->lock);
+            return SALTS_OK;
+        }
+    }
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_ENOENT;
+}
+
+static bool host_target_equal(const char *target, size_t size,
+                              const char *literal) {
+    const size_t literal_size = strlen(literal);
+    return size == literal_size &&
+        memcmp(target, literal, size) == 0;
+}
+
+static int resolve_locked(scxml_host_router_impl *impl,
+                          scxml_host_session_ref source,
+                          const char *target, size_t target_size,
+                          scxml_host_session_ref *out_target) {
+    size_t i;
+    scxml_host_session_ref resolved = {0};
+    if (!matches(impl, source)) return SALTS_ENOENT;
+    if (target_size == 0u) {
+        resolved = source;
+    } else if (host_target_equal(target, target_size, "#_parent")) {
+        resolved = impl->endpoints[source.slot].parent;
+    } else if (target_size > 2u && target[0] == '#' && target[1] == '_') {
+        /* Invocation aliases have precedence over globally exposed Session
+           locations and are visible only from their owning Session. */
+        for (i = 0u; i < impl->invoke_capacity; ++i) {
+            const scxml_host_invoke_route *route = &impl->invoke_routes[i];
+            if (route->live && refs_equal(route->owner, source) &&
+                route->id_size == target_size - 2u &&
+                memcmp(route->id, target + 2u, route->id_size) == 0) {
+                resolved = route->target;
+                break;
+            }
+        }
+    }
+    if (resolved.generation == 0u && target_size != 0u) {
+        /* Global addresses are the exact generated SCXML location strings,
+           not an ambiguous slot, URI substring or prefix match. */
+        for (i = 0u; i < impl->endpoint_capacity; ++i) {
+            const scxml_host_endpoint *candidate = &impl->endpoints[i];
+            if (candidate->live && candidate->accessible &&
+                candidate->location_size == target_size &&
+                memcmp(candidate->location, target, target_size) == 0) {
+                resolved = (scxml_host_session_ref){
+                    (uint32_t)i, candidate->generation
+                };
+                break;
+            }
+        }
+    }
+    if (!matches(impl, resolved)) return SALTS_ENOENT;
+    *out_target = resolved;
+    return SALTS_OK;
+}
+
+int scxml_host_router_resolve(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *target, size_t target_size,
+    scxml_host_session_ref *out_target) {
+    scxml_host_router_impl *impl = router_impl(router);
+    int status;
+    if (out_target != NULL) *out_target = (scxml_host_session_ref){0};
+    if (impl == NULL || out_target == NULL ||
+        (target_size != 0u && target == NULL))
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    status = resolve_locked(impl, source, target, target_size, out_target);
+    if (status == SALTS_ENOENT && !matches(impl, source))
+        ++impl->stale_refs;
+    cmeta_mutex_unlock(&impl->lock);
+    return status;
+}
+
+int scxml_host_router_prepare_target(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *target, size_t target_size,
+    const char *name, size_t name_size,
+    const char *send_id, size_t send_id_size,
+    const char *text, size_t text_size,
+    cflow_statechart_effect_ticket *out_ticket) {
+    scxml_host_router_impl *impl = router_impl(router);
+    scxml_host_session_ref resolved = {0};
+    scxml_host_row *row;
+    int status;
+    if (out_ticket != NULL) *out_ticket = (cflow_statechart_effect_ticket){0};
+    if (impl == NULL || out_ticket == NULL ||
+        (target_size != 0u && target == NULL) ||
+        send_id_size > SCXML_EVENT_METADATA_CAPACITY ||
+        (send_id_size != 0u &&
+         (send_id == NULL || memchr(send_id, '\0', send_id_size) != NULL)) ||
+        !valid_fields(impl, name, name_size, text, text_size))
+        return SALTS_EINVAL;
+
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    status = resolve_locked(impl, source, target, target_size, &resolved);
+    if (status != SALTS_OK) {
+        if (!matches(impl, source)) ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return status;
+    }
+    row = reserve_locked(impl, resolved, name, name_size, text, text_size);
+    if (row == NULL) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOBUFS;
+    }
+    row->source = source;
+    if (send_id_size != 0u) memcpy(row->send_id, send_id, send_id_size);
+    row->send_id[send_id_size] = '\0';
+    row->send_id_size = send_id_size;
+    ++impl->prepared;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        ticket_commit, ticket_discard, row
+    };
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
 int scxml_host_router_prepare(scxml_host_router *router,
                               scxml_host_session_ref target,
                               const char *name, size_t name_size,
