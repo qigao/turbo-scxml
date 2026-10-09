@@ -74,6 +74,7 @@ typedef struct fenced_cnet_write {
     joint_fixture *fixture;
     const unsigned char *data;
     size_t size;
+    cnet_connection connection;
 } fenced_cnet_write;
 
 static native_io_backend_kind backend(void) {
@@ -184,7 +185,7 @@ static int send_one(void *user) {
     memcpy(mem_buffer_data(buffer), request->data, request->size);
     mem_set_used(buffer, request->size);
     status = cnet_send_buffer(
-        &request->fixture->sender, request->fixture->outbound, buffer);
+        &request->fixture->sender, request->connection, buffer);
     mem_buffer_release(buffer);
     return status;
 }
@@ -517,7 +518,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_true(f.receiver_probe.connected);
         check_equal(cnet_receive(&f.receiver, f.inbound, 2u), SALTS_OK);
 
-        write_a = (fenced_cnet_write){&f, &a, 1u};
+        write_a = (fenced_cnet_write){&f, &a, 1u, f.outbound};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen1, send_one, &write_a), SALTS_OK);
         /* gN still holds a live Invoke even if its native send completes. */
@@ -575,7 +576,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(cmeta_plugin_registry_unload(
             &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
 
-        write_b = (fenced_cnet_write){&f, &b, 1u};
+        write_b = (fenced_cnet_write){&f, &b, 1u, f.outbound};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen2, send_one, &write_b), SALTS_OK);
         deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
@@ -639,7 +640,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
            then cancel its Invoke before polling the native completion. The
            original Component Scope must remain retained until that callback. */
         check_equal(cnet_receive(&f.receiver, f.inbound, 1u), SALTS_OK);
-        write_c = (fenced_cnet_write){&f, &c, 1u};
+        write_c = (fenced_cnet_write){&f, &c, 1u, f.outbound};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen2, send_one, &write_c), SALTS_OK);
         check_equal(f.sender_probe.sends_done, (size_t)2u);
