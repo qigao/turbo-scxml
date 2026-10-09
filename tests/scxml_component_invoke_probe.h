@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct scxml_test_cnet_probe_snapshot {
+typedef struct scxml_test_cnet_observer_stats {
     uint64_t invoke_token;
     int marker;
     size_t native_sends;
@@ -21,11 +21,11 @@ typedef struct scxml_test_cnet_probe_snapshot {
     bool native_connected;
     bool native_terminal;
     bool invoke_closed;
-} scxml_test_cnet_probe_snapshot;
+} scxml_test_cnet_observer_stats;
 
 #define SCXML_TEST_CNET_PROBE_METHODS(X, I) \
     X(I, R1, bool, get_observer, cnet_observer *, out) \
-    X(I, R1, bool, snapshot, scxml_test_cnet_probe_snapshot *, out)
+    X(I, R1, bool, snapshot, scxml_test_cnet_observer_stats *, out)
 
 CMETA_INTERFACE(scxml_test_cnet_probe, SCXML_TEST_CNET_PROBE_METHODS);
 CMETA_OBJECT_INTERFACE_ADAPTER(scxml_test_cnet_probe);
