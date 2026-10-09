@@ -5,6 +5,7 @@
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/plugin.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
 #include <stdint.h>
@@ -269,6 +270,37 @@ static bool retire_native_dso_generation(void *user) {
     if (status == SALTS_COMPONENT_PLUGIN_BUSY)
         probe->saw_scope_busy = true;
     return status == SALTS_COMPONENT_PLUGIN_OK;
+}
+
+typedef struct dso_concurrent_unload {
+    cmeta_plugin_registry *registry;
+    cmeta_plugin_ref plugin;
+    scxml_test_cnet_callback_gate *gate;
+    cmeta_plugin_status status;
+    bool reached_callback;
+} dso_concurrent_unload;
+
+static void callback_gate_init(scxml_test_cnet_callback_gate *gate) {
+    atomic_init(&gate->entered, 0);
+    atomic_init(&gate->release, 0);
+    atomic_init(&gate->timed_out, 0);
+}
+
+/* Runs concurrently with *actual DSO instructions* inside the CNet owner's
+ * poll callback. Never touches the owner-only CNet/Invoke/Scope objects;
+ * the registry itself serializes unload/lease admission. */
+static void foreign_unload_during_callback(void *user) {
+    dso_concurrent_unload *race = (dso_concurrent_unload *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(10000);
+    while (!atomic_load_explicit(&race->gate->entered, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    race->reached_callback =
+        atomic_load_explicit(&race->gate->entered, memory_order_acquire) != 0;
+    if (race->reached_callback)
+        race->status = cmeta_plugin_registry_unload(
+            race->registry, race->plugin);
+    atomic_store_explicit(&race->gate->release, 1, memory_order_release);
 }
 
 static bool signal(joint_fixture *fixture, size_t slot, const char *name) {
@@ -741,7 +773,12 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         char uri[64];
         const unsigned char a = 'A', b = 'B', c = 'C';
         fenced_cnet_write write_a, write_b, write_c;
+        scxml_test_cnet_callback_gate send_gate, terminal_gate;
+        dso_concurrent_unload send_race = {0}, terminal_race = {0};
+        cmeta_thread_t send_thread = NULL, terminal_thread = NULL;
 
+        callback_gate_init(&send_gate);
+        callback_gate_init(&terminal_gate);
         check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
                     CMETA_PLUGIN_OK);
         f.registry_live = true;
@@ -825,6 +862,10 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
         check_true(f.receiver_probe.connected);
         check_equal(cnet_receive(&f.receiver, f.inbound, 1u), SALTS_OK);
+        /* Arm before native send admission: later owner polls may deliver
+           on_send while building/connecting the next generation. */
+        check_true(scxml_test_cnet_probe_arm_send_gate(
+            &probes[0], &send_gate));
         write_a = (fenced_cnet_write){&f, &a, 1u, f.outbound};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen[0], send_one, &write_a), SALTS_OK);
@@ -882,6 +923,14 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         token[1] = invoke_token_from_scope(&f.scopes[1]);
         check_true(token[1] > 0);
 
+        /* Race registry unload against live gN DSO on_send, while its Scope
+           and old NativeIO request are still pinned through publication. */
+        send_race.registry = &f.registry;
+        send_race.plugin = f.plugins[0];
+        send_race.gate = &send_gate;
+        check_equal(cmeta_thread_create(
+            &send_thread, foreign_unload_during_callback, &send_race),
+            SALTS_OK);
         options.observer = sender_observers[1];
         check_equal(cnet_connect(&f.sender, &options, &f.outbound_next), SALTS_OK);
         deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
@@ -891,6 +940,12 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         } while (!native[1].native_connected &&
                  cmeta_monotonic_ms() < deadline);
         check_true(native[1].native_connected);
+        check_equal(cmeta_thread_join(&send_thread), SALTS_OK);
+        cmeta_thread_destroy(&send_thread);
+        check_true(send_race.reached_callback);
+        check_equal(send_race.status, CMETA_PLUGIN_BUSY);
+        check_equal(atomic_load_explicit(
+            &send_gate.timed_out, memory_order_acquire), 0);
         check_equal(cnet_listener_wait(&f.listener, TIMEOUT_MS, &ready),
                     SALTS_OK);
         check_equal(ready, 1);
@@ -1037,6 +1092,16 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(native[1].native_sends, (size_t)2u);
         check_equal(f.receiver_probe_next.received, (size_t)2u);
         check_equal(f.receiver_probe_next.bytes[1], (unsigned char)'C');
+        /* Repeat with an authentic terminal on_state callback *inside*
+           the second DSO. Unload races the callback, not a copied snapshot. */
+        check_true(scxml_test_cnet_probe_arm_terminal_gate(
+            &probes[1], &terminal_gate));
+        terminal_race.registry = &f.registry;
+        terminal_race.plugin = f.plugins[1];
+        terminal_race.gate = &terminal_gate;
+        check_equal(cmeta_thread_create(
+            &terminal_thread, foreign_unload_during_callback, &terminal_race),
+            SALTS_OK);
         check_equal(cnet_close(&f.sender, f.outbound_next), SALTS_OK);
         check_equal(cnet_close(&f.receiver, f.inbound_next), SALTS_OK);
         deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
@@ -1047,6 +1112,12 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         } while (!native[1].native_terminal &&
                  cmeta_monotonic_ms() < deadline);
         check_true(native[1].native_terminal);
+        check_equal(cmeta_thread_join(&terminal_thread), SALTS_OK);
+        cmeta_thread_destroy(&terminal_thread);
+        check_true(terminal_race.reached_callback);
+        check_equal(terminal_race.status, CMETA_PLUGIN_BUSY);
+        check_equal(atomic_load_explicit(
+            &terminal_gate.timed_out, memory_order_acquire), 0);
         check_equal(scxml_cnet_domain_fence_retire(
             &f.fence, gen[1], retire_native_dso_generation, &draining[1]),
             SALTS_EBUSY);
