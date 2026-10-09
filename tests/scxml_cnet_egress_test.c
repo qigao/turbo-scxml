@@ -287,9 +287,11 @@ spec("CNet transactional outbound raw-byte profile") {
         while (cmeta_monotonic_ms() < deadline) {
             check_equal(cnet_client_poll(&sender, 1u, &events), SALTS_OK);
             check_equal(cnet_client_poll(&receiver, 1u, &events), SALTS_OK);
-            if (scxml_cnet_egress_is_quiescent(&egress)) break;
+            check_true(scxml_cnet_egress_get_stats(&egress, &stats));
+            /* Terminal belongs to CNet; full quiescence additionally
+               requires the SCXML Session to close its adapter below. */
+            if (stats.terminal) break;
         }
-        check_true(scxml_cnet_egress_get_stats(&egress, &stats));
         check_true(stats.terminal);
         check_equal(stats.pending, (size_t)0u);
         scxml_session_cancel(&session);
