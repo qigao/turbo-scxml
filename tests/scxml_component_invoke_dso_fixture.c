@@ -206,12 +206,12 @@ static bool probe_get_observer(void *self, cnet_observer *out) {
 }
 
 static bool probe_snapshot(void *self,
-                           scxml_test_cnet_probe_snapshot *out) {
+                           scxml_test_cnet_observer_stats *out) {
     const invoke_fixture_state *fixture =
         (const invoke_fixture_state *)self;
-    if (out != NULL) *out = (scxml_test_cnet_probe_snapshot){0};
+    if (out != NULL) *out = (scxml_test_cnet_observer_stats){0};
     if (fixture == NULL || out == NULL) return false;
-    *out = (scxml_test_cnet_probe_snapshot){
+    *out = (scxml_test_cnet_observer_stats){
         .invoke_token = fixture->active_token,
         .marker = fixture->marker,
         .native_sends = fixture->native_sends,
