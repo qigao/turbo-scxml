@@ -274,6 +274,13 @@ int scxml_host_router_init(scxml_host_router *router,
         config->event_capacity == 0u ||
         config->event_capacity > SIZE_MAX / sizeof(scxml_host_row) ||
         config->invoke_capacity > SIZE_MAX / sizeof(scxml_host_invoke_route) ||
+        config->cancel_capacity > SIZE_MAX / sizeof(scxml_host_cancel_row) ||
+        config->timer_capacity > config->event_capacity ||
+        ((config->timer_capacity != 0u) != (config->clock != NULL)) ||
+        (config->timer_capacity != 0u &&
+         (config->cancel_capacity == 0u ||
+          !cflow_clock_valid(config->clock))) ||
+        (config->timer_capacity == 0u && config->cancel_capacity != 0u) ||
         config->max_text_bytes == 0u ||
         config->max_text_bytes > SCXML_EVENT_METADATA_CAPACITY)
         return SALTS_EINVAL;
@@ -287,11 +294,17 @@ int scxml_host_router_init(scxml_host_router *router,
         impl->invoke_routes = (scxml_host_invoke_route *)calloc(
             config->invoke_capacity, sizeof(*impl->invoke_routes));
     }
+    if (config->cancel_capacity != 0u) {
+        impl->cancel_rows = (scxml_host_cancel_row *)calloc(
+            config->cancel_capacity, sizeof(*impl->cancel_rows));
+    }
     if (impl->endpoints == NULL || impl->rows == NULL ||
-        (config->invoke_capacity != 0u && impl->invoke_routes == NULL)) {
+        (config->invoke_capacity != 0u && impl->invoke_routes == NULL) ||
+        (config->cancel_capacity != 0u && impl->cancel_rows == NULL)) {
         free(impl->endpoints);
         free(impl->rows);
         free(impl->invoke_routes);
+        free(impl->cancel_rows);
         free(impl);
         return SALTS_ENOMEM;
     }
@@ -300,12 +313,16 @@ int scxml_host_router_init(scxml_host_router *router,
         free(impl->endpoints);
         free(impl->rows);
         free(impl->invoke_routes);
+        free(impl->cancel_rows);
         free(impl);
         return SALTS_ENOMEM;
     }
     impl->endpoint_capacity = config->endpoint_capacity;
     impl->event_capacity = config->event_capacity;
     impl->invoke_capacity = config->invoke_capacity;
+    impl->clock = config->clock;
+    impl->timer_capacity = config->timer_capacity;
+    impl->cancel_capacity = config->cancel_capacity;
     impl->max_text_bytes = config->max_text_bytes;
     for (i = 0u; i < config->event_capacity; ++i) impl->rows[i].owner = impl;
     router->impl = impl;
@@ -1107,7 +1124,10 @@ bool scxml_host_router_get_stats(
         .reserved = impl->reserved,
         .high_water = impl->high_water,
         .invoke_bindings = impl->invoke_count,
+        .delayed_pending = impl->timer_pending,
+        .cancel_pending = impl->cancel_pending,
         .closed = impl->closed,
+        .timer_running = impl->timer_running,
         .draining = impl->draining,
         .prepared = impl->prepared,
         .committed = impl->committed,
@@ -1117,7 +1137,14 @@ bool scxml_host_router_get_stats(
         .rejected_full = impl->rejected_full,
         .stale_refs = impl->stale_refs,
         .delivery_errors = impl->delivery_errors,
-        .invariant_failures = impl->invariant_failures
+        .invariant_failures = impl->invariant_failures,
+        .timer_fired = impl->timer_fired,
+        .timer_cancelled = impl->timer_cancelled,
+        .cancel_prepared = impl->cancel_prepared,
+        .cancel_committed = impl->cancel_committed,
+        .cancel_discarded = impl->cancel_discarded,
+        .cancel_fire_won = impl->cancel_fire_won,
+        .timer_done_failed = impl->timer_done_failed
     };
     cmeta_mutex_unlock(&impl->lock);
     return true;
@@ -1149,8 +1176,9 @@ bool scxml_host_router_is_quiescent(const scxml_host_router *router) {
     bool ok;
     if (impl == NULL) return false;
     cmeta_mutex_lock(&impl->lock);
-    ok = impl->closed && !impl->draining &&
-         impl->pending == 0u && impl->endpoint_count == 0u &&
+    ok = impl->closed && !impl->draining && !impl->timer_running &&
+         impl->pending == 0u && impl->timer_pending == 0u &&
+         impl->cancel_pending == 0u && impl->endpoint_count == 0u &&
          impl->invoke_count == 0u;
     cmeta_mutex_unlock(&impl->lock);
     return ok;
@@ -1165,6 +1193,7 @@ int scxml_host_router_destroy(scxml_host_router *router) {
     free(impl->rows);
     free(impl->endpoints);
     free(impl->invoke_routes);
+    free(impl->cancel_rows);
     free(impl);
     router->impl = NULL;
     return SALTS_OK;
