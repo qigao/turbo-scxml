@@ -86,8 +86,8 @@ int scxml_host_router_reserve(
 int scxml_host_router_activate(
     scxml_host_router *router, scxml_host_session_ref ref,
     scxml_session *session);
-/* Abort a never-activated endpoint after failed Session init. READY rows
- * involving it are cancelled; RESERVED tickets must first discard/commit.
+/* Abort a never-activated endpoint after failed Session init. READY and
+ * DELAYED rows are cancelled; RESERVED tickets must first discard/commit.
  * Relation bindings must be explicitly unlinked before abortion.
  */
 int scxml_host_router_abort(
@@ -222,8 +222,8 @@ int scxml_host_router_cancel(scxml_host_router *router,
                              scxml_host_session_ref target,
                              size_t *out_cancelled);
 /* Close a source's Event I/O binding without cancelling unrelated targets:
- * drop only READY rows from this exact sending Session. RESERVED tickets
- * and INFLIGHT delivery remain authoritative and must settle separately. */
+ * drop READY and DELAYED rows owned by this source. RESERVED tickets and
+ * FIRING/INFLIGHT delivery remain authoritative until natural settlement. */
 int scxml_host_router_cancel_source(
     scxml_host_router *router, scxml_host_session_ref source,
     size_t *out_cancelled);

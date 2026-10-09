@@ -338,4 +338,67 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         scxml_program_destroy(&program);
     }
 
+    it("cancels unexpired source timers on Session close without firing") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='waiting'>"
+            "<state id='waiting'><onentry>"
+            "<send event='never' delay='5ms' id='close-1'/>"
+            "</onentry></state></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        scxml_host_router router = {0};
+        scxml_host_session_ref ref = {0};
+        scxml_host_event_io_binding binding = {0};
+        cflow_executor executor = {0};
+        cflow_clock clock = {0};
+        scxml_host_router_stats stats = {0};
+        size_t fired = 0u, delivered = 0u;
+
+        check_true(cflow_clock_virtual_init(&clock, (cflow_instant){0u}));
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_compile(&program, source, sizeof(source)-1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        check_equal(scxml_host_router_init(
+            &router, &(scxml_host_router_config){
+                .endpoint_capacity = 1u, .event_capacity = 1u,
+                .max_text_bytes = 8u, .clock = &clock,
+                .timer_capacity = 1u, .cancel_capacity = 1u
+            }), SALTS_OK);
+        check_equal(scxml_host_router_reserve(&router, &ref), SALTS_OK);
+        check_equal(scxml_host_event_io_binding_init_delayed(
+            &binding, &router, ref), SALTS_OK);
+        {
+            scxml_session_config config =
+                timed_session_config(&program, &executor, &binding);
+            check_equal(scxml_session_init(&session, &config),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_equal(scxml_host_router_activate(&router, ref, &session), SALTS_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.delayed_pending, (size_t)1u);
+        scxml_session_cancel(&session);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)0u);
+        check_equal(stats.delayed_pending, (size_t)0u);
+        check_equal(stats.timer_cancelled, UINT64_C(1));
+        check_true(cflow_clock_advance(&clock, cflow_duration_from_ms(10u)));
+        check_equal(scxml_host_router_run_due(&router, 1u, &fired), SALTS_OK);
+        check_equal(fired, (size_t)0u);
+        check_equal(scxml_host_router_drain(&router, 1u, &delivered),
+                    CFLOW_MAILBOX_EMPTY);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_host_event_io_binding_destroy(&binding), SALTS_OK);
+        check_equal(scxml_host_router_detach(&router, ref), SALTS_OK);
+        check_equal(scxml_host_router_close(&router), SALTS_OK);
+        check_equal(scxml_host_router_destroy(&router), SALTS_OK);
+        cflow_executor_destroy(&executor);
+        cflow_clock_destroy(&clock);
+        scxml_program_destroy(&program);
+    }
+
 }

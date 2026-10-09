@@ -26,9 +26,41 @@ Detach returns BUSY while RESERVED or READY events still borrow that Session.
 - **Host consumer:** explicit `host_router_drain` transfers ready Events in
   commit order via `scxml_session_try_send_named_with_metadata`. Session FULL
   retains the same head; no busy-loop, automatic retry or unbounded backup.
-- **Lifecycle:** Host `cancel` explicitly drops only READY events for a
-  generation. RESERVED tickets must still settle. `close` cancels READY
-  globally. Session detach and Host destroy require every borrowed row gone.
+- **Lifecycle:** Host target cancel drops READY rows; source close and
+  aborted initialization also cancel unexpired DELAYED rows. RESERVED and
+  FIRING/INFLIGHT work still requires natural settlement. Router close
+  cancels READY and DELAYED globally; detach requires all borrows gone.
+
+## CFlow Clock delayed sends and sendid cancellation
+
+The base Host adapter remains SEND|CONTENT. An explicit delayed binding
+requires a valid borrowed monotonic `cflow_clock`, positive
+`timer_capacity` and `cancel_capacity`, and opts in to DELAYED_SEND|CANCEL.
+No second Scheduler or Statechart timer queue is created. Deadlines are
+measured at effect-ticket **commit**, and the Host owner alone invokes
+`scxml_host_router_run_due` after serialized CFlow Clock progress.
+
+A bounded Host Event row keeps the borrowed request's copied sendid and
+content while RESERVED/DELAYED. At the deadline, the Host claims FIRING,
+releases its mutex, calls the existing SCXML Session sendid registry's
+`scxml_session_report_send_done`, and only then publishes READY. Target
+Mailbox FULL retains READY without automatic retry.
+
+Cancel has its own finite ticket pool. Preparing it pins the source and
+the original Event-row identity, guarding against slot reuse. CFlow
+commit cancels RESERVED/DELAYED rows; discard leaves them intact. If
+the deadline claim has already won, late cancel is a terminal no-op.
+The runtime may clear its sendid registry while its Host cancel intent is
+still live. The Host recognizes this specific completion race by the
+matching row identity and cancel intent; a false sendid completion without
+such proof remains a protocol failure and never invents a successful Event.
+
+Closing a source only cancels its unexpired READY/DELAYED rows; a still
+FIRING/INFLIGHT row retains Session/Plugin generation ownership until
+natural settlement. Clock mutation must be externally serialized with
+Host due-driving and commit. Tests cover exact virtual deadline, same
+microstep send+cancel, discard, capacity, fire-wins, source-close,
+invalid sendid and Release/ASan+UBSan memory safety.
 
 ## Experimental framed TCP wire profile
 
@@ -79,7 +111,7 @@ FIFO FULL with retained Host head, TCP split/coalesced frames, Host FULL,
 stale CNet generation rejection, invalid length and terminal teardown.
 
 **Remaining:** named/scalar/CMETA data-model conversion and complete normative
-SCXML Event wire codec/target mapping,
-bidirectional observer composition, cross-Owner Host Actor controls, delayed
-send and cancellation ACT, exclusive generation fencing, Windows/macOS and
-sanitizer qualification. All remain tracked by the existing umbrella issues.
+SCXML Event wire codec/target mapping, bidirectional observer composition,
+cross-Owner Host Actor controls, full Invoke ACT and NativeIO terminal
+cancellation races, generation fencing, TSan, Windows/macOS and complete
+stable SDK qualification. Linux ASan+UBSan does not replace these gates.

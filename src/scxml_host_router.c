@@ -441,6 +441,8 @@ int scxml_host_router_abort(scxml_host_router *router,
              row->state == SCXML_HOST_ROW_DELAYED) &&
             (refs_equal(row->source, ref) ||
              refs_equal(row->target, ref))) {
+            if (row->state == SCXML_HOST_ROW_DELAYED)
+                ++impl->timer_cancelled;
             release_locked(impl, row);
             ++impl->cancelled;
         }
@@ -1100,17 +1102,17 @@ int scxml_host_router_run_due(
                 ++impl->cancelled;
                 release_locked(impl, row);
             } else {
-            if (impl->timer_pending == 0u) {
-                ++impl->invariant_failures;
-                result = SALTS_EPROTO;
-                release_locked(impl, row);
-            } else {
-                --impl->timer_pending;
-                row->state = SCXML_HOST_ROW_READY;
-                ++impl->timer_fired;
-                ++count;
+                if (impl->timer_pending == 0u) {
+                    ++impl->invariant_failures;
+                    result = SALTS_EPROTO;
+                    release_locked(impl, row);
+                } else {
+                    --impl->timer_pending;
+                    row->state = SCXML_HOST_ROW_READY;
+                    ++impl->timer_fired;
+                    ++count;
+                }
             }
-        }
         }
         cmeta_mutex_unlock(&impl->lock);
         if (result != SALTS_OK) break;
@@ -1371,6 +1373,8 @@ int scxml_host_router_cancel_source(
         if ((row->state == SCXML_HOST_ROW_READY ||
              row->state == SCXML_HOST_ROW_DELAYED) &&
             refs_equal(row->source, source)) {
+            if (row->state == SCXML_HOST_ROW_DELAYED)
+                ++impl->timer_cancelled;
             release_locked(impl, row);
             ++impl->cancelled;
             ++count;
