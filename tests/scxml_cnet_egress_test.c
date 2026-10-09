@@ -287,11 +287,11 @@ spec("CNet transactional outbound raw-byte profile") {
         while (cmeta_monotonic_ms() < deadline) {
             check_equal(cnet_client_poll(&sender, 1u, &events), SALTS_OK);
             check_equal(cnet_client_poll(&receiver, 1u, &events), SALTS_OK);
-            if (scxml_cnet_egress_is_quiescent(&egress) && probe.terminal)
-                break;
+            if (scxml_cnet_egress_is_quiescent(&egress)) break;
         }
         check_true(scxml_cnet_egress_get_stats(&egress, &stats));
         check_true(stats.terminal);
+        check_equal(stats.pending, (size_t)0u);
         scxml_session_cancel(&session);
         check_true(cflow_executor_wait_idle(&executor));
         check_true(scxml_cnet_egress_is_quiescent(&egress));
@@ -299,6 +299,8 @@ spec("CNet transactional outbound raw-byte profile") {
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_cnet_egress_destroy(&egress), SALTS_OK);
         check_equal(cnet_client_stop(&receiver, 1000u), SALTS_OK);
+        /* CNet stop is the definitive terminal for the receiving owner. */
+        check_true(probe.terminal);
         check_equal(cnet_client_destroy(&receiver), SALTS_OK);
         check_equal(cnet_client_stop(&sender, 1000u), SALTS_OK);
         check_equal(cnet_client_destroy(&sender), SALTS_OK);
