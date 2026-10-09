@@ -1,12 +1,20 @@
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/native_io.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
  * borrows it, and all observation, routing and admission use the same owner.
@@ -114,6 +122,35 @@ static int submit_one(cnet_client *client, cnet_connection connection,
     }
     return native_io_request_valid(*request) ? SALTS_OK : SALTS_ENOENT;
 }
+
+#if !defined(_WIN32)
+/* The producer performs ordinary kernel I/O on the peer socket. Only the
+ * owner thread calls NativeIO methods; concurrent calls into the backend are
+ * explicitly forbidden by its contract. */
+typedef struct native_cancel_producer {
+    atomic_int ready;
+    atomic_int fire;
+    atomic_int written;
+    int peer;
+    unsigned char byte;
+} native_cancel_producer;
+
+static void native_cancel_write_peer(void *user) {
+    native_cancel_producer *race = (native_cancel_producer *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + REQUEST_TEST_TIMEOUT_MS;
+    atomic_store_explicit(&race->ready, 1, memory_order_release);
+    while (!atomic_load_explicit(&race->fire, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (!atomic_load_explicit(&race->fire, memory_order_acquire)) {
+        atomic_store_explicit(&race->written, -1, memory_order_release);
+        return;
+    }
+    atomic_store_explicit(&race->written,
+        send(race->peer, &race->byte, 1u, 0) == 1 ? 1 : -1,
+        memory_order_release);
+}
+#endif
 
 spec("CNet external NativeIO slot/generation and stale terminal ownership") {
     it("reuses a real native request slot without accepting the old terminal") {
@@ -240,4 +277,122 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(native_io_backend_close(&io), SALTS_OK);
         check_equal(native_io_backend_destroy(&io), SALTS_OK);
     }
+#if !defined(_WIN32)
+    it("arbitrates real peer completion versus cancellation once on the NativeIO owner") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_request request = {0}, replacement = {0};
+        native_io_completion first = {0}, second = {0};
+        native_io_backend_stats stats = {0};
+        native_io_operation operation = {0};
+        native_cancel_producer race = {0};
+        cmeta_thread_t thread = NULL;
+        int sockets[2] = {-1, -1}, cancel_status, flags;
+        size_t count = 0u;
+        unsigned char first_byte = 0u, second_byte = 0u;
+        uint64_t deadline;
+
+        check_equal(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+        for (size_t i = 0u; i < 2u; ++i) {
+            flags = fcntl(sockets[i], F_GETFL, 0);
+            check_true(flags >= 0);
+            check_equal(fcntl(sockets[i], F_SETFL, flags | O_NONBLOCK), 0);
+        }
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_STREAM_RECV,
+            .endpoint = endpoint, .buffer = &first_byte,
+            .length = 1u, .user_data = UINTPTR_C(41)
+        };
+        check_equal(native_io_backend_submit(&io, &operation, &request),
+                    SALTS_OK);
+        check_true(native_io_request_valid(request));
+
+        /* Producer races an actual socket write with an owner-lane native
+           cancellation request. Cancellation acknowledgement is NOT a
+           terminal; only observe decides between OK and CANCELLED. */
+        atomic_init(&race.ready, 0);
+        atomic_init(&race.fire, 0);
+        atomic_init(&race.written, 0);
+        race.peer = sockets[1];
+        race.byte = 'A';
+        check_equal(cmeta_thread_create(
+            &thread, native_cancel_write_peer, &race), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + REQUEST_TEST_TIMEOUT_MS;
+        while (!atomic_load_explicit(&race.ready, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+        }
+        check_equal(atomic_load_explicit(
+            &race.ready, memory_order_acquire), 1);
+        atomic_store_explicit(&race.fire, 1, memory_order_release);
+        cancel_status = native_io_backend_cancel(&io, request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_equal(cmeta_thread_join(&thread), SALTS_OK);
+        cmeta_thread_destroy(&thread);
+        check_equal(atomic_load_explicit(
+            &race.written, memory_order_acquire), 1);
+        check_equal(native_io_backend_release_socket(&io, endpoint),
+                    SALTS_EBUSY);
+
+        check_equal(native_io_backend_observe(
+            &io, &first, 1u, REQUEST_TEST_TIMEOUT_MS, &count), SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(first.request, request));
+        check_true(first.kind == NATIVE_IO_COMPLETION_CANCELLED ||
+                   first.kind == NATIVE_IO_COMPLETION_OK);
+        if (first.kind == NATIVE_IO_COMPLETION_CANCELLED) {
+            check_equal(first.bytes, (size_t)0u);
+        } else {
+            check_equal(first.bytes, (size_t)1u);
+            check_equal(first_byte, (unsigned char)'A');
+        }
+        check_equal(native_io_backend_cancel(&io, request), SALTS_ENOENT);
+        count = 99u;
+        check_equal(native_io_backend_observe(
+            &io, &second, 1u, 0u, &count), SALTS_ETIMEDOUT);
+        check_equal(count, (size_t)0u);
+
+        /* request_capacity==1 forces a REAL slot recycle; the stale cancel
+           must not invalidate the new generation or release its buffer. */
+        operation.buffer = &second_byte;
+        operation.user_data = (uintptr_t)42u;
+        check_equal(native_io_backend_submit(&io, &operation, &replacement),
+                    SALTS_OK);
+        check_equal(replacement.slot, request.slot);
+        check_not_equal(replacement.generation, request.generation);
+        check_equal(native_io_backend_cancel(&io, request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+        if (first.kind == NATIVE_IO_COMPLETION_OK) {
+            const unsigned char next_byte = 'B';
+            check_equal(send(sockets[1], &next_byte, 1u, 0), 1);
+        }
+        count = 0u;
+        second = (native_io_completion){0};
+        check_equal(native_io_backend_observe(
+            &io, &second, 1u, REQUEST_TEST_TIMEOUT_MS, &count), SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(second.request, replacement));
+        check_equal(second.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(second.bytes, (size_t)1u);
+        check_equal(second_byte, (unsigned char)(
+            first.kind == NATIVE_IO_COMPLETION_CANCELLED ? 'A' : 'B'));
+        check_equal(native_io_backend_cancel(&io, replacement), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(close(sockets[0]), 0);
+        check_equal(close(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(&io, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
+    }
+#endif
 }
