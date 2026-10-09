@@ -860,6 +860,239 @@ int scxml_host_router_prepare_target(
     return SALTS_OK;
 }
 
+
+static void cancel_release_locked(scxml_host_router_impl *impl,
+                                  scxml_host_cancel_row *intent) {
+    if (!intent->in_use || impl->cancel_pending == 0u) {
+        ++impl->invariant_failures;
+        return;
+    }
+    intent->target = NULL;
+    intent->target_identity = 0u;
+    intent->source = (scxml_host_session_ref){0};
+    intent->in_use = false;
+    --impl->cancel_pending;
+}
+
+static void cancel_commit(void *user) {
+    scxml_host_cancel_row *intent = (scxml_host_cancel_row *)user;
+    scxml_host_router_impl *impl;
+    scxml_host_row *row;
+    if (intent == NULL || intent->owner == NULL) return;
+    impl = intent->owner;
+    cmeta_mutex_lock(&impl->lock);
+    if (!intent->in_use) {
+        ++impl->invariant_failures;
+    } else {
+        row = intent->target;
+        if (row != NULL && row->identity == intent->target_identity &&
+            refs_equal(row->source, intent->source) &&
+            (row->state == SCXML_HOST_ROW_RESERVED ||
+             row->state == SCXML_HOST_ROW_DELAYED)) {
+            ++impl->timer_cancelled;
+            ++impl->cancelled;
+            release_locked(impl, row);
+        } else {
+            /* Once the owner has claimed deadline FIRING, cancellation is
+               terminally lost. A recycled row is protected by identity. */
+            ++impl->cancel_fire_won;
+        }
+        ++impl->cancel_committed;
+        cancel_release_locked(impl, intent);
+    }
+    cmeta_mutex_unlock(&impl->lock);
+}
+
+static void cancel_discard(void *user) {
+    scxml_host_cancel_row *intent = (scxml_host_cancel_row *)user;
+    scxml_host_router_impl *impl;
+    if (intent == NULL || intent->owner == NULL) return;
+    impl = intent->owner;
+    cmeta_mutex_lock(&impl->lock);
+    if (!intent->in_use) {
+        ++impl->invariant_failures;
+    } else {
+        ++impl->cancel_discarded;
+        cancel_release_locked(impl, intent);
+    }
+    cmeta_mutex_unlock(&impl->lock);
+}
+
+int scxml_host_router_prepare_cancel(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *send_id, size_t send_id_size,
+    cflow_statechart_effect_ticket *out_ticket) {
+    scxml_host_router_impl *impl = router_impl(router);
+    scxml_host_row *row = NULL;
+    scxml_host_cancel_row *intent = NULL;
+    size_t i;
+    if (out_ticket != NULL) *out_ticket = (cflow_statechart_effect_ticket){0};
+    if (impl == NULL || out_ticket == NULL || send_id == NULL ||
+        send_id_size == 0u || send_id_size > SCXML_EVENT_METADATA_CAPACITY ||
+        memchr(send_id, '\0', send_id_size) != NULL ||
+        impl->cancel_capacity == 0u)
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (!matches(impl, source)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    for (i = 0u; i < impl->event_capacity; ++i) {
+        scxml_host_row *candidate = &impl->rows[i];
+        if (candidate->delay_ms != 0u &&
+            candidate->state != SCXML_HOST_ROW_FREE &&
+            refs_equal(candidate->source, source) &&
+            candidate->send_id_size == send_id_size &&
+            memcmp(candidate->send_id, send_id, send_id_size) == 0) {
+            row = candidate;
+            break;
+        }
+    }
+    if (row == NULL) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    if (impl->cancel_pending >= impl->cancel_capacity) {
+        ++impl->rejected_full;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOBUFS;
+    }
+    for (i = 0u; i < impl->cancel_capacity; ++i) {
+        if (!impl->cancel_rows[i].in_use) {
+            intent = &impl->cancel_rows[i];
+            break;
+        }
+    }
+    if (intent == NULL) {
+        ++impl->invariant_failures;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_EPROTO;
+    }
+    *intent = (scxml_host_cancel_row){
+        .owner = impl, .target = row, .source = source,
+        .target_identity = row->identity, .in_use = true
+    };
+    ++impl->cancel_pending;
+    ++impl->cancel_prepared;
+    *out_ticket = (cflow_statechart_effect_ticket){
+        cancel_commit, cancel_discard, intent
+    };
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+bool scxml_host_router_supports_delayed(const scxml_host_router *router) {
+    scxml_host_router_impl *impl = router != NULL
+        ? (scxml_host_router_impl *)router->impl : NULL;
+    bool valid;
+    if (impl == NULL) return false;
+    cmeta_mutex_lock(&impl->lock);
+    valid = !impl->closed && impl->clock != NULL &&
+        cflow_clock_valid(impl->clock) &&
+        impl->timer_capacity != 0u && impl->cancel_capacity != 0u;
+    cmeta_mutex_unlock(&impl->lock);
+    return valid;
+}
+
+int scxml_host_router_run_due(
+    scxml_host_router *router, size_t max_fires, size_t *out_fired) {
+    scxml_host_router_impl *impl = router_impl(router);
+    int result = SALTS_OK;
+    size_t count = 0u;
+    if (out_fired != NULL) *out_fired = 0u;
+    if (impl == NULL || out_fired == NULL || max_fires == 0u ||
+        impl->clock == NULL)
+        return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (impl->closed) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ESHUTDOWN;
+    }
+    if (impl->timer_running) {
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_EBUSY;
+    }
+    impl->timer_running = true;
+    cmeta_mutex_unlock(&impl->lock);
+
+    while (count < max_fires) {
+        scxml_host_row *row = NULL;
+        scxml_session *source_session;
+        bool settled;
+        size_t i;
+        cflow_instant now;
+        cmeta_mutex_lock(&impl->lock);
+        if (impl->closed) {
+            result = SALTS_ESHUTDOWN;
+            cmeta_mutex_unlock(&impl->lock);
+            break;
+        }
+        now = cflow_clock_now(impl->clock);
+        for (i = 0u; i < impl->event_capacity; ++i) {
+            scxml_host_row *candidate = &impl->rows[i];
+            if (candidate->state == SCXML_HOST_ROW_DELAYED &&
+                candidate->deadline_ns <= now.ns &&
+                matches(impl, candidate->source) &&
+                impl->endpoints[candidate->source.slot].active &&
+                (row == NULL ||
+                 candidate->deadline_ns < row->deadline_ns ||
+                 (candidate->deadline_ns == row->deadline_ns &&
+                  candidate->sequence < row->sequence)))
+                row = candidate;
+        }
+        if (row == NULL) {
+            cmeta_mutex_unlock(&impl->lock);
+            break;
+        }
+        source_session = impl->endpoints[row->source.slot].session;
+        row->state = SCXML_HOST_ROW_FIRING;
+        cmeta_mutex_unlock(&impl->lock);
+
+        /* CFlow Session registry may take its own lock. Do NOT hold the Host
+           lock, and do NOT treat an unacknowledged sendid as delivered. */
+        settled = scxml_session_report_send_done(
+            source_session, row->send_id, row->send_id_size);
+
+        cmeta_mutex_lock(&impl->lock);
+        if (row->state != SCXML_HOST_ROW_FIRING) {
+            ++impl->invariant_failures;
+            result = SALTS_EPROTO;
+        } else if (!settled || impl->closed) {
+            if (!settled) {
+                ++impl->timer_done_failed;
+                result = SALTS_EPROTO;
+            }
+            ++impl->timer_cancelled;
+            ++impl->cancelled;
+            release_locked(impl, row);
+        } else {
+            if (impl->timer_pending == 0u) {
+                ++impl->invariant_failures;
+                result = SALTS_EPROTO;
+                release_locked(impl, row);
+            } else {
+                --impl->timer_pending;
+                row->state = SCXML_HOST_ROW_READY;
+                ++impl->timer_fired;
+                ++count;
+            }
+        }
+        cmeta_mutex_unlock(&impl->lock);
+        if (result != SALTS_OK) break;
+    }
+
+    cmeta_mutex_lock(&impl->lock);
+    impl->timer_running = false;
+    cmeta_mutex_unlock(&impl->lock);
+    *out_fired = count;
+    return result;
+}
+
 int scxml_host_router_prepare(scxml_host_router *router,
                               scxml_host_session_ref target,
                               const char *name, size_t name_size,
