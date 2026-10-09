@@ -717,6 +717,8 @@ cflow_mailbox_status scxml_host_router_drain(
         scxml_host_row *row = NULL;
         scxml_session *session;
         scxml_event_metadata metadata;
+        const char *origin = NULL;
+        size_t origin_size = 0u;
         cflow_mailbox_status status;
         size_t i;
 
@@ -743,7 +745,18 @@ cflow_mailbox_status scxml_host_router_drain(
             cmeta_mutex_unlock(&impl->lock);
             break;
         }
-        /* The row and matching Session reference stay borrowed while marked
+        if (row->source.generation != 0u) {
+            if (!matches(impl, row->source)) {
+                ++impl->stale_refs;
+                ++impl->delivery_errors;
+                result = CFLOW_MAILBOX_INVALID_ARGUMENT;
+                cmeta_mutex_unlock(&impl->lock);
+                break;
+            }
+            origin = impl->endpoints[row->source.slot].location;
+            origin_size = impl->endpoints[row->source.slot].location_size;
+        }
+        /* The row and matching Session/source generation stay borrowed while
            INFLIGHT. Detach, close and cancel may not recycle this row. */
         session = impl->endpoints[row->target.slot].session;
         row->state = SCXML_HOST_ROW_INFLIGHT;
@@ -752,6 +765,12 @@ cflow_mailbox_status scxml_host_router_drain(
         metadata = (scxml_event_metadata){
             .abi_version = SCXML_EVENT_METADATA_ABI,
             .struct_size = sizeof(scxml_event_metadata),
+            .send_id = row->send_id_size ? row->send_id : NULL,
+            .send_id_size = row->send_id_size,
+            .origin = origin,
+            .origin_size = origin_size,
+            .origin_type = origin != NULL ? "scxml" : NULL,
+            .origin_type_size = origin != NULL ? 5u : 0u,
             .data = {
                 .kind = SCXML_CONTENT_TEXT_UTF8,
                 .bytes = row->text,
