@@ -4,7 +4,7 @@ name: Native SDK CI
 # ACE 2.3 integration branch uses its separate exact-candidate conformance CI.
 on:
   pull_request:
-    branches: [main, feature/component-runtime-conformance]
+    branches: [main]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -178,9 +178,12 @@ jobs:
             printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
+          salts_root="$(sdk_root salts.native linux-x64)"
+          utils_root="$(sdk_root saltsutils.native linux-x64)"
+          chttp_root="$(sdk_root chttp.native linux-x64)"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.family == 'linux'
@@ -465,9 +468,14 @@ jobs:
             printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          # Assign first: set -e will stop on a missing target RID instead of
+          # silently emitting SALTS_ROOT= after a failing echo substitution.
+          salts_root="$(sdk_root salts.native "$NATIVE_SDK_RID")"
+          utils_root="$(sdk_root saltsutils.native "$NATIVE_SDK_RID")"
+          chttp_root="$(sdk_root chttp.native "$NATIVE_SDK_RID")"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.id == 'macos'
@@ -552,9 +560,14 @@ jobs:
             printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          # Assign first: set -e will stop on a missing target RID instead of
+          # silently emitting SALTS_ROOT= after a failing echo substitution.
+          salts_root="$(sdk_root salts.native "$NATIVE_SDK_RID")"
+          utils_root="$(sdk_root saltsutils.native "$NATIVE_SDK_RID")"
+          chttp_root="$(sdk_root chttp.native "$NATIVE_SDK_RID")"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.id == 'android'
