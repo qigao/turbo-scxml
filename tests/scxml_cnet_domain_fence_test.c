@@ -393,6 +393,68 @@ spec("ACE CNet domain exclusive owner and Component generation fencing") {
         check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_OK);
     }
 
+    it("rolls back failed staged activation without disturbing accepted owner work") {
+        scxml_cnet_domain_fence fence = {0};
+        scxml_cnet_domain_fence_stats before = {0}, after = {0};
+        fence_quiescence old_live = {false, false};
+        fence_quiescence ready = {true, true};
+        const uint64_t old_generation = UINT64_C(11);
+        const uint64_t rejected_candidate = UINT64_C(12);
+        const uint64_t replacement = UINT64_C(13);
+
+        check_equal(scxml_cnet_domain_fence_init(&fence), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, old_generation), SALTS_OK);
+        /* An accepted operation survives failed candidate validation. This
+           deliberately exercises admission only: NativeIO terminal and the
+           real DSO lifetime are qualified in the joint loopback test. */
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, old_generation, accept_noop, NULL), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, rejected_candidate), SALTS_OK);
+        check_true(scxml_cnet_domain_fence_get_stats(&fence, &before));
+        check_equal(before.current_generation, old_generation);
+        check_equal(before.staged_generation, rejected_candidate);
+        check_equal(before.admission_epoch, UINT64_C(1));
+        /* A failed validation never calls activate. Explicit rollback of
+           the staged, unadmitted candidate needs no fabricated terminal. */
+        check_equal(scxml_cnet_domain_fence_retire(
+            &fence, rejected_candidate, NULL, NULL), SALTS_OK);
+        check_true(scxml_cnet_domain_fence_get_stats(&fence, &after));
+        check_equal(after.current_generation, old_generation);
+        check_equal(after.staged_generation, UINT64_C(0));
+        check_equal(after.draining_generation, UINT64_C(0));
+        check_equal(after.admission_epoch, before.admission_epoch);
+        check_equal(after.switches, UINT64_C(0));
+        check_equal(after.accepted, UINT64_C(1));
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, rejected_candidate), SALTS_EALREADY);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, old_generation, accept_noop, NULL), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, replacement), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_activate(
+            &fence, rejected_candidate), SALTS_ENOENT);
+        check_equal(scxml_cnet_domain_fence_activate(
+            &fence, replacement), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, old_generation, accept_noop, NULL), SALTS_EPERM);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &fence, old_generation, check_quiescence, &old_live), SALTS_EBUSY);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &fence, UINT64_C(14)), SALTS_EBUSY);
+        old_live.native_done = true;
+        check_equal(scxml_cnet_domain_fence_retire(
+            &fence, old_generation, check_quiescence, &old_live), SALTS_EBUSY);
+        old_live.component_scope_released = true;
+        check_equal(scxml_cnet_domain_fence_retire(
+            &fence, old_generation, check_quiescence, &old_live), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_close(&fence), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &fence, replacement, check_quiescence, &ready), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_OK);
+    }
+
     it("rejects cross-owner submit without borrowing the Component generation") {
         scxml_cnet_domain_fence fence = {0};
         scxml_cnet_domain_fence_stats stats = {0};
