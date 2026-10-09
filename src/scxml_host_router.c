@@ -8,8 +8,21 @@
 typedef struct scxml_host_endpoint {
     scxml_session *session;
     uint32_t generation;
+    scxml_host_session_ref parent;
+    char location[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t location_size;
     bool live;
+    bool accessible;
 } scxml_host_endpoint;
+
+/* Invoke aliases are generation-pinned and drawn from one finite table. */
+typedef struct scxml_host_invoke_route {
+    scxml_host_session_ref owner;
+    scxml_host_session_ref target;
+    char id[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    size_t id_size;
+    bool live;
+} scxml_host_invoke_route;
 
 typedef enum scxml_host_row_state {
     SCXML_HOST_ROW_FREE = 0,
@@ -24,19 +37,25 @@ typedef struct scxml_host_row {
     scxml_host_router_impl *owner;
     scxml_host_row_state state;
     scxml_host_session_ref target;
+    scxml_host_session_ref source;
     uint64_t sequence;
     size_t name_size;
     size_t text_size;
+    size_t send_id_size;
     char name[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char text[SCXML_EVENT_METADATA_CAPACITY + 1u];
+    char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
 } scxml_host_row;
 
 struct scxml_host_router_impl {
     cmeta_mutex_t lock;
     scxml_host_endpoint *endpoints;
     scxml_host_row *rows;
+    scxml_host_invoke_route *invoke_routes;
     size_t endpoint_capacity;
     size_t event_capacity;
+    size_t invoke_capacity;
+    size_t invoke_count;
     size_t max_text_bytes;
     size_t endpoint_count;
     size_t pending;
@@ -90,10 +109,13 @@ static void release_locked(scxml_host_router_impl *impl, scxml_host_row *row) {
     }
     memset(row->name, 0, sizeof(row->name));
     memset(row->text, 0, sizeof(row->text));
+    memset(row->send_id, 0, sizeof(row->send_id));
     row->target = (scxml_host_session_ref){0};
+    row->source = (scxml_host_session_ref){0};
     row->sequence = 0u;
     row->name_size = 0u;
     row->text_size = 0u;
+    row->send_id_size = 0u;
     row->state = SCXML_HOST_ROW_FREE;
     --impl->pending;
 }
@@ -182,6 +204,7 @@ int scxml_host_router_init(scxml_host_router *router,
         config->endpoint_capacity > SIZE_MAX / sizeof(scxml_host_endpoint) ||
         config->event_capacity == 0u ||
         config->event_capacity > SIZE_MAX / sizeof(scxml_host_row) ||
+        config->invoke_capacity > SIZE_MAX / sizeof(scxml_host_invoke_route) ||
         config->max_text_bytes == 0u ||
         config->max_text_bytes > SCXML_EVENT_METADATA_CAPACITY)
         return SALTS_EINVAL;
@@ -191,9 +214,15 @@ int scxml_host_router_init(scxml_host_router *router,
         config->endpoint_capacity, sizeof(*impl->endpoints));
     impl->rows = (scxml_host_row *)calloc(
         config->event_capacity, sizeof(*impl->rows));
-    if (impl->endpoints == NULL || impl->rows == NULL) {
+    if (config->invoke_capacity != 0u) {
+        impl->invoke_routes = (scxml_host_invoke_route *)calloc(
+            config->invoke_capacity, sizeof(*impl->invoke_routes));
+    }
+    if (impl->endpoints == NULL || impl->rows == NULL ||
+        (config->invoke_capacity != 0u && impl->invoke_routes == NULL)) {
         free(impl->endpoints);
         free(impl->rows);
+        free(impl->invoke_routes);
         free(impl);
         return SALTS_ENOMEM;
     }
@@ -201,11 +230,13 @@ int scxml_host_router_init(scxml_host_router *router,
     if (impl->lock == NULL) {
         free(impl->endpoints);
         free(impl->rows);
+        free(impl->invoke_routes);
         free(impl);
         return SALTS_ENOMEM;
     }
     impl->endpoint_capacity = config->endpoint_capacity;
     impl->event_capacity = config->event_capacity;
+    impl->invoke_capacity = config->invoke_capacity;
     impl->max_text_bytes = config->max_text_bytes;
     for (i = 0u; i < config->event_capacity; ++i) impl->rows[i].owner = impl;
     router->impl = impl;
@@ -481,7 +512,9 @@ bool scxml_host_router_get_stats(
         .pending = impl->pending,
         .reserved = impl->reserved,
         .high_water = impl->high_water,
+        .invoke_bindings = impl->invoke_count,
         .closed = impl->closed,
+        .draining = impl->draining,
         .prepared = impl->prepared,
         .committed = impl->committed,
         .discarded = impl->discarded,
@@ -535,6 +568,7 @@ int scxml_host_router_destroy(scxml_host_router *router) {
     cmeta_mutex_destroy(&impl->lock);
     free(impl->rows);
     free(impl->endpoints);
+    free(impl->invoke_routes);
     free(impl);
     router->impl = NULL;
     return SALTS_OK;
