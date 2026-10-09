@@ -8,6 +8,7 @@ typedef struct scxml_host_binding_impl {
     scxml_host_router *router;
     scxml_host_session_ref source;
     atomic_bool closed;
+    bool delayed_enabled;
 } scxml_host_binding_impl;
 
 static scxml_adapter_status host_prepare_send(
@@ -46,7 +47,7 @@ static scxml_adapter_status host_prepare_send(
         *out_error = invalid_type;
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
-    if (request->delay_ms != 0u) {
+    if (request->delay_ms != 0u && !impl->delayed_enabled) {
         *out_error = invalid_delay;
         return SCXML_ADAPTER_ERROR_EXECUTION;
     }
@@ -69,7 +70,8 @@ static scxml_adapter_status host_prepare_send(
         status = scxml_host_router_prepare_target(
             impl->router, impl->source, request->target, request->target_size,
             request->event, request->event_size,
-            request->id, request->id_size, content, out_ticket);
+            request->id, request->id_size, content,
+            request->delay_ms, out_ticket);
     }
     switch (status) {
         case SALTS_OK:
@@ -91,6 +93,39 @@ static scxml_adapter_status host_prepare_send(
             return SCXML_ADAPTER_INVALID_CONTRACT;
         default:
             *out_error = "Host routing admission failed";
+            return SCXML_ADAPTER_ERROR_EXECUTION;
+    }
+}
+
+static scxml_adapter_status host_prepare_cancel(
+    void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    scxml_host_binding_impl *impl = (scxml_host_binding_impl *)user;
+    int status;
+    if (out_ticket != NULL)
+        *out_ticket = (cflow_statechart_effect_ticket){0};
+    if (out_error != NULL) *out_error = NULL;
+    if (impl == NULL || request == NULL || out_ticket == NULL ||
+        out_error == NULL || request->send_id == NULL ||
+        request->send_id_size == 0u ||
+        request->send_id_size > SCXML_EVENT_METADATA_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    if (atomic_load_explicit(&impl->closed, memory_order_acquire))
+        return SCXML_ADAPTER_CLOSED;
+    if (!impl->delayed_enabled) return SCXML_ADAPTER_INVALID_CONTRACT;
+    status = scxml_host_router_prepare_cancel(
+        impl->router, impl->source,
+        request->send_id, request->send_id_size, out_ticket);
+    switch (status) {
+        case SALTS_OK: return SCXML_ADAPTER_ACCEPTED;
+        case SALTS_ENOBUFS: return SCXML_ADAPTER_FULL;
+        case SALTS_ESHUTDOWN: return SCXML_ADAPTER_CLOSED;
+        case SALTS_ENOENT:
+            *out_error = "The delayed sendid is no longer owned by this Session";
+            return SCXML_ADAPTER_ERROR_COMMUNICATION;
+        case SALTS_EINVAL: return SCXML_ADAPTER_INVALID_CONTRACT;
+        default:
+            *out_error = "Host delayed-send cancel admission failed";
             return SCXML_ADAPTER_ERROR_EXECUTION;
     }
 }
@@ -125,13 +160,26 @@ static const scxml_event_io_adapter HOST_ADAPTER = {
     .is_quiescent = host_quiescent
 };
 
-int scxml_host_event_io_binding_init(
+static const scxml_event_io_adapter HOST_DELAYED_ADAPTER = {
+    .abi_version = SCXML_ADAPTER_ABI,
+    .struct_size = sizeof(scxml_event_io_adapter),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_CONTENT |
+                    SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL,
+    .prepare_send = host_prepare_send,
+    .prepare_cancel = host_prepare_cancel,
+    .close = host_close,
+    .is_quiescent = host_quiescent
+};
+
+static int binding_init(
     scxml_host_event_io_binding *binding, scxml_host_router *router,
-    scxml_host_session_ref source) {
+    scxml_host_session_ref source, bool delayed) {
     scxml_host_binding_impl *impl;
     scxml_host_session_ref resolved = {0};
     int status;
     if (binding == NULL || binding->impl != NULL || router == NULL)
+        return SALTS_EINVAL;
+    if (delayed && !scxml_host_router_supports_delayed(router))
         return SALTS_EINVAL;
     status = scxml_host_router_resolve(router, source, NULL, 0u, &resolved);
     if (status != SALTS_OK) return status;
@@ -139,9 +187,27 @@ int scxml_host_event_io_binding_init(
     if (impl == NULL) return SALTS_ENOMEM;
     impl->router = router;
     impl->source = resolved;
+    impl->delayed_enabled = delayed;
     atomic_init(&impl->closed, false);
     binding->impl = impl;
     return SALTS_OK;
+}
+
+int scxml_host_event_io_binding_init(
+    scxml_host_event_io_binding *binding, scxml_host_router *router,
+    scxml_host_session_ref source) {
+    return binding_init(binding, router, source, false);
+}
+
+int scxml_host_event_io_binding_init_delayed(
+    scxml_host_event_io_binding *binding, scxml_host_router *router,
+    scxml_host_session_ref source) {
+    return binding_init(binding, router, source, true);
+}
+
+const scxml_event_io_adapter *
+scxml_host_event_io_binding_delayed_adapter(void) {
+    return &HOST_DELAYED_ADAPTER;
 }
 
 const scxml_event_io_adapter *scxml_host_event_io_binding_adapter(void) {
