@@ -319,7 +319,7 @@ spec("Generation-checked bounded SCXML Host routing") {
             &router, child, "#_parent", sizeof("#_parent") - 1u,
             "go", 2u, "send-42", 7u,
             &(scxml_content_view){.kind = SCXML_CONTENT_TEXT_UTF8,
-                .bytes = "hi", .byte_count = 2u}, &ticket), SALTS_OK);
+                .bytes = "hi", .byte_count = 2u}, 0u, &ticket), SALTS_OK);
         check_equal(scxml_host_router_detach(&router, child), SALTS_EBUSY);
         check_equal(scxml_host_router_detach(&router, parent), SALTS_EBUSY);
         check_equal(scxml_host_router_drain(&router, 1u, &delivered),
@@ -334,7 +334,7 @@ spec("Generation-checked bounded SCXML Host routing") {
         check_false(machine.errored);
         check_equal(scxml_host_router_prepare_target(
             &router, parent, "#_child", sizeof("#_child") - 1u,
-            "go", 2u, NULL, 0u, NULL, &ticket), SALTS_OK);
+            "go", 2u, NULL, 0u, NULL, 0u, &ticket), SALTS_OK);
         ticket.discard(ticket.user);
         check_true(scxml_host_router_get_stats(&router, &stats));
         check_equal(stats.discarded, UINT64_C(1));
