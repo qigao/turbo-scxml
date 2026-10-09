@@ -192,6 +192,27 @@ jobs:
           ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
 
+      - name: Run bounded CNet/Host ASan and UBSan qualification
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-release-user \
+            -S "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/component-sanitized" \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DCMAKE_C_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=undefined"
+          cmake --build build/component-sanitized --parallel 2
+          ctest --test-dir build/component-sanitized \
+            -R '^(scxml_cnet_ingress_test|scxml_cnet_egress_test|scxml_host_router_test|scxml_cnet_frame_ingress_test)$' \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/sanitizer-results.xml"
+
       - name: Record ccache statistics
         if: always()
         shell: bash
@@ -227,5 +248,7 @@ jobs:
             build/component-runtime/ccache-stats.txt
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
+            build/component-runtime/sanitizer-results.xml
+            build/component-sanitized/Testing/Temporary/LastTest.log
             build/component-runtime/Testing/Temporary/LastTest.log
             tests/install_consumer/build/component-installed/Testing/Temporary/LastTest.log
