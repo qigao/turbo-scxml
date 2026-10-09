@@ -698,4 +698,367 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             SALTS_OK);
         check_equal(scxml_cnet_domain_fence_destroy(&f.fence), SALTS_OK);
     }
+
+    it("keeps real DSO CNet callback code loaded through on_send/terminal after N-to-N+1") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='working'>"
+            "<state id='working'>"
+            "<invoke id='worker' type='urn:test:invoke' src='worker'/>"
+            "<transition event='done.invoke.worker' target='done'/>"
+            "<transition event='finish' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        const char *paths[] = { SCXML_INVOKE_DSO_ONE, SCXML_INVOKE_DSO_TWO };
+        const cmeta_plugin_registry_config registry_conf = { .capacity = 2u };
+        const cnet_client_config net_conf = cnet_config();
+        const cnet_listener_config listener_conf = {
+            .backend = backend(), .host = "127.0.0.1",
+            .port = 0u, .backlog = 2u
+        };
+        cnet_observer sender_observers[SESSIONS] = {{0}, {0}};
+        cnet_observer recv_observers[SESSIONS] = {
+            { .on_state = receiver_state, .on_receive = receiver_data,
+              .user = &f.receiver_probe },
+            { .on_state = receiver_state, .on_receive = receiver_data,
+              .user = &f.receiver_probe_next }
+        };
+        scxml_test_cnet_probe probes[SESSIONS] = {{0}, {0}};
+        scxml_test_cnet_probe_snapshot native[SESSIONS] = {{0}, {0}};
+        joint_dso_native_observer draining[SESSIONS] = {
+            { .fixture = &f, .generation_slot = 0u, .expected_sends = 1u },
+            { .fixture = &f, .generation_slot = 1u, .expected_sends = 2u }
+        };
+        salts_component_plugin_generation *previous = NULL;
+        scxml_diagnostic diagnostic = {0};
+        cnet_connect_options options = {0};
+        scxml_cnet_domain_fence_stats fence_stats = {0};
+        cflow_statechart_instance_stats session_stats = {0};
+        uint64_t deadline;
+        uint64_t gen[SESSIONS] = {0u, 0u};
+        uint16_t port = 0u;
+        int token[SESSIONS] = {0, 0}, ready = 0;
+        size_t events = 0u;
+        char uri[64];
+        const unsigned char a = 'A', b = 'B', c = 'C';
+        fenced_cnet_write write_a, write_b, write_c;
+
+        check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
+                    CMETA_PLUGIN_OK);
+        f.registry_live = true;
+        for (size_t i = 0u; i < SESSIONS; ++i) {
+            check_equal(cmeta_plugin_registry_load(
+                &f.registry, paths[i], &f.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &f.registry, f.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(generation_build(&f, i, i, UINT64_C(11) + (uint64_t)i),
+                        SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&f.runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(scxml_compile(&f.program, source, sizeof(source)-1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        check_equal(scxml_cnet_domain_fence_init(&f.fence), SALTS_OK);
+        check_equal(cnet_client_init(&f.sender, &net_conf), SALTS_OK);
+        check_equal(cnet_client_init(&f.receiver, &net_conf), SALTS_OK);
+        check_equal(cnet_listener_init(&f.listener, &listener_conf), SALTS_OK);
+        check_equal(cnet_listener_port(&f.listener, &port), SALTS_OK);
+        check_true(port > 0u);
+        check_true(snprintf(uri, sizeof(uri),
+            "tcp://127.0.0.1:%u", (unsigned)port) > 0);
+        options.uri = uri;
+
+        /* Publish N; its Invoke and CNet observer callbacks are both code
+           pointers into the first real ComponentPlugin-loaded DSO. */
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[0], &f.runtime), SCXML_COMPONENT_OK);
+        gen[0] = scxml_component_scope_generation_id(&f.scopes[0]);
+        check_equal(gen[0], UINT64_C(11));
+        check_equal(scxml_component_invoke_provider_bind(
+            &f.invoke[0], &f.scopes[0], "ScxmlInvokeDsoFixture",
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+            SCXML_COMPONENT_OK);
+        check_true(dso_native_observer_from_scope(&f.scopes[0], &probes[0]));
+        check_true(scxml_test_cnet_probe_get_observer(
+            &probes[0], &sender_observers[0]));
+        check_not_null(sender_observers[0].on_send);
+        check_not_null(sender_observers[0].on_state);
+        check_true(cflow_executor_serial_init(&f.executors[0]));
+        f.executor_live[0] = true;
+        {
+            scxml_session_config conf = {
+                .program = &f.program, .executor = &f.executors[0],
+                .external_event_capacity = 2u, .internal_event_capacity = 2u,
+                .completion_capacity = 2u, .microstep_limit = 16u,
+                .invocation_capacity = 1u, .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invoke = scxml_component_invoke_provider_adapter(&f.invoke[0]),
+                .invoke_user = scxml_component_invoke_provider_user(&f.invoke[0])
+            };
+            check_equal(scxml_session_init(&f.sessions[0], &conf),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        token[0] = invoke_token_from_scope(&f.scopes[0]);
+        check_true(token[0] > 0);
+        check_equal(scxml_cnet_domain_fence_attach(&f.fence, gen[0]), SALTS_OK);
+
+        options.observer = sender_observers[0];
+        check_equal(cnet_connect(&f.sender, &options, &f.outbound), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        do {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[0], &native[0]));
+        } while (!native[0].native_connected &&
+                 cmeta_monotonic_ms() < deadline);
+        check_true(native[0].native_connected);
+        check_equal(cnet_listener_wait(&f.listener, TIMEOUT_MS, &ready),
+                    SALTS_OK);
+        check_equal(ready, 1);
+        check_equal(cnet_listener_accept(&f.listener, &f.receiver,
+            &recv_observers[0], &f.inbound), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!f.receiver_probe.connected && cmeta_monotonic_ms() < deadline)
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+        check_true(f.receiver_probe.connected);
+        check_equal(cnet_receive(&f.receiver, f.inbound, 1u), SALTS_OK);
+        write_a = (fenced_cnet_write){&f, &a, 1u, f.outbound};
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen[0], send_one, &write_a), SALTS_OK);
+        /* This native send has been accepted but its DSO on_send callback
+           has NOT yet run. The old Component Scope must remain pinned. */
+        check_true(native_dso_snapshot(&probes[0], &native[0]));
+        check_equal(native[0].native_sends, (size_t)0u);
+
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[0].generation);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &f.fence, UINT64_C(12)), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_activate(
+            &f.fence, UINT64_C(12)), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen[0], send_one, &write_a), SALTS_EPERM);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+
+        /* New generation has an independent real Invoke/Scope, its own
+           DSO-resident CNet callback, a *different connection*, but the
+           SAME listener and same native owner (no listener rebind). */
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[1], &f.runtime), SCXML_COMPONENT_OK);
+        gen[1] = scxml_component_scope_generation_id(&f.scopes[1]);
+        check_equal(gen[1], UINT64_C(12));
+        check_equal(scxml_component_invoke_provider_bind(
+            &f.invoke[1], &f.scopes[1], "ScxmlInvokeDsoFixture",
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+            SCXML_COMPONENT_OK);
+        check_true(dso_native_observer_from_scope(&f.scopes[1], &probes[1]));
+        check_true(scxml_test_cnet_probe_get_observer(
+            &probes[1], &sender_observers[1]));
+        check_true(cflow_executor_serial_init(&f.executors[1]));
+        f.executor_live[1] = true;
+        {
+            scxml_session_config conf = {
+                .program = &f.program, .executor = &f.executors[1],
+                .external_event_capacity = 2u, .internal_event_capacity = 2u,
+                .completion_capacity = 2u, .microstep_limit = 16u,
+                .invocation_capacity = 1u, .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invoke = scxml_component_invoke_provider_adapter(&f.invoke[1]),
+                .invoke_user = scxml_component_invoke_provider_user(&f.invoke[1])
+            };
+            check_equal(scxml_session_init(&f.sessions[1], &conf),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_true(cflow_executor_wait_idle(&f.executors[1]));
+        token[1] = invoke_token_from_scope(&f.scopes[1]);
+        check_true(token[1] > 0);
+
+        options.observer = sender_observers[1];
+        check_equal(cnet_connect(&f.sender, &options, &f.outbound_next), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        do {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[1], &native[1]));
+        } while (!native[1].native_connected &&
+                 cmeta_monotonic_ms() < deadline);
+        check_true(native[1].native_connected);
+        check_equal(cnet_listener_wait(&f.listener, TIMEOUT_MS, &ready),
+                    SALTS_OK);
+        check_equal(ready, 1);
+        check_equal(cnet_listener_accept(&f.listener, &f.receiver,
+            &recv_observers[1], &f.inbound_next), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!f.receiver_probe_next.connected &&
+               cmeta_monotonic_ms() < deadline)
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+        check_true(f.receiver_probe_next.connected);
+        check_equal(cnet_receive(&f.receiver, f.inbound_next, 1u), SALTS_OK);
+        write_b = (fenced_cnet_write){&f, &b, 1u, f.outbound_next};
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen[1], send_one, &write_b), SALTS_OK);
+
+        /* Poll both CNet connections through the same owner. Each callback
+           executes inside its own DSO, not in this executable. */
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (cmeta_monotonic_ms() < deadline) {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[0], &native[0]));
+            check_true(native_dso_snapshot(&probes[1], &native[1]));
+            if (native[0].native_sends >= 1u &&
+                native[1].native_sends >= 1u &&
+                f.receiver_probe.received >= 1u &&
+                f.receiver_probe_next.received >= 1u) break;
+        }
+        check_equal(native[0].native_sends, (size_t)1u);
+        check_equal(native[1].native_sends, (size_t)1u);
+        check_equal(native[0].native_send_bytes, (size_t)1u);
+        check_equal(native[1].native_send_bytes, (size_t)1u);
+        check_equal(native[0].stale_callbacks, (size_t)0u);
+        check_equal(native[1].stale_callbacks, (size_t)0u);
+        check_equal(f.receiver_probe.received, (size_t)1u);
+        check_equal(f.receiver_probe_next.received, (size_t)1u);
+        check_equal(f.receiver_probe.bytes[0], (unsigned char)'A');
+        check_equal(f.receiver_probe_next.bytes[0], (unsigned char)'B');
+
+        /* Unloading old DSO after only on_send is still invalid: its own
+           on_state(CLOSED) code has not executed yet. */
+        draining[0].adapter = probes[0];
+        draining[1].adapter = probes[1];
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[0], retire_native_dso_generation, &draining[0]),
+            SALTS_EBUSY);
+        check_false(draining[0].saw_native_terminal);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(cnet_close(&f.sender, f.outbound), SALTS_OK);
+        check_equal(cnet_close(&f.receiver, f.inbound), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        do {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[0], &native[0]));
+        } while (!native[0].native_terminal &&
+                 cmeta_monotonic_ms() < deadline);
+        check_true(native[0].native_terminal);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[0], retire_native_dso_generation, &draining[0]),
+            SALTS_EBUSY);
+        check_true(draining[0].saw_native_terminal);
+        check_true(draining[0].saw_scope_busy);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[0], (uint64_t)token[0]), CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[0], (uint64_t)token[0]),
+            CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_true(scxml_session_get_stats(&f.sessions[0], &session_stats));
+        check_true(session_stats.done);
+        check_false(session_stats.errored);
+        check_equal(scxml_session_destroy(&f.sessions[0]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(&f.invoke[0]),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(&f.scopes[0]),
+                    SCXML_COMPONENT_OK);
+        /* Native CLOSED and Plugin Scope release are both authoritative
+           before the DSO callback instructions can be unloaded. */
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[0], retire_native_dso_generation, &draining[0]),
+            SALTS_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        {
+            bool quiescent = false;
+            check_equal(cmeta_plugin_registry_poll_quiescent(
+                &f.registry, f.plugins[0], &quiescent), CMETA_PLUGIN_OK);
+            check_true(quiescent);
+        }
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        f.plugins[0] = (cmeta_plugin_ref){0};
+        f.outbound = (cnet_connection){0};
+        f.inbound = (cnet_connection){0};
+
+        /* Old DSO is GONE, while N+1 Invoke and DSO CNet observer are still
+           live. A subsequent N+1 command must continue to work. */
+        check_equal(scxml_cnet_domain_fence_get_stats(&f.fence, &fence_stats),
+                    true);
+        check_equal(fence_stats.current_generation, gen[1]);
+        check_equal(fence_stats.draining_generation, UINT64_C(0));
+        check_equal(cnet_receive(&f.receiver, f.inbound_next, 1u), SALTS_OK);
+        write_c = (fenced_cnet_write){&f, &c, 1u, f.outbound_next};
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen[1], send_one, &write_c), SALTS_OK);
+        check_true(native_dso_snapshot(&probes[1], &native[1]));
+        check_equal(native[1].native_sends, (size_t)1u);
+
+        /* Reverse ordering: Invoke cancellation retires the Statechart
+           ticket BEFORE the CNet native send terminal, not vice versa. */
+        check_true(signal(&f, 1u, "finish"));
+        check_equal(invoke_token_from_scope(&f.scopes[1]), -token[1]);
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[1], (uint64_t)token[1]),
+            CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_destroy(&f.sessions[1]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(&f.invoke[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &f.runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[1].generation);
+        check_equal(scxml_cnet_domain_fence_close(&f.fence), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[1], retire_native_dso_generation, &draining[1]),
+            SALTS_EBUSY);
+        check_false(draining[1].saw_native_terminal);
+
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (cmeta_monotonic_ms() < deadline) {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[1], &native[1]));
+            if (native[1].native_sends >= 2u &&
+                f.receiver_probe_next.received >= 2u) break;
+        }
+        check_equal(native[1].native_sends, (size_t)2u);
+        check_equal(f.receiver_probe_next.received, (size_t)2u);
+        check_equal(f.receiver_probe_next.bytes[1], (unsigned char)'C');
+        check_equal(cnet_close(&f.sender, f.outbound_next), SALTS_OK);
+        check_equal(cnet_close(&f.receiver, f.inbound_next), SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        do {
+            check_equal(cnet_client_poll(&f.sender, 1u, &events), SALTS_OK);
+            check_equal(cnet_client_poll(&f.receiver, 1u, &events), SALTS_OK);
+            check_true(native_dso_snapshot(&probes[1], &native[1]));
+        } while (!native[1].native_terminal &&
+                 cmeta_monotonic_ms() < deadline);
+        check_true(native[1].native_terminal);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[1], retire_native_dso_generation, &draining[1]),
+            SALTS_EBUSY);
+        check_true(draining[1].saw_native_terminal);
+        check_true(draining[1].saw_scope_busy);
+        check_equal(scxml_component_scope_release(&f.scopes[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[1], retire_native_dso_generation, &draining[1]),
+            SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_destroy(&f.fence), SALTS_OK);
+        f.outbound_next = (cnet_connection){0};
+        f.inbound_next = (cnet_connection){0};
+    }
 }
