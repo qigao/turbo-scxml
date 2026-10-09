@@ -42,6 +42,7 @@ typedef struct scxml_host_row {
     uint64_t sequence;
     size_t name_size;
     size_t text_size;
+    scxml_content_kind content_kind;
     size_t send_id_size;
     char name[SCXML_EVENT_METADATA_CAPACITY + 1u];
     char text[SCXML_EVENT_METADATA_CAPACITY + 1u];
@@ -127,6 +128,7 @@ static void release_locked(scxml_host_router_impl *impl, scxml_host_row *row) {
     row->sequence = 0u;
     row->name_size = 0u;
     row->text_size = 0u;
+    row->content_kind = SCXML_CONTENT_INVALID;
     row->send_id_size = 0u;
     row->state = SCXML_HOST_ROW_FREE;
     --impl->pending;
@@ -156,6 +158,8 @@ static scxml_host_row *reserve_locked(scxml_host_router_impl *impl,
     row->target = target;
     row->name_size = name_size;
     row->text_size = text_size;
+    row->content_kind = text != NULL
+        ? SCXML_CONTENT_TEXT_UTF8 : SCXML_CONTENT_INVALID;
     memcpy(row->name, name, name_size);
     row->name[name_size] = '\0';
     if (text_size != 0u) memcpy(row->text, text, text_size);
@@ -699,19 +703,33 @@ int scxml_host_router_prepare_target(
     const char *target, size_t target_size,
     const char *name, size_t name_size,
     const char *send_id, size_t send_id_size,
-    const char *text, size_t text_size,
+    const scxml_content_view *content,
     cflow_statechart_effect_ticket *out_ticket) {
     scxml_host_router_impl *impl = router_impl(router);
     scxml_host_session_ref resolved = {0};
     scxml_host_row *row;
+    const char *text = NULL;
+    size_t text_size = 0u;
+    scxml_content_kind kind = SCXML_CONTENT_INVALID;
     int status;
     if (out_ticket != NULL) *out_ticket = (cflow_statechart_effect_ticket){0};
     if (impl == NULL || out_ticket == NULL ||
         (target_size != 0u && target == NULL) ||
         send_id_size > SCXML_EVENT_METADATA_CAPACITY ||
         (send_id_size != 0u &&
-         (send_id == NULL || memchr(send_id, '\0', send_id_size) != NULL)) ||
-        !valid_fields(impl, name, name_size, text, text_size))
+         (send_id == NULL || memchr(send_id, '\0', send_id_size) != NULL)))
+        return SALTS_EINVAL;
+    if (content != NULL) {
+        kind = content->kind;
+        if (kind != SCXML_CONTENT_TEXT_UTF8 &&
+            kind != SCXML_CONTENT_XML_UTF8)
+            return SALTS_ENOTSUP;
+        text = content->bytes;
+        text_size = content->byte_count;
+        if (text_size > impl->max_text_bytes)
+            return SALTS_EMSGSIZE;
+    }
+    if (!valid_fields(impl, name, name_size, text, text_size))
         return SALTS_EINVAL;
 
     cmeta_mutex_lock(&impl->lock);
@@ -731,6 +749,7 @@ int scxml_host_router_prepare_target(
         return SALTS_ENOBUFS;
     }
     row->source = source;
+    row->content_kind = kind;
     if (send_id_size != 0u) memcpy(row->send_id, send_id, send_id_size);
     row->send_id[send_id_size] = '\0';
     row->send_id_size = send_id_size;
@@ -903,8 +922,9 @@ cflow_mailbox_status scxml_host_router_drain(
             .origin_type = origin != NULL ? "scxml" : NULL,
             .origin_type_size = origin != NULL ? 5u : 0u,
             .data = {
-                .kind = SCXML_CONTENT_TEXT_UTF8,
-                .bytes = row->text,
+                .kind = row->content_kind,
+                .bytes = row->content_kind != SCXML_CONTENT_INVALID
+                    ? row->text : NULL,
                 .byte_count = row->text_size
             }
         };
