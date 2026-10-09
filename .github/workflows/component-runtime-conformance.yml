@@ -1,12 +1,26 @@
 name: Component runtime conformance
 
 on:
+  pull_request:
+    branches:
+      - feature/component-runtime-conformance
+    paths:
+      - ".github/workflows/component-runtime-conformance.yml"
+      - "CMakeLists.txt"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - "presets/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
   push:
     branches:
       - feature/component-runtime-conformance
   workflow_dispatch:
 
 permissions:
+  actions: read # access the exact Salts 2.3 Actions artifact, never fallback
   contents: read
   packages: read
 
@@ -19,10 +33,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-component-linux-x64-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      # Independent from Native SDK released-graph and sanitizer caches.
+      CCACHE_DIR: ${{ runner.temp }}/turboscxml-component-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - name: Checkout TurboSCXML integration branch
         uses: actions/checkout@v4
@@ -36,10 +53,14 @@ jobs:
         with:
           mode: read
 
-      - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Restore ccache compiler objects
+        uses: actions/cache@v4
         with:
-          version: v0.18.0
+          path: ${{ runner.temp }}/turboscxml-component-ccache
+          key: turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', '.github/workflows/component-runtime-conformance.yml') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', '.github/workflows/component-runtime-conformance.yml') }}-
+            turboscxml-component-ccache-linux-x64-v1-
 
       - name: Restore Salts host re2c
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
@@ -53,7 +74,9 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config ccache
+          command -v ccache
+          ccache --zero-stats
 
       # Fail closed: only the exact published prerelease and attested source SHA are valid.
       # Never check out, compile or fall back to a stable Salts tree here.
@@ -167,12 +190,16 @@ jobs:
           ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
 
-      - name: Record sccache statistics
-        if: always() && env.SCCACHE_PATH != ''
+      - name: Record ccache statistics
+        if: always()
         shell: bash
         run: |
           mkdir -p build/component-runtime
-          "$SCCACHE_PATH" --show-stats | tee build/component-runtime/sccache-stats.txt
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee build/component-runtime/ccache-stats.txt
+          else
+            printf 'ccache tool unavailable before build\n' > build/component-runtime/ccache-stats.txt
+          fi
 
       - name: Record acceptance identities
         if: always()
@@ -196,7 +223,7 @@ jobs:
           name: component-acceptance-linux-x64
           path: |
             build/component-runtime/acceptance.txt
-            build/component-runtime/sccache-stats.txt
+            build/component-runtime/ccache-stats.txt
             build/component-runtime/component-results.xml
             build/component-runtime/installed-results.xml
             build/component-runtime/Testing/Temporary/LastTest.log
