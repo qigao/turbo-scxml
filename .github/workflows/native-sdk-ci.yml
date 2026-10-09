@@ -52,47 +52,45 @@ jobs:
             runner: ubuntu-24.04
             rid: linux-x64
             triplet: x64-linux
-            use_sccache: true
-            cache_namespace: turboscxml-native-linux-x64-release-v1
+            cache: ccache
           - id: linux-sanitizers
             label: Linux x64 ASan + UBSan
             family: linux
             runner: ubuntu-24.04
             rid: linux-x64
             triplet: x64-linux
-            use_sccache: true
-            cache_namespace: turboscxml-native-linux-x64-sanitizers-v1
+            cache: ccache
           - id: windows
             label: Windows x64 released SDK
             family: windows
             runner: windows-2022
             rid: windows-x64
             triplet: x64-windows
-            use_sccache: false
-            cache_namespace: turboscxml-native-windows-x64-release-v1
+            cache: none
           - id: macos
             label: macOS released SDK
             family: macos
             runner: macos-15
             rid: ""
             triplet: ""
-            use_sccache: true
-            cache_namespace: turboscxml-native-macos-release-v1
+            cache: ccache
           - id: android
             label: Android arm64-v8a released SDK
             family: android
             runner: ubuntu-24.04
             rid: android-arm64-v8a
             triplet: arm64-android
-            use_sccache: true
-            cache_namespace: turboscxml-native-android-arm64-release-v1
+            cache: ccache
     env:
       NATIVE_SDK_RID: ${{ matrix.rid }}
       VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
-      SCCACHE_GHA_ENABLED: ${{ matrix.use_sccache && 'true' || 'false' }}
-      SCCACHE_GHA_VERSION: ${{ matrix.cache_namespace }}
-      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
-      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
+      # The MSVC Visual Studio generator remains native; Ninja host/cross builds use ccache.
+      CCACHE_DIR: ${{ runner.temp }}/turboscxml-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.cache == 'ccache' && 'ccache' || '' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.cache == 'ccache' && 'ccache' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -101,23 +99,35 @@ jobs:
         with:
           mode: read
 
-      - name: Set up sccache for Ninja builds
-        if: matrix.use_sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      # Only compiler outputs are cached here; vcpkg SDKs retain their separate
+      # cache-only restore and package identity verification.
+      - name: Restore ccache compiler objects
+        if: matrix.cache == 'ccache'
+        uses: actions/cache@v4
         with:
-          version: v0.18.0
+          path: ${{ runner.temp }}/turboscxml-ccache
+          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json') }}-
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
-      - name: Prepare build tools
-        if: matrix.family == 'linux'
+      - name: Prepare Linux-hosted Ninja and ccache toolchain
+        if: matrix.family == 'linux' || matrix.family == 'android'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+          if [ "$VCPKG_TARGET_TRIPLET" = "arm64-android" ]; then
+            test -n "${ANDROID_NDK_HOME:-}"
+            test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          fi
+          command -v ccache
+          ccache --zero-stats
 
       - name: Restore current published native SDK graph
         if: matrix.family == 'linux'
@@ -381,7 +391,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm
+          brew install ninja nasm ccache
+          command -v ccache
+          ccache --zero-stats
           case "$RUNNER_ARCH" in
             X64)
               rid=macos-x64
@@ -480,16 +492,6 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
           cmake --build build/consumer-voicexml-quickjs-macos --parallel 2
 
-      - name: Prepare toolchain
-        if: matrix.id == 'android'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
-          test -n "${ANDROID_NDK_HOME:-}"
-          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-
       - name: Restore current published native SDK graph
         if: matrix.id == 'android'
         shell: bash
@@ -559,6 +561,25 @@ jobs:
           export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml"
           cmake -S tests/install_consumer -B build/consumer-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
           cmake --build build/consumer-android --parallel 2
+
+      - name: Record ccache statistics
+        if: always() && matrix.cache == 'ccache'
+        shell: bash
+        run: |
+          mkdir -p build/ci-evidence
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee "build/ci-evidence/ccache-${{ matrix.id }}.txt"
+          else
+            printf 'ccache tool unavailable before build\n' > "build/ci-evidence/ccache-${{ matrix.id }}.txt"
+          fi
+
+      - name: Upload compiler-cache evidence
+        if: always() && matrix.cache == 'ccache'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccache-native-${{ matrix.id }}-${{ runner.arch }}
+          path: build/ci-evidence/ccache-${{ matrix.id }}.txt
+          if-no-files-found: warn
 
   result:
     name: Native SDK CI result
