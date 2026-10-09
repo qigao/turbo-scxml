@@ -444,6 +444,48 @@ jobs:
           echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
           echo "DATABIND_ROOT=$utils" >> "$GITHUB_ENV"
 
+      - name: Preflight installed macOS TinyTest native TLS ABI
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/component-multirid-results
+          archive="$SALTS_ROOT/lib/libtinytest.a"
+          manifest="$SALTS_ROOT/salts-sdk-manifest.txt"
+          test -f "$archive"
+          test -f "$manifest"
+          echo "Checking restored, immutable Salts SDK TinyTest ABI:"
+          grep -E '^(version|commit|os|arch|rid|profile)=' "$manifest" \
+            | tee build/component-multirid-results/salts-sdk-identity.txt
+          nm -gU "$archive" > build/component-multirid-results/tinytest-symbols.txt
+          if grep -Fq '___emutls_v.ttest_active_config__' \
+              build/component-multirid-results/tinytest-symbols.txt; then
+            echo "::error::Installed Salts.Native macOS TinyTest exports GCC-emulated TLS, not AppleClang-native TLS. Upstream qigao/salts#1084; exact RC SDK remains blocked."
+            exit 1
+          fi
+          if ! grep -Fq ' _ttest_active_config__' \
+              build/component-multirid-results/tinytest-symbols.txt; then
+            echo "::error::Installed Salts.Native TinyTest lacks the native Mach-O _ttest_active_config__ symbol. Upstream qigao/salts#1084."
+            exit 1
+          fi
+          case "$NATIVE_SDK_RID" in
+            macos-arm64) target_arch=arm64 ;;
+            macos-x64) target_arch=x86_64 ;;
+            *) echo "::error::Unsupported macOS SDK RID $NATIVE_SDK_RID"; exit 1 ;;
+          esac
+          cat > "$RUNNER_TEMP/turboscxml-tinytest-c11.c" <<'EOF'
+          #include <tinytest.h>
+          spec("installed native-TLS TinyTest C11") {
+              it("links and runs from the restored SDK") {
+                  check_equal(1, 1);
+              }
+          }
+          EOF
+          /usr/bin/clang -std=c11 -O2 -arch "$target_arch" \
+            -I"$SALTS_ROOT/include" "$RUNNER_TEMP/turboscxml-tinytest-c11.c" \
+            "$archive" -o "$RUNNER_TEMP/turboscxml-tinytest-c11"
+          "$RUNNER_TEMP/turboscxml-tinytest-c11"
+
       - name: Restore Windows third-party dependencies from cache only
         if: matrix.id == 'windows-x64'
         shell: pwsh
@@ -488,7 +530,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows Component build failed" }
           $env:PATH = "$env:SALTS_ROOT/bin;$env:SALTS_UTILS_ROOT/bin;$env:GITHUB_WORKSPACE/vcpkg_installed/x64-windows/bin;$env:PATH"
           New-Item -ItemType Directory -Force -Path build/component-multirid-results | Out-Null
-          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --repeat until-fail:50 --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
           if ($LASTEXITCODE -ne 0) { throw "Windows IOCP/DSO runtime tests failed" }
           cmake --install build/component-multirid --config Release
           if ($LASTEXITCODE -ne 0) { throw "Windows Component install failed" }
