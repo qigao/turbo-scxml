@@ -235,6 +235,7 @@ jobs:
           cmake --build build/component-tsan --parallel 2
           ctest --test-dir build/component-tsan \
             -R '^(scxml_cnet_domain_fence_test|scxml_component_cnet_invoke_test)$' \
+            --repeat until-fail:50 \
             --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/tsan-results.xml"
 
