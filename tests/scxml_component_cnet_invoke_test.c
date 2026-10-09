@@ -142,20 +142,27 @@ static void receiver_data(void *user, cnet_connection handle,
     probe->received += view->size;
 }
 
-static salts_component_plugin_status generation_build(
+static salts_component_plugin_status generation_build_export(
     joint_fixture *fixture, size_t slot, size_t plugin_index,
-    uint64_t generation_id) {
+    uint64_t generation_id, const char *export_id) {
     invoke_dso_generation *g = &fixture->generations[slot];
     const salts_component_plugin_generation_storage storage = {
         g->deployments, 1u, g->instances, 1u, g->dependencies, 1u,
         g->activation_order, 1u, g->modules, 1u
     };
     const salts_component_plugin_source source = {
-        fixture->plugins[plugin_index], "component-provider", NULL, NULL
+        fixture->plugins[plugin_index], export_id, NULL, NULL
     };
     return salts_component_plugin_generation_build(
         &g->generation, generation_id, &fixture->registry, &storage,
         NULL, 0u, &source, 1u, NULL, 0u);
+}
+
+static salts_component_plugin_status generation_build(
+    joint_fixture *fixture, size_t slot, size_t plugin_index,
+    uint64_t generation_id) {
+    return generation_build_export(
+        fixture, slot, plugin_index, generation_id, "component-provider");
 }
 
 /* Get a DSO-owned Invoke token through its *real* borrowed Component Scope.
@@ -1007,6 +1014,25 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         write_b = (fenced_cnet_write){&f, &b, 1u, f.outbound_next};
         check_equal(scxml_cnet_domain_fence_try_submit(
             &f.fence, gen[1], send_one, &write_b), SALTS_OK);
+
+        /* Exercise an actual provider-export activation failure, not just
+           a domain-fence ENOENT. ComponentPlugin acquires the live module,
+           discovers the missing export, then releases its candidate lease.
+           Neither the failed candidate nor its rejected publish may replace
+           gN+1 or touch the native send already accepted above. */
+        check_equal(generation_build_export(
+            &f, 2u, 1u, gen[1] + UINT64_C(1),
+            "missing-invoke-provider-export"), SALTS_COMPONENT_PLUGIN_PLUGIN_ERROR);
+        check_equal(f.generations[2].generation.state,
+                    SALTS_COMPONENT_PLUGIN_GENERATION_FAILED);
+        check_equal(f.generations[2].generation.module_count, (size_t)0u);
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[2].generation, &rejected_previous),
+            SALTS_COMPONENT_PLUGIN_INVALID_STATE);
+        check_null(rejected_previous);
+        check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[1]), CMETA_PLUGIN_BUSY);
 
         /* With both real ComponentPlugin generations attached, the old gN
            still owns a live Invoke and DSO callback, and the new gN+1 has
