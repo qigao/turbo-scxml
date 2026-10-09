@@ -282,6 +282,11 @@ if(TURBOSCXML_ENABLE_HOST)
     scxml_host_event_io_test.c
     LIBS TurboSCXML::Host Salts::Core)
   set_tests_properties(scxml_host_event_io_test PROPERTIES TIMEOUT 30)
+  turboscxml_add_test(
+    scxml_host_delay_test
+    scxml_host_delay_test.c
+    LIBS TurboSCXML::Host Salts::Core)
+  set_tests_properties(scxml_host_delay_test PROPERTIES TIMEOUT 30)
 endif()
 
 if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
