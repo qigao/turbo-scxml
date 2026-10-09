@@ -305,6 +305,11 @@ if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
     scxml_cnet_frame_ingress_test.c
     LIBS TurboSCXML::CNetEventIO Salts::Core)
   set_tests_properties(scxml_cnet_frame_ingress_test PROPERTIES TIMEOUT 30)
+  turboscxml_add_test(
+    scxml_cnet_domain_fence_test
+    scxml_cnet_domain_fence_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_domain_fence_test PROPERTIES TIMEOUT 40)
 endif()
 
 turboscxml_add_test(
