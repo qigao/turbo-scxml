@@ -1,3 +1,8 @@
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/native_io.h>
@@ -15,6 +20,84 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
+
+#if defined(_WIN32)
+typedef SOCKET native_race_socket;
+#define NATIVE_RACE_INVALID_SOCKET INVALID_SOCKET
+#else
+typedef int native_race_socket;
+#define NATIVE_RACE_INVALID_SOCKET (-1)
+#endif
+
+/* One test-owned pair; the NativeIO backend remains the sole progress owner. */
+static int native_race_open_pair(native_race_socket sockets[2]) {
+#if defined(_WIN32)
+    WSADATA wsa = {0};
+    SOCKET listener = INVALID_SOCKET;
+    struct sockaddr_in address = {0};
+    int address_length = (int)sizeof(address);
+    u_long nonblocking = 1u;
+    sockets[0] = INVALID_SOCKET;
+    sockets[1] = INVALID_SOCKET;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+    listener = WSASocketW(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u, WSA_FLAG_OVERLAPPED);
+    if (listener == INVALID_SOCKET) goto failure;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listener, (const struct sockaddr *)&address,
+             (int)sizeof(address)) != 0 ||
+        listen(listener, 1) != 0 ||
+        getsockname(listener, (struct sockaddr *)&address, &address_length) != 0)
+        goto failure;
+    sockets[1] = WSASocketW(
+        AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u, WSA_FLAG_OVERLAPPED);
+    if (sockets[1] == INVALID_SOCKET ||
+        connect(sockets[1], (const struct sockaddr *)&address,
+                (int)sizeof(address)) != 0)
+        goto failure;
+    sockets[0] = accept(listener, NULL, NULL);
+    if (sockets[0] == INVALID_SOCKET ||
+        ioctlsocket(sockets[0], FIONBIO, &nonblocking) != 0 ||
+        ioctlsocket(sockets[1], FIONBIO, &nonblocking) != 0)
+        goto failure;
+    (void)closesocket(listener);
+    return 0;
+failure:
+    if (listener != INVALID_SOCKET) (void)closesocket(listener);
+    if (sockets[0] != INVALID_SOCKET) (void)closesocket(sockets[0]);
+    if (sockets[1] != INVALID_SOCKET) (void)closesocket(sockets[1]);
+    sockets[0] = INVALID_SOCKET;
+    sockets[1] = INVALID_SOCKET;
+    (void)WSACleanup();
+    return -1;
+#else
+    int flags;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) return -1;
+    for (size_t index = 0u; index < 2u; ++index) {
+        flags = fcntl(sockets[index], F_GETFL, 0);
+        if (flags < 0 ||
+            fcntl(sockets[index], F_SETFL, flags | O_NONBLOCK) != 0) {
+            (void)close(sockets[0]);
+            (void)close(sockets[1]);
+            sockets[0] = -1;
+            sockets[1] = -1;
+            return -1;
+        }
+    }
+    return 0;
+#endif
+}
+
+static int native_race_close_socket(native_race_socket value) {
+#if defined(_WIN32)
+    return closesocket(value);
+#else
+    return close(value);
+#endif
+}
+
 
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
  * borrows it, and all observation, routing and admission use the same owner.
@@ -123,7 +206,6 @@ static int submit_one(cnet_client *client, cnet_connection connection,
     return native_io_request_valid(*request) ? SALTS_OK : SALTS_ENOENT;
 }
 
-#if !defined(_WIN32)
 /* The producer performs ordinary kernel I/O on the peer socket. Only the
  * owner thread calls NativeIO methods; concurrent calls into the backend are
  * explicitly forbidden by its contract. */
@@ -131,7 +213,7 @@ typedef struct native_cancel_producer {
     atomic_int ready;
     atomic_int fire;
     atomic_int written;
-    int peer;
+    native_race_socket peer;
     unsigned char byte;
 } native_cancel_producer;
 
@@ -147,10 +229,9 @@ static void native_cancel_write_peer(void *user) {
         return;
     }
     atomic_store_explicit(&race->written,
-        send(race->peer, &race->byte, 1u, 0) == 1 ? 1 : -1,
+        send(race->peer, (const char *)&race->byte, 1, 0) == 1 ? 1 : -1,
         memory_order_release);
 }
-#endif
 
 spec("CNet external NativeIO slot/generation and stale terminal ownership") {
     it("reuses a real native request slot without accepting the old terminal") {
@@ -277,7 +358,6 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(native_io_backend_close(&io), SALTS_OK);
         check_equal(native_io_backend_destroy(&io), SALTS_OK);
     }
-#if !defined(_WIN32)
     it("arbitrates real peer completion versus cancellation once on the NativeIO owner") {
         const native_io_backend_config config = {
             .kind = test_backend(), .endpoint_capacity = 1u,
@@ -291,17 +371,15 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         native_io_operation operation = {0};
         native_cancel_producer race = {0};
         cmeta_thread_t thread = NULL;
-        int sockets[2] = {-1, -1}, cancel_status, flags;
+        native_race_socket sockets[2] = {
+            NATIVE_RACE_INVALID_SOCKET, NATIVE_RACE_INVALID_SOCKET
+        };
+        int cancel_status;
         size_t count = 0u;
         unsigned char first_byte = 0u, second_byte = 0u;
         uint64_t deadline;
 
-        check_equal(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
-        for (size_t i = 0u; i < 2u; ++i) {
-            flags = fcntl(sockets[i], F_GETFL, 0);
-            check_true(flags >= 0);
-            check_equal(fcntl(sockets[i], F_SETFL, flags | O_NONBLOCK), 0);
-        }
+        check_equal(native_race_open_pair(sockets), 0);
         check_equal(native_io_backend_init(&io, &config), SALTS_OK);
         check_equal(native_io_backend_attach_socket(
             &io, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
@@ -372,7 +450,7 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(stats.active_requests, (size_t)1u);
         if (first.kind == NATIVE_IO_COMPLETION_OK) {
             const unsigned char next_byte = 'B';
-            check_equal(send(sockets[1], &next_byte, 1u, 0), 1);
+            check_equal(send(sockets[1], (const char *)&next_byte, 1, 0), 1);
         }
         count = 0u;
         second = (native_io_completion){0};
@@ -388,11 +466,13 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_true(native_io_backend_get_stats(&io, &stats));
         check_equal(stats.active_requests, (size_t)0u);
 
-        check_equal(close(sockets[0]), 0);
-        check_equal(close(sockets[1]), 0);
+        check_equal(native_race_close_socket(sockets[0]), 0);
+        check_equal(native_race_close_socket(sockets[1]), 0);
         check_equal(native_io_backend_release_socket(&io, endpoint), SALTS_OK);
         check_equal(native_io_backend_close(&io), SALTS_OK);
         check_equal(native_io_backend_destroy(&io), SALTS_OK);
-    }
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
 #endif
+    }
 }
