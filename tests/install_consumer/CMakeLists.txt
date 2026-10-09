@@ -4,6 +4,8 @@ project(TurboSCXMLInstallConsumer LANGUAGES C CXX)
 
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT
   "Require and exercise the installed Component bridge" OFF)
+option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO
+  "Require and exercise the installed CNetEventIO component" OFF)
 
 option(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE
   "Require and exercise the installed CHttpResource component" OFF)
@@ -164,6 +166,9 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS Component)
+endif()
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS CNetEventIO)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS VoiceXMLDialogManager)
@@ -634,6 +639,28 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT)
   target_link_libraries(turboscxml_component_install_consumer PRIVATE TurboSCXML::Component)
 endif()
 
+if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO)
+  if(NOT TARGET TurboSCXML::CNetEventIO OR NOT TARGET Salts::CNet)
+    message(FATAL_ERROR "Expected installed CNetEventIO and Salts::CNet")
+  endif()
+  get_target_property(TURBOSCXML_CNET_LINKS
+    TurboSCXML::CNetEventIO INTERFACE_LINK_LIBRARIES)
+  if(NOT TURBOSCXML_CNET_LINKS STREQUAL
+     "TurboSCXML::SCXML;Salts::CNet")
+    message(FATAL_ERROR
+      "Unexpected installed CNetEventIO link closure: ${TURBOSCXML_CNET_LINKS}")
+  endif()
+  add_executable(turboscxml_cnet_install_consumer cnet_ingress_main.c)
+  target_compile_features(turboscxml_cnet_install_consumer PRIVATE c_std_11)
+  target_link_libraries(turboscxml_cnet_install_consumer
+    PRIVATE TurboSCXML::CNetEventIO)
+
+  add_executable(turboscxml_cnet_install_consumer_cpp cnet_ingress_main.cpp)
+  target_compile_features(turboscxml_cnet_install_consumer_cpp PRIVATE cxx_std_17)
+  target_link_libraries(turboscxml_cnet_install_consumer_cpp
+    PRIVATE TurboSCXML::CNetEventIO)
+endif()
+
 # Run the existing package consumers as executable behavior checks.
 enable_testing()
 foreach(consumer IN ITEMS
@@ -641,7 +668,8 @@ foreach(consumer IN ITEMS
     turboscxml_provider_install_consumer turboscxml_provider_install_consumer_cpp
     turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp
     turboscxml_plugin_install_consumer turboscxml_plugin_install_consumer_cpp
-    turboscxml_component_install_consumer)
+    turboscxml_component_install_consumer
+    turboscxml_cnet_install_consumer turboscxml_cnet_install_consumer_cpp)
   if(TARGET ${consumer})
     add_test(NAME ${consumer} COMMAND ${consumer})
     set_tests_properties(${consumer} PROPERTIES TIMEOUT 60)
