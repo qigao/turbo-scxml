@@ -1099,6 +1099,33 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
                     true);
         check_equal(fence_stats.current_generation, gen[1]);
         check_equal(fence_stats.draining_generation, UINT64_C(0));
+
+        /* A failed EXCLUSIVE-I/O candidate activation must never displace
+           the still-live gN+1 Invoke/DSO and its real CNet connection.
+           Roll back the staged domain admission, not the current provider. */
+        check_equal(scxml_cnet_domain_fence_attach(
+            &f.fence, gen[1] + UINT64_C(1)), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_activate(
+            &f.fence, gen[1] + UINT64_C(2)), SALTS_ENOENT);
+        check_equal(scxml_cnet_domain_fence_get_stats(
+            &f.fence, &fence_stats), true);
+        check_equal(fence_stats.current_generation, gen[1]);
+        check_equal(fence_stats.staged_generation, gen[1] + UINT64_C(1));
+        check_equal(fence_stats.attached, (size_t)2u);
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &f.fence, gen[1] + UINT64_C(1), send_one, &write_b), SALTS_EPERM);
+        check_equal(scxml_cnet_domain_fence_retire(
+            &f.fence, gen[1] + UINT64_C(1), NULL, NULL), SALTS_OK);
+        check_equal(scxml_cnet_domain_fence_attach(
+            &f.fence, gen[1] + UINT64_C(1)), SALTS_EALREADY);
+        check_equal(scxml_cnet_domain_fence_get_stats(
+            &f.fence, &fence_stats), true);
+        check_equal(fence_stats.current_generation, gen[1]);
+        check_equal(fence_stats.staged_generation, UINT64_C(0));
+        check_equal(fence_stats.attached, (size_t)1u);
+        check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
+
+        /* The existing listener and gN+1 still transmit after rollback. */
         check_equal(cnet_receive(&f.receiver, f.inbound_next, 1u), SALTS_OK);
         /* Both instructions are in the same live DSO but execute on
            independent CFlow SerialExecutor and CNet owner lanes. This
