@@ -125,7 +125,7 @@ int scxml_host_router_resolve(
     const char *target, size_t target_size, scxml_host_session_ref *out_target);
 
 /* One SCXML source-relative send effect, atomically resolving its target
- * and copying name, optional sendid and TEXT_UTF8 content into a RESERVED
+ * and copying name, optional sendid and TEXT_UTF8/XML_UTF8 content into a RESERVED
  * Host row. The returned ticket transfers into the CFlow effect journal.
  * The source and target references remain pinned until final Host delivery
  * or explicit cancel/discard. Nonempty send_id is bounded by metadata size.
@@ -136,7 +136,9 @@ int scxml_host_router_prepare_target(
     const char *target, size_t target_size,
     const char *name, size_t name_size,
     const char *send_id, size_t send_id_size,
-    const char *text, size_t text_size,
+    /* NULL: no content. Otherwise TEXT_UTF8 or XML_UTF8, borrowed for
+       this call and copied into bounded Host row before ACCEPTED. */
+    const scxml_content_view *content,
     cflow_statechart_effect_ticket *out_ticket);
 
 /*
