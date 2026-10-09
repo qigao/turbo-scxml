@@ -13,8 +13,10 @@ Detach returns BUSY while RESERVED or READY events still borrow that Session.
 
 ### Transactional and transport admission
 
-- **SCXML producer:** `host_router_prepare` copies a complete Event to a
-  RESERVED row and returns a CFlow effect ticket. `commit` publishes READY;
+- **SCXML producer:** `host_router_prepare_target` resolves the destination
+  and copies a complete Event plus optional `sendid` and bounded TEXT_UTF8
+  or XML_UTF8 `_event.data` into a RESERVED row. The Host SEND/CONTENT
+  adapter returns one CFlow effect ticket. `commit` publishes READY;
   `discard` releases it. Neither callback drives CNet or calls a Session.
 - **CNet producer:** `host_router_enqueue` copies an already decoded complete
   Event into the same bounded Host queue. It has no SCXML microstep to commit.
@@ -68,7 +70,8 @@ microstep ticket commit/discard, a blocked executor causing true external
 FIFO FULL with retained Host head, TCP split/coalesced frames, Host FULL,
 stale CNet generation rejection, invalid length and terminal teardown.
 
-**Remaining:** complete SCXML Event wire codec and normative target mapping,
+**Remaining:** named/scalar/CMETA data-model conversion and complete normative
+SCXML Event wire codec/target mapping,
 bidirectional observer composition, cross-Owner Host Actor controls, delayed
 send and cancellation ACT, exclusive generation fencing, Windows/macOS and
 sanitizer qualification. All remain tracked by the existing umbrella issues.
