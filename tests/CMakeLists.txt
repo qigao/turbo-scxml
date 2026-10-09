@@ -316,6 +316,9 @@ if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
     LIBS TurboSCXML::CNetEventIO Salts::NativeIO Salts::Core)
   set_tests_properties(scxml_cnet_request_generation_test
     PROPERTIES TIMEOUT 40)
+  if(WIN32)
+    target_link_libraries(scxml_cnet_request_generation_test PRIVATE ws2_32)
+  endif()
 endif()
 
 if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
