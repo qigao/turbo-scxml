@@ -18,6 +18,8 @@ option(TURBOSCXML_ENABLE_PLUGIN
   "Build and install the optional Salts Plugin composition bridge" ON)
 option(TURBOSCXML_ENABLE_COMPONENT
   "Build the optional Salts Component provider composition bridge" OFF)
+option(TURBOSCXML_ENABLE_CNET_EVENT_IO
+  "Build optional owner-driven CNet chunk ingress into SCXML Sessions" OFF)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 
 if(ENABLE_SANITIZER_ADDRESS)
@@ -86,6 +88,10 @@ endif()
 if(TURBOSCXML_ENABLE_COMPONENT AND NOT TARGET Salts::ComponentPlugin)
   message(FATAL_ERROR
     "TURBOSCXML_ENABLE_COMPONENT requires Salts::ComponentPlugin")
+endif()
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO AND NOT TARGET Salts::CNet)
+  message(FATAL_ERROR
+    "TURBOSCXML_ENABLE_CNET_EVENT_IO requires Salts::CNet")
 endif()
 
 foreach(required_target IN ITEMS
@@ -274,6 +280,23 @@ if(TURBOSCXML_ENABLE_COMPONENT)
       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
   target_link_libraries(turbo_scxml_component
     PUBLIC TurboSCXML::SCXML Salts::ComponentPlugin)
+endif()
+
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  add_library(turbo_scxml_cnet_event_io STATIC
+    src/scxml_cnet_ingress.c)
+  add_library(TurboSCXML::CNetEventIO ALIAS turbo_scxml_cnet_event_io)
+  set_target_properties(turbo_scxml_cnet_event_io PROPERTIES
+    EXPORT_NAME CNetEventIO
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_scxml_cnet_event_io PUBLIC c_std_11)
+  target_include_directories(turbo_scxml_cnet_event_io
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_scxml_cnet_event_io
+    PUBLIC TurboSCXML::SCXML Salts::CNet)
 endif()
 
 add_library(turbo_ccxml STATIC
@@ -625,6 +648,17 @@ if(BUILD_TESTING)
     endif()
   endif()
 
+  if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+    get_target_property(
+      TURBOSCXML_CNET_LINKS
+      turbo_scxml_cnet_event_io INTERFACE_LINK_LIBRARIES)
+    if(NOT TURBOSCXML_CNET_LINKS STREQUAL
+       "TurboSCXML::SCXML;Salts::CNet")
+      message(FATAL_ERROR
+        "TurboSCXML::CNetEventIO dependency contract changed")
+    endif()
+  endif()
+
   get_target_property(
     TURBOCCXML_PUBLIC_LINKS turbo_ccxml INTERFACE_LINK_LIBRARIES)
   set(TURBOCCXML_EXPECTED_LINKS
@@ -799,6 +833,14 @@ if(TURBOSCXML_ENABLE_COMPONENT)
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  install(TARGETS turbo_scxml_cnet_event_io
+    EXPORT TurboSCXMLTargets
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+endif()
 install(TARGETS turbo_ccxml
   EXPORT TurboSCXMLTargets
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -891,6 +933,11 @@ if(TURBOSCXML_ENABLE_COMPONENT)
     FILES include/scxml/component.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
 endif()
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  install(
+    FILES include/scxml/cnet_ingress.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/scxml)
+endif()
 install(
   FILES include/ccxml/ccxml.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
@@ -934,6 +981,8 @@ set(TURBOSCXML_PACKAGE_HAS_PLUGIN
   ${TURBOSCXML_ENABLE_PLUGIN})
 set(TURBOSCXML_PACKAGE_HAS_COMPONENT
   ${TURBOSCXML_ENABLE_COMPONENT})
+set(TURBOSCXML_PACKAGE_HAS_CNET_EVENT_IO
+  ${TURBOSCXML_ENABLE_CNET_EVENT_IO})
 set(TURBOSCXML_PACKAGE_HAS_CHTTP_RESOURCE
   ${TURBOSCXML_ENABLE_CHTTP_RESOURCE})
 set(TURBOSCXML_PACKAGE_HAS_VOICEXML_CHTTP_RESOURCE
