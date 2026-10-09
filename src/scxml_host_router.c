@@ -894,7 +894,9 @@ bool scxml_host_router_is_quiescent(const scxml_host_router *router) {
     bool ok;
     if (impl == NULL) return false;
     cmeta_mutex_lock(&impl->lock);
-    ok = impl->closed && impl->pending == 0u && impl->endpoint_count == 0u;
+    ok = impl->closed && !impl->draining &&
+         impl->pending == 0u && impl->endpoint_count == 0u &&
+         impl->invoke_count == 0u;
     cmeta_mutex_unlock(&impl->lock);
     return ok;
 }
