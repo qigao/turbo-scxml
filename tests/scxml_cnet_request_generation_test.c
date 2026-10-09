@@ -6,6 +6,7 @@
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/native_io.h>
+#include <salts/native_io_ace_token.h>
 #include <salts/thread.h>
 #include <tinytest.h>
 
@@ -141,6 +142,16 @@ static void on_send(void *user, cnet_connection connection, size_t bytes) {
     ++probe->sends;
     probe->bytes += bytes;
 }
+
+/* A token binds a real NativeIO request and its caller-owned buffer to the
+ * authoritative observed terminal; it does not retain a DSO or settle the
+ * Session. DSO/Scope lifetime remains a separate outer obligation. */
+typedef struct native_receive_act_context {
+    unsigned char *buffer;
+    size_t settled;
+} native_receive_act_context;
+
+NATIVE_IO_ACE_TOKEN_TYPE(scxml_native_recv_act, native_receive_act_context);
 
 static bool same_request(native_io_request a, native_io_request b) {
     return a.slot == b.slot && a.generation == b.generation;
@@ -367,6 +378,9 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         native_io_endpoint endpoint = {0};
         native_io_request request = {0}, replacement = {0};
         native_io_completion first = {0}, second = {0};
+        native_receive_act_context first_context = {0}, next_context = {0};
+        native_receive_act_context *settled_context = NULL;
+        scxml_native_recv_act first_act = {0}, next_act = {0};
         native_io_backend_stats stats = {0};
         native_io_operation operation = {0};
         native_cancel_producer race = {0};
@@ -391,6 +405,10 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(native_io_backend_submit(&io, &operation, &request),
                     SALTS_OK);
         check_true(native_io_request_valid(request));
+        first_context.buffer = &first_byte;
+        check_equal(scxml_native_recv_act_bind(
+            &first_act, request, endpoint, (uintptr_t)41u, &first_context),
+            SALTS_OK);
 
         /* Producer races an actual socket write with an owner-lane native
            cancellation request. Cancellation acknowledgement is NOT a
@@ -412,6 +430,10 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         cancel_status = native_io_backend_cancel(&io, request);
         check_true(cancel_status == SALTS_OK ||
                    cancel_status == SALTS_EALREADY);
+        /* A cancel acknowledgement is not the ACT terminal: the borrowed
+           buffer and caller-owned association remain live until observe. */
+        check_true(first_act.active);
+        check_equal(first_context.settled, (size_t)0u);
         check_equal(cmeta_thread_join(&thread), SALTS_OK);
         cmeta_thread_destroy(&thread);
         check_equal(atomic_load_explicit(
@@ -425,6 +447,24 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_true(same_request(first.request, request));
         check_true(first.kind == NATIVE_IO_COMPLETION_CANCELLED ||
                    first.kind == NATIVE_IO_COMPLETION_OK);
+        {
+            /* A shallow-copied ACT cannot consume the genuine completion or
+               steal the live owner association. */
+            scxml_native_recv_act copied = first_act;
+            check_equal(scxml_native_recv_act_settle(
+                &copied, &first, &settled_context), SALTS_EINVAL);
+            check_null(settled_context);
+            check_true(first_act.active);
+        }
+        check_equal(scxml_native_recv_act_settle(
+            &first_act, &first, &settled_context), SALTS_OK);
+        check_true(settled_context == &first_context);
+        check_true(settled_context->buffer == &first_byte);
+        ++settled_context->settled;
+        check_equal(first_context.settled, (size_t)1u);
+        check_equal(scxml_native_recv_act_settle(
+            &first_act, &first, &settled_context), SALTS_EALREADY);
+        check_null(settled_context);
         if (first.kind == NATIVE_IO_COMPLETION_CANCELLED) {
             check_equal(first.bytes, (size_t)0u);
         } else {
@@ -445,6 +485,17 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
                     SALTS_OK);
         check_equal(replacement.slot, request.slot);
         check_not_equal(replacement.generation, request.generation);
+        next_context.buffer = &second_byte;
+        check_equal(scxml_native_recv_act_bind(
+            &next_act, replacement, endpoint, (uintptr_t)42u,
+            &next_context), SALTS_OK);
+        /* This is an actual observed terminal for the numerically recycled
+           slot's older generation. It cannot settle the replacement ACT. */
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &first, &settled_context), SALTS_ENOENT);
+        check_null(settled_context);
+        check_true(next_act.active);
+        check_equal(next_context.settled, (size_t)0u);
         check_equal(native_io_backend_cancel(&io, request), SALTS_ENOENT);
         check_true(native_io_backend_get_stats(&io, &stats));
         check_equal(stats.active_requests, (size_t)1u);
@@ -459,6 +510,15 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(count, (size_t)1u);
         check_true(same_request(second.request, replacement));
         check_equal(second.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &second, &settled_context), SALTS_OK);
+        check_true(settled_context == &next_context);
+        check_true(settled_context->buffer == &second_byte);
+        ++settled_context->settled;
+        check_equal(next_context.settled, (size_t)1u);
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &second, &settled_context), SALTS_EALREADY);
+        check_null(settled_context);
         check_equal(second.bytes, (size_t)1u);
         check_equal(second_byte, (unsigned char)(
             first.kind == NATIVE_IO_COMPLETION_CANCELLED ? 'A' : 'B'));
