@@ -1,8 +1,14 @@
 #include <scxml/cnet_ingress.h>
 #include <scxml/cnet_egress.h>
+#include <scxml/host_router.h>
+#include <scxml/cnet_frame_ingress.h>
 #include <salts/error_codes.h>
 
 int main() {
+    scxml_host_router router = {0};
+    scxml_cnet_frame_ingress frame = {0};
+    if (scxml_host_router_destroy(&router) != SALTS_OK ||
+        scxml_cnet_frame_ingress_destroy(&frame) != SALTS_OK) return 5;
     scxml_cnet_egress outbound = {0};
     const scxml_event_io_adapter *transport = scxml_cnet_egress_adapter();
     if (transport == NULL || transport->prepare_send == NULL ||
