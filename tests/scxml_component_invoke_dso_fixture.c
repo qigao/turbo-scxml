@@ -1,4 +1,5 @@
 #include <scxml/provider.h>
+#include "scxml_component_invoke_probe.h"
 #include <salts/component_plugin_abi.h>
 #include <salts/plugin_decl.h>
 
@@ -11,7 +12,9 @@
  * may inspect the published int marker only while retaining a ComponentScope.
  * No borrowed request pointer or Session internal state is persisted.
  */
-cmeta_component(ScxmlInvokeDsoFixture, cmeta_provides(scxml_invoke_provider));
+cmeta_component(ScxmlInvokeDsoFixture,
+    cmeta_provides(scxml_invoke_provider)
+    cmeta_provides(scxml_test_cnet_probe));
 
 typedef struct invoke_fixture_state {
     int marker;
@@ -20,6 +23,14 @@ typedef struct invoke_fixture_state {
     bool start_reserved;
     bool cancel_reserved;
     bool closed;
+    bool native_bound;
+    bool native_connected;
+    bool native_terminal;
+    cnet_connection native_connection;
+    size_t native_sends;
+    size_t native_send_bytes;
+    size_t native_state_callbacks;
+    size_t stale_callbacks;
 } invoke_fixture_state;
 
 static invoke_fixture_state state = {
@@ -130,18 +141,115 @@ CMETA_IMPLEMENTS(scxml_invoke_provider, invoke_impl,
     .close = close_provider,
     .is_quiescent = is_quiescent);
 
+/* CNet stores these function pointers in its observer. Their *instructions*
+ * reside in this very DSO; the existing ComponentPlugin Scope pins module
+ * code until CNet's authoritative native CLOSED/FAILED terminal is observed.
+ * The callback is invoked only by the single CNet client Owner lane.
+ * This is test-only protocol projection, not a second NativeIO owner. */
+static bool native_connection_matches(invoke_fixture_state *fixture,
+                                      cnet_connection connection) {
+    if (!fixture->native_bound) {
+        fixture->native_connection = connection;
+        fixture->native_bound = true;
+        return true;
+    }
+    return fixture->native_connection.slot == connection.slot &&
+        fixture->native_connection.generation == connection.generation;
+}
+
+static void dso_native_state(
+    void *user, cnet_connection connection,
+    cnet_connection_state value, const cnet_error *error) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)user;
+    (void)error;
+    if (fixture == NULL) return;
+    if (!native_connection_matches(fixture, connection)) {
+        ++fixture->stale_callbacks;
+        return;
+    }
+    ++fixture->native_state_callbacks;
+    if (value == CNET_CONNECTION_CONNECTED) {
+        fixture->native_connected = true;
+    } else if (value == CNET_CONNECTION_CLOSING) {
+        fixture->native_connected = false;
+    } else if (value == CNET_CONNECTION_CLOSED ||
+               value == CNET_CONNECTION_FAILED) {
+        fixture->native_connected = false;
+        fixture->native_terminal = true;
+    }
+}
+
+static void dso_native_send(
+    void *user, cnet_connection connection, size_t bytes) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)user;
+    if (fixture == NULL) return;
+    if (!native_connection_matches(fixture, connection) ||
+        fixture->native_terminal) {
+        ++fixture->stale_callbacks;
+        return;
+    }
+    ++fixture->native_sends;
+    fixture->native_send_bytes += bytes;
+}
+
+static bool probe_get_observer(void *self, cnet_observer *out) {
+    invoke_fixture_state *fixture = (invoke_fixture_state *)self;
+    if (out != NULL) *out = (cnet_observer){0};
+    if (fixture == NULL || out == NULL || fixture->native_bound)
+        return false;
+    *out = (cnet_observer){
+        .on_state = dso_native_state,
+        .on_send = dso_native_send,
+        .user = fixture
+    };
+    return true;
+}
+
+static bool probe_snapshot(void *self,
+                           scxml_test_cnet_probe_snapshot *out) {
+    const invoke_fixture_state *fixture =
+        (const invoke_fixture_state *)self;
+    if (out != NULL) *out = (scxml_test_cnet_probe_snapshot){0};
+    if (fixture == NULL || out == NULL) return false;
+    *out = (scxml_test_cnet_probe_snapshot){
+        .invoke_token = fixture->active_token,
+        .marker = fixture->marker,
+        .native_sends = fixture->native_sends,
+        .native_send_bytes = fixture->native_send_bytes,
+        .native_state_callbacks = fixture->native_state_callbacks,
+        .stale_callbacks = fixture->stale_callbacks,
+        .native_connected = fixture->native_connected,
+        .native_terminal = fixture->native_terminal,
+        .invoke_closed = fixture->closed
+    };
+    return true;
+}
+
+CMETA_IMPLEMENTS(scxml_test_cnet_probe, probe_impl, 0u,
+    .get_observer = probe_get_observer,
+    .snapshot = probe_snapshot);
+
 static cmeta_status project(
     void *context, const cmeta_object_ref *object,
     const cmeta_interface_desc *expected, cmeta_interface_projection *out) {
     (void)context;
-    if (object == NULL || out == NULL ||
-        !cmeta_interface_desc_equal(
-            expected, scxml_invoke_provider_interface()))
+    if (object == NULL || out == NULL)
+        return CMETA_INVALID_ARGUMENT;
+    if (cmeta_interface_desc_equal(
+            expected, scxml_invoke_provider_interface())) {
+        *out = (cmeta_interface_projection){
+            sizeof(*out), scxml_invoke_provider_interface(),
+            &state, &invoke_impl_vtable
+        };
+    } else if (cmeta_interface_desc_equal(
+            expected, scxml_test_cnet_probe_interface())) {
+        *out = (cmeta_interface_projection){
+            sizeof(*out), scxml_test_cnet_probe_interface(),
+            &state, &probe_impl_vtable
+        };
+    } else {
         return CMETA_TRAIT_MISSING;
-    *out = (cmeta_interface_projection){
-        sizeof(*out), scxml_invoke_provider_interface(),
-        &state, &invoke_impl_vtable
-    };
+    }
     return CMETA_OK;
 }
 
