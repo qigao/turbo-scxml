@@ -1,5 +1,7 @@
 #include <scxml/host_router.h>
 
+#include <cflow/clock.h>
+
 #include <salts/thread.h>
 
 #include <stdlib.h>
@@ -28,6 +30,8 @@ typedef struct scxml_host_invoke_route {
 typedef enum scxml_host_row_state {
     SCXML_HOST_ROW_FREE = 0,
     SCXML_HOST_ROW_RESERVED,
+    SCXML_HOST_ROW_DELAYED,
+    SCXML_HOST_ROW_FIRING,
     SCXML_HOST_ROW_READY,
     SCXML_HOST_ROW_INFLIGHT
 } scxml_host_row_state;
@@ -40,6 +44,9 @@ typedef struct scxml_host_row {
     scxml_host_session_ref target;
     scxml_host_session_ref source;
     uint64_t sequence;
+    uint64_t identity;
+    uint64_t delay_ms;
+    uint64_t deadline_ns;
     size_t name_size;
     size_t text_size;
     scxml_content_kind content_kind;
@@ -49,11 +56,27 @@ typedef struct scxml_host_row {
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
 } scxml_host_row;
 
+/* The cancel ticket is a separate bounded reservation; it never owns the
+   target row and its identity check prohibits ABA slot reuse. */
+typedef struct scxml_host_cancel_row {
+    scxml_host_router_impl *owner;
+    scxml_host_row *target;
+    scxml_host_session_ref source;
+    uint64_t target_identity;
+    bool in_use;
+} scxml_host_cancel_row;
+
 struct scxml_host_router_impl {
     cmeta_mutex_t lock;
     scxml_host_endpoint *endpoints;
     scxml_host_row *rows;
     scxml_host_invoke_route *invoke_routes;
+    scxml_host_cancel_row *cancel_rows;
+    cflow_clock *clock;
+    size_t timer_capacity;
+    size_t timer_pending;
+    size_t cancel_capacity;
+    size_t cancel_pending;
     size_t endpoint_capacity;
     size_t event_capacity;
     size_t invoke_capacity;
@@ -64,6 +87,14 @@ struct scxml_host_router_impl {
     size_t reserved;
     size_t high_water;
     uint64_t next_sequence;
+    uint64_t next_row_identity;
+    uint64_t timer_fired;
+    uint64_t timer_cancelled;
+    uint64_t cancel_prepared;
+    uint64_t cancel_committed;
+    uint64_t cancel_discarded;
+    uint64_t cancel_fire_won;
+    uint64_t timer_done_failed;
     uint64_t prepared;
     uint64_t committed;
     uint64_t discarded;
@@ -76,6 +107,7 @@ struct scxml_host_router_impl {
     bool closed;
     /* One host drain lane; Session admission must not run under lock. */
     bool draining;
+    bool timer_running;
 };
 
 static scxml_host_router_impl *router_impl(scxml_host_router *router) {
@@ -120,12 +152,22 @@ static void release_locked(scxml_host_router_impl *impl, scxml_host_row *row) {
         if (impl->reserved != 0u) --impl->reserved;
         else ++impl->invariant_failures;
     }
+    if (row->delay_ms != 0u &&
+        (row->state == SCXML_HOST_ROW_RESERVED ||
+         row->state == SCXML_HOST_ROW_DELAYED ||
+         row->state == SCXML_HOST_ROW_FIRING)) {
+        if (impl->timer_pending != 0u) --impl->timer_pending;
+        else ++impl->invariant_failures;
+    }
     memset(row->name, 0, sizeof(row->name));
     memset(row->text, 0, sizeof(row->text));
     memset(row->send_id, 0, sizeof(row->send_id));
     row->target = (scxml_host_session_ref){0};
     row->source = (scxml_host_session_ref){0};
     row->sequence = 0u;
+    row->identity = 0u;
+    row->delay_ms = 0u;
+    row->deadline_ns = 0u;
     row->name_size = 0u;
     row->text_size = 0u;
     row->content_kind = SCXML_CONTENT_INVALID;
@@ -140,7 +182,8 @@ static scxml_host_row *reserve_locked(scxml_host_router_impl *impl,
                                      const char *text, size_t text_size) {
     scxml_host_row *row = NULL;
     size_t i;
-    if (impl->pending == impl->event_capacity) {
+    if (impl->pending == impl->event_capacity ||
+        impl->next_row_identity == UINT64_MAX) {
         ++impl->rejected_full;
         return NULL;
     }
@@ -155,6 +198,7 @@ static scxml_host_row *reserve_locked(scxml_host_router_impl *impl,
         return NULL;
     }
     row->state = SCXML_HOST_ROW_RESERVED;
+    row->identity = ++impl->next_row_identity;
     row->target = target;
     row->name_size = name_size;
     row->text_size = text_size;
@@ -179,8 +223,17 @@ static void commit_locked(scxml_host_router_impl *impl, scxml_host_row *row) {
         release_locked(impl, row);
     } else {
         --impl->reserved;
-        row->state = SCXML_HOST_ROW_READY;
         row->sequence = ++impl->next_sequence;
+        if (row->delay_ms != 0u) {
+            /* Clock mutation and this commit are externally serialized. */
+            const cflow_instant now = cflow_clock_now(impl->clock);
+            const cflow_deadline deadline =
+                cflow_deadline_after(now, cflow_duration_from_ms(row->delay_ms));
+            row->deadline_ns = deadline.ns;
+            row->state = SCXML_HOST_ROW_DELAYED;
+        } else {
+            row->state = SCXML_HOST_ROW_READY;
+        }
         ++impl->committed;
     }
 }
