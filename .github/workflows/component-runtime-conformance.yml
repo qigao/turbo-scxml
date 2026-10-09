@@ -17,7 +17,6 @@ on:
   push:
     branches:
       - feature/component-runtime-conformance
-      - feature/ace23-cnet-ingress
     paths:
       - ".github/workflows/component-runtime-conformance.yml"
       - "CMakeLists.txt"
