@@ -317,7 +317,7 @@ if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
     add_library(scxml_invoke_component_dso_${generation} MODULE
       scxml_component_invoke_dso_fixture.c)
     target_link_libraries(scxml_invoke_component_dso_${generation} PRIVATE
-      TurboSCXML::SCXML Salts::ComponentPluginABI Salts::PluginABI)
+      TurboSCXML::SCXML Salts::ComponentPluginABI Salts::PluginABI Salts::CNet)
     target_compile_features(scxml_invoke_component_dso_${generation} PRIVATE c_std_11)
     target_compile_definitions(scxml_invoke_component_dso_${generation} PRIVATE
       SCXML_COMPONENT_DSO_MARKER=${generation}00
