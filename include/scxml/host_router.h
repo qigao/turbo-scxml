@@ -38,6 +38,12 @@ typedef struct scxml_host_router_config {
     size_t max_text_bytes;
     /* Zero disables invocation aliases; positive bound allocates exact rows. */
     size_t invoke_capacity;
+    /* Optional borrowed CFlow monotonic Clock. timer_capacity is bounded
+       separately from the combined finite Host event_capacity. */
+    cflow_clock *clock;
+    size_t timer_capacity;
+    /* Cancellation ticket rows; positive if timer_capacity is positive. */
+    size_t cancel_capacity;
 } scxml_host_router_config;
 
 typedef struct scxml_host_router_stats {
@@ -46,7 +52,10 @@ typedef struct scxml_host_router_stats {
     size_t reserved;
     size_t high_water;
     size_t invoke_bindings;
+    size_t delayed_pending;
+    size_t cancel_pending;
     bool closed;
+    bool timer_running;
     bool draining;
     uint64_t prepared;
     uint64_t committed;
@@ -57,6 +66,13 @@ typedef struct scxml_host_router_stats {
     uint64_t stale_refs;
     uint64_t delivery_errors;
     uint64_t invariant_failures;
+    uint64_t timer_fired;
+    uint64_t timer_cancelled;
+    uint64_t cancel_prepared;
+    uint64_t cancel_committed;
+    uint64_t cancel_discarded;
+    uint64_t cancel_fire_won;
+    uint64_t timer_done_failed;
 } scxml_host_router_stats;
 
 int scxml_host_router_init(scxml_host_router *router,
@@ -139,7 +155,36 @@ int scxml_host_router_prepare_target(
     /* NULL: no content. Otherwise TEXT_UTF8 or XML_UTF8, borrowed for
        this call and copied into bounded Host row before ACCEPTED. */
     const scxml_content_view *content,
+    uint64_t delay_ms,
     cflow_statechart_effect_ticket *out_ticket);
+
+/* Reserve cancellation of one live delayed send belonging to source,
+ * keyed by the same sendid used by the SCXML Session's existing registry.
+ * The ticket is owned by the CFlow effect journal; commit/discard is exactly
+ * once and neither calls CNet or Session. Due-vs-cancel linearizes at the
+ * Host lock. Fires already won by run_due cannot be revoked.
+ */
+int scxml_host_router_prepare_cancel(
+    scxml_host_router *router, scxml_host_session_ref source,
+    const char *send_id, size_t send_id_size,
+    cflow_statechart_effect_ticket *out_ticket);
+
+/* The Host owner explicitly drives a finite monotonic-clock deadline
+ * ledger. Commit measures delay from its own commit instant. Only this
+ * method claims due rows; it reports sendid completion back to the existing
+ * Session delayed-send registry OUTSIDE the Host mutex.
+ *
+ * On a due/Cancel race the winner owns the row, never a duplicate Event.
+ * On Host FULL an already-fired row stays READY for a later drain.
+ * Clock mutation must be serialized with run_due/commit by the caller.
+ * No background timers, worker, scheduler or automatic settlement retry.
+ */
+int scxml_host_router_run_due(
+    scxml_host_router *router, size_t max_fires, size_t *out_fired);
+
+/* Explicit proof of Clock, finite delayed registry and finite ticket slots.
+ * Used to admit an adapter with DELAYED_SEND|CANCEL capabilities. */
+bool scxml_host_router_supports_delayed(const scxml_host_router *router);
 
 /*
  * Copy one complete Event and UTF-8 body into bounded Host storage. No Event
