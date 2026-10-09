@@ -83,9 +83,46 @@ ASan+UBSan CNet/Host/DSO tests, `Salts.Native 2.3.0-rc.1` and
 The CNet/CMeta observer interface exists only in test sources, not the
 installed TurboSCXML API.
 
+## Cross-thread DSO / Invoke / CNet conformance (2026-10-10 Linux)
+
+The joint `scxml_component_cnet_invoke_test` now has test-only,
+address-stable C11 atomic callback gates projected through the existing
+borrowed CMeta Service; the installed TurboSCXML ABI is unchanged. The CNet
+owner actually enters the gN DSO `on_send` or the gN+1 DSO terminal
+`on_state(CLOSED/FAILED)`, while a different real thread attempts
+`cmeta_plugin_registry_unload`. The registry's authoritative lease/lock
+path returns BUSY. After the callback resumes and the *actual* CNet terminal
+is observed, Session/Invoke/Component Scope retirement proceeds in order.
+No observer function pointer is used after its originating DSO unloads.
+
+A separate two-gate case places the real gN+1 DSO Invoke
+`prepare_cancel` on its CFlow SerialExecutor worker in flight at the
+**same time** as its real DSO `on_send` completion on the CNet owner. Both
+gates must be entered before a coordinator thread releases either side.
+The single Statechart effect journal still settles the Invoke cancellation;
+the CNet callback does not synthesize a second CFlow settlement, and a
+subsequent stale `done.invoke` is rejected. This tests **cross-lane
+overlap**, not yet the deeper NativeIO *same-request* ACT cancel-vs-terminal
+linearization proof.
+
+The owner-affine domain fence also has a real two-thread negative test:
+foreign activation during an in-flight owner admission fails without
+invalidating the accepted command or switching epochs. Switching on the
+owner lane afterward fences gN admission and preserves gN+1 operation.
+
+**Exact-head qualified CI:** [#37977909381](https://github.com/qigao/turbo-scxml/actions/runs/37977909381)
+at [`37785b5`](https://github.com/qigao/turbo-scxml/commit/37785b551f5e465afcf86703c9528ca290c5785a):
+15/15 focused Release tests, 12/12 installed C11/C++17 consumers,
+8/8 Linux ASan+UBSan and **2/2 separate Linux TSan tests**. TSan instruments
+the local TurboSCXML targets and test DSOs against an installed
+`Salts.Native 2.3.0-rc.1` / `SaltsUtils.Native 4.3.0-rc.1` graph; the
+external SDK native binaries are not TSan-instrumented. Repeated TSan
+stress qualification is tracked by the later workflow change `36dd6f3`;
+report it only once its own exact-head CI finishes.
+
 ## Remaining conformance
 
-- **Qualified on Linux (controlled order):** DSO-resident CNet on_send/on_state executes through a live CMeta-projected Scope, and old DSO unload remains BUSY until authentic CNet terminal and Invoke/Scope quiescence. Full **simultaneous** callback execution versus Scope/unload on multiple threads still needs a separately controlled TSan race test; no claim of concurrent unload safety outside the single-owner serialization proof.
-- Adversarial controlled races for true simultaneous ACT cancel versus kernel completion, Session restart/request-slot reuse, and failed live Component candidate activation with rollback; preserve exactly-once effect-ticket and `done.invoke.*` behavior.
-- TSan where supported, Windows IOCP and macOS Kqueue runtime and exact installed Salts 2.3/SaltsUtils 4.3 multi-RID release qualification. Linux ASan+UBSan is qualified only for the focused tests listed above.
-- No automatic retry or fallback generation, and no release/merge authorization implied by one Linux gate.
+- NativeIO-authoritative ACT cancellation versus completion on **the same request identity**, including exactly-once terminal and request-slot/generation reuse. The cross-lane DSO overlap above is not a substitute.
+- Failed candidate activation with deterministic rollback, stale Scope invalid release, close/reopen and exhaustion with live native work; no alternate registry, fallback, or automatic settlement retry.
+- Windows IOCP and macOS Kqueue runtime/DSO race tests and exact installed multi-RID Salts 2.3/SaltsUtils 4.3 SDK qualification. A Linux-only sanitizer pass cannot close those gates.
+- Draft PR #307 remains **DO NOT MERGE / DO NOT PUBLISH**; no Salts 2.3 release admission is implied.
