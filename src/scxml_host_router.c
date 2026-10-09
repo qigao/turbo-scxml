@@ -971,6 +971,57 @@ int scxml_host_router_cancel(scxml_host_router *router,
     return SALTS_OK;
 }
 
+int scxml_host_router_cancel_source(
+    scxml_host_router *router, scxml_host_session_ref source,
+    size_t *out_cancelled) {
+    scxml_host_router_impl *impl = router_impl(router);
+    size_t count = 0u, i;
+    if (out_cancelled != NULL) *out_cancelled = 0u;
+    if (impl == NULL || out_cancelled == NULL) return SALTS_EINVAL;
+    cmeta_mutex_lock(&impl->lock);
+    if (!matches(impl, source)) {
+        ++impl->stale_refs;
+        cmeta_mutex_unlock(&impl->lock);
+        return SALTS_ENOENT;
+    }
+    for (i = 0u; i < impl->event_capacity; ++i) {
+        scxml_host_row *row = &impl->rows[i];
+        if (row->state == SCXML_HOST_ROW_READY &&
+            refs_equal(row->source, source)) {
+            release_locked(impl, row);
+            ++impl->cancelled;
+            ++count;
+        }
+    }
+    *out_cancelled = count;
+    cmeta_mutex_unlock(&impl->lock);
+    return SALTS_OK;
+}
+
+bool scxml_host_router_source_is_quiescent(
+    const scxml_host_router *router, scxml_host_session_ref source) {
+    scxml_host_router_impl *impl = router != NULL
+        ? (scxml_host_router_impl *)router->impl : NULL;
+    bool quiescent = true;
+    size_t i;
+    if (impl == NULL) return false;
+    cmeta_mutex_lock(&impl->lock);
+    if (!matches(impl, source)) {
+        quiescent = false;
+    } else {
+        for (i = 0u; i < impl->event_capacity; ++i) {
+            const scxml_host_row *row = &impl->rows[i];
+            if (row->state != SCXML_HOST_ROW_FREE &&
+                refs_equal(row->source, source)) {
+                quiescent = false;
+                break;
+            }
+        }
+    }
+    cmeta_mutex_unlock(&impl->lock);
+    return quiescent;
+}
+
 bool scxml_host_router_get_stats(
     const scxml_host_router *router, scxml_host_router_stats *out) {
     scxml_host_router_impl *impl = router != NULL
