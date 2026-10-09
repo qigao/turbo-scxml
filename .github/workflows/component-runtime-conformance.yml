@@ -280,3 +280,285 @@ jobs:
             build/component-sanitized/Testing/Temporary/LastTest.log
             build/component-runtime/Testing/Temporary/LastTest.log
             tests/install_consumer/build/component-installed/Testing/Temporary/LastTest.log
+
+  # Post-Linux admission only. This qualifies native IOCP/Kqueue callbacks
+  # and installed ACE Component consumers against the same immutable RC
+  # package names; it does not authorize publication or stable integration.
+  component-multirid:
+    name: ACE Component / ${{ matrix.id }}
+    needs: component-runtime
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            runner: windows-2022
+            triplet: x64-windows
+          - id: macos-native
+            runner: macos-15
+            triplet: auto
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-component-multirid-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.id == 'macos-native' && 'ccache' || '' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.id == 'macos-native' && 'ccache' || '' }}
+    steps:
+      - name: Checkout exact TurboSCXML candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Configure existing shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore existing Salts host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore macOS ccache objects
+        if: matrix.id == 'macos-native'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.turboscxml-component-multirid-ccache
+          key: turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-
+
+      - name: Prepare macOS compiler and package RID
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja ccache
+          case "$RUNNER_ARCH" in
+            X64) rid=macos-x64; triplet=x64-osx ;;
+            ARM64) rid=macos-arm64; triplet=arm64-osx ;;
+            *) echo "Unsupported macOS architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          echo "NATIVE_SDK_RID=$rid" >> "$GITHUB_ENV"
+          echo "VCPKG_TARGET_TRIPLET=$triplet" >> "$GITHUB_ENV"
+          ccache --zero-stats
+
+      - name: Restore exact Windows x64 Salts and SaltsUtils RC SDKs
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
+          $packages = Join-Path $env:RUNNER_TEMP "turboscxml-component-sdks"
+          $project = Join-Path $env:RUNNER_TEMP "component-dependencies.csproj"
+          '<configuration><packageSources><clear /></packageSources></configuration>' |
+            Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          if ($LASTEXITCODE -ne 0) { throw "NuGet source setup failed" }
+          Copy-Item -LiteralPath "cmake/ci/native-sdk-dependencies.csproj" -Destination $project
+          dotnet restore $project --configfile $config --packages $packages --no-cache
+          if ($LASTEXITCODE -ne 0) { throw "RC SDK restore failed" }
+          function Get-ExactSdk([string]$name, [string]$expected) {
+            $roots = @(
+              Get-ChildItem -LiteralPath (Join-Path $packages $name) -Directory |
+                ForEach-Object { Join-Path $_.FullName "sdk\windows-x64" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+            )
+            if ($roots.Count -ne 1) { throw "Expected exactly one $name/windows-x64 SDK; found $($roots.Count)" }
+            $version = Split-Path (Split-Path (Split-Path $roots[0] -Parent) -Parent) -Leaf
+            if ($version -ne $expected) { throw "Rejected $name/$version; requires $expected" }
+            $manifestName = if ($name -eq "salts.native") { "salts-sdk-manifest.txt" } else { "salts-utils-sdk-manifest.txt" }
+            $manifest = Join-Path $roots[0] $manifestName
+            $rows = @(Get-Content -LiteralPath $manifest)
+            if (-not ($rows -contains "version=$expected") -or
+                -not ($rows -contains "profile=release") -or
+                -not ($rows -contains "rid=windows-x64") -or
+                @($rows | Where-Object { $_ -match '^commit=[0-9a-fA-F]{40}$' }).Count -ne 1) {
+              throw "RC SDK manifest mismatch: $manifest"
+            }
+            return ($roots[0] -replace '\', '/')
+          }
+          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.1"
+          $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.1"
+          "SALTS_ROOT=$salts" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$utils" >> $env:GITHUB_ENV
+          "DATABIND_ROOT=$utils" >> $env:GITHUB_ENV
+          "NATIVE_SDK_RID=windows-x64" >> $env:GITHUB_ENV
+          "VCPKG_TARGET_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+
+      - name: Restore exact macOS Salts and SaltsUtils RC SDKs
+        if: matrix.id == 'macos-native'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-component-sdks"
+          project="$RUNNER_TEMP/component-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local name="$1" expected="$2" manifest_name="$3"
+            local roots=() candidate version
+            while IFS= read -r candidate; do roots+=("$candidate"); done < <(
+              find "$packages/$name" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$NATIVE_SDK_RID" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              echo "Expected exactly one $name/$NATIVE_SDK_RID SDK; found ${#roots[@]}" >&2
+              return 1
+            fi
+            version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            test "$version" = "$expected"
+            local manifest="${roots[0]}/$manifest_name"
+            test -f "$manifest"
+            grep -Fxq "version=$expected" "$manifest"
+            grep -Fxq "rid=$NATIVE_SDK_RID" "$manifest"
+            grep -Fxq 'profile=release' "$manifest"
+            grep -Eq '^commit=[[:xdigit:]]{40}$' "$manifest"
+            printf '%s' "${roots[0]}"
+          }
+          salts="$(sdk_root salts.native 2.3.0-rc.1 salts-sdk-manifest.txt)"
+          utils="$(sdk_root saltsutils.native 4.3.0-rc.1 salts-utils-sdk-manifest.txt)"
+          echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
+          echo "DATABIND_ROOT=$utils" >> "$GITHUB_ENV"
+
+      - name: Restore Windows third-party dependencies from cache only
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-windows --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg binary cache-only restore failed" }
+
+      - name: Restore macOS third-party dependencies from cache only
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+
+      - name: Build, test and install Windows IOCP ACE Component
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = "$env:GITHUB_WORKSPACE/stage/component"
+          $flags = @(
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_MANIFEST_MODE=OFF",
+            "-DVCPKG_APPLOCAL_DEPS=OFF",
+            "-DCMAKE_INSTALL_PREFIX=$prefix",
+            "-DBUILD_TESTING=ON",
+            "-DTURBOSCXML_ENABLE_COMPONENT=ON",
+            "-DTURBOSCXML_ENABLE_PLUGIN=ON",
+            "-DTURBOSCXML_ENABLE_HOST=ON",
+            "-DTURBOSCXML_ENABLE_CNET_EVENT_IO=ON",
+            "-DTURBOSCXML_ENABLE_QUICKJS=OFF",
+            "-DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF",
+            "-DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF",
+            "-DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF"
+          )
+          cmake -S . -B build/component-multirid -G "Visual Studio 17 2022" -A x64 @flags
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component configure failed" }
+          cmake --build build/component-multirid --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component build failed" }
+          $env:PATH = "$env:SALTS_ROOT/bin;$env:SALTS_UTILS_ROOT/bin;$env:GITHUB_WORKSPACE/vcpkg_installed/x64-windows/bin;$env:PATH"
+          New-Item -ItemType Directory -Force -Path build/component-multirid-results | Out-Null
+          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          if ($LASTEXITCODE -ne 0) { throw "Windows IOCP/DSO runtime tests failed" }
+          cmake --install build/component-multirid --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component install failed" }
+          $env:TURBOSCXML_ROOT = $prefix
+          $env:PATH = "$prefix/bin;$env:PATH"
+          $consumerFlags = @(
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_MANIFEST_MODE=OFF",
+            "-DVCPKG_APPLOCAL_DEPS=OFF",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO=ON"
+          )
+          cmake -S tests/install_consumer -B build/component-multirid-consumer -G "Visual Studio 17 2022" -A x64 @consumerFlags
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer configure failed" }
+          cmake --build build/component-multirid-consumer --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer build failed" }
+          ctest --test-dir build/component-multirid-consumer -C Release --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/consumer.xml"
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer test failed" }
+
+      - name: Build, test and install macOS Kqueue ACE Component
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(
+            "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed"
+            "-DVCPKG_TARGET_TRIPLET=$VCPKG_TARGET_TRIPLET"
+            "-DVCPKG_MANIFEST_MODE=OFF"
+            "-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/stage/component"
+            "-DBUILD_TESTING=ON"
+            "-DTURBOSCXML_ENABLE_COMPONENT=ON"
+            "-DTURBOSCXML_ENABLE_PLUGIN=ON"
+            "-DTURBOSCXML_ENABLE_HOST=ON"
+            "-DTURBOSCXML_ENABLE_CNET_EVENT_IO=ON"
+            "-DTURBOSCXML_ENABLE_QUICKJS=OFF"
+            "-DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF"
+            "-DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF"
+            "-DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF"
+          )
+          cmake -S . -B build/component-multirid -G Ninja -DCMAKE_BUILD_TYPE=Release "${flags[@]}"
+          cmake --build build/component-multirid --parallel 2
+          export DYLD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
+          mkdir -p build/component-multirid-results
+          ctest --test-dir build/component-multirid -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          cmake --install build/component-multirid
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/component"
+          export DYLD_LIBRARY_PATH="$TURBOSCXML_ROOT/lib:$DYLD_LIBRARY_PATH"
+          cmake -S tests/install_consumer -B build/component-multirid-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed" \
+            "-DVCPKG_TARGET_TRIPLET=$VCPKG_TARGET_TRIPLET" \
+            "-DVCPKG_MANIFEST_MODE=OFF" \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO=ON
+          cmake --build build/component-multirid-consumer --parallel 2
+          ctest --test-dir build/component-multirid-consumer --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/consumer.xml"
+
+      - name: Record cross-platform acceptance identity
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-multirid-results
+          printf 'consumer_commit=%s\nrunner_os=%s\nrunner_arch=%s\nrid=%s\n' \
+            "$GITHUB_SHA" "$RUNNER_OS" "$RUNNER_ARCH" "${NATIVE_SDK_RID:-unknown}" > build/component-multirid-results/identity.txt
+
+      - name: Upload cross-platform acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-multirid-${{ matrix.id }}
+          path: |
+            build/component-multirid-results/
+            build/component-multirid/Testing/Temporary/LastTest.log
+            build/component-multirid-consumer/Testing/Temporary/LastTest.log
