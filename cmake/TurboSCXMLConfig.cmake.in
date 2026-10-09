@@ -51,7 +51,7 @@ endif()
 set(_TURBOSCXML_NEEDS_SCXML ${_TURBOSCXML_PACKAGE_WIDE})
 foreach(_TURBOSCXML_COMPONENT IN ITEMS
     SCXML CCXML VoiceXMLDialogManager VoiceXMLCHttpResource
-    QuickJS Plugin Component CHttpResource CHttpEventIO CNetEventIO)
+    QuickJS Plugin Component Host CHttpResource CHttpEventIO CNetEventIO)
   if(_TURBOSCXML_COMPONENT IN_LIST TurboSCXML_FIND_COMPONENTS)
     set(_TURBOSCXML_NEEDS_SCXML TRUE)
   endif()
@@ -152,6 +152,14 @@ set(TurboSCXML_VoiceXMLQuickJS_FOUND
   @TURBOSCXML_PACKAGE_HAS_VOICEXML_QUICKJS@)
 set(TurboSCXML_Plugin_FOUND @TURBOSCXML_PACKAGE_HAS_PLUGIN@)
 set(TurboSCXML_Component_FOUND @TURBOSCXML_PACKAGE_HAS_COMPONENT@)
+set(TurboSCXML_Host_FOUND @TURBOSCXML_PACKAGE_HAS_HOST@)
+if(Host IN_LIST TurboSCXML_FIND_COMPONENTS AND
+   NOT TurboSCXML_Host_FOUND AND TurboSCXML_FIND_REQUIRED_Host)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "This TurboSCXML package does not include the Host component")
+  return()
+endif()
 set(TurboSCXML_CNetEventIO_FOUND @TURBOSCXML_PACKAGE_HAS_CNET_EVENT_IO@)
 if(CNetEventIO IN_LIST TurboSCXML_FIND_COMPONENTS AND
    NOT TurboSCXML_CNetEventIO_FOUND AND
@@ -159,6 +167,13 @@ if(CNetEventIO IN_LIST TurboSCXML_FIND_COMPONENTS AND
   set(TurboSCXML_FOUND FALSE)
   set(TurboSCXML_NOT_FOUND_MESSAGE
     "This TurboSCXML package does not include the CNetEventIO component")
+  return()
+endif()
+if(TurboSCXML_CNetEventIO_FOUND AND NOT TurboSCXML_Host_FOUND)
+  set(TurboSCXML_CNetEventIO_FOUND FALSE)
+  set(TurboSCXML_FOUND FALSE)
+  set(TurboSCXML_NOT_FOUND_MESSAGE
+    "The CNetEventIO component requires the provider-neutral Host component")
   return()
 endif()
 if(TurboSCXML_CNetEventIO_FOUND AND
