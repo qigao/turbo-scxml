@@ -312,6 +312,32 @@ if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
   set_tests_properties(scxml_cnet_domain_fence_test PROPERTIES TIMEOUT 40)
 endif()
 
+if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  foreach(generation IN ITEMS 1 2)
+    add_library(scxml_invoke_component_dso_${generation} MODULE
+      scxml_component_invoke_dso_fixture.c)
+    target_link_libraries(scxml_invoke_component_dso_${generation} PRIVATE
+      TurboSCXML::SCXML Salts::ComponentPluginABI Salts::PluginABI)
+    target_compile_features(scxml_invoke_component_dso_${generation} PRIVATE c_std_11)
+    target_compile_definitions(scxml_invoke_component_dso_${generation} PRIVATE
+      SCXML_COMPONENT_DSO_MARKER=${generation}00
+      SCXML_INVOKE_DSO_ID="test.scxml.invoke.component.${generation}")
+    set_target_properties(scxml_invoke_component_dso_${generation} PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+      FOLDER "tests/fixtures")
+  endforeach()
+  turboscxml_add_test(
+    scxml_component_cnet_invoke_test
+    scxml_component_cnet_invoke_test.c
+    LIBS TurboSCXML::Component TurboSCXML::CNetEventIO Salts::Core
+    DEFINITIONS
+      SCXML_INVOKE_DSO_ONE="$<TARGET_FILE:scxml_invoke_component_dso_1>"
+      SCXML_INVOKE_DSO_TWO="$<TARGET_FILE:scxml_invoke_component_dso_2>")
+  add_dependencies(scxml_component_cnet_invoke_test
+    scxml_invoke_component_dso_1 scxml_invoke_component_dso_2)
+  set_tests_properties(scxml_component_cnet_invoke_test PROPERTIES TIMEOUT 60)
+endif()
+
 turboscxml_add_test(
   scxml_w3c_conformance_test
   scxml_w3c_conformance_test.c
