@@ -134,6 +134,11 @@ static int accept_noop(void *unused) {
     return SALTS_OK;
 }
 
+static int reject_noop(void *unused) {
+    (void)unused;
+    return SALTS_ENOBUFS;
+}
+
 static bool check_quiescence(void *user) {
     const fence_quiescence *q = (const fence_quiescence *)user;
     return q != NULL && q->native_done && q->component_scope_released;
@@ -324,8 +329,13 @@ spec("ACE CNet domain exclusive owner and Component generation fencing") {
         check_equal(cmeta_thread_join(&thread), SALTS_OK);
         cmeta_thread_destroy(&thread);
         check_equal(ctx.status, SALTS_EINVAL);
+        /* A rejected CNet command retains no native resource or Component
+           generation lease. It cannot be reported as an accepted send. */
+        check_equal(scxml_cnet_domain_fence_try_submit(
+            &fence, UINT64_C(11), reject_noop, NULL), SALTS_ENOBUFS);
         check_true(scxml_cnet_domain_fence_get_stats(&fence, &stats));
         check_equal(stats.accepted, UINT64_C(0));
+        check_equal(stats.failed_submissions, UINT64_C(1));
         check_equal(scxml_cnet_domain_fence_close(&fence), SALTS_OK);
         check_equal(scxml_cnet_domain_fence_retire(
             &fence, UINT64_C(11), NULL, NULL), SALTS_EINVAL);
