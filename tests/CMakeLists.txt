@@ -310,6 +310,12 @@ if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
     scxml_cnet_domain_fence_test.c
     LIBS TurboSCXML::CNetEventIO Salts::Core)
   set_tests_properties(scxml_cnet_domain_fence_test PROPERTIES TIMEOUT 40)
+  turboscxml_add_test(
+    scxml_cnet_request_generation_test
+    scxml_cnet_request_generation_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::NativeIO Salts::Core)
+  set_tests_properties(scxml_cnet_request_generation_test
+    PROPERTIES TIMEOUT 40)
 endif()
 
 if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
