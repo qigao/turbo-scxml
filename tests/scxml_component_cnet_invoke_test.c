@@ -2193,6 +2193,23 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         close_first_invoke_probe probe = {0};
         scxml_invoke_adapter gate_adapter = {0};
         scxml_invoke_stats stats = {0};
+        const native_io_backend_config native_conf = {
+            .kind = backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend native = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_operation op = {0};
+        native_io_request req_old = {0}, req_next = {0};
+        native_io_completion done_old = {0}, done_next = {0};
+        scxml_invoke_native_context ctx_old = {0}, ctx_next = {0};
+        scxml_invoke_native_context *settled = NULL;
+        scxml_invoke_native_act act_old = {0}, act_next = {0};
+        scxml_act_socket sockets[2] = {
+            SCXML_ACT_INVALID_SOCKET, SCXML_ACT_INVALID_SOCKET
+        };
+        unsigned char byte_old = 0u, byte_next = 0u;
+        size_t n = 0u;
         uint64_t deadline;
         int old_token, next_token;
 
@@ -2260,6 +2277,24 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_true(cflow_executor_wait_idle(&f.executors[0]));
         old_token = invoke_token_from_scope(&f.scopes[0]);
         check_true(old_token > 0);
+        /* One physical NativeIO request belongs to this old Invoke Scope. */
+        check_equal(scxml_act_make_socket_pair(sockets), 0);
+        check_equal(native_io_backend_init(&native, &native_conf), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &native, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
+        op = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_STREAM_RECV, .endpoint = endpoint,
+            .buffer = &byte_old, .length = 1u,
+            .user_data = (uintptr_t)old_token
+        };
+        check_equal(native_io_backend_submit(
+            &native, &op, &req_old), SALTS_OK);
+        ctx_old = (scxml_invoke_native_context){
+            &f.scopes[0], UINT64_C(11), (uintptr_t)old_token,
+            &byte_old, 0u
+        };
+        check_equal(scxml_invoke_native_act_bind(
+            &act_old, req_old, endpoint, op.user_data, &ctx_old), SALTS_OK);
         check_equal(scxml_session_try_send_named_with_metadata(
             &f.sessions[0], "finish", 6u, &metadata), CFLOW_MAILBOX_OK);
 
@@ -2307,6 +2342,48 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
         check_equal(scxml_session_destroy(&f.sessions[0]),
                     CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
+        check_true(act_old.active);
+        check_equal(ctx_old.settlements, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &native, endpoint), SALTS_EBUSY);
+        /* The genuine kernel terminal arrives after close but before
+           any DSO prepare_cancel admission. Cancel ack is not terminal. */
+        check_equal(send(sockets[1], "A", 1, 0), 1);
+        check_equal(native_io_backend_observe(
+            &native, &done_old, 1u, TIMEOUT_MS, &n), SALTS_OK);
+        check_equal(n, (size_t)1u);
+        check_equal(done_old.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(done_old.request.slot, req_old.slot);
+        check_equal(done_old.request.generation, req_old.generation);
+        check_equal(byte_old, (unsigned char)'A');
+        check_equal(scxml_invoke_native_act_settle(
+            &act_old, &done_old, &settled), SALTS_OK);
+        check_true(settled == &ctx_old);
+        ++settled->settlements;
+        check_equal(ctx_old.settlements, (size_t)1u);
+        check_equal(scxml_invoke_native_act_settle(
+            &act_old, &done_old, &settled), SALTS_EALREADY);
+        check_null(settled);
+        /* Capacity one: gN+1 reuses the real request slot while the old
+           callback is gated, with a different request generation. */
+        op.buffer = &byte_next;
+        op.user_data = (uintptr_t)next_token;
+        check_equal(native_io_backend_submit(
+            &native, &op, &req_next), SALTS_OK);
+        check_equal(req_next.slot, req_old.slot);
+        check_not_equal(req_next.generation, req_old.generation);
+        ctx_next = (scxml_invoke_native_context){
+            &f.scopes[1], UINT64_C(12), (uintptr_t)next_token,
+            &byte_next, 0u
+        };
+        check_equal(scxml_invoke_native_act_bind(
+            &act_next, req_next, endpoint, op.user_data, &ctx_next), SALTS_OK);
+        check_equal(scxml_invoke_native_act_settle(
+            &act_next, &done_old, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_equal(native_io_backend_cancel(
+            &native, req_old), SALTS_ENOENT);
+        check_true(act_next.active);
 
         atomic_store_explicit(
             &probe.admission.release, 1, memory_order_release);
@@ -2353,6 +2430,27 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
         f.plugins[0] = (cmeta_plugin_ref){0};
 
+        /* The new request remains live after gN unload and must settle
+           only from its own authentic NativeIO terminal. */
+        check_true(act_next.active);
+        check_equal(ctx_next.settlements, (size_t)0u);
+        check_equal(send(sockets[1], "B", 1, 0), 1);
+        n = 0u;
+        check_equal(native_io_backend_observe(
+            &native, &done_next, 1u, TIMEOUT_MS, &n), SALTS_OK);
+        check_equal(n, (size_t)1u);
+        check_equal(done_next.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(done_next.request.slot, req_next.slot);
+        check_equal(done_next.request.generation, req_next.generation);
+        check_equal(byte_next, (unsigned char)'B');
+        check_equal(scxml_invoke_native_act_settle(
+            &act_next, &done_next, &settled), SALTS_OK);
+        check_true(settled == &ctx_next);
+        ++settled->settlements;
+        check_equal(ctx_next.settlements, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &native, req_next), SALTS_ENOENT);
+
         /* gN+1's DSO remains executable after old code unload. */
         check_equal(invoke_token_from_scope(&f.scopes[1]), next_token);
         check_true(session_send_signal(&f, 1u, "finish"));
@@ -2371,6 +2469,15 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             SALTS_COMPONENT_PLUGIN_OK);
         check_equal(f.runtime.active_scopes, (size_t)0u);
         check_equal(f.runtime.attached_generations, (size_t)0u);
+        check_equal(scxml_act_close_socket(sockets[0]), 0);
+        check_equal(scxml_act_close_socket(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(
+            &native, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&native), SALTS_OK);
+        check_equal(native_io_backend_destroy(&native), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
     }
 
     it("recreates real DSO and CNet owner only after concurrent unload is rejected and native quiesces") {
