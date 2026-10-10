@@ -436,6 +436,72 @@ static void callback_gate_init(scxml_test_cnet_callback_gate *gate) {
     atomic_init(&gate->timed_out, 0);
 }
 
+/* Hold CFlow BEFORE entering the real DSO prepare_cancel. Session.cancel
+ * may close its adapter on the caller lane without invoking any new owner or
+ * modifying native I/O; the original Component Scope pins the DSO code. */
+typedef struct close_first_invoke_probe {
+    const scxml_invoke_adapter *delegate;
+    void *delegate_user;
+    scxml_test_cnet_callback_gate admission;
+    atomic_int close_returned;
+    atomic_int close_calls;
+    atomic_int cancel_calls;
+    atomic_int cancel_saw_close;
+    atomic_int cancel_status;
+    atomic_int ticket_issued;
+} close_first_invoke_probe;
+
+static scxml_adapter_status close_first_prepare_start(
+    void *user, const scxml_invoke_start_request *request,
+    cflow_statechart_effect_ticket *ticket, const char **error) {
+    close_first_invoke_probe *p = (close_first_invoke_probe *)user;
+    return p->delegate->prepare_start(p->delegate_user, request, ticket, error);
+}
+
+static scxml_adapter_status close_first_prepare_cancel(
+    void *user, const scxml_invoke_cancel_request *request,
+    cflow_statechart_effect_ticket *ticket, const char **error) {
+    close_first_invoke_probe *p = (close_first_invoke_probe *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(10000);
+    scxml_adapter_status status;
+
+    atomic_store_explicit(&p->admission.entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&p->admission.release,
+                                 memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (!atomic_load_explicit(&p->admission.release, memory_order_acquire))
+        atomic_store_explicit(&p->admission.timed_out, 1,
+                              memory_order_release);
+    atomic_store_explicit(&p->cancel_saw_close,
+        atomic_load_explicit(&p->close_returned, memory_order_acquire),
+        memory_order_release);
+
+    /* Only NOW enter DSO instructions. This observes the provider's actual
+       closed admission bit, not merely the Session exit request. */
+    status = p->delegate->prepare_cancel(
+        p->delegate_user, request, ticket, error);
+    atomic_store_explicit(&p->cancel_status, (int)status,
+                          memory_order_release);
+    atomic_store_explicit(&p->ticket_issued,
+        ticket != NULL && (ticket->commit != NULL || ticket->discard != NULL),
+        memory_order_release);
+    atomic_fetch_add_explicit(&p->cancel_calls, 1, memory_order_release);
+    return status;
+}
+
+static void close_first_close(void *user) {
+    close_first_invoke_probe *p = (close_first_invoke_probe *)user;
+    atomic_fetch_add_explicit(&p->close_calls, 1, memory_order_relaxed);
+    p->delegate->close(p->delegate_user);
+    atomic_store_explicit(&p->close_returned, 1, memory_order_release);
+}
+
+static bool close_first_quiescent(void *user) {
+    close_first_invoke_probe *p = (close_first_invoke_probe *)user;
+    return p->delegate->is_quiescent(p->delegate_user);
+}
+
 /* Runs concurrently with *actual DSO instructions* inside the CNet owner's
  * poll callback. Never touches the owner-only CNet/Invoke/Scope objects;
  * the registry itself serializes unload/lease admission. */
@@ -2099,6 +2165,202 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
 #if defined(_WIN32)
         check_equal(WSACleanup(), 0);
 #endif
+    }
+
+    it("forces close before real DSO Invoke cancel admission during async exit") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='working'>"
+            "<state id='working'>"
+            "<invoke id='worker' type='urn:test:invoke' src='worker'/>"
+            "<transition event='finish' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        const char *paths[] = {SCXML_INVOKE_DSO_ONE, SCXML_INVOKE_DSO_TWO};
+        const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+        const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata)
+        };
+        scxml_diagnostic diagnostic = {0};
+        salts_component_plugin_generation *previous = NULL;
+        close_first_invoke_probe probe = {0};
+        scxml_invoke_adapter gate_adapter = {0};
+        scxml_invoke_stats stats = {0};
+        uint64_t deadline;
+        int old_token, next_token;
+
+        check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
+                    CMETA_PLUGIN_OK);
+        f.registry_live = true;
+        for (size_t i = 0u; i < SESSIONS; ++i) {
+            check_equal(cmeta_plugin_registry_load(
+                &f.registry, paths[i], &f.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &f.registry, f.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(generation_build(
+                &f, i, i, UINT64_C(11) + (uint64_t)i),
+                SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&f.runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(scxml_compile(
+            &f.program, source, sizeof(source) - 1u, NULL, &diagnostic),
+            SCXML_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[0], &f.runtime), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_invoke_provider_bind(
+            &f.invoke[0], &f.scopes[0], "ScxmlInvokeDsoFixture",
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+            SCXML_COMPONENT_OK);
+
+        probe.delegate = scxml_component_invoke_provider_adapter(&f.invoke[0]);
+        probe.delegate_user = scxml_component_invoke_provider_user(&f.invoke[0]);
+        check_not_null(probe.delegate);
+        callback_gate_init(&probe.admission);
+        atomic_init(&probe.close_returned, 0);
+        atomic_init(&probe.close_calls, 0);
+        atomic_init(&probe.cancel_calls, 0);
+        atomic_init(&probe.cancel_saw_close, 0);
+        atomic_init(&probe.cancel_status, -1);
+        atomic_init(&probe.ticket_issued, 0);
+        gate_adapter = *probe.delegate;
+        gate_adapter.prepare_start = close_first_prepare_start;
+        gate_adapter.prepare_cancel = close_first_prepare_cancel;
+        gate_adapter.prepare_forward = NULL;
+        gate_adapter.close = close_first_close;
+        gate_adapter.is_quiescent = close_first_quiescent;
+
+        check_true(cflow_executor_serial_init(&f.executors[0]));
+        f.executor_live[0] = true;
+        {
+            scxml_session_config config = {
+                .program = &f.program, .executor = &f.executors[0],
+                .external_event_capacity = 2u,
+                .internal_event_capacity = 2u,
+                .completion_capacity = 2u, .microstep_limit = 16u,
+                .invocation_capacity = 1u, .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invoke = &gate_adapter, .invoke_user = &probe
+            };
+            check_equal(scxml_session_init(&f.sessions[0], &config),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        old_token = invoke_token_from_scope(&f.scopes[0]);
+        check_true(old_token > 0);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &f.sessions[0], "finish", 6u, &metadata), CFLOW_MAILBOX_OK);
+
+        /* The real CFlow onexit effect is now in the test's pre-DSO gate;
+           no prepare_cancel code inside the DSO has executed yet. */
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!atomic_load_explicit(&probe.admission.entered,
+                                     memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+        }
+        check_equal(atomic_load_explicit(
+            &probe.admission.entered, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(
+            &probe.cancel_calls, memory_order_acquire), 0);
+        check_equal(atomic_load_explicit(
+            &probe.close_calls, memory_order_acquire), 0);
+
+        /* New gN+1 may start without stealing the old Session/Invoke Scope. */
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[0].generation);
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[1], &f.runtime), SCXML_COMPONENT_OK);
+        check_true(restart_invoke_session(&f, 1u));
+        next_token = invoke_token_from_scope(&f.scopes[1]);
+        check_true(next_token > 0);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+
+        /* Exit is asynchronous: close returns before the CFlow onexit
+           callback can pass its gate into DSO prepare_cancel. */
+        scxml_session_cancel(&f.sessions[0]);
+        check_equal(atomic_load_explicit(
+            &probe.close_returned, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(
+            &probe.close_calls, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(
+            &probe.cancel_calls, memory_order_acquire), 0);
+        check_equal(invoke_token_from_scope(&f.scopes[0]), old_token);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(scxml_session_destroy(&f.sessions[0]),
+                    CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
+
+        atomic_store_explicit(
+            &probe.admission.release, 1, memory_order_release);
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        check_equal(atomic_load_explicit(
+            &probe.admission.timed_out, memory_order_acquire), 0);
+        check_equal(atomic_load_explicit(
+            &probe.cancel_calls, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(
+            &probe.cancel_saw_close, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(
+            &probe.cancel_status, memory_order_acquire), SCXML_ADAPTER_CLOSED);
+        check_equal(atomic_load_explicit(
+            &probe.ticket_issued, memory_order_acquire), 0);
+        check_true(scxml_session_get_invoke_stats(&f.sessions[0], &stats));
+        check_equal(stats.started, UINT64_C(1));
+        check_equal(stats.cancelled, UINT64_C(0));
+        check_equal(stats.cancel_failed, UINT64_C(1));
+        check_equal(stats.active, (size_t)0u);
+        check_equal(invoke_token_from_scope(&f.scopes[0]), old_token);
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[0], (uint64_t)old_token),
+            CFLOW_MAILBOX_INVALID_ARGUMENT);
+
+        /* Only after the callback leaves its borrowed DSO may gN drain. */
+        check_equal(scxml_session_destroy(&f.sessions[0]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(
+            &f.invoke[0]), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(
+            &f.scopes[0]), SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        {
+            bool quiescent = false;
+            check_equal(cmeta_plugin_registry_poll_quiescent(
+                &f.registry, f.plugins[0], &quiescent), CMETA_PLUGIN_OK);
+            check_true(quiescent);
+        }
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        f.plugins[0] = (cmeta_plugin_ref){0};
+
+        /* gN+1's DSO remains executable after old code unload. */
+        check_equal(invoke_token_from_scope(&f.scopes[1]), next_token);
+        check_true(session_send_signal(&f, 1u, "finish"));
+        check_equal(invoke_token_from_scope(&f.scopes[1]), -next_token);
+        check_equal(scxml_session_destroy(&f.sessions[1]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(
+            &f.invoke[1]), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(
+            &f.scopes[1]), SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &f.runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[1].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(f.runtime.active_scopes, (size_t)0u);
+        check_equal(f.runtime.attached_generations, (size_t)0u);
     }
 
     it("recreates real DSO and CNet owner only after concurrent unload is rejected and native quiesces") {

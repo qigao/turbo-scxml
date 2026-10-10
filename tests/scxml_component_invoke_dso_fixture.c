@@ -107,12 +107,15 @@ static scxml_adapter_status prepare_cancel(
     if (out_error != NULL) *out_error = NULL;
     if (fixture == NULL || request == NULL || out_ticket == NULL ||
         out_error == NULL ||
-        atomic_load_explicit(&fixture->closed, memory_order_acquire) ||
         fixture->cancel_reserved || request->token == 0u ||
         request->token != fixture->active_token ||
         request->id == NULL || request->id_size != 6u ||
         memcmp(request->id, "worker", 6u) != 0)
         return SCXML_ADAPTER_INVALID_CONTRACT;
+    /* Closing rejects new cancel admission; it does not invalidate an
+       already accepted move-only ticket or fabricate NativeIO terminal. */
+    if (atomic_load_explicit(&fixture->closed, memory_order_acquire))
+        return SCXML_ADAPTER_CLOSED;
     /* Pause the actual DSO ACT cancellation callback while CNet's real
        native terminal is dispatched independently on its owner lane. */
     callback_gate_wait(&fixture->cancel_gate);
