@@ -607,10 +607,86 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(voice_dso_marker(&scopes[0]), 111);
         check_equal(voice_dso_marker(&scopes[1]), 200);
         check_false(documents[0].active);
+
+        /* Termination is a distinct CCXML ticket; do not refetch the old
+           document and do not migrate a prepared Program to gN+1. */
+        terminate.dialog_id = old_dialog.data;
+        terminate.dialog_id_size = old_dialog.size;
+        terminate.immediate = false;
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(adapter->prepare_dialog_terminate(
+            vxml_dialog_manager_ccxml_user(&managers[0]),
+            &terminate, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        check_not_null(ticket.commit);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+            &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+        check_equal(events[0].count, (size_t)2u);
+        check_equal(events[0].names[1], "dialog.exit");
+        check_equal(voice_dso_marker(&scopes[0]), 111);
+        check_equal(voice_dso_marker(&scopes[1]), 200);
+
+        /* A borrowed provider dispatch inside the DialogManager requires
+           its caller-retained Scope. Retire manager before that Scope and
+           unload only after its original generation is fully draining. */
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_BUSY);
+        voice_manager_close_destroy(&managers[0], &upstream[0]);
+        check_equal(upstream[0].close_count, (size_t)1u);
         check_equal(scxml_component_scope_release(&scopes[0]),
                     SCXML_COMPONENT_OK);
-        /* The Component Scope itself is the module lease; without any
-           Session borrow registered in the wrapper, this release must
-           be placed AFTER the actual DialogManager is destroyed. */
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, plugins[0]), CMETA_PLUGIN_OK);
+        quiescent = false;
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, plugins[0], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_OK);
+        plugins[0] = (cmeta_plugin_ref){0};
+
+        /* This authentic second DSO stays callable AFTER gN code unloaded;
+           it owns a distinct source marker and document lease. */
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(adapter->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(&managers[1]),
+            &new_start, &new_dialog, &ticket, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_not_null(ticket.commit);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+            &managers[1], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+        check_equal(events[1].count, (size_t)2u);
+        check_equal(events[1].names[0], "dialog.started");
+        check_equal(events[1].names[1], "dialog.exit");
+        check_equal(voice_dso_marker(&scopes[1]), 211);
+        check_false(documents[1].active);
+        voice_manager_close_destroy(&managers[1], &upstream[1]);
+        check_equal(upstream[1].close_count, (size_t)1u);
+        check_equal(scxml_component_scope_release(&scopes[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[1].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(runtime.attached_generations, (size_t)0u);
+        check_equal(runtime.active_scopes, (size_t)0u);
+        check_equal(salts_component_plugin_runtime_destroy(
+            &runtime), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, plugins[1]), CMETA_PLUGIN_OK);
+        quiescent = false;
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, plugins[1], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[1]), CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_destroy(
+            &registry), CMETA_PLUGIN_OK);
     }
 }
