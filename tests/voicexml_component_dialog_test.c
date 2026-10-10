@@ -642,6 +642,281 @@ spec("VoiceXML/CCXML Component resource generation") {
             &runtime), SALTS_COMPONENT_PLUGIN_OK);
     }
 
+    it("retains old DSO resource through an in-flight Host Actor while a new dialog generation starts") {
+        static const char source[] = "mem:voice-dso";
+        static const char media[] = "application/voicexml+xml";
+        static const char old_call[] = "actor-old";
+        static const char next_call[] = "actor-new";
+        const char *paths[2] = {
+            VOICE_RESOURCE_DSO_ONE, VOICE_RESOURCE_DSO_TWO
+        };
+        const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+        cmeta_plugin_registry registry = {0};
+        cmeta_plugin_ref plugins[2] = {{0}, {0}};
+        voice_generation generations[2] = {{0}, {0}};
+        salts_component_plugin_runtime runtime = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_component_scope scopes[2] = {{0}, {0}};
+        voice_resource_borrow documents[2] = {{0}, {0}};
+        vxml_dialog_manager managers[2] = {{0}, {0}};
+        voice_telephony upstream[2] = {{0}, {0}};
+        voice_events events[2] = {{0}, {0}};
+        cflow_machine machine = {0};
+        cflow_executor executor = {0};
+        cflow_scheduler scheduler = {0};
+        cflow_actor actor = {0};
+        cflow_actor_ref old_ref = {0};
+        voice_actor_probe probe = {0};
+        cflow_machine_action_binding binding = {
+            300u, voice_actor_progress, &probe
+        };
+        const cflow_machine_state states[1] = {
+            {10u, &cmeta_type_int, CFLOW_MACHINE_STATE_ACTIVE}
+        };
+        const cflow_event_type types[1] = {
+            {100u, &cmeta_type_int}
+        };
+        const cflow_machine_action actions[1] = {
+            {300u, &cmeta_type_int, 100u, &cmeta_type_int,
+             &cmeta_type_int, CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
+             CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS,
+             CFLOW_MACHINE_ACTION_VALUE, &cmeta_type_int, 0u}
+        };
+        const cflow_machine_transition transitions[1] = {
+            {10u, 100u, 0u, 300u, 10u, 1u}
+        };
+        const cflow_machine_definition definition = {
+            states, 1u, 10u, types, 1u, NULL, 0u,
+            actions, 1u, transitions, 1u
+        };
+        const ccxml_telephony_adapter_v1 *adapter =
+            vxml_dialog_manager_ccxml_adapter();
+        const ccxml_dialog_start_request old_request = {
+            .source = source, .source_size = sizeof(source) - 1u,
+            .media_type = media, .media_type_size = sizeof(media) - 1u,
+            .connection_id = old_call,
+            .connection_id_size = sizeof(old_call) - 1u
+        };
+        const ccxml_dialog_start_request next_request = {
+            .source = source, .source_size = sizeof(source) - 1u,
+            .media_type = media, .media_type_size = sizeof(media) - 1u,
+            .connection_id = next_call,
+            .connection_id_size = sizeof(next_call) - 1u
+        };
+        ccxml_string_view dialog_id = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        cflow_actor_stats stats = {0};
+        size_t progressed = 0u;
+        int state_value = 0;
+        int generation_control = 51;
+        const cflow_event_view control = {
+            100u, &cmeta_type_int, &generation_control
+        };
+        uint64_t deadline;
+        bool quiescent = false;
+
+        check_equal(cmeta_plugin_registry_init(
+            &registry, &registry_conf), CMETA_PLUGIN_OK);
+        for (size_t i = 0u; i < 2u; ++i) {
+            check_equal(cmeta_plugin_registry_load(
+                &registry, paths[i], &plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &registry, plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(voice_dso_generation_build(
+                &generations[i], &registry, plugins[i],
+                UINT64_C(51) + (uint64_t)i),
+                SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &scopes[0], &runtime), SCXML_COMPONENT_OK);
+        check_true(voice_resource_bind(
+            &documents[0], &scopes[0], VOICE_DSO_COMPONENT));
+        check_equal(voice_manager_init(
+            &managers[0], &documents[0], &upstream[0], &events[0]),
+            VXML_DIALOG_MANAGER_OK);
+        check_equal(adapter->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(&managers[0]),
+            &old_request, &dialog_id, &ticket, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(voice_dso_marker(&scopes[0]), 100);
+
+        /* An independent CFlow Machine Actor, NOT a second VoiceXML or
+           SCXML language Session. Its SerialExecutor owns the only
+           DialogManager progress callback and its finite control mailbox. */
+        atomic_init(&probe.gate_entered, false);
+        atomic_init(&probe.gate_release, false);
+        atomic_init(&probe.wrong_owner, false);
+        atomic_init(&probe.actions, 0);
+        atomic_init(&probe.values, 0);
+        atomic_init(&probe.failures, 0);
+        atomic_init(&probe.dones, 0);
+        atomic_init(&probe.last_message, -1);
+        probe.manager = &managers[0];
+        probe.scope = &scopes[0];
+        probe.generation_id = UINT64_C(51);
+        probe.expected_control = 51;
+        probe.check_generation = true;
+        probe.gate_before_ready = true;
+        probe.forbidden_thread = cmeta_thread_current_token();
+
+        check_equal(cflow_machine_build(
+            &machine, &definition), CFLOW_MACHINE_OK);
+        check_true(cflow_executor_serial_init(&executor));
+        check_true(cflow_scheduler_worker_init(&scheduler, 1u));
+        {
+            cflow_actor_config config = {0};
+            config.machine = (cflow_machine_instance_config){
+                &machine, &state_value, &cmeta_type_int,
+                NULL, 0u, &binding, 1u, 1u, &executor
+            };
+            config.scheduler = &scheduler;
+            config.callbacks = (cflow_subscriber_callbacks){
+                voice_actor_on_value, voice_actor_on_error,
+                voice_actor_on_done, &probe
+            };
+            check_equal(cflow_actor_init(
+                &actor, &config).status, CFLOW_ACTOR_OK);
+        }
+        check_true(cflow_actor_ref_acquire(&actor, &old_ref));
+        check_equal(cflow_actor_start(&actor), CFLOW_ACTOR_OK);
+        check_equal(cflow_actor_ref_try_send(
+            &old_ref, &control), CFLOW_ACTOR_SEND_ACCEPTED);
+        generation_control = 999; /* accepted payload is copied by CFlow */
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (!atomic_load_explicit(
+                   &probe.gate_entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
+        check_true(atomic_load_explicit(
+            &probe.gate_entered, memory_order_acquire));
+        check_equal(atomic_load(&probe.actions), 0);
+        check_equal(voice_dso_marker(&scopes[0]), 100);
+
+        /* gN Host Actor callback is now in flight on its CFlow worker.
+           Publication cannot migrate either that callback or the
+           DialogManager's pending row to the new Component generation. */
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[0].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(scxml_component_scope_acquire(
+            &scopes[1], &runtime), SCXML_COMPONENT_OK);
+        check_true(voice_resource_bind(
+            &documents[1], &scopes[1], VOICE_DSO_COMPONENT));
+        check_equal(scxml_component_scope_generation_id(
+            &scopes[1]), UINT64_C(52));
+        check_equal(voice_manager_init(
+            &managers[1], &documents[1], &upstream[1], &events[1]),
+            VXML_DIALOG_MANAGER_OK);
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(adapter->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(&managers[1]),
+            &next_request, &dialog_id, &ticket, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(vxml_dialog_manager_run_ready(
+            &managers[1], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+        check_equal(events[1].count, (size_t)2u);
+        check_equal(events[1].names[0], "dialog.started");
+        check_equal(events[1].names[1], "dialog.exit");
+        check_equal(voice_dso_marker(&scopes[1]), 211);
+        check_equal(voice_dso_marker(&scopes[0]), 100);
+
+        /* Release the same old Actor callback. The DSO code executing
+           within run_ready is selected by its frozen scope, not by the
+           new current-generation publication pointer. */
+        atomic_store_explicit(
+            &probe.gate_release, true, memory_order_release);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while ((atomic_load(&probe.values) != 1 ||
+                atomic_load(&probe.actions) != 1) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
+        check_equal(atomic_load(&probe.actions), 1);
+        check_equal(atomic_load(&probe.values), 1);
+        check_equal(atomic_load(&probe.last_message), 51);
+        check_false(atomic_load(&probe.wrong_owner));
+        check_equal(atomic_load(&probe.failures), 0);
+        check_equal(events[0].count, (size_t)2u);
+        check_equal(events[0].names[0], "dialog.started");
+        check_equal(events[0].names[1], "dialog.exit");
+        check_equal(voice_dso_marker(&scopes[0]), 111);
+        check_equal(voice_dso_marker(&scopes[1]), 211);
+        check_true(cflow_actor_get_stats(&actor, &stats));
+        check_equal(stats.machine.completed, UINT64_C(1));
+
+        check_equal(cflow_actor_request_stop(&actor), CFLOW_ACTOR_OK);
+        check_equal(cflow_actor_wait(&actor), CFLOW_ACTOR_STATE_STOPPED);
+        check_equal(cflow_actor_ref_try_send(
+            &old_ref, &control), CFLOW_ACTOR_SEND_STOPPED);
+        cflow_actor_destroy(&actor);
+        check_equal(cflow_actor_ref_try_send(
+            &old_ref, &control), CFLOW_ACTOR_SEND_STALE);
+        cflow_actor_ref_release(&old_ref);
+        check_null(old_ref.impl);
+        cflow_scheduler_destroy(&scheduler);
+        cflow_executor_destroy(&executor);
+        cflow_machine_destroy(&machine);
+
+        /* Retire the old Actor AND its actual DialogManager before releasing
+           its borrowed Component Scope and Plugin. New generation stays
+           callable after genuine old DSO module unload. */
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_BUSY);
+        voice_manager_close_destroy(&managers[0], &upstream[0]);
+        check_equal(scxml_component_scope_release(&scopes[0]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, plugins[0]), CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, plugins[0], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_OK);
+        plugins[0] = (cmeta_plugin_ref){0};
+
+        check_equal(voice_dso_marker(&scopes[1]), 211);
+        voice_manager_close_destroy(&managers[1], &upstream[1]);
+        check_equal(scxml_component_scope_release(&scopes[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[1].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(runtime.attached_generations, (size_t)0u);
+        check_equal(runtime.active_scopes, (size_t)0u);
+        check_equal(salts_component_plugin_runtime_destroy(
+            &runtime), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &registry, plugins[1]), CMETA_PLUGIN_OK);
+        quiescent = false;
+        check_equal(cmeta_plugin_registry_poll_quiescent(
+            &registry, plugins[1], &quiescent), CMETA_PLUGIN_OK);
+        check_true(quiescent);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[1]), CMETA_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_destroy(
+            &registry), CMETA_PLUGIN_OK);
+    }
+
     it("pins the prepared dialog to gN while gN+1 starts independently") {
         static const char source_old[] = "mem:voice-gN";
         static const char source_next[] = "mem:voice-gN1";
