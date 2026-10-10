@@ -455,6 +455,143 @@ spec("ACE CNet domain exclusive owner and Component generation fencing") {
         check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_OK);
     }
 
+    it("closes and recreates the real CNet domain only after old native terminal") {
+        const cnet_client_config net_config = client_config();
+        const cnet_listener_config listener_config = {
+            .backend = test_backend(), .host = "127.0.0.1",
+            .port = 0u, .backlog = 2u
+        };
+        scxml_cnet_domain_fence fence = {0};
+        scxml_cnet_domain_fence_stats stats = {0};
+        const uint64_t generations[2] = {UINT64_C(11), UINT64_C(22)};
+
+        /* Exactly one TCP listener and one domain epoch at any instant.
+           This tests real native retirement plus a completely new domain
+           incarnation, not an implicit transport rebind or Scope migration. */
+        for (size_t round = 0u; round < 2u; ++round) {
+            cnet_client sender = {0}, receiver = {0};
+            cnet_listener listener = {0};
+            cnet_connection outbound = {0}, inbound = {0};
+            fence_sender send_probe = {0};
+            fence_receiver recv_probe = {0};
+            fence_quiescence owner_ready = {false, true};
+            cnet_observer sender_observer = {
+                .on_state = outgoing_state, .on_send = outgoing_send,
+                .user = &send_probe
+            };
+            cnet_observer receiver_observer = {
+                .on_state = incoming_state, .on_receive = incoming_receive,
+                .user = &recv_probe
+            };
+            cnet_connect_options options = {0};
+            uint16_t port = 0u;
+            char uri[64];
+            uint64_t deadline;
+            size_t events = 0u;
+            int ready = 0;
+            unsigned char byte = (unsigned char)('A' + (int)round);
+            fence_submit write = {0};
+            const uint64_t current = generations[round];
+
+            check_equal(scxml_cnet_domain_fence_init(&fence), SALTS_OK);
+            check_equal(scxml_cnet_domain_fence_attach(
+                &fence, current), SALTS_OK);
+            check_true(scxml_cnet_domain_fence_get_stats(&fence, &stats));
+            check_equal(stats.current_generation, current);
+            check_equal(stats.admission_epoch, UINT64_C(1));
+            check_equal(stats.accepted, UINT64_C(0));
+            check_equal(stats.retired, UINT64_C(0));
+            if (round != 0u) {
+                /* The old numeric generation has no standing in the newly
+                   created domain and cannot borrow a new native request. */
+                check_equal(scxml_cnet_domain_fence_try_submit(
+                    &fence, generations[0], accept_noop, NULL), SALTS_EPERM);
+                check_equal(stats.current_generation, current);
+            }
+
+            check_equal(cnet_client_init(&sender, &net_config), SALTS_OK);
+            check_equal(cnet_client_init(&receiver, &net_config), SALTS_OK);
+            check_equal(cnet_listener_init(&listener, &listener_config),
+                        SALTS_OK);
+            check_equal(cnet_listener_port(&listener, &port), SALTS_OK);
+            check_true(port != 0u);
+            check_true(snprintf(uri, sizeof(uri), "tcp://127.0.0.1:%u",
+                                (unsigned int)port) > 0);
+            options.uri = uri;
+            options.observer = sender_observer;
+            check_equal(cnet_connect(&sender, &options, &outbound), SALTS_OK);
+            deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+            while (!send_probe.connected && cmeta_monotonic_ms() < deadline)
+                check_equal(cnet_client_poll(
+                    &sender, 1u, &events), SALTS_OK);
+            check_true(send_probe.connected);
+            check_equal(cnet_listener_wait(
+                &listener, FENCE_TEST_TIMEOUT_MS, &ready), SALTS_OK);
+            check_equal(ready, 1);
+            check_equal(cnet_listener_accept(
+                &listener, &receiver, &receiver_observer, &inbound), SALTS_OK);
+            deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+            while (!recv_probe.connected && cmeta_monotonic_ms() < deadline)
+                check_equal(cnet_client_poll(
+                    &receiver, 1u, &events), SALTS_OK);
+            check_true(recv_probe.connected);
+            check_equal(cnet_receive(&receiver, inbound, 1u), SALTS_OK);
+
+            write = (fence_submit){
+                .fence = &fence, .client = &sender, .connection = outbound,
+                .bytes = &byte, .size = 1u
+            };
+            check_equal(scxml_cnet_domain_fence_try_submit(
+                &fence, current, submit_bytes, &write), SALTS_OK);
+            /* Closing exclusive-I/O admission MUST NOT cancel an accepted
+               NativeIO command or invent its terminal callback. */
+            check_equal(scxml_cnet_domain_fence_close(&fence), SALTS_OK);
+            check_equal(scxml_cnet_domain_fence_try_submit(
+                &fence, current, submit_bytes, &write), SALTS_ESHUTDOWN);
+            check_equal(scxml_cnet_domain_fence_retire(
+                &fence, current, check_quiescence, &owner_ready), SALTS_EBUSY);
+            check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_EBUSY);
+
+            deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+            while ((send_probe.completed != 1u || recv_probe.used != 1u) &&
+                   cmeta_monotonic_ms() < deadline) {
+                check_equal(cnet_client_poll(&sender, 1u, &events), SALTS_OK);
+                check_equal(cnet_client_poll(&receiver, 1u, &events), SALTS_OK);
+            }
+            check_equal(send_probe.completed, (size_t)1u);
+            check_equal(send_probe.accepted_bytes, (size_t)1u);
+            check_equal(recv_probe.used, (size_t)1u);
+            check_equal(recv_probe.received[0], byte);
+            check_false(recv_probe.failed);
+
+            check_equal(cnet_close(&sender, outbound), SALTS_OK);
+            check_equal(cnet_close(&receiver, inbound), SALTS_OK);
+            deadline = cmeta_monotonic_ms() + FENCE_TEST_TIMEOUT_MS;
+            while ((!send_probe.terminal || !recv_probe.terminal) &&
+                   cmeta_monotonic_ms() < deadline) {
+                check_equal(cnet_client_poll(&sender, 1u, &events), SALTS_OK);
+                check_equal(cnet_client_poll(&receiver, 1u, &events), SALTS_OK);
+            }
+            check_true(send_probe.terminal);
+            check_true(recv_probe.terminal);
+            /* No actual Plugin Scope lives in this admission-only fixture:
+               component_scope_released is deliberately modeled. The joint
+               DSO/Invoke fixture proves real Scope drain separately. */
+            owner_ready.native_done = true;
+            check_equal(scxml_cnet_domain_fence_retire(
+                &fence, current, check_quiescence, &owner_ready), SALTS_OK);
+            check_equal(scxml_cnet_domain_fence_destroy(&fence), SALTS_OK);
+            check_null(fence.impl);
+
+            check_equal(cnet_client_stop(&receiver, 1000u), SALTS_OK);
+            check_equal(cnet_client_destroy(&receiver), SALTS_OK);
+            check_equal(cnet_client_stop(&sender, 1000u), SALTS_OK);
+            check_equal(cnet_client_destroy(&sender), SALTS_OK);
+            check_equal(cnet_listener_close(&listener), SALTS_OK);
+            check_equal(cnet_listener_destroy(&listener), SALTS_OK);
+        }
+    }
+
     it("rejects cross-owner submit without borrowing the Component generation") {
         scxml_cnet_domain_fence fence = {0};
         scxml_cnet_domain_fence_stats stats = {0};
