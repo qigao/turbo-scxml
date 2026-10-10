@@ -138,7 +138,8 @@ jobs:
             grep -Eq '^commit=[[:xdigit:]]{40}' "$manifest" || { echo "Invalid SDK source SHA in $manifest" >&2; exit 1; }
           done
           grep -Fq "version=$salts_version" "$salts_manifest"
-()=>line+`
+          grep -Fq "version=$utils_version" "$utils_manifest"
+
           # This particular qualification must consume the published,
           # coordinated RC2 pair. NuGet references stay floating: a future
           # incompatible prerelease fails loudly instead of silently pinning
@@ -146,7 +147,7 @@ jobs:
           test "$salts_version" = '2.3.0-rc.2'
           test "$utils_version" = '4.3.0-rc.2'
           grep -Fxq 'commit=081bdff4da141c8042faa83aff0d25eae1077d5e' "$salts_manifest"
-          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"`
+          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$salts_root/include/salts/component_plugin.h"
           test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
@@ -422,13 +423,13 @@ jobs:
           }
           $salts = Get-ExactSdk "salts.native" "2.3.0-rc.2"
           $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.2"
-()=>`          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=081bdff4da141c8042faa83aff0d25eae1077d5e")) {
+          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=081bdff4da141c8042faa83aff0d25eae1077d5e")) {
             throw "Salts SDK source SHA differs from published 2.3.0-rc.2"
           }
           if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde")) {
             throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.2"
           }
-`+win
+          "SALTS_ROOT=$salts" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$utils" >> $env:GITHUB_ENV
           "DATABIND_ROOT=$utils" >> $env:GITHUB_ENV
           "NATIVE_SDK_RID=windows-x64" >> $env:GITHUB_ENV
@@ -470,9 +471,9 @@ jobs:
           }
           salts="$(sdk_root salts.native 2.3.0-rc.2 salts-sdk-manifest.txt)"
           utils="$(sdk_root saltsutils.native 4.3.0-rc.2 salts-utils-sdk-manifest.txt)"
-()=>`          grep -Fxq 'commit=081bdff4da141c8042faa83aff0d25eae1077d5e' "$salts/salts-sdk-manifest.txt"
+          grep -Fxq 'commit=081bdff4da141c8042faa83aff0d25eae1077d5e' "$salts/salts-sdk-manifest.txt"
           grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils/salts-utils-sdk-manifest.txt"
-`+mac
+          echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
           echo "DATABIND_ROOT=$utils" >> "$GITHUB_ENV"
 
