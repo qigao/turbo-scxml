@@ -251,6 +251,15 @@ if(TURBOSCXML_ENABLE_COMPONENT)
   include(CheckCXXSourceCompiles)
   set(_scxml_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
   set(_scxml_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+  set(_scxml_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  # Main target_compile_features(c_std_11) is not inherited by isolated
+  # check_*_source_compiles projects. MSVC defaults to its pre-C11 C dialect
+  # without an explicit flag, so this compiler-only proof must select the
+  # exact production C11 and C++17 language modes itself. No ABI fallback.
+  if(MSVC)
+    set(CMAKE_REQUIRED_FLAGS
+      "${_scxml_saved_required_flags} /std:c11 /experimental:c11atomics")
+  endif()
   set(_scxml_saved_try_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
   # try_compile runs in an isolated project: project-local ALIAS targets
   # are not visible there. Compile from the exact installed SDK headers,
@@ -318,6 +327,10 @@ int main(void) { return 0; }
       "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_C11)
   check_c_source_compiles(
       "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_C11)
+  if(MSVC)
+    set(CMAKE_REQUIRED_FLAGS
+      "${_scxml_saved_required_flags} /std:c++17")
+  endif()
   check_cxx_source_compiles(
       "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_CPP17)
   check_cxx_source_compiles(
@@ -352,6 +365,7 @@ int main(void) { return 0; }
   endif()
   set(CMAKE_REQUIRED_LIBRARIES "${_scxml_saved_required_libraries}")
   set(CMAKE_REQUIRED_INCLUDES "${_scxml_saved_required_includes}")
+  set(CMAKE_REQUIRED_FLAGS "${_scxml_saved_required_flags}")
   if(_scxml_saved_try_type)
     set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_scxml_saved_try_type}")
   else()
