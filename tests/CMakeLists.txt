@@ -324,6 +324,27 @@ int main(void) { return 0; }
       "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_CPP17)
   if(NOT SCXML_INTERCEPT_EXACT_C11 OR SCXML_INTERCEPT_MUTABLE_C11 OR
      NOT SCXML_INTERCEPT_EXACT_CPP17 OR SCXML_INTERCEPT_MUTABLE_CPP17)
+    # A failing positive probe is an SDK/compiler configuration defect, not
+    # permission to skip the compile-time native signature gate. Print the
+    # short compiler diagnostics to Actions before aborting this configure.
+    set(_scxml_probe_log "${CMAKE_BINARY_DIR}/CMakeFiles/CMakeConfigureLog.yaml")
+    if(EXISTS "${_scxml_probe_log}")
+      file(READ "${_scxml_probe_log}" _scxml_probe_text)
+      string(REGEX MATCHALL
+        "[^\\n]*(error C[0-9]+|fatal error|cannot open include file|error:)[^\\n]*"
+        _scxml_probe_errors "${_scxml_probe_text}")
+      if(_scxml_probe_errors)
+        list(LENGTH _scxml_probe_errors _scxml_probe_count)
+        if(_scxml_probe_count GREATER 30)
+          math(EXPR _scxml_probe_tail "${_scxml_probe_count} - 30")
+          list(SUBLIST _scxml_probe_errors ${_scxml_probe_tail} 30
+            _scxml_probe_errors)
+        endif()
+        foreach(_scxml_probe_error IN LISTS _scxml_probe_errors)
+          message(STATUS "SCXML Interceptor compile probe: ${_scxml_probe_error}")
+        endforeach()
+      endif()
+    endif()
     message(FATAL_ERROR
       "SCXML ACE typed Interceptor C11/C++17 native ABI gate failed")
   endif()
