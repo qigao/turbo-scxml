@@ -153,6 +153,15 @@ typedef struct native_receive_act_context {
 
 NATIVE_IO_ACE_TOKEN_TYPE(scxml_native_recv_act, native_receive_act_context);
 
+/* A distinct typed ACT for native stream-send: completion remains owned
+ * by NativeIO; the caller's send bytes may be released only after observe. */
+typedef struct native_send_act_context {
+    const unsigned char *buffer;
+    size_t settled;
+} native_send_act_context;
+
+NATIVE_IO_ACE_TOKEN_TYPE(scxml_native_send_act, native_send_act_context);
+
 static bool same_request(native_io_request a, native_io_request b) {
     return a.slot == b.slot && a.generation == b.generation;
 }
@@ -368,6 +377,129 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(cnet_listener_destroy(&listener), SALTS_OK);
         check_equal(native_io_backend_close(&io), SALTS_OK);
         check_equal(native_io_backend_destroy(&io), SALTS_OK);
+    }
+    it("settles real NativeIO STREAM_SEND after cancel and rejects recycled-slot ABA") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request old_request = {0}, next_request = {0};
+        native_io_completion old_terminal = {0}, next_terminal = {0};
+        native_io_backend_stats stats = {0};
+        native_send_act_context old_ctx = {0}, next_ctx = {0};
+        native_send_act_context *settled = NULL;
+        scxml_native_send_act old_act = {0}, next_act = {0};
+        native_race_socket sockets[2] = {
+            NATIVE_RACE_INVALID_SOCKET, NATIVE_RACE_INVALID_SOCKET
+        };
+        unsigned char old_byte = 'S', next_byte = 'T';
+        size_t count = 0u;
+        int cancel_status;
+
+        check_equal(native_race_open_pair(sockets), 0);
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_STREAM_SEND,
+            .endpoint = endpoint, .buffer = &old_byte,
+            .length = 1u, .user_data = (uintptr_t)101u
+        };
+        check_equal(native_io_backend_submit(
+            &io, &operation, &old_request), SALTS_OK);
+        check_true(native_io_request_valid(old_request));
+        old_ctx.buffer = &old_byte;
+        check_equal(scxml_native_send_act_bind(
+            &old_act, old_request, endpoint, (uintptr_t)101u, &old_ctx),
+            SALTS_OK);
+
+        /* A real socket write may already be completing when the owner
+           requests cancellation. Neither OK nor EALREADY is an ACT terminal. */
+        cancel_status = native_io_backend_cancel(&io, old_request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(old_act.active);
+        check_equal(old_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_EBUSY);
+
+        check_equal(native_io_backend_observe(
+            &io, &old_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(old_terminal.request, old_request));
+        check_equal(old_terminal.user_data, (uintptr_t)101u);
+        check_true(old_terminal.kind == NATIVE_IO_COMPLETION_OK ||
+                   old_terminal.kind == NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(old_terminal.bytes,
+                    old_terminal.kind == NATIVE_IO_COMPLETION_OK
+                        ? (size_t)1u : (size_t)0u);
+        check_equal(scxml_native_send_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_OK);
+        check_true(settled == &old_ctx);
+        check_true(settled->buffer == &old_byte);
+        ++settled->settled;
+        check_equal(old_ctx.settled, (size_t)1u);
+        check_equal(scxml_native_send_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(native_io_backend_cancel(&io, old_request), SALTS_ENOENT);
+
+        /* Capacity one forces a physical slot reuse. A copied real old
+           terminal and old cancellation cannot consume the new send ACT. */
+        operation.buffer = &next_byte;
+        operation.user_data = (uintptr_t)102u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &next_request), SALTS_OK);
+        check_equal(next_request.slot, old_request.slot);
+        check_not_equal(next_request.generation, old_request.generation);
+        next_ctx.buffer = &next_byte;
+        check_equal(scxml_native_send_act_bind(
+            &next_act, next_request, endpoint, (uintptr_t)102u, &next_ctx),
+            SALTS_OK);
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &old_terminal, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_true(next_act.active);
+        check_equal(next_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_cancel(&io, old_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+
+        count = 0u;
+        check_equal(native_io_backend_observe(
+            &io, &next_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(next_terminal.request, next_request));
+        check_equal(next_terminal.user_data, (uintptr_t)102u);
+        check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(next_terminal.bytes, (size_t)1u);
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_OK);
+        check_true(settled == &next_ctx);
+        check_true(settled->buffer == &next_byte);
+        ++settled->settled;
+        check_equal(next_ctx.settled, (size_t)1u);
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(native_io_backend_cancel(&io, next_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(native_race_close_socket(sockets[0]), 0);
+        check_equal(native_race_close_socket(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
     }
     it("arbitrates real peer completion versus cancellation once on the NativeIO owner") {
         const native_io_backend_config config = {
