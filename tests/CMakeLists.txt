@@ -260,6 +260,24 @@ if(TURBOSCXML_ENABLE_COMPONENT)
     "${PROJECT_SOURCE_DIR}/include"
     "${SALTS_ROOT_PATH}/include"
     "${SALTS_UTILS_ROOT_PATH}/include")
+  # The public SCXML umbrella includes generated DataBind/XML Parser headers
+  # with target-specific, installed subdirectory include roots. An isolated
+  # try_compile does NOT inherit main-graph target include paths, so construct
+  # its compile-only include set from each actual imported SDK target.
+  foreach(_sdk_target IN ITEMS
+      Salts::CMeta Salts::CFlow Salts::CSerde
+      Salts::DataBind Salts::XmlParser Salts::Core)
+    get_target_property(_sdk_public_includes
+      ${_sdk_target} INTERFACE_INCLUDE_DIRECTORIES)
+    if(_sdk_public_includes)
+      foreach(_sdk_include IN LISTS _sdk_public_includes)
+        if(NOT _sdk_include MATCHES "^\\$<")
+          list(APPEND CMAKE_REQUIRED_INCLUDES "${_sdk_include}")
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES CMAKE_REQUIRED_INCLUDES)
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
   set(_scxml_intercept_good [=[
 #include <scxml/component.h>
