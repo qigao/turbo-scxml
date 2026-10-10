@@ -2022,6 +2022,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         dso_domain_restart_attempt race = {0};
         cmeta_thread_t foreign_thread = NULL;
         salts_component_plugin_generation *previous = NULL;
+        cmeta_plugin_ref retired_plugin = {0};
 
         callback_gate_init(&send_gate);
         check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
@@ -2102,7 +2103,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
                     &f.fence, generation_ids[0], send_one, &write),
                     SALTS_EPERM);
                 check_equal(cmeta_plugin_registry_unload(
-                    &f.registry, f.plugins[0]), CMETA_PLUGIN_STALE);
+                    &f.registry, retired_plugin), CMETA_PLUGIN_STALE);
             }
 
             check_equal(cnet_client_init(&f.sender, &net_conf), SALTS_OK);
@@ -2269,6 +2270,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             }
             check_equal(cmeta_plugin_registry_unload(
                 &f.registry, f.plugins[round]), CMETA_PLUGIN_OK);
+            retired_plugin = f.plugins[round];
             f.plugins[round] = (cmeta_plugin_ref){0};
         }
     }
