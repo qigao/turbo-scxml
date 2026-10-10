@@ -1,6 +1,12 @@
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
+/* Windows RPC/COM can define interface as a macro; CMeta has a descriptor
+   field with that exact identifier. Do not rewrite CMeta's public C ABI. */
+#ifdef interface
+#undef interface
+#endif
 #endif
 
 #include <cnet/cnet.h>
@@ -241,6 +247,89 @@ failed:
     (void)WSACleanup();
 #endif
     return error;
+}
+
+/* Test-only real byte pipe: Windows uses overlapped named-pipe handles,
+ * POSIX uses two nonblocking file descriptors. This code never owns or
+ * advances a second NativeIO request/terminal engine. */
+#if defined(_WIN32)
+typedef HANDLE native_race_pipe;
+#define NATIVE_RACE_INVALID_PIPE INVALID_HANDLE_VALUE
+#else
+typedef int native_race_pipe;
+#define NATIVE_RACE_INVALID_PIPE (-1)
+#endif
+
+static int native_race_close_pipe(native_race_pipe handle) {
+#if defined(_WIN32)
+    return CloseHandle(handle) ? 0 : -1;
+#else
+    return close(handle);
+#endif
+}
+
+static int native_race_open_pipe_pair(native_race_pipe pair[2]) {
+    pair[0] = NATIVE_RACE_INVALID_PIPE;
+    pair[1] = NATIVE_RACE_INVALID_PIPE;
+#if defined(_WIN32)
+    static LONG sequence = 0;
+    char name[128];
+    OVERLAPPED connect_overlapped = {0};
+    HANDLE event = NULL;
+    BOOL pending = FALSE;
+    int written = snprintf(
+        name, sizeof(name), "\\\\.\\pipe\\turbo-scxml-native-act-%lu-%ld",
+        GetCurrentProcessId(), InterlockedIncrement(&sequence));
+    if (written < 0 || (size_t)written >= sizeof(name)) return -1;
+    /* The server's outbound pipe is [1]; the client read end is [0]. */
+    pair[1] = CreateNamedPipeA(
+        name, PIPE_ACCESS_OUTBOUND | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1u,
+        4096u, 4096u, 0u, NULL);
+    if (pair[1] == INVALID_HANDLE_VALUE) goto failed;
+    event = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (event == NULL) goto failed;
+    connect_overlapped.hEvent = event;
+    if (!ConnectNamedPipe(pair[1], &connect_overlapped)) {
+        const DWORD error = GetLastError();
+        if (error == ERROR_IO_PENDING) pending = TRUE;
+        else if (error != ERROR_PIPE_CONNECTED) goto failed;
+    }
+    pair[0] = CreateFileA(
+        name, GENERIC_READ, 0u, NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
+    if (pair[0] == INVALID_HANDLE_VALUE) goto failed;
+    if (pending) {
+        DWORD bytes = 0u;
+        if (!GetOverlappedResult(
+                pair[1], &connect_overlapped, &bytes, TRUE)) goto failed;
+    }
+    (void)CloseHandle(event);
+    return 0;
+failed:
+    if (pair[0] != INVALID_HANDLE_VALUE)
+        (void)native_race_close_pipe(pair[0]);
+    if (pair[1] != INVALID_HANDLE_VALUE)
+        (void)native_race_close_pipe(pair[1]);
+    if (event != NULL) (void)CloseHandle(event);
+    pair[0] = INVALID_HANDLE_VALUE;
+    pair[1] = INVALID_HANDLE_VALUE;
+    return -1;
+#else
+    int flags;
+    if (pipe(pair) != 0) return -1;
+    for (size_t i = 0u; i < 2u; ++i) {
+        flags = fcntl(pair[i], F_GETFL, 0);
+        if (flags < 0 ||
+            fcntl(pair[i], F_SETFL, flags | O_NONBLOCK) != 0) {
+            (void)native_race_close_pipe(pair[0]);
+            (void)native_race_close_pipe(pair[1]);
+            pair[0] = NATIVE_RACE_INVALID_PIPE;
+            pair[1] = NATIVE_RACE_INVALID_PIPE;
+            return -1;
+        }
+    }
+    return 0;
+#endif
 }
 
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
@@ -1047,6 +1136,235 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
 #if defined(_WIN32)
         check_equal(WSACleanup(), 0);
 #endif
+    }
+    it("qualifies native PIPE_READ and PIPE_WRITE terminals with one reused ACT slot") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 2u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint read_endpoint = {0}, write_endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request cancelled_read = {0}, written = {0},
+                          received = {0}, cancelled_write = {0};
+        native_io_completion terminal_read = {0}, terminal_write = {0},
+                             terminal_receive = {0}, terminal_cancel_write = {0};
+        native_io_backend_stats stats = {0};
+        native_receive_act_context read_cancel_context = {0},
+                                   receive_context = {0};
+        native_send_act_context write_context = {0}, write_cancel_context = {0};
+        native_receive_act_context *read_settled = NULL;
+        native_send_act_context *write_settled = NULL;
+        scxml_native_recv_act read_cancel_act = {0}, receive_act = {0};
+        scxml_native_send_act write_act = {0}, write_cancel_act = {0};
+        native_race_pipe pipes[2] = {
+            NATIVE_RACE_INVALID_PIPE, NATIVE_RACE_INVALID_PIPE
+        };
+        unsigned char cancelled_byte = 0u, received_byte = 0u;
+        unsigned char payload = 'P', extra = 'Q';
+        size_t count = 0u;
+        int cancel_status;
+
+        /* A single backend/owner owns both native pipe endpoints and every
+           kernel terminal. No worker, polling fallback, or second registry. */
+        check_true(native_io_backend_kind_supports_pipe(test_backend()));
+        check_equal(native_race_open_pipe_pair(pipes), 0);
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_pipe(
+            &io, (uintptr_t)pipes[0], NATIVE_IO_PIPE_ENDPOINT_ASYNC_CAPABLE,
+            &read_endpoint), SALTS_OK);
+        check_equal(native_io_backend_attach_pipe(
+            &io, (uintptr_t)pipes[1], NATIVE_IO_PIPE_ENDPOINT_ASYNC_CAPABLE,
+            &write_endpoint), SALTS_OK);
+
+        /* No writer has submitted data: a real pending PIPE_READ is
+           cancelled, but ACT and borrowed read storage remain live until
+           the authoritative kernel terminal is observed. */
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_PIPE_READ,
+            .endpoint = read_endpoint, .buffer = &cancelled_byte,
+            .length = 1u, .user_data = (uintptr_t)501u
+        };
+        check_equal(native_io_backend_submit(
+            &io, &operation, &cancelled_read), SALTS_OK);
+        read_cancel_context.buffer = &cancelled_byte;
+        check_equal(scxml_native_recv_act_bind(
+            &read_cancel_act, cancelled_read, read_endpoint,
+            (uintptr_t)501u, &read_cancel_context), SALTS_OK);
+        check_equal(native_io_backend_release_pipe(
+            &io, read_endpoint), SALTS_EBUSY);
+        cancel_status = native_io_backend_cancel(&io, cancelled_read);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(read_cancel_act.active);
+        check_equal(read_cancel_context.settled, (size_t)0u);
+        check_equal(native_io_backend_observe(
+            &io, &terminal_read, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(terminal_read.request, cancelled_read));
+        check_equal(terminal_read.kind, NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(terminal_read.bytes, (size_t)0u);
+        check_equal(terminal_read.user_data, (uintptr_t)501u);
+        check_equal(scxml_native_recv_act_settle(
+            &read_cancel_act, &terminal_read, &read_settled), SALTS_OK);
+        check_true(read_settled == &read_cancel_context);
+        check_true(read_settled->buffer == &cancelled_byte);
+        ++read_settled->settled;
+        check_equal(scxml_native_recv_act_settle(
+            &read_cancel_act, &terminal_read, &read_settled), SALTS_EALREADY);
+        check_null(read_settled);
+        check_equal(read_cancel_context.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, cancelled_read), SALTS_ENOENT);
+
+        /* The exact same single NativeIO request slot is now used by a
+           genuine kernel PIPE_WRITE. Its immutable payload remains borrowed
+           until observed, not until submit returns or a callback is guessed. */
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_PIPE_WRITE,
+            .endpoint = write_endpoint, .buffer = &payload,
+            .length = 1u, .user_data = (uintptr_t)502u
+        };
+        count = 0u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &written), SALTS_OK);
+        check_equal(written.slot, cancelled_read.slot);
+        check_not_equal(written.generation, cancelled_read.generation);
+        write_context.buffer = &payload;
+        check_equal(scxml_native_send_act_bind(
+            &write_act, written, write_endpoint,
+            (uintptr_t)502u, &write_context), SALTS_OK);
+        check_equal(scxml_native_send_act_settle(
+            &write_act, &terminal_read, &write_settled), SALTS_ENOENT);
+        check_null(write_settled);
+        check_equal(native_io_backend_cancel(
+            &io, cancelled_read), SALTS_ENOENT);
+        check_equal(native_io_backend_release_pipe(
+            &io, write_endpoint), SALTS_EBUSY);
+        check_equal(native_io_backend_observe(
+            &io, &terminal_write, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(terminal_write.request, written));
+        check_equal(terminal_write.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(terminal_write.bytes, (size_t)1u);
+        check_equal(terminal_write.user_data, (uintptr_t)502u);
+        check_equal(scxml_native_send_act_settle(
+            &write_act, &terminal_write, &write_settled), SALTS_OK);
+        check_true(write_settled == &write_context);
+        check_true(write_settled->buffer == &payload);
+        ++write_settled->settled;
+        check_equal(scxml_native_send_act_settle(
+            &write_act, &terminal_write, &write_settled), SALTS_EALREADY);
+        check_null(write_settled);
+        check_equal(write_context.settled, (size_t)1u);
+
+        /* A new PIPE_READ sees the byte written by the previous genuine
+           PIPE_WRITE. Replayed read/write completions cannot settle it. */
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_PIPE_READ,
+            .endpoint = read_endpoint, .buffer = &received_byte,
+            .length = 1u, .user_data = (uintptr_t)503u
+        };
+        count = 0u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &received), SALTS_OK);
+        check_equal(received.slot, written.slot);
+        check_not_equal(received.generation, written.generation);
+        receive_context.buffer = &received_byte;
+        check_equal(scxml_native_recv_act_bind(
+            &receive_act, received, read_endpoint,
+            (uintptr_t)503u, &receive_context), SALTS_OK);
+        check_equal(scxml_native_recv_act_settle(
+            &receive_act, &terminal_read, &read_settled), SALTS_ENOENT);
+        check_null(read_settled);
+        check_equal(scxml_native_recv_act_settle(
+            &receive_act, &terminal_write, &read_settled), SALTS_ENOENT);
+        check_null(read_settled);
+        check_equal(native_io_backend_cancel(
+            &io, written), SALTS_ENOENT);
+        check_equal(native_io_backend_observe(
+            &io, &terminal_receive, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(terminal_receive.request, received));
+        check_equal(terminal_receive.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(terminal_receive.bytes, (size_t)1u);
+        check_equal(received_byte, payload);
+        check_equal(scxml_native_recv_act_settle(
+            &receive_act, &terminal_receive, &read_settled), SALTS_OK);
+        check_true(read_settled == &receive_context);
+        ++read_settled->settled;
+        check_equal(scxml_native_recv_act_settle(
+            &receive_act, &terminal_receive, &read_settled), SALTS_EALREADY);
+        check_null(read_settled);
+        check_equal(receive_context.settled, (size_t)1u);
+
+        /* WRITE cancellation is best effort: immediate writes can win on
+           epoll/Kqueue, and IOCP may deliver OK or CANCELLED. Neither a
+           cancel acknowledgement nor an implicit retry settles its ACT. */
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_PIPE_WRITE,
+            .endpoint = write_endpoint, .buffer = &extra,
+            .length = 1u, .user_data = (uintptr_t)504u
+        };
+        count = 0u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &cancelled_write), SALTS_OK);
+        check_equal(cancelled_write.slot, received.slot);
+        check_not_equal(cancelled_write.generation, received.generation);
+        write_cancel_context.buffer = &extra;
+        check_equal(scxml_native_send_act_bind(
+            &write_cancel_act, cancelled_write, write_endpoint,
+            (uintptr_t)504u, &write_cancel_context), SALTS_OK);
+        cancel_status = native_io_backend_cancel(&io, cancelled_write);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(write_cancel_act.active);
+        check_equal(write_cancel_context.settled, (size_t)0u);
+        check_equal(native_io_backend_release_pipe(
+            &io, write_endpoint), SALTS_EBUSY);
+        check_equal(native_io_backend_observe(
+            &io, &terminal_cancel_write, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(
+            terminal_cancel_write.request, cancelled_write));
+        check_equal(terminal_cancel_write.user_data, (uintptr_t)504u);
+        check_true(terminal_cancel_write.kind == NATIVE_IO_COMPLETION_OK ||
+                   terminal_cancel_write.kind == NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(terminal_cancel_write.bytes,
+                    terminal_cancel_write.kind == NATIVE_IO_COMPLETION_OK
+                        ? (size_t)1u : (size_t)0u);
+        check_equal(scxml_native_send_act_settle(
+            &write_cancel_act, &terminal_cancel_write, &write_settled),
+            SALTS_OK);
+        check_true(write_settled == &write_cancel_context);
+        check_true(write_settled->buffer == &extra);
+        ++write_settled->settled;
+        check_equal(scxml_native_send_act_settle(
+            &write_cancel_act, &terminal_cancel_write, &write_settled),
+            SALTS_EALREADY);
+        check_null(write_settled);
+        check_equal(write_cancel_context.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, cancelled_write), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+        check_equal(stats.request_capacity, (size_t)1u);
+
+        /* NativeIO owns terminal identity, while the test owns OS handles.
+           Only quiescent endpoints may be released; neither API closes the
+           other's resources implicitly. */
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_race_close_pipe(pipes[0]), 0);
+        check_equal(native_race_close_pipe(pipes[1]), 0);
+        check_equal(native_io_backend_release_pipe(
+            &io, read_endpoint), SALTS_OK);
+        check_equal(native_io_backend_release_pipe(
+            &io, write_endpoint), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
     }
     it("arbitrates real peer completion versus cancellation once on the NativeIO owner") {
         const native_io_backend_config config = {
