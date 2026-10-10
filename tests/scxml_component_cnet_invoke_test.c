@@ -2517,11 +2517,13 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(salts_component_plugin_generation_drain(
             &f.runtime, &f.generations[0].generation),
             SALTS_COMPONENT_PLUGIN_BUSY);
-        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_OK);
+        /* The Session and binding still need a live Host endpoint to
+           verify quiescence; detach is LAST, never before destroy. */
         check_equal(scxml_session_destroy(&f.sessions[0]),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_host_event_io_binding_destroy(
             &bindings[0]), SALTS_OK);
+        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_OK);
         check_equal(scxml_component_invoke_provider_destroy(
             &f.invoke[0]), SCXML_COMPONENT_OK);
         check_equal(scxml_component_scope_release(
@@ -2564,11 +2566,11 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(stats.timer_done_failed, UINT64_C(0));
         check_equal(stats.invariant_failures, UINT64_C(0));
 
-        check_equal(scxml_host_router_detach(&router, refs[1]), SALTS_OK);
         check_equal(scxml_session_destroy(&f.sessions[1]),
                     CFLOW_STATECHART_INSTANCE_OK);
         check_equal(scxml_host_event_io_binding_destroy(
             &bindings[1]), SALTS_OK);
+        check_equal(scxml_host_router_detach(&router, refs[1]), SALTS_OK);
         check_equal(scxml_component_invoke_provider_destroy(
             &f.invoke[1]), SCXML_COMPONENT_OK);
         check_equal(scxml_component_scope_release(
