@@ -397,6 +397,27 @@ int main(void) { return 0; }
   add_dependencies(scxml_component_dso_test
     scxml_component_dso_1 scxml_component_dso_2)
   set_tests_properties(scxml_component_dso_test PROPERTIES TIMEOUT 60)
+
+  # Explicitly opt in to the microbenchmark via its CTest name. It is built
+  # with the normal full CMake graph but not repeated in the sanitizer/TSan
+  # or cross-RID conformance regex: timing is not a functional gate.
+  add_executable(
+    scxml_component_interceptor_benchmark
+    scxml_component_interceptor_benchmark.c)
+  target_compile_features(scxml_component_interceptor_benchmark PRIVATE c_std_11)
+  set_target_properties(scxml_component_interceptor_benchmark PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_link_libraries(scxml_component_interceptor_benchmark PRIVATE
+    TurboSCXML::Component Salts::Platform)
+  target_compile_definitions(scxml_component_interceptor_benchmark PRIVATE
+    SCXML_COMPONENT_DSO_ONE="$<TARGET_FILE:scxml_component_dso_1>")
+  add_dependencies(scxml_component_interceptor_benchmark
+    scxml_component_dso_1)
+  add_test(NAME scxml_component_interceptor_benchmark
+    COMMAND scxml_component_interceptor_benchmark)
+  set_tests_properties(scxml_component_interceptor_benchmark PROPERTIES
+    LABELS "microbenchmark" TIMEOUT 60)
+
   turboscxml_add_test(
     scxml_component_test
     scxml_component_test.c
