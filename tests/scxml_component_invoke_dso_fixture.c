@@ -5,6 +5,7 @@
 #include <salts/plugin_decl.h>
 
 #include <limits.h>
+#include <stdatomic.h>
 #include <string.h>
 
 /*
@@ -23,7 +24,7 @@ typedef struct invoke_fixture_state {
     uint64_t prepared_token;
     bool start_reserved;
     bool cancel_reserved;
-    bool closed;
+    atomic_bool closed;
     bool native_bound;
     bool native_connected;
     bool native_terminal;
@@ -78,7 +79,8 @@ static scxml_adapter_status prepare_start(
         *out_ticket = (cflow_statechart_effect_ticket){0};
     if (out_error != NULL) *out_error = NULL;
     if (fixture == NULL || request == NULL || out_ticket == NULL ||
-        out_error == NULL || fixture->closed ||
+        out_error == NULL ||
+        atomic_load_explicit(&fixture->closed, memory_order_acquire) ||
         fixture->start_reserved || fixture->active_token != 0u ||
         request->token == 0u || request->token > (uint64_t)INT_MAX ||
         request->id == NULL || request->id_size != 6u ||
@@ -104,7 +106,8 @@ static scxml_adapter_status prepare_cancel(
         *out_ticket = (cflow_statechart_effect_ticket){0};
     if (out_error != NULL) *out_error = NULL;
     if (fixture == NULL || request == NULL || out_ticket == NULL ||
-        out_error == NULL || fixture->closed ||
+        out_error == NULL ||
+        atomic_load_explicit(&fixture->closed, memory_order_acquire) ||
         fixture->cancel_reserved || request->token == 0u ||
         request->token != fixture->active_token ||
         request->id == NULL || request->id_size != 6u ||
@@ -133,12 +136,14 @@ static scxml_adapter_status reject_forward(
 
 static void close_provider(void *user) {
     invoke_fixture_state *fixture = (invoke_fixture_state *)user;
-    if (fixture != NULL) fixture->closed = true;
+    if (fixture != NULL)
+        atomic_store_explicit(&fixture->closed, true, memory_order_release);
 }
 
 static bool is_quiescent(void *user) {
     const invoke_fixture_state *fixture = (const invoke_fixture_state *)user;
-    return fixture != NULL && fixture->closed &&
+    return fixture != NULL &&
+           atomic_load_explicit(&fixture->closed, memory_order_acquire) &&
            !fixture->start_reserved && !fixture->cancel_reserved;
 }
 
@@ -250,7 +255,8 @@ static bool probe_snapshot(void *self,
         .stale_callbacks = fixture->stale_callbacks,
         .native_connected = fixture->native_connected,
         .native_terminal = fixture->native_terminal,
-        .invoke_closed = fixture->closed
+        .invoke_closed = atomic_load_explicit(
+            &fixture->closed, memory_order_acquire)
     };
     return true;
 }
@@ -278,7 +284,8 @@ static bool probe_arm_terminal_gate(
 static bool probe_arm_cancel_gate(
     void *self, scxml_test_cnet_callback_gate *gate) {
     invoke_fixture_state *fixture = (invoke_fixture_state *)self;
-    if (fixture == NULL || gate == NULL || fixture->closed ||
+    if (fixture == NULL || gate == NULL ||
+        atomic_load_explicit(&fixture->closed, memory_order_acquire) ||
         fixture->active_token == 0u || fixture->cancel_reserved ||
         fixture->cancel_gate != NULL)
         return false;
