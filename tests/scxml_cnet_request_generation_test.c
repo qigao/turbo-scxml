@@ -129,7 +129,12 @@ static int native_race_open_udp_pair(native_race_socket sockets[2]) {
     if (rx < 0 || tx < 0) goto failed;
 #endif
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    /* sockaddr stores network-order octets; express the loopback address
+       explicitly rather than combining an SDK macro with host byte order. */
+    {
+        const unsigned char loopback[] = {127u, 0u, 0u, 1u};
+        memcpy(&address.sin_addr, loopback, sizeof(loopback));
+    }
     address.sin_port = 0;
     failure_stage = -2; /* bind local UDP receiver */
     if (bind(rx, (const struct sockaddr *)&address, address_length) != 0)
