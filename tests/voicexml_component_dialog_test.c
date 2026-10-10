@@ -444,6 +444,106 @@ static void voice_actor_on_done(void *user) {
     if (probe != NULL) atomic_fetch_add(&probe->dones, 1);
 }
 
+/* Cross-thread test publisher for one owner-affine Host Actor. The Actor
+ * action executes on its CFlow owner lane; only publication of a DISTINCT
+ * new generation/dialog is performed by this test's helper thread.
+ *
+ * This deliberately does not put the worker Scheduler's concurrent callback
+ * state under a foreign request_stop() on the consumer side: full upstream
+ * TSan exposed an independent Salts/CFlow subscription.c race (#1105) for
+ * that configuration. This test must not suppress or claim to fix it. */
+typedef struct voice_actor_generation_publish {
+    voice_actor_probe *gate;
+    salts_component_plugin_runtime *runtime;
+    voice_generation *generations;
+    salts_component_plugin_generation **previous;
+    cmeta_plugin_registry *registry;
+    cmeta_plugin_ref old_plugin;
+    scxml_component_scope *new_scope;
+    voice_resource_borrow *new_document;
+    vxml_dialog_manager *new_manager;
+    voice_telephony *new_upstream;
+    voice_events *new_events;
+    const ccxml_dialog_start_request *new_request;
+    atomic_int outcome;
+} voice_actor_generation_publish;
+
+static void voice_publish_while_host_actor_paused(void *user) {
+    voice_actor_generation_publish *ctx =
+        (voice_actor_generation_publish *)user;
+    const ccxml_telephony_adapter_v1 *adapter =
+        vxml_dialog_manager_ccxml_adapter();
+    ccxml_string_view dialog = {0};
+    cflow_statechart_effect_ticket ticket = {0};
+    const char *error = NULL;
+    size_t progressed = 0u;
+    int outcome = 1;
+    uint64_t deadline;
+
+    if (ctx == NULL || ctx->gate == NULL) return;
+    deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+    while (!atomic_load_explicit(
+               &ctx->gate->gate_entered, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline)
+        cmeta_sleep_ms(1u);
+    if (!atomic_load_explicit(
+            &ctx->gate->gate_entered, memory_order_acquire)) {
+        outcome = -1;
+        goto finished;
+    }
+    if (salts_component_plugin_runtime_publish(
+            ctx->runtime, &ctx->generations[1].generation,
+            ctx->previous) != SALTS_COMPONENT_PLUGIN_OK ||
+        *ctx->previous != &ctx->generations[0].generation) {
+        outcome = -2;
+        goto finished;
+    }
+    if (salts_component_plugin_generation_drain(
+            ctx->runtime, &ctx->generations[0].generation) !=
+            SALTS_COMPONENT_PLUGIN_BUSY ||
+        cmeta_plugin_registry_unload(
+            ctx->registry, ctx->old_plugin) != CMETA_PLUGIN_BUSY) {
+        outcome = -3;
+        goto finished;
+    }
+    if (scxml_component_scope_acquire(
+            ctx->new_scope, ctx->runtime) != SCXML_COMPONENT_OK ||
+        !voice_resource_bind(
+            ctx->new_document, ctx->new_scope, VOICE_DSO_COMPONENT)) {
+        outcome = -4;
+        goto finished;
+    }
+    if (voice_manager_init(
+            ctx->new_manager, ctx->new_document, ctx->new_upstream,
+            ctx->new_events) != VXML_DIALOG_MANAGER_OK) {
+        outcome = -5;
+        goto finished;
+    }
+    if (adapter->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(ctx->new_manager),
+            ctx->new_request, &dialog, &ticket, &error) !=
+            SCXML_ADAPTER_ACCEPTED ||
+        ticket.commit == NULL || ticket.discard == NULL) {
+        outcome = -6;
+        goto finished;
+    }
+    ticket.commit(ticket.user);
+    if (vxml_dialog_manager_run_ready(
+            ctx->new_manager, 1u, &progressed) !=
+            VXML_DIALOG_MANAGER_OK ||
+        progressed != 1u || ctx->new_events->count != 2u) {
+        outcome = -7;
+        goto finished;
+    }
+finished:
+    atomic_store_explicit(
+        &ctx->outcome, outcome, memory_order_release);
+    /* Always release the waiting Host owner; even a failed test admission
+       must not leave its CFlow callback blocked or leak the test thread. */
+    atomic_store_explicit(
+        &ctx->gate->gate_release, true, memory_order_release);
+}
+
 spec("VoiceXML/CCXML Component resource generation") {
     it("uses one independent bounded Host Actor for owner-affine DialogManager progress") {
         static const char source[] = "mem:voice-actor";
