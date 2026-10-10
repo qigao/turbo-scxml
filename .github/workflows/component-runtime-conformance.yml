@@ -140,10 +140,10 @@ jobs:
           grep -Fq "version=$salts_version" "$salts_manifest"
           grep -Fq "version=$utils_version" "$utils_manifest"
 
-          # This particular qualification must consume the published,
-          # published Salts RC5 / SaltsUtils RC2 integration pair. NuGet is
-          # floating; an incompatible prerelease fails loudly, never pinning
-          # or mixing Unicode-export owners. No automatic fallback on SDK drift.
+          # Exact current RC graph for reproducible multi-RID admission.
+          # All host runners restore identical versions, while manifest SHA
+          # checks reject package/source drift. A new published candidate
+          # requires an explicit simultaneous update, not a fallback.
           test "$salts_version" = '2.3.0-rc.5'
           test "$utils_version" = '4.3.0-rc.2'
           grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts_manifest"
