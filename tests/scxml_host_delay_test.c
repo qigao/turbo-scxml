@@ -39,6 +39,7 @@ typedef struct delayed_aba_worker {
     scxml_host_session_ref source;
     atomic_int ready;
     atomic_int fire;
+    atomic_int published;
     int release_status;
     int prepare_status;
     size_t cancelled_rows;
@@ -62,8 +63,10 @@ static void reuse_delayed_row_from_other_thread(void *user) {
     race->prepare_status = scxml_host_router_prepare_target(
         race->router, race->source, NULL, 0u,
         "new", 3u, "same", 4u, NULL, 5u, &next);
-    if (race->prepare_status == SALTS_OK)
+    if (race->prepare_status == SALTS_OK) {
         next.commit(next.user);
+        atomic_store_explicit(&race->published, 1, memory_order_release);
+    }
 }
 
 spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
@@ -433,6 +436,7 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         race.source = ref;
         atomic_init(&race.ready, 0);
         atomic_init(&race.fire, 0);
+        atomic_init(&race.published, 0);
         check_equal(cmeta_thread_create(
             &worker, reuse_delayed_row_from_other_thread, &race),
             SALTS_OK);
@@ -470,6 +474,72 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         check_equal(stats.cancel_committed, UINT64_C(2));
         check_equal(stats.timer_fired, UINT64_C(0));
         check_equal(stats.invariant_failures, UINT64_C(0));
+
+        /* Deterministic ABA branch: unlike an unconstrained thread race,
+           force the old cancel ticket to execute AFTER a different real
+           thread has recycled and committed the SAME row for a new sendid.
+           A row-address/sendid-only check would wrongly revoke this send. */
+        {
+            cflow_statechart_effect_ticket old_again = {0};
+            cflow_statechart_effect_ticket stale_again = {0};
+            cflow_statechart_effect_ticket current_cancel = {0};
+            const uint64_t fire_won_before = stats.cancel_fire_won;
+
+            check_equal(scxml_host_router_prepare_target(
+                &router, ref, NULL, 0u,
+                "old2", 4u, "same", 4u, NULL, 5u, &old_again),
+                SALTS_OK);
+            old_again.commit(old_again.user);
+            check_equal(scxml_host_router_prepare_cancel(
+                &router, ref, "same", 4u, &stale_again), SALTS_OK);
+            atomic_store_explicit(&race.ready, 0, memory_order_release);
+            atomic_store_explicit(&race.fire, 0, memory_order_release);
+            atomic_store_explicit(&race.published, 0, memory_order_release);
+            race.cancelled_rows = 0u;
+            check_equal(cmeta_thread_create(
+                &worker, reuse_delayed_row_from_other_thread, &race),
+                SALTS_OK);
+            deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+            while (!atomic_load_explicit(
+                       &race.ready, memory_order_acquire) &&
+                   cmeta_monotonic_ms() < deadline) {
+            }
+            check_equal(atomic_load_explicit(
+                &race.ready, memory_order_acquire), 1);
+            atomic_store_explicit(&race.fire, 1, memory_order_release);
+            deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+            while (!atomic_load_explicit(
+                       &race.published, memory_order_acquire) &&
+                   cmeta_monotonic_ms() < deadline) {
+            }
+            check_equal(atomic_load_explicit(
+                &race.published, memory_order_acquire), 1);
+            /* The worker MUST have cancelled the old row and committed its
+               replacement before this old ticket can inspect the reused row. */
+            stale_again.commit(stale_again.user);
+            check_equal(cmeta_thread_join(&worker), SALTS_OK);
+            cmeta_thread_destroy(&worker);
+            check_equal(race.release_status, SALTS_OK);
+            check_equal(race.prepare_status, SALTS_OK);
+            check_equal(race.cancelled_rows, (size_t)1u);
+            check_true(scxml_host_router_get_stats(&router, &stats));
+            check_equal(stats.pending, (size_t)1u);
+            check_equal(stats.delayed_pending, (size_t)1u);
+            check_equal(stats.cancel_pending, (size_t)0u);
+            check_equal(stats.cancel_fire_won, fire_won_before + UINT64_C(1));
+            check_equal(stats.invariant_failures, UINT64_C(0));
+
+            check_equal(scxml_host_router_prepare_cancel(
+                &router, ref, "same", 4u, &current_cancel), SALTS_OK);
+            current_cancel.commit(current_cancel.user);
+            check_true(scxml_host_router_get_stats(&router, &stats));
+            check_equal(stats.pending, (size_t)0u);
+            check_equal(stats.delayed_pending, (size_t)0u);
+            check_equal(stats.cancel_pending, (size_t)0u);
+            check_equal(stats.timer_cancelled, UINT64_C(4));
+            check_equal(stats.cancel_committed, UINT64_C(4));
+            check_equal(stats.invariant_failures, UINT64_C(0));
+        }
         check_true(scxml_host_router_source_is_quiescent(&router, ref));
         check_equal(scxml_host_router_detach(&router, ref), SALTS_OK);
         check_equal(scxml_host_router_close(&router), SALTS_OK);
