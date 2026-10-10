@@ -141,12 +141,12 @@ jobs:
           grep -Fq "version=$utils_version" "$utils_manifest"
 
           # This particular qualification must consume the published,
-          # published Salts RC3 / SaltsUtils RC2 integration pair. NuGet stays
+          # published Salts RC4 / SaltsUtils RC2 integration pair. NuGet stays
           # floating; an incompatible prerelease fails loudly, never pinning
-          # or mixing Unicode-export owners. Salts RC3's IDNA addition is additive.
-          test "$salts_version" = '2.3.0-rc.3'
+          # or mixing Unicode-export owners. No automatic fallback on SDK drift.
+          test "$salts_version" = '2.3.0-rc.4'
           test "$utils_version" = '4.3.0-rc.2'
-          grep -Fxq 'commit=21a88ca4d80a76341fb8164cd33ceed3a3eb3d57' "$salts_manifest"
+          grep -Fxq 'commit=233a0d1c2086808d85160ad70010e13b4c63d5c8' "$salts_manifest"
           grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$salts_root/include/salts/component_plugin.h"
@@ -171,7 +171,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$utils_root/lib:$utils_root/bin:$salts_root/lib:$salts_root/bin:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
           cat build/component-runtime/sdk-graph.txt
 
-          # Ownership migration gate: the published Salts 2.3 RC3 includes
+          # Ownership migration gate: the published Salts 2.3 prereleases include
           # Salts::Unicode but released SaltsUtils 4.3 RC1 still exports it.
           # Detect that incompatible *latest released* pair before CMake
           # configure. Never rewrite imported targets, inject shims, or choose
@@ -433,10 +433,10 @@ jobs:
             }
             return $roots[0]
           }
-          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.3"
+          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.4"
           $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.2"
-          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=21a88ca4d80a76341fb8164cd33ceed3a3eb3d57")) {
-            throw "Salts SDK source SHA differs from published 2.3.0-rc.3"
+          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=233a0d1c2086808d85160ad70010e13b4c63d5c8")) {
+            throw "Salts SDK source SHA differs from published 2.3.0-rc.4"
           }
           if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde")) {
             throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.2"
@@ -481,9 +481,9 @@ jobs:
             grep -Eq '^commit=[[:xdigit:]]{40}$' "$manifest"
             printf '%s' "${roots[0]}"
           }
-          salts="$(sdk_root salts.native 2.3.0-rc.3 salts-sdk-manifest.txt)"
+          salts="$(sdk_root salts.native 2.3.0-rc.4 salts-sdk-manifest.txt)"
           utils="$(sdk_root saltsutils.native 4.3.0-rc.2 salts-utils-sdk-manifest.txt)"
-          grep -Fxq 'commit=21a88ca4d80a76341fb8164cd33ceed3a3eb3d57' "$salts/salts-sdk-manifest.txt"
+          grep -Fxq 'commit=233a0d1c2086808d85160ad70010e13b4c63d5c8' "$salts/salts-sdk-manifest.txt"
           grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils/salts-utils-sdk-manifest.txt"
           echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
