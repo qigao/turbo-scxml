@@ -349,7 +349,17 @@ static int voice_dso_marker(const scxml_component_scope *scope) {
  * serialized run_ready() progresses on the Actor owner executor lane. */
 typedef struct voice_actor_probe {
     vxml_dialog_manager *manager;
+    /* The bound Component Scope and generation are borrowed through the
+       Actor's explicit stop/join/destroy boundary, never copied into data. */
+    const scxml_component_scope *scope;
+    uint64_t generation_id;
+    bool check_generation;
+    int expected_control;
     const void *owner_thread;
+    const void *forbidden_thread;
+    bool gate_before_ready;
+    atomic_bool gate_entered;
+    atomic_bool gate_release;
     atomic_bool wrong_owner;
     atomic_int actions;
     atomic_int values;
@@ -367,8 +377,34 @@ static bool voice_actor_progress(
     if (probe == NULL || state == NULL || event == NULL ||
         next_state == NULL || observation == NULL || out_error == NULL)
         return false;
-    if (probe->owner_thread != cmeta_thread_current_token())
+    if ((probe->owner_thread != NULL &&
+         probe->owner_thread != cmeta_thread_current_token()) ||
+        (probe->forbidden_thread != NULL &&
+         probe->forbidden_thread == cmeta_thread_current_token()))
         atomic_store(&probe->wrong_owner, true);
+    if (probe->check_generation &&
+        (probe->scope == NULL ||
+         scxml_component_scope_generation_id(probe->scope) !=
+             probe->generation_id ||
+         *(const int *)event != probe->expected_control)) {
+        *out_error = "stale or foreign VoiceXML Actor generation";
+        return false;
+    }
+    if (probe->gate_before_ready) {
+        const uint64_t deadline =
+            cmeta_monotonic_ms() + UINT64_C(5000);
+        atomic_store_explicit(
+            &probe->gate_entered, true, memory_order_release);
+        while (!atomic_load_explicit(
+                   &probe->gate_release, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
+        if (!atomic_load_explicit(
+                &probe->gate_release, memory_order_acquire)) {
+            *out_error = "VoiceXML DSO Host Actor gate timed out";
+            return false;
+        }
+    }
     status = vxml_dialog_manager_run_ready(probe->manager, 1u, &advanced);
     if (status != VXML_DIALOG_MANAGER_OK || advanced != 1u) {
         *out_error = "VoiceXML host Actor cannot advance bounded dialog row";
@@ -387,7 +423,10 @@ static bool voice_actor_on_value(
     if (probe == NULL || value == NULL ||
         !cmeta_type_equal(type, &cmeta_type_int))
         return false;
-    if (probe->owner_thread != cmeta_thread_current_token())
+    if ((probe->owner_thread != NULL &&
+         probe->owner_thread != cmeta_thread_current_token()) ||
+        (probe->forbidden_thread != NULL &&
+         probe->forbidden_thread == cmeta_thread_current_token()))
         atomic_store(&probe->wrong_owner, true);
     atomic_store(&probe->last_message, *(const int *)value);
     atomic_fetch_add(&probe->values, 1);
