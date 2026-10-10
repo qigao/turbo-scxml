@@ -244,6 +244,67 @@ turboscxml_add_test(
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 if(TURBOSCXML_ENABLE_COMPONENT)
+  # Runtime FunctionAbi validation complements, not replaces, C11/C++17
+  # native function-pointer constness checks. Only compile static libraries:
+  # installed SDK linking is separately exercised by the normal CTests.
+  include(CheckCSourceCompiles)
+  include(CheckCXXSourceCompiles)
+  set(_scxml_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+  set(_scxml_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+  set(_scxml_saved_try_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+  set(CMAKE_REQUIRED_LIBRARIES TurboSCXML::Component)
+  set(CMAKE_REQUIRED_INCLUDES "${PROJECT_SOURCE_DIR}/include")
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  set(_scxml_intercept_good [=[
+#include <scxml/component.h>
+#include <cmeta/ace_interceptor.h>
+CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
+                       cflow_statechart_effect_ticket);
+cmeta_status exact(void *, const scxml_send_request *,
+                   cflow_statechart_effect_ticket *);
+CMETA_STATIC_ASSERT(
+    CMETA_TYPE_MATCHES(&exact, scxml_compile_intercept_target_fn),
+    "exact native callback signature must compile");
+int main(void) { return 0; }
+]=])
+  set(_scxml_intercept_bad [=[
+#include <scxml/component.h>
+#include <cmeta/ace_interceptor.h>
+CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
+                       cflow_statechart_effect_ticket);
+cmeta_status mutable_request(void *, scxml_send_request *,
+                             cflow_statechart_effect_ticket *);
+CMETA_STATIC_ASSERT(
+    CMETA_TYPE_MATCHES(&mutable_request, scxml_compile_intercept_target_fn),
+    "mutable request is not a borrowed const request");
+int main(void) { return 0; }
+]=])
+  foreach(_check IN ITEMS
+      SCXML_INTERCEPT_EXACT_C11 SCXML_INTERCEPT_MUTABLE_C11
+      SCXML_INTERCEPT_EXACT_CPP17 SCXML_INTERCEPT_MUTABLE_CPP17)
+    unset("${_check}" CACHE)
+  endforeach()
+  check_c_source_compiles(
+      "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_C11)
+  check_c_source_compiles(
+      "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_C11)
+  check_cxx_source_compiles(
+      "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_CPP17)
+  check_cxx_source_compiles(
+      "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_CPP17)
+  if(NOT SCXML_INTERCEPT_EXACT_C11 OR SCXML_INTERCEPT_MUTABLE_C11 OR
+     NOT SCXML_INTERCEPT_EXACT_CPP17 OR SCXML_INTERCEPT_MUTABLE_CPP17)
+    message(FATAL_ERROR
+      "SCXML ACE typed Interceptor C11/C++17 native ABI gate failed")
+  endif()
+  set(CMAKE_REQUIRED_LIBRARIES "${_scxml_saved_required_libraries}")
+  set(CMAKE_REQUIRED_INCLUDES "${_scxml_saved_required_includes}")
+  if(_scxml_saved_try_type)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_scxml_saved_try_type}")
+  else()
+    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+  endif()
+
   foreach(generation IN ITEMS 1 2)
     add_library(scxml_component_dso_${generation} MODULE
       scxml_component_dso_fixture.c)
