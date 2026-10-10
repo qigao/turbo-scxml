@@ -3,9 +3,11 @@
 #include <cflow/executor.h>
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +52,21 @@ static void sender_state(void *user, cnet_connection connection,
         state == CNET_CONNECTION_FAILED) probe->terminal = true;
 }
 
+/* Test uses the existing CFlow SerialExecutor as its single Session
+ * execution owner. The kernel CNet callback continues on the separate
+ * explicit CNet poll-owner lane; there is no second network progress loop. */
+typedef struct ingress_fifo_gate {
+    atomic_bool entered;
+    atomic_bool release;
+} ingress_fifo_gate;
+
+static void block_session_fifo_executor(void *user) {
+    ingress_fifo_gate *gate = (ingress_fifo_gate *)user;
+    atomic_store_explicit(&gate->entered, true, memory_order_release);
+    while (!atomic_load_explicit(&gate->release, memory_order_acquire))
+        cmeta_thread_yield();
+}
+
 spec("Owner-driven CNet to SCXML Event ingress") {
     it("rejects missing Session and invalid bounded configuration") {
         scxml_cnet_ingress ingress = {0};
@@ -59,7 +76,7 @@ spec("Owner-driven CNet to SCXML Event ingress") {
         check_equal(scxml_cnet_ingress_destroy(&ingress), SALTS_OK);
     }
 
-    it("copies a real TCP receive chunk, retains it under Host backpressure, and drains exactly once") {
+    it("retains a real TCP chunk across Host capacity and Session FIFO FULL without loss") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' initial='active'>"
             "<state id='active'><transition event='wire.chunk' target='done'/></state>"
@@ -71,6 +88,11 @@ spec("Owner-driven CNet to SCXML Event ingress") {
         scxml_program program = {0};
         scxml_session session = {0};
         scxml_diagnostic diagnostic = {0};
+        const scxml_event_metadata ignore_metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata)
+        };
+        ingress_fifo_gate gate = {0};
         cflow_executor executor = {0};
         cnet_client sender = {0};
         cnet_client receiver = {0};
@@ -93,6 +115,8 @@ spec("Owner-driven CNet to SCXML Event ingress") {
         char uri[64];
         int ready = 0;
 
+        atomic_init(&gate.entered, false);
+        atomic_init(&gate.release, false);
         check_equal(scxml_compile(
             &program, source, sizeof(source) - 1u, NULL, &diagnostic),
             SCXML_OK);
@@ -106,6 +130,7 @@ spec("Owner-driven CNet to SCXML Event ingress") {
         };
         check_equal(scxml_session_init(&session, &session_config),
                     CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&executor));
 
         check_equal(cnet_client_init(&sender, &net_config), SALTS_OK);
         check_equal(cnet_client_init(&receiver, &net_config), SALTS_OK);
@@ -169,6 +194,26 @@ spec("Owner-driven CNet to SCXML Event ingress") {
             check_equal(stats.pending, (size_t)0u);
         }
 
+        /* Fill the ACTUAL Session external FIFO while the existing CFlow
+           SerialExecutor is suspended by a test-only atomic gate. Network
+           polling remains on its one CNet owner; the Host ingress staging
+           row is independent of these two Session FIFO slots. */
+        check_equal(cflow_executor_try_post(
+            &executor, block_session_fifo_executor, &gate),
+            CFLOW_ADMISSION_ACCEPTED);
+        deadline = cmeta_monotonic_ms() + CNET_SCXML_TIMEOUT_MS;
+        while (!atomic_load_explicit(&gate.entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_thread_yield();
+        check_true(atomic_load_explicit(
+            &gate.entered, memory_order_acquire));
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &session, "ignore", 6u, &ignore_metadata), CFLOW_MAILBOX_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &session, "ignore", 6u, &ignore_metadata), CFLOW_MAILBOX_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &session, "ignore", 6u, &ignore_metadata), CFLOW_MAILBOX_FULL);
+
         buffer = mem_get_buffer(mem_global(), 1u);
         check_not_null(buffer);
         ((unsigned char *)mem_buffer_data(buffer))[0] = (unsigned char)'X';
@@ -185,6 +230,24 @@ spec("Owner-driven CNet to SCXML Event ingress") {
         check_equal(stats.pending, (size_t)1u);
         check_equal(stats.received, UINT64_C(1));
         check_equal(scxml_cnet_ingress_arm(&ingress), SALTS_ENOBUFS);
+        /* Host capacity FULL rejects further receive credits. A separate
+           Session FIFO FULL refuses delivery of this already accepted
+           chunk but does not release, overwrite or replay the Host row. */
+        check_equal(scxml_cnet_ingress_drain(&ingress, 1u, &delivered),
+                    CFLOW_MAILBOX_FULL);
+        check_equal(delivered, (size_t)0u);
+        check_true(scxml_cnet_ingress_get_stats(&ingress, &stats));
+        check_equal(stats.pending, (size_t)1u);
+        check_equal(stats.received, UINT64_C(1));
+        check_equal(stats.delivered, UINT64_C(0));
+        check_false(stats.failed);
+
+        /* Only explicit progress on the original CFlow SerialExecutor
+           restores Session mailbox credit. There is no automatic retry or
+           duplicate NativeIO completion. */
+        atomic_store_explicit(
+            &gate.release, true, memory_order_release);
+        check_true(cflow_executor_wait_idle(&executor));
         check_equal(scxml_cnet_ingress_drain(&ingress, 1u, &delivered),
                     CFLOW_MAILBOX_OK);
         check_equal(delivered, (size_t)1u);
