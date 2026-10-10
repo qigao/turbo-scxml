@@ -19,6 +19,8 @@
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #endif
 
@@ -99,6 +101,64 @@ static int native_race_close_socket(native_race_socket value) {
 #endif
 }
 
+
+/* One real OS-connected UDP pair. Use overlapped WinSock handles for IOCP
+ * and nonblocking descriptors for epoll/Kqueue. No second I/O progress owner. */
+static int native_race_open_udp_pair(native_race_socket sockets[2]) {
+    struct sockaddr_in address = {0};
+    native_race_socket tx = NATIVE_RACE_INVALID_SOCKET;
+    native_race_socket rx = NATIVE_RACE_INVALID_SOCKET;
+#if defined(_WIN32)
+    WSADATA wsa = {0};
+    int address_length = (int)sizeof(address);
+    u_long nonblocking = 1u;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+    rx = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, 0u,
+                    WSA_FLAG_OVERLAPPED);
+    tx = WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, 0u,
+                    WSA_FLAG_OVERLAPPED);
+    if (rx == INVALID_SOCKET || tx == INVALID_SOCKET) goto failed;
+#else
+    socklen_t address_length = (socklen_t)sizeof(address);
+    int flags;
+    rx = socket(AF_INET, SOCK_DGRAM, 0);
+    tx = socket(AF_INET, SOCK_DGRAM, 0);
+    if (rx < 0 || tx < 0) goto failed;
+#endif
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(rx, (const struct sockaddr *)&address,
+             (socklen_t)sizeof(address)) != 0 ||
+        getsockname(rx, (struct sockaddr *)&address, &address_length) != 0 ||
+        connect(tx, (const struct sockaddr *)&address,
+                (socklen_t)address_length) != 0) goto failed;
+#if defined(_WIN32)
+    if (ioctlsocket(tx, FIONBIO, &nonblocking) != 0 ||
+        ioctlsocket(rx, FIONBIO, &nonblocking) != 0) goto failed;
+#else
+    flags = fcntl(tx, F_GETFL, 0);
+    if (flags < 0 || fcntl(tx, F_SETFL, flags | O_NONBLOCK) != 0)
+        goto failed;
+    flags = fcntl(rx, F_GETFL, 0);
+    if (flags < 0 || fcntl(rx, F_SETFL, flags | O_NONBLOCK) != 0)
+        goto failed;
+#endif
+    sockets[0] = tx;
+    sockets[1] = rx;
+    return 0;
+failed:
+    if (tx != NATIVE_RACE_INVALID_SOCKET)
+        (void)native_race_close_socket(tx);
+    if (rx != NATIVE_RACE_INVALID_SOCKET)
+        (void)native_race_close_socket(rx);
+#if defined(_WIN32)
+    (void)WSACleanup();
+#endif
+    sockets[0] = NATIVE_RACE_INVALID_SOCKET;
+    sockets[1] = NATIVE_RACE_INVALID_SOCKET;
+    return -1;
+}
 
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
  * borrows it, and all observation, routing and admission use the same owner.
@@ -487,6 +547,124 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(scxml_native_send_act_settle(
             &next_act, &next_terminal, &settled), SALTS_EALREADY);
         check_null(settled);
+        check_equal(native_io_backend_cancel(&io, next_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(native_race_close_socket(sockets[0]), 0);
+        check_equal(native_race_close_socket(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
+    }
+    it("settles connected UDP_SEND_TO only after genuine terminal and rejects ABA") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request old_request = {0}, next_request = {0};
+        native_io_completion old_terminal = {0}, next_terminal = {0};
+        native_io_backend_stats stats = {0};
+        native_send_act_context old_ctx = {0}, next_ctx = {0};
+        native_send_act_context *settled = NULL;
+        scxml_native_send_act old_act = {0}, next_act = {0};
+        native_race_socket sockets[2] = {
+            NATIVE_RACE_INVALID_SOCKET, NATIVE_RACE_INVALID_SOCKET
+        };
+        unsigned char first = 'U', second = 'V';
+        size_t count = 0u;
+        int cancel_status;
+
+        check_equal(native_race_open_udp_pair(sockets), 0);
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
+        /* The peer is a real bound UDP socket, and sender is OS-connected.
+           Zero address fields explicitly select connected send semantics. */
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_UDP_SEND_TO, .endpoint = endpoint,
+            .buffer = &first, .length = 1u, .user_data = (uintptr_t)201u
+        };
+        check_equal(native_io_backend_submit(
+            &io, &operation, &old_request), SALTS_OK);
+        old_ctx.buffer = &first;
+        check_equal(scxml_native_send_act_bind(
+            &old_act, old_request, endpoint, (uintptr_t)201u, &old_ctx),
+            SALTS_OK);
+
+        cancel_status = native_io_backend_cancel(&io, old_request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(old_act.active);
+        check_equal(old_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_EBUSY);
+        check_equal(native_io_backend_observe(
+            &io, &old_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(old_terminal.request, old_request));
+        check_equal(old_terminal.user_data, (uintptr_t)201u);
+        check_true(old_terminal.kind == NATIVE_IO_COMPLETION_OK ||
+                   old_terminal.kind == NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(old_terminal.bytes,
+                    old_terminal.kind == NATIVE_IO_COMPLETION_OK
+                        ? (size_t)1u : (size_t)0u);
+        check_equal(scxml_native_send_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_OK);
+        check_true(settled == &old_ctx);
+        check_true(settled->buffer == &first);
+        ++settled->settled;
+        check_equal(scxml_native_send_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(old_ctx.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(&io, old_request), SALTS_ENOENT);
+
+        operation.buffer = &second;
+        operation.user_data = (uintptr_t)202u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &next_request), SALTS_OK);
+        check_equal(next_request.slot, old_request.slot);
+        check_not_equal(next_request.generation, old_request.generation);
+        next_ctx.buffer = &second;
+        check_equal(scxml_native_send_act_bind(
+            &next_act, next_request, endpoint, (uintptr_t)202u, &next_ctx),
+            SALTS_OK);
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &old_terminal, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_true(next_act.active);
+        check_equal(next_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_cancel(&io, old_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+
+        count = 0u;
+        check_equal(native_io_backend_observe(
+            &io, &next_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(next_terminal.request, next_request));
+        check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(next_terminal.bytes, (size_t)1u);
+        check_equal(next_terminal.user_data, (uintptr_t)202u);
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_OK);
+        check_true(settled == &next_ctx);
+        check_true(settled->buffer == &second);
+        ++settled->settled;
+        check_equal(scxml_native_send_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(next_ctx.settled, (size_t)1u);
         check_equal(native_io_backend_cancel(&io, next_request), SALTS_ENOENT);
         check_true(native_io_backend_get_stats(&io, &stats));
         check_equal(stats.active_requests, (size_t)0u);
