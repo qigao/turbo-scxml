@@ -701,6 +701,137 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
         check_equal(WSACleanup(), 0);
 #endif
     }
+    it("arbitrates UDP_RECV_FROM cancellation and reuses its payload/address borrow safely") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request old_request = {0}, next_request = {0};
+        native_io_completion old_terminal = {0}, next_terminal = {0};
+        native_io_backend_stats stats = {0};
+        native_receive_act_context old_ctx = {0}, next_ctx = {0};
+        native_receive_act_context *settled = NULL;
+        scxml_native_recv_act old_act = {0}, next_act = {0};
+        native_race_socket sockets[2] = {
+            NATIVE_RACE_INVALID_SOCKET, NATIVE_RACE_INVALID_SOCKET
+        };
+        struct sockaddr_storage old_from = {0}, next_from = {0};
+        unsigned char first = 0u, second = 0u;
+        size_t count = 0u;
+        int cancel_status;
+
+        /* The OS-bound UDP receiver is unconnected, so each successful
+           recv-from must populate its independently borrowed source address.
+           The connected sender is only an external packet producer. */
+        check_equal(native_race_open_udp_pair(sockets), 0);
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)sockets[1], &endpoint), SALTS_OK);
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_UDP_RECV_FROM, .endpoint = endpoint,
+            .buffer = &first, .length = 1u, .user_data = (uintptr_t)301u,
+            .address = &old_from, .address_capacity = sizeof(old_from)
+        };
+        check_equal(native_io_backend_submit(
+            &io, &operation, &old_request), SALTS_OK);
+        old_ctx.buffer = &first;
+        check_equal(scxml_native_recv_act_bind(
+            &old_act, old_request, endpoint, (uintptr_t)301u, &old_ctx),
+            SALTS_OK);
+        cancel_status = native_io_backend_cancel(&io, old_request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(old_act.active);
+        check_equal(old_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_EBUSY);
+        /* Only observe, never cancellation acknowledgement, ends the
+           payload AND sockaddr borrow and authorizes one ACT settlement. */
+        check_equal(native_io_backend_observe(
+            &io, &old_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(old_terminal.request, old_request));
+        check_equal(old_terminal.kind, NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(old_terminal.user_data, (uintptr_t)301u);
+        check_equal(old_terminal.bytes, (size_t)0u);
+        check_equal(scxml_native_recv_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_OK);
+        check_true(settled == &old_ctx);
+        check_true(settled->buffer == &first);
+        ++settled->settled;
+        check_equal(scxml_native_recv_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(old_ctx.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, old_request), SALTS_ENOENT);
+
+        /* Re-admit a new generation in the same physical slot with
+           distinct caller-owned payload and sockaddr buffers. */
+        operation.buffer = &second;
+        operation.address = &next_from;
+        operation.user_data = (uintptr_t)302u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &next_request), SALTS_OK);
+        check_equal(next_request.slot, old_request.slot);
+        check_not_equal(next_request.generation, old_request.generation);
+        next_ctx.buffer = &second;
+        check_equal(scxml_native_recv_act_bind(
+            &next_act, next_request, endpoint, (uintptr_t)302u, &next_ctx),
+            SALTS_OK);
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &old_terminal, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_true(next_act.active);
+        check_equal(native_io_backend_cancel(
+            &io, old_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+
+        check_equal(send(sockets[0], "V", 1, 0), 1);
+        count = 0u;
+        check_equal(native_io_backend_observe(
+            &io, &next_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(next_terminal.request, next_request));
+        check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(next_terminal.user_data, (uintptr_t)302u);
+        check_equal(next_terminal.bytes, (size_t)1u);
+        check_equal(second, (unsigned char)'V');
+        check_true(next_terminal.address_length >=
+                   sizeof(struct sockaddr_in));
+        check_true(next_terminal.address_length <= sizeof(next_from));
+        check_equal(((const struct sockaddr *)&next_from)->sa_family,
+                    AF_INET);
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_OK);
+        check_true(settled == &next_ctx);
+        check_true(settled->buffer == &second);
+        ++settled->settled;
+        check_equal(scxml_native_recv_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(next_ctx.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, next_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(native_race_close_socket(sockets[0]), 0);
+        check_equal(native_race_close_socket(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(
+            &io, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
+    }
     it("arbitrates real peer completion versus cancellation once on the NativeIO owner") {
         const native_io_backend_config config = {
             .kind = test_backend(), .endpoint_capacity = 1u,
