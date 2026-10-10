@@ -1,4 +1,5 @@
 #include "tinytest.h"
+#include "scxml_component_interceptor_probe.h"
 #include <scxml/component.h>
 #include <salts/plugin.h>
 
@@ -122,6 +123,193 @@ spec("Component DSO-backed SCXML sessions") {
 
     before_each() { memset(&test, 0, sizeof(test)); }
     after_each() { check_true(cleanup(&test)); }
+
+    it("retains real DSO FunctionAbi and ticket authority through scoped Interceptor calls") {
+        const char *paths[] = {SCXML_COMPONENT_DSO_ONE, SCXML_COMPONENT_DSO_TWO};
+        const cmeta_plugin_registry_config registry_config = {.capacity = 2u};
+        const scxml_send_request probe_request = {
+            .event = "probe", .event_size = 5u
+        };
+        const scxml_send_request wrong_request = {
+            .event = "wrong", .event_size = 5u
+        };
+        const cmeta_function_abi_desc *expected =
+            &scxml_intercept_target_contract__function_abi_meta;
+        cmeta_function_abi_desc provided = *expected;
+        cmeta_function_desc wrong_result = *expected->function;
+        scxml_component_invoke_provider denied_invoke = {0};
+        scxml_component_event_io_provider denied_event = {0};
+        scxml_intercept_probe old = {0}, next = {0};
+        salts_component_plugin_generation *previous = NULL;
+        const scxml_event_io_adapter *adapter;
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+
+        check_equal(cmeta_plugin_registry_init(
+            &test.registry, &registry_config), CMETA_PLUGIN_OK);
+        test.registry_live = true;
+        for (size_t i = 0u; i < SESSION_CAPACITY; ++i) {
+            check_equal(cmeta_plugin_registry_load(
+                &test.registry, paths[i], &test.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &test.registry, test.plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(build_generation(&test, i, i, (uint64_t)i + 1u),
+                        SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&test.runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &test.runtime, &test.generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &test.scopes[0], &test.runtime), SCXML_COMPONENT_OK);
+
+        /* Real Plugin DSO supplies only canonical Event I/O and SEND.
+           Wrong Interface or capability fails BEFORE Session publication. */
+        check_equal(scxml_component_invoke_provider_bind(
+            &denied_invoke, &test.scopes[0], "ScxmlDsoFixture",
+            SCXML_INVOKE_CAP_START), SCXML_COMPONENT_UNAVAILABLE);
+        check_equal(scxml_component_event_io_provider_bind(
+            &denied_event, &test.scopes[0], "ScxmlDsoFixture",
+            SCXML_EVENT_IO_CAP_CANCEL),
+            SCXML_COMPONENT_CAPABILITY_MISMATCH);
+        check_equal(test.scopes[0].binding_count, (size_t)0u);
+        check_false(denied_invoke.live);
+        check_false(denied_event.live);
+
+        check_equal(scxml_component_event_io_provider_bind(
+            &test.providers[0], &test.scopes[0], "ScxmlDsoFixture",
+            SCXML_EVENT_IO_CAP_SEND), SCXML_COMPONENT_OK);
+        adapter = scxml_component_event_io_provider_adapter(&test.providers[0]);
+        check_not_null(adapter);
+        check_equal(scxml_intercept_probe_init(
+            &old, adapter,
+            scxml_component_event_io_provider_user(&test.providers[0])),
+            CMETA_OK);
+        check_true(cmeta_function_abi_desc_valid(expected));
+        wrong_result.result_flags = CMETA_RESULT_OWNED;
+        provided.function = &wrong_result;
+        check_equal(scxml_test_send_intercept_admit(
+            &old.chain, &old, scxml_intercept_target,
+            old.hooks, 2u, expected, &provided), CMETA_TYPE_MISMATCH);
+        check_true(old.chain.target == scxml_intercept_target);
+        check_equal(marker_value(&test.scopes[0]), 100);
+
+        /* Actual DSO prepare_send creates the ticket, but the Interceptor
+           only TRANSFERS it on ACCEPTED; execution has no effect yet. */
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        check_not_null(ticket.commit);
+        check_not_null(ticket.discard);
+        check_null(error);
+        check_equal(marker_value(&test.scopes[0]), 100);
+        check_equal(old.trace_count, (size_t)5u);
+        check_equal(old.trace[0], 11u);
+        check_equal(old.trace[1], 12u);
+        check_equal(old.trace[2], 9u);
+        check_equal(old.trace[3], 22u);
+        check_equal(old.trace[4], 21u);
+        ticket.commit(ticket.user);
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(marker_value(&test.scopes[0]), 101);
+
+        old.reject_stage = 2u;
+        scxml_intercept_probe_reset_trace(&old);
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(old.target_calls, 1u);
+        check_equal(marker_value(&test.scopes[0]), 101);
+        check_equal(old.trace_count, (size_t)4u);
+        check_equal(old.trace[2], 32u);
+        check_equal(old.trace[3], 31u);
+        old.reject_stage = 0u;
+
+        /* Real DSO rejects an unsupported event without issuing a ticket. */
+        check_equal(scxml_intercept_prepare_send(
+            &old, &wrong_request, &ticket, &error),
+            SCXML_ADAPTER_INVALID_CONTRACT);
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(marker_value(&test.scopes[0]), 101);
+
+        /* Deliberate post-provider failure must invoke the REAL DSO
+           discard callback exactly once, never commit or transfer ticket. */
+        old.fail_after_provider = true;
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(ticket.commit);
+        check_equal(old.discarded_on_failure, 1u);
+        check_equal(marker_value(&test.scopes[0]), 1101);
+        old.fail_after_provider = false;
+
+        /* Publication makes gN DRAINING but does not transfer its borrow.
+           Intercepted real DSO callback remains callable under gN Scope. */
+        check_equal(salts_component_plugin_runtime_publish(
+            &test.runtime, &test.generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &test.generations[0].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &test.runtime, &test.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(marker_value(&test.scopes[0]), 1102);
+
+        check_equal(scxml_component_scope_acquire(
+            &test.scopes[1], &test.runtime), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_event_io_provider_bind(
+            &test.providers[1], &test.scopes[1], "ScxmlDsoFixture",
+            SCXML_EVENT_IO_CAP_SEND), SCXML_COMPONENT_OK);
+        check_equal(scxml_intercept_probe_init(
+            &next, scxml_component_event_io_provider_adapter(&test.providers[1]),
+            scxml_component_event_io_provider_user(&test.providers[1])),
+            CMETA_OK);
+        check_equal(marker_value(&test.scopes[1]), 200);
+        check_equal(scxml_intercept_prepare_send(
+            &next, &probe_request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(marker_value(&test.scopes[1]), 201);
+
+        /* Only the external Component lease authorizes safe old DSO unload.
+           An interceptor hook pointer is never used after its Scope retires. */
+        adapter->close(scxml_component_event_io_provider_user(
+            &test.providers[0]));
+        check_equal(scxml_component_event_io_provider_destroy(
+            &test.providers[0]), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(
+            &test.scopes[0]), SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &test.runtime, &test.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_OK);
+        {
+            bool quiescent = false;
+            check_equal(cmeta_plugin_registry_poll_quiescent(
+                &test.registry, test.plugins[0], &quiescent), CMETA_PLUGIN_OK);
+            check_true(quiescent);
+        }
+        check_equal(cmeta_plugin_registry_unload(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_OK);
+        test.plugins[0] = (cmeta_plugin_ref){0};
+
+        /* gN+1 callback and its own independent ticket still execute
+           after old DSO code/metadata are fully unloaded. */
+        check_equal(scxml_intercept_prepare_send(
+            &next, &probe_request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        ticket.commit(ticket.user);
+        check_equal(marker_value(&test.scopes[1]), 202);
+    }
 
     it("keeps old session effects in the old DSO until session and scope retirement") {
         static const char source[] =
