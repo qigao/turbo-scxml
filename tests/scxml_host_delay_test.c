@@ -377,7 +377,111 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         scxml_program_destroy(&program);
     }
 
-()=>test+insertBefore
+    it("rejects a stale cancel ticket during cross-thread delayed-row ABA reuse") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='idle'><state id='idle'/></scxml>";
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        scxml_session session = {0};
+        scxml_host_router router = {0};
+        scxml_host_session_ref ref = {0};
+        cflow_clock clock = {0};
+        cflow_executor executor = {0};
+        scxml_host_router_stats stats = {0};
+        cflow_statechart_effect_ticket original = {0};
+        cflow_statechart_effect_ticket stale_cancel = {0};
+        cflow_statechart_effect_ticket fresh_cancel = {0};
+        delayed_aba_worker race = {0};
+        cmeta_thread_t worker = NULL;
+        uint64_t deadline;
+
+        check_true(cflow_clock_virtual_init(&clock, (cflow_instant){0u}));
+        check_true(cflow_executor_serial_init(&executor));
+        check_equal(scxml_compile(&program, source, sizeof(source)-1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        check_equal(scxml_session_init(&session, &(scxml_session_config){
+            .program = &program, .executor = &executor,
+            .external_event_capacity = 2u, .internal_event_capacity = 2u,
+            .completion_capacity = 2u, .microstep_limit = 16u
+        }), CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_host_router_init(
+            &router, &(scxml_host_router_config){
+                .endpoint_capacity = 1u, .event_capacity = 1u,
+                .max_text_bytes = 8u, .clock = &clock,
+                .timer_capacity = 1u, .cancel_capacity = 1u
+            }), SALTS_OK);
+        check_equal(scxml_host_router_attach(&router, &session, &ref),
+                    SALTS_OK);
+        check_true(cflow_executor_wait_idle(&executor));
+        check_equal(scxml_host_router_prepare_target(
+            &router, ref, NULL, 0u,
+            "old", 3u, "same", 4u, NULL, 5u, &original),
+            SALTS_OK);
+        original.commit(original.user);
+        check_equal(scxml_host_router_prepare_cancel(
+            &router, ref, "same", 4u, &stale_cancel), SALTS_OK);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)1u);
+        check_equal(stats.delayed_pending, (size_t)1u);
+        check_equal(stats.cancel_pending, (size_t)1u);
+
+        /* Two real threads race stale cancel commit against freeing and
+           reusing the ONLY delayed row. Neither sendid text nor row address
+           may let the old ticket consume the new row identity. */
+        race.router = &router;
+        race.source = ref;
+        atomic_init(&race.ready, 0);
+        atomic_init(&race.fire, 0);
+        check_equal(cmeta_thread_create(
+            &worker, reuse_delayed_row_from_other_thread, &race),
+            SALTS_OK);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (!atomic_load_explicit(&race.ready, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+        }
+        check_equal(atomic_load_explicit(
+            &race.ready, memory_order_acquire), 1);
+        atomic_store_explicit(&race.fire, 1, memory_order_release);
+        stale_cancel.commit(stale_cancel.user);
+        check_equal(cmeta_thread_join(&worker), SALTS_OK);
+        cmeta_thread_destroy(&worker);
+        check_equal(race.release_status, SALTS_OK);
+        check_equal(race.prepare_status, SALTS_OK);
+        check_true(race.cancelled_rows <= (size_t)1u);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)1u);
+        check_equal(stats.delayed_pending, (size_t)1u);
+        check_equal(stats.cancel_pending, (size_t)0u);
+        check_equal(stats.timer_cancelled, UINT64_C(1));
+        check_equal(stats.cancel_committed, UINT64_C(1));
+        check_equal(stats.invariant_failures, UINT64_C(0));
+        check_equal(stats.timer_done_failed, UINT64_C(0));
+
+        /* Only the replacement's own ticket may now cancel its row. */
+        check_equal(scxml_host_router_prepare_cancel(
+            &router, ref, "same", 4u, &fresh_cancel), SALTS_OK);
+        fresh_cancel.commit(fresh_cancel.user);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)0u);
+        check_equal(stats.delayed_pending, (size_t)0u);
+        check_equal(stats.cancel_pending, (size_t)0u);
+        check_equal(stats.timer_cancelled, UINT64_C(2));
+        check_equal(stats.cancel_committed, UINT64_C(2));
+        check_equal(stats.timer_fired, UINT64_C(0));
+        check_equal(stats.invariant_failures, UINT64_C(0));
+        check_true(scxml_host_router_source_is_quiescent(&router, ref));
+        check_equal(scxml_host_router_detach(&router, ref), SALTS_OK);
+        check_equal(scxml_host_router_close(&router), SALTS_OK);
+        check_equal(scxml_host_router_destroy(&router), SALTS_OK);
+        check_equal(scxml_session_destroy(&session),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        cflow_executor_destroy(&executor);
+        cflow_clock_destroy(&clock);
+        scxml_program_destroy(&program);
+    }
+
+    it("cancels unexpired source timers on Session close without firing") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
             "version='1.0' initial='waiting'>"
