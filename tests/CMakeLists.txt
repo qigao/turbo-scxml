@@ -338,12 +338,15 @@ if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
   turboscxml_add_test(
     scxml_component_cnet_invoke_test
     scxml_component_cnet_invoke_test.c
-    LIBS TurboSCXML::Component TurboSCXML::CNetEventIO Salts::Core
+    LIBS TurboSCXML::Component TurboSCXML::CNetEventIO Salts::NativeIO Salts::Core
     DEFINITIONS
       SCXML_INVOKE_DSO_ONE="$<TARGET_FILE:scxml_invoke_component_dso_1>"
       SCXML_INVOKE_DSO_TWO="$<TARGET_FILE:scxml_invoke_component_dso_2>")
   add_dependencies(scxml_component_cnet_invoke_test
     scxml_invoke_component_dso_1 scxml_invoke_component_dso_2)
+  if(WIN32)
+    target_link_libraries(scxml_component_cnet_invoke_test PRIVATE ws2_32)
+  endif()
   set_tests_properties(scxml_component_cnet_invoke_test PROPERTIES TIMEOUT 60)
 endif()
 

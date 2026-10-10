@@ -1,9 +1,19 @@
+#if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
+
 #include <scxml/component.h>
 #include <scxml/cnet_domain_fence.h>
 #include "scxml_component_invoke_probe.h"
 
 #include <cnet/cnet.h>
 #include <salts/clock.h>
+#include <salts/native_io_ace_token.h>
 #include <salts/plugin.h>
 #include <salts/thread.h>
 #include <tinytest.h>
@@ -77,6 +87,94 @@ typedef struct fenced_cnet_write {
     size_t size;
     cnet_connection connection;
 } fenced_cnet_write;
+
+/* Native ACT and DSO Invoke use one real NativeIO owner in the test below.
+ * This helper only creates the peer's connected kernel sockets. */
+#if defined(_WIN32)
+typedef SOCKET scxml_act_socket;
+#define SCXML_ACT_INVALID_SOCKET INVALID_SOCKET
+#else
+typedef int scxml_act_socket;
+#define SCXML_ACT_INVALID_SOCKET (-1)
+#endif
+
+typedef struct scxml_invoke_native_context {
+    scxml_component_scope *scope;
+    uint64_t generation;
+    uintptr_t invoke_token;
+    unsigned char *borrowed_buffer;
+    size_t settlements;
+} scxml_invoke_native_context;
+
+NATIVE_IO_ACE_TOKEN_TYPE(scxml_invoke_native_act, scxml_invoke_native_context);
+
+static int scxml_act_make_socket_pair(scxml_act_socket pair[2]) {
+#if defined(_WIN32)
+    WSADATA wsa = {0};
+    SOCKET listener = INVALID_SOCKET;
+    struct sockaddr_in address = {0};
+    int address_length = (int)sizeof(address);
+    u_long nonblocking = 1u;
+    pair[0] = INVALID_SOCKET;
+    pair[1] = INVALID_SOCKET;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+    listener = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u,
+                          WSA_FLAG_OVERLAPPED);
+    if (listener == INVALID_SOCKET) goto failed;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = 0;
+    if (bind(listener, (const struct sockaddr *)&address,
+             (int)sizeof(address)) != 0 || listen(listener, 1) != 0 ||
+        getsockname(listener, (struct sockaddr *)&address,
+                    &address_length) != 0)
+        goto failed;
+    pair[1] = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u,
+                         WSA_FLAG_OVERLAPPED);
+    if (pair[1] == INVALID_SOCKET ||
+        connect(pair[1], (const struct sockaddr *)&address,
+                (int)sizeof(address)) != 0)
+        goto failed;
+    pair[0] = accept(listener, NULL, NULL);
+    if (pair[0] == INVALID_SOCKET ||
+        ioctlsocket(pair[0], FIONBIO, &nonblocking) != 0 ||
+        ioctlsocket(pair[1], FIONBIO, &nonblocking) != 0)
+        goto failed;
+    (void)closesocket(listener);
+    return 0;
+failed:
+    if (listener != INVALID_SOCKET) (void)closesocket(listener);
+    if (pair[0] != INVALID_SOCKET) (void)closesocket(pair[0]);
+    if (pair[1] != INVALID_SOCKET) (void)closesocket(pair[1]);
+    pair[0] = INVALID_SOCKET;
+    pair[1] = INVALID_SOCKET;
+    (void)WSACleanup();
+    return -1;
+#else
+    int flags;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair) != 0) return -1;
+    for (size_t index = 0u; index < 2u; ++index) {
+        flags = fcntl(pair[index], F_GETFL, 0);
+        if (flags < 0 ||
+            fcntl(pair[index], F_SETFL, flags | O_NONBLOCK) != 0) {
+            (void)close(pair[0]);
+            (void)close(pair[1]);
+            pair[0] = -1;
+            pair[1] = -1;
+            return -1;
+        }
+    }
+    return 0;
+#endif
+}
+
+static int scxml_act_close_socket(scxml_act_socket value) {
+#if defined(_WIN32)
+    return closesocket(value);
+#else
+    return close(value);
+#endif
+}
 
 static native_io_backend_kind backend(void) {
 #if defined(_WIN32)
@@ -1547,5 +1645,293 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(scxml_cnet_domain_fence_destroy(&f.fence), SALTS_OK);
         check_equal(f.runtime.attached_generations, (size_t)0u);
         check_equal(f.runtime.active_scopes, (size_t)0u);
+    }
+
+    it("binds real DSO Invoke identities to one NativeIO ACT owner across generations") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='working'>"
+            "<state id='working'>"
+            "<invoke id='worker' type='urn:test:invoke' src='worker'/>"
+            "<transition event='finish' target='done'/>"
+            "<transition event='done.invoke.worker' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        const char *paths[] = {SCXML_INVOKE_DSO_ONE, SCXML_INVOKE_DSO_TWO};
+        const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+        const native_io_backend_config native_conf = {
+            .kind = backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        const scxml_event_metadata finish_metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata)
+        };
+        native_io_backend native = {0};
+        native_io_endpoint endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request old_request = {0}, next_request = {0};
+        native_io_completion old_terminal = {0}, next_terminal = {0};
+        native_io_backend_stats stats = {0};
+        scxml_act_socket sockets[2] = {
+            SCXML_ACT_INVALID_SOCKET, SCXML_ACT_INVALID_SOCKET
+        };
+        scxml_invoke_native_context old_ctx = {0}, next_ctx = {0};
+        scxml_invoke_native_context *settled = NULL;
+        scxml_invoke_native_act old_act = {0}, next_act = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_diagnostic diagnostic = {0};
+        unsigned char old_byte = 0u, next_byte = 0u;
+        const unsigned char payload = 'N';
+        size_t count = 0u;
+        int old_token, next_token, cancel_status;
+
+        check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
+                    CMETA_PLUGIN_OK);
+        f.registry_live = true;
+        for (size_t index = 0u; index < SESSIONS; ++index) {
+            check_equal(cmeta_plugin_registry_load(
+                &f.registry, paths[index], &f.plugins[index]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &f.registry, f.plugins[index]), CMETA_PLUGIN_OK);
+            check_equal(generation_build(
+                &f, index, index, UINT64_C(11) + (uint64_t)index),
+                SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&f.runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(scxml_compile(&f.program, source, sizeof(source) - 1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[0], &f.runtime), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_invoke_provider_bind(
+            &f.invoke[0], &f.scopes[0], "ScxmlInvokeDsoFixture",
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+            SCXML_COMPONENT_OK);
+        check_true(cflow_executor_serial_init(&f.executors[0]));
+        f.executor_live[0] = true;
+        {
+            scxml_session_config conf = {
+                .program = &f.program, .executor = &f.executors[0],
+                .external_event_capacity = 2u, .internal_event_capacity = 2u,
+                .completion_capacity = 2u, .microstep_limit = 16u,
+                .invocation_capacity = 1u, .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invoke = scxml_component_invoke_provider_adapter(&f.invoke[0]),
+                .invoke_user = scxml_component_invoke_provider_user(&f.invoke[0])
+            };
+            check_equal(scxml_session_init(&f.sessions[0], &conf),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        old_token = invoke_token_from_scope(&f.scopes[0]);
+        check_true(old_token > 0);
+
+        /* Only one NativeIO backend and one owner: the DSO/Invoke lease is
+           owned by ComponentPlugin, while the ACT owns no transport or DSO.
+           NativeIO remains the sole source of I/O terminal truth. */
+        check_equal(scxml_act_make_socket_pair(sockets), 0);
+        check_equal(native_io_backend_init(&native, &native_conf), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &native, (uintptr_t)sockets[0], &endpoint), SALTS_OK);
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_STREAM_RECV,
+            .endpoint = endpoint, .buffer = &old_byte,
+            .length = 1u, .user_data = (uintptr_t)old_token
+        };
+        check_equal(native_io_backend_submit(
+            &native, &operation, &old_request), SALTS_OK);
+        old_ctx = (scxml_invoke_native_context){
+            &f.scopes[0], UINT64_C(11), (uintptr_t)old_token,
+            &old_byte, 0u
+        };
+        check_equal(scxml_invoke_native_act_bind(
+            &old_act, old_request, endpoint, operation.user_data, &old_ctx),
+            SALTS_OK);
+
+        /* The original DSO Invoke stays gN, while a real replacement DSO
+           becomes the current generation. Neither native request identity
+           nor its borrowed payload may migrate to the replacement. */
+        check_equal(salts_component_plugin_runtime_publish(
+            &f.runtime, &f.generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[0].generation);
+        check_equal(scxml_component_scope_acquire(
+            &f.scopes[1], &f.runtime), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_invoke_provider_bind(
+            &f.invoke[1], &f.scopes[1], "ScxmlInvokeDsoFixture",
+            SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+            SCXML_COMPONENT_OK);
+        check_true(cflow_executor_serial_init(&f.executors[1]));
+        f.executor_live[1] = true;
+        {
+            scxml_session_config conf = {
+                .program = &f.program, .executor = &f.executors[1],
+                .external_event_capacity = 2u, .internal_event_capacity = 2u,
+                .completion_capacity = 2u, .microstep_limit = 16u,
+                .invocation_capacity = 1u, .effect_capacity = 2u,
+                .adapter_internal_event_capacity = 2u,
+                .invoke = scxml_component_invoke_provider_adapter(&f.invoke[1]),
+                .invoke_user = scxml_component_invoke_provider_user(&f.invoke[1])
+            };
+            check_equal(scxml_session_init(&f.sessions[1], &conf),
+                        CFLOW_STATECHART_INSTANCE_OK);
+        }
+        check_true(cflow_executor_wait_idle(&f.executors[1]));
+        next_token = invoke_token_from_scope(&f.scopes[1]);
+        check_true(next_token > 0);
+        check_equal(invoke_token_from_scope(&f.scopes[0]), old_token);
+        check_equal(scxml_component_scope_generation_id(&f.scopes[0]),
+                    old_ctx.generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
+
+        /* An SCXML cancellation settles its Statechart effect journal, NOT
+           the accepted kernel request or the typed NativeIO ACT. */
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &f.sessions[0], "finish", 6u, &finish_metadata),
+            CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        check_equal(invoke_token_from_scope(&f.scopes[0]), -old_token);
+        check_true(old_act.active);
+        check_equal(old_ctx.settlements, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &native, endpoint), SALTS_EBUSY);
+        cancel_status = native_io_backend_cancel(&native, old_request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(old_act.active);
+        check_equal(native_io_backend_observe(
+            &native, &old_terminal, 1u, TIMEOUT_MS, &count), SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_equal(old_terminal.request.slot, old_request.slot);
+        check_equal(old_terminal.request.generation, old_request.generation);
+        check_equal(old_terminal.kind, NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(scxml_invoke_native_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_OK);
+        check_true(settled == &old_ctx);
+        check_true(settled->scope == &f.scopes[0]);
+        check_equal(settled->generation, UINT64_C(11));
+        check_equal(settled->invoke_token, (uintptr_t)old_token);
+        ++settled->settlements;
+        check_equal(scxml_invoke_native_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(old_ctx.settlements, (size_t)1u);
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[0], (uint64_t)old_token),
+            CFLOW_MAILBOX_INVALID_ARGUMENT);
+
+        /* Capacity one forces an actual slot reuse. The old authentic
+           terminal cannot consume the new generation's ACT, even before
+           the old Component scope/module is finally unloaded. */
+        operation.buffer = &next_byte;
+        operation.user_data = (uintptr_t)next_token;
+        check_equal(native_io_backend_submit(
+            &native, &operation, &next_request), SALTS_OK);
+        check_equal(next_request.slot, old_request.slot);
+        check_not_equal(next_request.generation, old_request.generation);
+        next_ctx = (scxml_invoke_native_context){
+            &f.scopes[1], UINT64_C(12), (uintptr_t)next_token,
+            &next_byte, 0u
+        };
+        check_equal(scxml_invoke_native_act_bind(
+            &next_act, next_request, endpoint, operation.user_data, &next_ctx),
+            SALTS_OK);
+        check_equal(scxml_invoke_native_act_settle(
+            &next_act, &old_terminal, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_true(next_act.active);
+        check_equal(next_ctx.settlements, (size_t)0u);
+        check_equal(native_io_backend_cancel(
+            &native, old_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&native, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+
+        check_equal(scxml_session_destroy(&f.sessions[0]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(&f.invoke[0]),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(&f.scopes[0]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        {
+            bool quiescent = false;
+            check_equal(cmeta_plugin_registry_poll_quiescent(
+                &f.registry, f.plugins[0], &quiescent), CMETA_PLUGIN_OK);
+            check_true(quiescent);
+        }
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        f.plugins[0] = (cmeta_plugin_ref){0};
+        check_equal(invoke_token_from_scope(&f.scopes[1]), next_token);
+        check_true(next_act.active);
+
+        check_equal(send(sockets[1], (const char *)&payload, 1, 0), 1);
+        count = 0u;
+        check_equal(native_io_backend_observe(
+            &native, &next_terminal, 1u, TIMEOUT_MS, &count), SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_equal(next_terminal.request.slot, next_request.slot);
+        check_equal(next_terminal.request.generation, next_request.generation);
+        check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(next_terminal.bytes, (size_t)1u);
+        check_equal(next_byte, payload);
+        check_equal(scxml_invoke_native_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_OK);
+        check_true(settled == &next_ctx);
+        check_true(settled->scope == &f.scopes[1]);
+        check_equal(settled->generation, UINT64_C(12));
+        check_equal(settled->invoke_token, (uintptr_t)next_token);
+        ++settled->settlements;
+        check_equal(scxml_invoke_native_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(next_ctx.settlements, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &native, next_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&native, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[1], (uint64_t)next_token), CFLOW_MAILBOX_OK);
+        check_true(cflow_executor_wait_idle(&f.executors[1]));
+        check_equal(scxml_session_report_invoke_done(
+            &f.sessions[1], (uint64_t)next_token),
+            CFLOW_MAILBOX_INVALID_ARGUMENT);
+        check_equal(scxml_session_destroy(&f.sessions[1]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_component_invoke_provider_destroy(&f.invoke[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(&f.scopes[1]),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &f.runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[1].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(f.runtime.attached_generations, (size_t)0u);
+        check_equal(f.runtime.active_scopes, (size_t)0u);
+
+        check_equal(scxml_act_close_socket(sockets[0]), 0);
+        check_equal(scxml_act_close_socket(sockets[1]), 0);
+        check_equal(native_io_backend_release_socket(
+            &native, endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&native), SALTS_OK);
+        check_equal(native_io_backend_destroy(&native), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
     }
 }
