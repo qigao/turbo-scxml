@@ -344,6 +344,12 @@ if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
       SCXML_INVOKE_DSO_TWO="$<TARGET_FILE:scxml_invoke_component_dso_2>")
   add_dependencies(scxml_component_cnet_invoke_test
     scxml_invoke_component_dso_1 scxml_invoke_component_dso_2)
+  if(TURBOSCXML_ENABLE_HOST)
+    target_link_libraries(scxml_component_cnet_invoke_test PRIVATE
+      TurboSCXML::Host)
+    target_compile_definitions(scxml_component_cnet_invoke_test PRIVATE
+      SCXML_TEST_COMPONENT_HOST_DELAY=1)
+  endif()
   if(WIN32)
     target_link_libraries(scxml_component_cnet_invoke_test PRIVATE ws2_32)
   endif()

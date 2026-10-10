@@ -13,6 +13,11 @@
 #include <unistd.h>
 #endif
 
+#if defined(SCXML_TEST_COMPONENT_HOST_DELAY)
+#include <scxml/host_event_io.h>
+#include <cflow/clock.h>
+#endif
+
 #include <scxml/component.h>
 #include <scxml/cnet_domain_fence.h>
 #include "scxml_component_invoke_probe.h"
@@ -2371,4 +2376,214 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             f.plugins[round] = (cmeta_plugin_ref){0};
         }
     }
+
+#if defined(SCXML_TEST_COMPONENT_HOST_DELAY)
+    it("keeps a real DSO Invoke Scope while another Host generation reuses its bounded delayed slot") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='working'>"
+            "<state id='working'>"
+            "<onentry><send event='timeout' delay='5ms' id='shared'/></onentry>"
+            "<invoke id='worker' type='urn:test:invoke' src='worker'/>"
+            "<transition event='timeout' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        const char *paths[] = {SCXML_INVOKE_DSO_ONE, SCXML_INVOKE_DSO_TWO};
+        const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+        cflow_clock clock = {0};
+        scxml_host_router router = {0};
+        scxml_host_event_io_binding bindings[SESSIONS] = {{0}, {0}};
+        scxml_host_session_ref refs[SESSIONS] = {{0}, {0}};
+        scxml_host_router_stats stats = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_effect_ticket stale = {0};
+        cflow_statechart_instance_stats machine = {0};
+        size_t fired = 0u, delivered = 0u;
+        int token[SESSIONS] = {0, 0};
+
+        check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
+                    CMETA_PLUGIN_OK);
+        f.registry_live = true;
+        for (size_t slot = 0u; slot < SESSIONS; ++slot) {
+            check_equal(cmeta_plugin_registry_load(
+                &f.registry, paths[slot], &f.plugins[slot]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &f.registry, f.plugins[slot]), CMETA_PLUGIN_OK);
+            check_equal(generation_build(
+                &f, slot, slot, UINT64_C(11) + (uint64_t)slot),
+                SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&f.runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(scxml_compile(
+            &f.program, source, sizeof(source) - 1u, NULL, &diagnostic),
+            SCXML_OK);
+        check_true(cflow_clock_virtual_init(&clock, (cflow_instant){0u}));
+        /* One physical Host delayed row, even though two distinct live
+           Component generations, Sessions and Invoke tokens will coexist. */
+        check_equal(scxml_host_router_init(
+            &router, &(scxml_host_router_config){
+                .endpoint_capacity = 2u, .event_capacity = 1u,
+                .max_text_bytes = 16u, .clock = &clock,
+                .timer_capacity = 1u, .cancel_capacity = 1u
+            }), SALTS_OK);
+        check_true(scxml_host_router_supports_delayed(&router));
+
+        for (size_t slot = 0u; slot < SESSIONS; ++slot) {
+            scxml_session_config config = {0};
+            check_equal(salts_component_plugin_runtime_publish(
+                &f.runtime, &f.generations[slot].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            if (slot == 0u) check_null(previous);
+            else check_true(previous == &f.generations[0].generation);
+            check_equal(scxml_component_scope_acquire(
+                &f.scopes[slot], &f.runtime), SCXML_COMPONENT_OK);
+            check_equal(scxml_component_scope_generation_id(
+                &f.scopes[slot]), UINT64_C(11) + (uint64_t)slot);
+            check_equal(scxml_component_invoke_provider_bind(
+                &f.invoke[slot], &f.scopes[slot], "ScxmlInvokeDsoFixture",
+                SCXML_INVOKE_CAP_START | SCXML_INVOKE_CAP_CANCEL),
+                SCXML_COMPONENT_OK);
+            check_true(cflow_executor_serial_init(&f.executors[slot]));
+            f.executor_live[slot] = true;
+            check_equal(scxml_host_router_reserve(
+                &router, &refs[slot]), SALTS_OK);
+            check_equal(scxml_host_event_io_binding_init_delayed(
+                &bindings[slot], &router, refs[slot]), SALTS_OK);
+            config = (scxml_session_config){
+                .program = &f.program, .executor = &f.executors[slot],
+                .external_event_capacity = 2u,
+                .internal_event_capacity = 2u,
+                .completion_capacity = 2u,
+                .microstep_limit = 24u,
+                .invocation_capacity = 1u,
+                .effect_capacity = 4u,
+                .adapter_internal_event_capacity = 2u,
+                .delayed_send_capacity = 1u,
+                .invoke = scxml_component_invoke_provider_adapter(
+                    &f.invoke[slot]),
+                .invoke_user = scxml_component_invoke_provider_user(
+                    &f.invoke[slot]),
+                .event_io = scxml_host_event_io_binding_delayed_adapter(),
+                .adapter_user = scxml_host_event_io_binding_user(
+                    &bindings[slot])
+            };
+            check_equal(scxml_session_init(&f.sessions[slot], &config),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            check_equal(scxml_host_router_activate(
+                &router, refs[slot], &f.sessions[slot]), SALTS_OK);
+            check_true(cflow_executor_wait_idle(&f.executors[slot]));
+            token[slot] = invoke_token_from_scope(&f.scopes[slot]);
+            check_true(token[slot] > 0);
+            check_true(scxml_host_router_get_stats(&router, &stats));
+            check_equal(stats.pending, (size_t)1u);
+            check_equal(stats.delayed_pending, (size_t)1u);
+            check_equal(stats.invariant_failures, UINT64_C(0));
+            check_equal(cmeta_plugin_registry_unload(
+                &f.registry, f.plugins[slot]), CMETA_PLUGIN_BUSY);
+
+            if (slot == 0u) {
+                /* Closing old Session CANCELS the Host timer and clears
+                   its move-only sendid registry, but does NOT silently
+                   surrender the outer Component Scope/DSO lease. */
+                scxml_session_cancel(&f.sessions[0]);
+                check_true(cflow_executor_wait_idle(&f.executors[0]));
+                check_true(scxml_host_router_get_stats(&router, &stats));
+                check_equal(stats.pending, (size_t)0u);
+                check_equal(stats.delayed_pending, (size_t)0u);
+                check_equal(stats.timer_cancelled, UINT64_C(1));
+                check_true(scxml_host_router_source_is_quiescent(
+                    &router, refs[0]));
+                check_equal(scxml_component_scope_generation_id(
+                    &f.scopes[0]), UINT64_C(11));
+                check_equal(cmeta_plugin_registry_unload(
+                    &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
+            }
+        }
+
+        /* A numeric Host row index and repeated sendid are NOT a
+           cross-generation authorization. The old source has no timer
+           despite a live, same-named timer in the replacement Session. */
+        check_equal(scxml_host_router_prepare_cancel(
+            &router, refs[0], "shared", 6u, &stale), SALTS_ENOENT);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)1u);
+        check_equal(stats.delayed_pending, (size_t)1u);
+        check_equal(stats.cancel_pending, (size_t)0u);
+        check_equal(stats.timer_fired, UINT64_C(0));
+        check_equal(stats.timer_cancelled, UINT64_C(1));
+        check_equal(stats.invariant_failures, UINT64_C(0));
+
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_OK);
+        check_equal(scxml_session_destroy(&f.sessions[0]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_host_event_io_binding_destroy(
+            &bindings[0]), SALTS_OK);
+        check_equal(scxml_component_invoke_provider_destroy(
+            &f.invoke[0]), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(
+            &f.scopes[0]), SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(cmeta_plugin_registry_request_stop(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        {
+            bool quiescent = false;
+            check_equal(cmeta_plugin_registry_poll_quiescent(
+                &f.registry, f.plugins[0], &quiescent), CMETA_PLUGIN_OK);
+            check_true(quiescent);
+        }
+        check_equal(cmeta_plugin_registry_unload(
+            &f.registry, f.plugins[0]), CMETA_PLUGIN_OK);
+        f.plugins[0] = (cmeta_plugin_ref){0};
+
+        /* gN+1's genuine Host timer is unaffected by old Session teardown
+           and continues with the new DSO Invoke borrowed Scope. */
+        check_equal(scxml_component_scope_generation_id(
+            &f.scopes[1]), UINT64_C(12));
+        check_equal(invoke_token_from_scope(&f.scopes[1]), token[1]);
+        check_true(cflow_clock_advance(
+            &clock, cflow_duration_from_ms(5u)));
+        check_equal(scxml_host_router_run_due(
+            &router, 1u, &fired), SALTS_OK);
+        check_equal(fired, (size_t)1u);
+        check_equal(scxml_host_router_drain(
+            &router, 1u, &delivered), CFLOW_MAILBOX_OK);
+        check_equal(delivered, (size_t)1u);
+        check_true(cflow_executor_wait_idle(&f.executors[1]));
+        check_true(scxml_session_get_stats(&f.sessions[1], &machine));
+        check_true(machine.done);
+        check_false(machine.errored);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.delayed_pending, (size_t)0u);
+        check_equal(stats.timer_fired, UINT64_C(1));
+        check_equal(stats.timer_done_failed, UINT64_C(0));
+        check_equal(stats.invariant_failures, UINT64_C(0));
+
+        check_equal(scxml_host_router_detach(&router, refs[1]), SALTS_OK);
+        check_equal(scxml_session_destroy(&f.sessions[1]),
+                    CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(scxml_host_event_io_binding_destroy(
+            &bindings[1]), SALTS_OK);
+        check_equal(scxml_component_invoke_provider_destroy(
+            &f.invoke[1]), SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(
+            &f.scopes[1]), SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &f.runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &f.generations[1].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[1].generation),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(f.runtime.attached_generations, (size_t)0u);
+        check_equal(f.runtime.active_scopes, (size_t)0u);
+        check_equal(scxml_host_router_close(&router), SALTS_OK);
+        check_equal(scxml_host_router_destroy(&router), SALTS_OK);
+        cflow_clock_destroy(&clock);
+    }
+#endif
 }
