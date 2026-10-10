@@ -2,9 +2,12 @@
 
 #include <cflow/clock.h>
 #include <cflow/executor.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
 #include <stdint.h>
+#include <stdatomic.h>
 #include <string.h>
 
 static scxml_session_config timed_session_config(
@@ -25,6 +28,42 @@ static scxml_session_config timed_session_config(
     config.event_io = scxml_host_event_io_binding_delayed_adapter();
     config.adapter_user = scxml_host_event_io_binding_user(binding);
     return config;
+}
+
+/* A cancel effect ticket is move-only, but an old ticket may still be
+ * executing when the Host reuses the sole delayed-event row. The Host
+ * mutex and the row identity (not the sendid or row address alone) decide
+ * whether that ticket may consume the current row. */
+typedef struct delayed_aba_worker {
+    scxml_host_router *router;
+    scxml_host_session_ref source;
+    atomic_int ready;
+    atomic_int fire;
+    int release_status;
+    int prepare_status;
+    size_t cancelled_rows;
+} delayed_aba_worker;
+
+static void reuse_delayed_row_from_other_thread(void *user) {
+    delayed_aba_worker *race = (delayed_aba_worker *)user;
+    cflow_statechart_effect_ticket next = {0};
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+    race->release_status = SALTS_ETIMEDOUT;
+    race->prepare_status = SALTS_EINVAL;
+    atomic_store_explicit(&race->ready, 1, memory_order_release);
+    while (!atomic_load_explicit(&race->fire, memory_order_acquire) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (!atomic_load_explicit(&race->fire, memory_order_acquire))
+        return;
+    race->release_status = scxml_host_router_cancel_source(
+        race->router, race->source, &race->cancelled_rows);
+    if (race->release_status != SALTS_OK) return;
+    race->prepare_status = scxml_host_router_prepare_target(
+        race->router, race->source, NULL, 0u,
+        "new", 3u, "same", 4u, NULL, 5u, &next);
+    if (race->prepare_status == SALTS_OK)
+        next.commit(next.user);
 }
 
 spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
@@ -338,7 +377,7 @@ spec("Bounded CFlow-clock Host delayed send and sendid cancellation") {
         scxml_program_destroy(&program);
     }
 
-    it("cancels unexpired source timers on Session close without firing") {
+()=>test+insertBefore
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
             "version='1.0' initial='waiting'>"
