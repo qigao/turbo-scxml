@@ -182,6 +182,67 @@ failed:
     return failure_stage;
 }
 
+/* Real loopback listener and two initially UNCONNECTED nonblocking clients.
+ * Connect progress is performed only by the single NativeIO backend. */
+static int native_race_open_connect_fixture(
+    native_race_socket *listener, native_race_socket clients[2],
+    struct sockaddr_in *remote) {
+    native_race_socket server = NATIVE_RACE_INVALID_SOCKET;
+    int error = -1;
+#if defined(_WIN32)
+    WSADATA wsa = {0};
+    int address_length = (int)sizeof(*remote);
+    u_long nonblocking = 1u;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+    server = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u,
+                        WSA_FLAG_OVERLAPPED);
+#else
+    socklen_t address_length = (socklen_t)sizeof(*remote);
+    server = socket(AF_INET, SOCK_STREAM, 0);
+#endif
+    *listener = NATIVE_RACE_INVALID_SOCKET;
+    clients[0] = NATIVE_RACE_INVALID_SOCKET;
+    clients[1] = NATIVE_RACE_INVALID_SOCKET;
+    if (server == NATIVE_RACE_INVALID_SOCKET) goto failed;
+    memset(remote, 0, sizeof(*remote));
+    remote->sin_family = AF_INET;
+    {
+        const unsigned char loopback[4] = {127u, 0u, 0u, 1u};
+        memcpy(&remote->sin_addr, loopback, sizeof(loopback));
+    }
+    remote->sin_port = 0;
+    if (bind(server, (const struct sockaddr *)remote, address_length) != 0 ||
+        getsockname(server, (struct sockaddr *)remote, &address_length) != 0 ||
+        listen(server, 4) != 0) goto failed;
+    for (size_t i = 0u; i < 2u; ++i) {
+#if defined(_WIN32)
+        clients[i] = WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, NULL, 0u,
+                                WSA_FLAG_OVERLAPPED);
+        if (clients[i] == INVALID_SOCKET ||
+            ioctlsocket(clients[i], FIONBIO, &nonblocking) != 0) goto failed;
+#else
+        int flags;
+        clients[i] = socket(AF_INET, SOCK_STREAM, 0);
+        if (clients[i] < 0) goto failed;
+        flags = fcntl(clients[i], F_GETFL, 0);
+        if (flags < 0 ||
+            fcntl(clients[i], F_SETFL, flags | O_NONBLOCK) != 0) goto failed;
+#endif
+    }
+    *listener = server;
+    return 0;
+failed:
+    if (server != NATIVE_RACE_INVALID_SOCKET)
+        (void)native_race_close_socket(server);
+    for (size_t i = 0u; i < 2u; ++i)
+        if (clients[i] != NATIVE_RACE_INVALID_SOCKET)
+            (void)native_race_close_socket(clients[i]);
+#if defined(_WIN32)
+    (void)WSACleanup();
+#endif
+    return error;
+}
+
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
  * borrows it, and all observation, routing and admission use the same owner.
  * No second request registry or completion engine is introduced. */
@@ -243,6 +304,15 @@ typedef struct native_send_act_context {
 } native_send_act_context;
 
 NATIVE_IO_ACE_TOKEN_TYPE(scxml_native_send_act, native_send_act_context);
+
+/* STREAM_CONNECT borrows an immutable sockaddr through authoritative observe.
+ * It is independently typed, without a second ACT or completion runtime. */
+typedef struct native_connect_act_context {
+    const struct sockaddr_in *address;
+    size_t settled;
+} native_connect_act_context;
+
+NATIVE_IO_ACE_TOKEN_TYPE(scxml_native_connect_act, native_connect_act_context);
 
 static bool same_request(native_io_request a, native_io_request b) {
     return a.slot == b.slot && a.generation == b.generation;
@@ -828,6 +898,152 @@ spec("CNet external NativeIO slot/generation and stale terminal ownership") {
             &io, endpoint), SALTS_OK);
         check_equal(native_io_backend_close(&io), SALTS_OK);
         check_equal(native_io_backend_destroy(&io), SALTS_OK);
+#if defined(_WIN32)
+        check_equal(WSACleanup(), 0);
+#endif
+    }
+    it("settles real STREAM_CONNECT only at terminal and fences reused request/address") {
+        const native_io_backend_config config = {
+            .kind = test_backend(), .endpoint_capacity = 1u,
+            .request_capacity = 1u, .completion_batch_capacity = 1u
+        };
+        native_io_backend io = {0};
+        native_io_endpoint old_endpoint = {0}, next_endpoint = {0};
+        native_io_operation operation = {0};
+        native_io_request old_request = {0}, next_request = {0};
+        native_io_completion old_terminal = {0}, next_terminal = {0};
+        native_io_backend_stats stats = {0};
+        native_connect_act_context old_ctx = {0}, next_ctx = {0};
+        native_connect_act_context *settled = NULL;
+        scxml_native_connect_act old_act = {0}, next_act = {0};
+        native_race_socket listener = NATIVE_RACE_INVALID_SOCKET;
+        native_race_socket clients[2] = {
+            NATIVE_RACE_INVALID_SOCKET, NATIVE_RACE_INVALID_SOCKET
+        };
+        struct sockaddr_in destination = {0}, old_address = {0},
+                           next_address = {0};
+        size_t count = 0u;
+        int cancel_status;
+
+        check_equal(native_race_open_connect_fixture(
+            &listener, clients, &destination), 0);
+        check_true(destination.sin_port != 0);
+        check_equal(native_io_backend_init(&io, &config), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)clients[0], &old_endpoint), SALTS_OK);
+        old_address = destination;
+        operation = (native_io_operation){
+            .kind = NATIVE_IO_OPERATION_STREAM_CONNECT,
+            .endpoint = old_endpoint, .user_data = (uintptr_t)401u,
+            .address = &old_address,
+            .address_capacity = sizeof(old_address),
+            .address_length = sizeof(old_address)
+        };
+        check_true(native_io_operation_valid(&operation));
+        check_equal(native_io_backend_submit(
+            &io, &operation, &old_request), SALTS_OK);
+        old_ctx.address = &old_address;
+        check_equal(scxml_native_connect_act_bind(
+            &old_act, old_request, old_endpoint,
+            (uintptr_t)401u, &old_ctx), SALTS_OK);
+        /* Cancel may lose to the already completing real kernel connect.
+           Neither cancellation acknowledgement nor loopback connection
+           readiness is permission to free the borrowed sockaddr. */
+        cancel_status = native_io_backend_cancel(&io, old_request);
+        check_true(cancel_status == SALTS_OK ||
+                   cancel_status == SALTS_EALREADY);
+        check_true(old_act.active);
+        check_equal(old_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_release_socket(
+            &io, old_endpoint), SALTS_EBUSY);
+        check_equal(native_io_backend_observe(
+            &io, &old_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(old_terminal.request, old_request));
+        check_equal(old_terminal.user_data, (uintptr_t)401u);
+        check_true(old_terminal.kind == NATIVE_IO_COMPLETION_OK ||
+                   old_terminal.kind == NATIVE_IO_COMPLETION_CANCELLED);
+        check_equal(old_terminal.bytes, (size_t)0u);
+        check_equal(scxml_native_connect_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_OK);
+        check_true(settled == &old_ctx);
+        check_true(settled->address == &old_address);
+        ++settled->settled;
+        check_equal(scxml_native_connect_act_settle(
+            &old_act, &old_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(old_ctx.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, old_request), SALTS_ENOENT);
+
+        /* Only an observed terminal frees both the request and endpoint.
+           Releasing this endpoint does NOT terminate the independent
+           listener, nor does it authorize a recycled request identity. */
+        check_equal(native_race_close_socket(clients[0]), 0);
+        clients[0] = NATIVE_RACE_INVALID_SOCKET;
+        check_equal(native_io_backend_release_socket(
+            &io, old_endpoint), SALTS_OK);
+        check_equal(native_io_backend_attach_socket(
+            &io, (uintptr_t)clients[1], &next_endpoint), SALTS_OK);
+        check_equal(next_endpoint.slot, old_endpoint.slot);
+        check_not_equal(next_endpoint.generation, old_endpoint.generation);
+        next_address = destination;
+        operation.endpoint = next_endpoint;
+        operation.address = &next_address;
+        operation.user_data = (uintptr_t)402u;
+        check_equal(native_io_backend_submit(
+            &io, &operation, &next_request), SALTS_OK);
+        check_equal(next_request.slot, old_request.slot);
+        check_not_equal(next_request.generation, old_request.generation);
+        next_ctx.address = &next_address;
+        check_equal(scxml_native_connect_act_bind(
+            &next_act, next_request, next_endpoint,
+            (uintptr_t)402u, &next_ctx), SALTS_OK);
+        check_equal(scxml_native_connect_act_settle(
+            &next_act, &old_terminal, &settled), SALTS_ENOENT);
+        check_null(settled);
+        check_true(next_act.active);
+        check_equal(next_ctx.settled, (size_t)0u);
+        check_equal(native_io_backend_cancel(
+            &io, old_request), SALTS_ENOENT);
+        check_equal(native_io_backend_release_socket(
+            &io, next_endpoint), SALTS_EBUSY);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)1u);
+
+        /* A genuine new connection, not a synthetic completion, settles the
+           replacement. Keep its sockaddr alive until observe returns. */
+        count = 0u;
+        check_equal(native_io_backend_observe(
+            &io, &next_terminal, 1u, REQUEST_TEST_TIMEOUT_MS, &count),
+            SALTS_OK);
+        check_equal(count, (size_t)1u);
+        check_true(same_request(next_terminal.request, next_request));
+        check_equal(next_terminal.user_data, (uintptr_t)402u);
+        check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
+        check_equal(next_terminal.bytes, (size_t)0u);
+        check_equal(scxml_native_connect_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_OK);
+        check_true(settled == &next_ctx);
+        check_true(settled->address == &next_address);
+        ++settled->settled;
+        check_equal(scxml_native_connect_act_settle(
+            &next_act, &next_terminal, &settled), SALTS_EALREADY);
+        check_null(settled);
+        check_equal(next_ctx.settled, (size_t)1u);
+        check_equal(native_io_backend_cancel(
+            &io, next_request), SALTS_ENOENT);
+        check_true(native_io_backend_get_stats(&io, &stats));
+        check_equal(stats.active_requests, (size_t)0u);
+
+        check_equal(native_race_close_socket(clients[1]), 0);
+        clients[1] = NATIVE_RACE_INVALID_SOCKET;
+        check_equal(native_io_backend_release_socket(
+            &io, next_endpoint), SALTS_OK);
+        check_equal(native_io_backend_close(&io), SALTS_OK);
+        check_equal(native_io_backend_destroy(&io), SALTS_OK);
+        check_equal(native_race_close_socket(listener), 0);
 #if defined(_WIN32)
         check_equal(WSACleanup(), 0);
 #endif
