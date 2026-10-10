@@ -161,13 +161,15 @@ static salts_component_plugin_status voice_generation_build(
 /* This is one borrowed canonical CMeta ObjectRef/Interface projection. The
  * outer Component Scope remains live until the DialogManager is destroyed. */
 static bool voice_resource_bind(
-    voice_resource_borrow *borrow, scxml_component_scope *scope) {
+    voice_resource_borrow *borrow, scxml_component_scope *scope,
+    const char *component_id) {
     salts_component_service service = {0};
     cmeta_status projection;
-    if (borrow == NULL || scope == NULL || !scope->live) return false;
+    if (borrow == NULL || scope == NULL || !scope->live ||
+        component_id == NULL || component_id[0] == '\0') return false;
     memset(borrow, 0, sizeof(*borrow));
     if (salts_component_plugin_scope_find_service_from(
-            &scope->component_scope, VOICE_STATIC_COMPONENT,
+            &scope->component_scope, component_id,
             scxml_text_resource_provider_interface(), &service) !=
         SALTS_COMPONENT_PLUGIN_OK)
         return false;
@@ -304,7 +306,40 @@ static void voice_manager_close_destroy(
                 VXML_DIALOG_MANAGER_OK);
 }
 
-spec("VoiceXML/CCXML static Component resource generation") {
+/* The identical resource Interface is also published by an independently
+ * loaded Plugin DSO; only the Salts Plugin runtime owns module unload. */
+#define VOICE_DSO_COMPONENT "VoiceComponentDsoFixture"
+
+static salts_component_plugin_status voice_dso_generation_build(
+    voice_generation *g, cmeta_plugin_registry *registry,
+    cmeta_plugin_ref plugin, uint64_t generation_id) {
+    const salts_component_plugin_generation_storage storage = {
+        g->deployments, 1u, g->instances, 1u, g->dependencies, 1u,
+        g->activation_order, 1u, g->modules, 1u
+    };
+    const salts_component_plugin_source source = {
+        plugin, "component-provider", NULL, NULL
+    };
+    memset(g, 0, sizeof(*g));
+    return salts_component_plugin_generation_build(
+        &g->generation, generation_id, registry, &storage,
+        NULL, 0u, &source, 1u, NULL, 0u);
+}
+
+static int voice_dso_marker(const scxml_component_scope *scope) {
+    salts_component_service service = {0};
+    if (scope == NULL || !scope->live ||
+        salts_component_plugin_scope_find_service_from(
+            &scope->component_scope, VOICE_DSO_COMPONENT,
+            scxml_text_resource_provider_interface(), &service) !=
+            SALTS_COMPONENT_PLUGIN_OK ||
+        service.object == NULL ||
+        !cmeta_data_desc_equal(service.object->data, &cmeta_data_int))
+        return -1;
+    return *(const int *)service.object->object;
+}
+
+spec("VoiceXML/CCXML Component resource generation") {
     it("pins the prepared dialog to gN while gN+1 starts independently") {
         static const char source_old[] = "mem:voice-gN";
         static const char source_next[] = "mem:voice-gN1";
@@ -359,7 +394,8 @@ spec("VoiceXML/CCXML static Component resource generation") {
         check_null(previous);
         check_equal(scxml_component_scope_acquire(
             &scopes[0], &runtime), SCXML_COMPONENT_OK);
-        check_true(voice_resource_bind(&documents[0], &scopes[0]));
+        check_true(voice_resource_bind(&documents[0], &scopes[0],
+            VOICE_STATIC_COMPONENT));
         check_equal(documents[0].generation_id, UINT64_C(11));
         check_equal(voice_manager_init(
             &managers[0], &documents[0], &upstream[0], &events[0]),
@@ -399,7 +435,8 @@ spec("VoiceXML/CCXML static Component resource generation") {
             SALTS_COMPONENT_PLUGIN_BUSY);
         check_equal(scxml_component_scope_acquire(
             &scopes[1], &runtime), SCXML_COMPONENT_OK);
-        check_true(voice_resource_bind(&documents[1], &scopes[1]));
+        check_true(voice_resource_bind(&documents[1], &scopes[1],
+            VOICE_STATIC_COMPONENT));
         check_equal(documents[1].generation_id, UINT64_C(12));
         check_equal(voice_manager_init(
             &managers[1], &documents[1], &upstream[1], &events[1]),
@@ -467,5 +504,113 @@ spec("VoiceXML/CCXML static Component resource generation") {
         check_equal(runtime.active_scopes, (size_t)0u);
         check_equal(salts_component_plugin_runtime_destroy(
             &runtime), SALTS_COMPONENT_PLUGIN_OK);
+    }
+
+    it("executes DSO resource callbacks through old CCXML prepare/terminate after new generation publishes") {
+        static const char uri[] = "mem:voice-dso";
+        static const char media[] = "application/voicexml+xml";
+        static const char call[] = "call-new-dso";
+        const char *paths[] = {VOICE_RESOURCE_DSO_ONE, VOICE_RESOURCE_DSO_TWO};
+        const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+        cmeta_plugin_registry registry = {0};
+        cmeta_plugin_ref plugins[2] = {{0}, {0}};
+        voice_generation generations[2] = {{0}, {0}};
+        salts_component_plugin_runtime runtime = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_component_scope scopes[2] = {{0}, {0}};
+        voice_resource_borrow documents[2] = {{0}, {0}};
+        vxml_dialog_manager managers[2] = {{0}, {0}};
+        voice_telephony upstream[2] = {{0}, {0}};
+        voice_events events[2] = {{0}, {0}};
+        const ccxml_telephony_adapter_v1 *adapter =
+            vxml_dialog_manager_ccxml_adapter();
+        const ccxml_dialog_prepare_request prepare = {
+            .source = uri, .source_size = sizeof(uri) - 1u,
+            .media_type = media, .media_type_size = sizeof(media) - 1u
+        };
+        const ccxml_dialog_start_request new_start = {
+            .source = uri, .source_size = sizeof(uri) - 1u,
+            .media_type = media, .media_type_size = sizeof(media) - 1u,
+            .connection_id = call, .connection_id_size = sizeof(call) - 1u
+        };
+        ccxml_dialog_terminate_request terminate = {0};
+        ccxml_string_view old_dialog = {0};
+        ccxml_string_view new_dialog = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        size_t progressed = 0u;
+        bool quiescent = false;
+        size_t i;
+
+        check_equal(cmeta_plugin_registry_init(
+            &registry, &registry_conf), CMETA_PLUGIN_OK);
+        for (i = 0u; i < 2u; ++i) {
+            check_equal(cmeta_plugin_registry_load(
+                &registry, paths[i], &plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(cmeta_plugin_registry_start(
+                &registry, plugins[i]), CMETA_PLUGIN_OK);
+            check_equal(voice_dso_generation_build(
+                &generations[i], &registry, plugins[i],
+                UINT64_C(21) + (uint64_t)i),
+                SALTS_COMPONENT_PLUGIN_OK);
+        }
+        check_equal(salts_component_plugin_runtime_init(&runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generations[0].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &scopes[0], &runtime), SCXML_COMPONENT_OK);
+        check_true(voice_resource_bind(
+            &documents[0], &scopes[0], VOICE_DSO_COMPONENT));
+        check_equal(voice_dso_marker(&scopes[0]), 100);
+        check_equal(voice_manager_init(
+            &managers[0], &documents[0], &upstream[0], &events[0]),
+            VXML_DIALOG_MANAGER_OK);
+
+        /* Old dialog ticket commits before gN+1 publication, but the
+           actual DSO open/close callbacks execute AFTER publication. */
+        check_equal(adapter->prepare_dialog_prepare(
+            vxml_dialog_manager_ccxml_user(&managers[0]),
+            &prepare, &old_dialog, &ticket, &error),
+            SCXML_ADAPTER_ACCEPTED);
+        check_not_null(ticket.commit);
+        check_equal(voice_dso_marker(&scopes[0]), 100);
+        ticket.commit(ticket.user);
+
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generations[1].generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generations[0].generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
+        check_equal(cmeta_plugin_registry_unload(
+            &registry, plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(scxml_component_scope_acquire(
+            &scopes[1], &runtime), SCXML_COMPONENT_OK);
+        check_true(voice_resource_bind(
+            &documents[1], &scopes[1], VOICE_DSO_COMPONENT));
+        check_equal(scxml_component_scope_generation_id(
+            &scopes[1]), UINT64_C(22));
+        check_equal(voice_dso_marker(&scopes[1]), 200);
+        check_equal(voice_manager_init(
+            &managers[1], &documents[1], &upstream[1], &events[1]),
+            VXML_DIALOG_MANAGER_OK);
+
+        check_equal(vxml_dialog_manager_run_ready(
+            &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+        check_equal(progressed, (size_t)1u);
+        check_equal(events[0].count, (size_t)1u);
+        check_equal(events[0].names[0], "dialog.prepared");
+        check_equal(voice_dso_marker(&scopes[0]), 111);
+        check_equal(voice_dso_marker(&scopes[1]), 200);
+        check_false(documents[0].active);
+        check_equal(scxml_component_scope_release(&scopes[0]),
+                    SCXML_COMPONENT_OK);
+        /* The Component Scope itself is the module lease; without any
+           Session borrow registered in the wrapper, this release must
+           be placed AFTER the actual DialogManager is destroyed. */
     }
 }
