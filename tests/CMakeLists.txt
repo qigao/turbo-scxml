@@ -252,8 +252,14 @@ if(TURBOSCXML_ENABLE_COMPONENT)
   set(_scxml_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
   set(_scxml_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
   set(_scxml_saved_try_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
-  set(CMAKE_REQUIRED_LIBRARIES TurboSCXML::Component)
-  set(CMAKE_REQUIRED_INCLUDES "${PROJECT_SOURCE_DIR}/include")
+  # try_compile runs in an isolated project: project-local ALIAS targets
+  # are not visible there. Compile from the exact installed SDK headers,
+  # without linking any placeholder library or bypassing an ABI check.
+  set(CMAKE_REQUIRED_LIBRARIES "")
+  set(CMAKE_REQUIRED_INCLUDES
+    "${PROJECT_SOURCE_DIR}/include"
+    "${SALTS_ROOT_PATH}/include"
+    "${SALTS_UTILS_ROOT_PATH}/include")
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
   set(_scxml_intercept_good [=[
 #include <scxml/component.h>
