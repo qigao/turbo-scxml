@@ -422,6 +422,11 @@ int main(void) { return 0; }
     scxml_component_test
     scxml_component_test.c
     LIBS TurboSCXML::Component)
+  turboscxml_add_test(
+    voicexml_component_dialog_test
+    voicexml_component_dialog_test.c
+    LIBS TurboSCXML::Component TurboSCXML::VoiceXMLDialogManager)
+  set_tests_properties(voicexml_component_dialog_test PROPERTIES TIMEOUT 60)
 endif()
 
 if(TURBOSCXML_ENABLE_HOST)
