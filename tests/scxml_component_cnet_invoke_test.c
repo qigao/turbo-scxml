@@ -182,6 +182,40 @@ static int scxml_act_close_socket(scxml_act_socket value) {
 #endif
 }
 
+typedef struct scxml_invoke_native_peer_race {
+    scxml_test_cnet_callback_gate *cancel_gate;
+    scxml_act_socket peer;
+    unsigned char byte;
+    atomic_int ready;
+    atomic_int fire;
+    atomic_int written;
+} scxml_invoke_native_peer_race;
+
+/* NativeIO is still advanced/cancelled ONLY on its existing owner. This
+ * independent thread performs one real socket write while the CFlow worker
+ * executes the DSO's actual prepare_cancel callback. */
+static void write_during_dso_native_cancel(void *user) {
+    scxml_invoke_native_peer_race *race =
+        (scxml_invoke_native_peer_race *)user;
+    const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(10000);
+    atomic_store_explicit(&race->ready, 1, memory_order_release);
+    while ((!atomic_load_explicit(&race->cancel_gate->entered,
+                                  memory_order_acquire) ||
+            !atomic_load_explicit(&race->fire, memory_order_acquire)) &&
+           cmeta_monotonic_ms() < deadline) {
+    }
+    if (!atomic_load_explicit(&race->cancel_gate->entered,
+                              memory_order_acquire) ||
+        !atomic_load_explicit(&race->fire, memory_order_acquire)) {
+        atomic_store_explicit(&race->written, -1, memory_order_release);
+        return;
+    }
+    atomic_store_explicit(
+        &race->written,
+        send(race->peer, (const char *)&race->byte, 1, 0) == 1 ? 1 : -1,
+        memory_order_release);
+}
+
 static native_io_backend_kind backend(void) {
 #if defined(_WIN32)
     return NATIVE_IO_BACKEND_IOCP;
@@ -1742,12 +1776,17 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         scxml_invoke_native_context old_ctx = {0}, next_ctx = {0};
         scxml_invoke_native_context *settled = NULL;
         scxml_invoke_native_act old_act = {0}, next_act = {0};
+        scxml_test_cnet_probe old_cancel_probe = {0};
+        scxml_test_cnet_callback_gate cancel_gate = {0};
+        scxml_invoke_native_peer_race peer_race = {0};
+        cmeta_thread_t peer_thread = NULL;
         salts_component_plugin_generation *previous = NULL;
         scxml_diagnostic diagnostic = {0};
         unsigned char old_byte = 0u, next_byte = 0u;
         const unsigned char payload = 'N';
         size_t count = 0u;
         int old_token, next_token, cancel_status;
+        uint64_t deadline;
 
         check_equal(cmeta_plugin_registry_init(&f.registry, &registry_conf),
                     CMETA_PLUGIN_OK);
@@ -1856,27 +1895,73 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(cmeta_plugin_registry_unload(
             &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
 
-        /* An SCXML cancellation settles its Statechart effect journal, NOT
-           the accepted kernel request or the typed NativeIO ACT. */
+        /* Three genuine lanes: the CFlow worker pauses *inside* the old
+           DSO prepare_cancel; a peer thread writes a kernel byte; the
+           original NativeIO owner arbitrates cancel/completion. Both
+           possible terminals (OK/CANCELLED) must settle this ACT ONCE.
+           An acknowledged cancellation is never itself the terminal. */
+        callback_gate_init(&cancel_gate);
+        check_true(dso_native_observer_from_scope(
+            &f.scopes[0], &old_cancel_probe));
+        check_true(scxml_test_cnet_probe_arm_cancel_gate(
+            &old_cancel_probe, &cancel_gate));
+        atomic_init(&peer_race.ready, 0);
+        atomic_init(&peer_race.fire, 0);
+        atomic_init(&peer_race.written, 0);
+        peer_race.cancel_gate = &cancel_gate;
+        peer_race.peer = sockets[1];
+        peer_race.byte = 'R';
+        check_equal(cmeta_thread_create(
+            &peer_thread, write_during_dso_native_cancel, &peer_race),
+            SALTS_OK);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!atomic_load_explicit(
+                   &peer_race.ready, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+        }
+        check_equal(atomic_load_explicit(
+            &peer_race.ready, memory_order_acquire), 1);
         check_equal(scxml_session_try_send_named_with_metadata(
             &f.sessions[0], "finish", 6u, &finish_metadata),
             CFLOW_MAILBOX_OK);
-        check_true(cflow_executor_wait_idle(&f.executors[0]));
-        check_equal(invoke_token_from_scope(&f.scopes[0]), -old_token);
+        deadline = cmeta_monotonic_ms() + TIMEOUT_MS;
+        while (!atomic_load_explicit(
+                   &cancel_gate.entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+        }
+        check_equal(atomic_load_explicit(
+            &cancel_gate.entered, memory_order_acquire), 1);
         check_true(old_act.active);
         check_equal(old_ctx.settlements, (size_t)0u);
         check_equal(native_io_backend_release_socket(
             &native, endpoint), SALTS_EBUSY);
+
+        atomic_store_explicit(&peer_race.fire, 1, memory_order_release);
         cancel_status = native_io_backend_cancel(&native, old_request);
         check_true(cancel_status == SALTS_OK ||
                    cancel_status == SALTS_EALREADY);
+        check_equal(cmeta_thread_join(&peer_thread), SALTS_OK);
+        cmeta_thread_destroy(&peer_thread);
+        check_equal(atomic_load_explicit(
+            &peer_race.written, memory_order_acquire), 1);
         check_true(old_act.active);
         check_equal(native_io_backend_observe(
             &native, &old_terminal, 1u, TIMEOUT_MS, &count), SALTS_OK);
         check_equal(count, (size_t)1u);
         check_equal(old_terminal.request.slot, old_request.slot);
         check_equal(old_terminal.request.generation, old_request.generation);
-        check_equal(old_terminal.kind, NATIVE_IO_COMPLETION_CANCELLED);
+        check_true(old_terminal.kind == NATIVE_IO_COMPLETION_OK ||
+                   old_terminal.kind == NATIVE_IO_COMPLETION_CANCELLED);
+        if (old_terminal.kind == NATIVE_IO_COMPLETION_OK) {
+            check_equal(old_terminal.bytes, (size_t)1u);
+            check_equal(old_byte, (unsigned char)'R');
+        } else {
+            check_equal(old_terminal.bytes, (size_t)0u);
+        }
+        /* The actual NativeIO terminal settles while DSO prepare_cancel
+           is STILL executing on its own CFlow worker. */
+        check_equal(atomic_load_explicit(
+            &cancel_gate.release, memory_order_acquire), 0);
         check_equal(scxml_invoke_native_act_settle(
             &old_act, &old_terminal, &settled), SALTS_OK);
         check_true(settled == &old_ctx);
@@ -1888,6 +1973,12 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &old_act, &old_terminal, &settled), SALTS_EALREADY);
         check_null(settled);
         check_equal(old_ctx.settlements, (size_t)1u);
+        atomic_store_explicit(
+            &cancel_gate.release, 1, memory_order_release);
+        check_true(cflow_executor_wait_idle(&f.executors[0]));
+        check_equal(atomic_load_explicit(
+            &cancel_gate.timed_out, memory_order_acquire), 0);
+        check_equal(invoke_token_from_scope(&f.scopes[0]), -old_token);
         check_equal(scxml_session_report_invoke_done(
             &f.sessions[0], (uint64_t)old_token),
             CFLOW_MAILBOX_INVALID_ARGUMENT);
@@ -1941,7 +2032,11 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(invoke_token_from_scope(&f.scopes[1]), next_token);
         check_true(next_act.active);
 
-        check_equal(send(sockets[1], (const char *)&payload, 1, 0), 1);
+        /* If the cancelled old receive never consumed the peer's 'R',
+           it remains the next valid stream byte; otherwise supply 'N'.
+           Never fabricate a second native completion or retry the ACT. */
+        if (old_terminal.kind == NATIVE_IO_COMPLETION_OK)
+            check_equal(send(sockets[1], (const char *)&payload, 1, 0), 1);
         count = 0u;
         check_equal(native_io_backend_observe(
             &native, &next_terminal, 1u, TIMEOUT_MS, &count), SALTS_OK);
@@ -1950,7 +2045,9 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(next_terminal.request.generation, next_request.generation);
         check_equal(next_terminal.kind, NATIVE_IO_COMPLETION_OK);
         check_equal(next_terminal.bytes, (size_t)1u);
-        check_equal(next_byte, payload);
+        check_equal(next_byte, (unsigned char)(
+            old_terminal.kind == NATIVE_IO_COMPLETION_CANCELLED
+                ? 'R' : payload));
         check_equal(scxml_invoke_native_act_settle(
             &next_act, &next_terminal, &settled), SALTS_OK);
         check_true(settled == &next_ctx);
