@@ -252,7 +252,7 @@ jobs:
       # Separate runtime/build from ASan+UBSan: TSan cannot share a process
       # with ASan. This instruments the local CNet/Host adapters and test DSOs;
       # imported prerelease Salts SDK libraries are not rebuilt with TSan.
-      - name: Run Linux concurrent Component and CNet TSan gate
+      - name: Run Linux concurrent Component, Host and CNet TSan gate
         shell: bash
         env:
           TSAN_OPTIONS: "halt_on_error=1:exitcode=66"
@@ -270,7 +270,7 @@ jobs:
             -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=thread"
           cmake --build build/component-tsan --parallel 2
           ctest --test-dir build/component-tsan \
-            -R '^(scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
+            -R '^(scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
             --repeat until-fail:50 \
             --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/tsan-results.xml"
@@ -575,7 +575,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows Component build failed" }
           $env:PATH = "$env:SALTS_ROOT/bin;$env:SALTS_UTILS_ROOT/bin;$env:GITHUB_WORKSPACE/vcpkg_installed/x64-windows/bin;$env:PATH"
           New-Item -ItemType Directory -Force -Path build/component-multirid-results | Out-Null
-          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --repeat until-fail:50 --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --repeat until-fail:50 --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
           if ($LASTEXITCODE -ne 0) { throw "Windows IOCP/DSO runtime tests failed" }
           # Single W3C corpus pass, separate from 50x native race stress.
           ctest --test-dir build/component-multirid -C Release -R '^scxml_w3c_conformance_test$' --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/w3c.xml"
@@ -627,7 +627,7 @@ jobs:
           cmake --build build/component-multirid --parallel 2
           export DYLD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
           mkdir -p build/component-multirid-results
-          ctest --test-dir build/component-multirid -R '^(scxml_component_dso_test|scxml_component_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          ctest --test-dir build/component-multirid -R '^(scxml_component_dso_test|scxml_component_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
           # Qualify W3C 422/423 under AppleClang/Kqueue host profile.
           ctest --test-dir build/component-multirid -R '^scxml_w3c_conformance_test$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/w3c.xml"
           cmake --install build/component-multirid
