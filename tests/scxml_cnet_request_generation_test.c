@@ -12,6 +12,8 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -108,6 +110,7 @@ static int native_race_open_udp_pair(native_race_socket sockets[2]) {
     struct sockaddr_in address = {0};
     native_race_socket tx = NATIVE_RACE_INVALID_SOCKET;
     native_race_socket rx = NATIVE_RACE_INVALID_SOCKET;
+    int failure_stage = -1;
 #if defined(_WIN32)
     WSADATA wsa = {0};
     int address_length = (int)sizeof(address);
@@ -128,11 +131,16 @@ static int native_race_open_udp_pair(native_race_socket sockets[2]) {
     address.sin_family = AF_INET;
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
-    if (bind(rx, (const struct sockaddr *)&address,
-             address_length) != 0 ||
-        getsockname(rx, (struct sockaddr *)&address, &address_length) != 0 ||
-        connect(tx, (const struct sockaddr *)&address,
-                address_length) != 0) goto failed;
+    failure_stage = -2; /* bind local UDP receiver */
+    if (bind(rx, (const struct sockaddr *)&address, address_length) != 0)
+        goto failed;
+    failure_stage = -3; /* query bound ephemeral port */
+    if (getsockname(rx, (struct sockaddr *)&address, &address_length) != 0)
+        goto failed;
+    failure_stage = -4; /* connect UDP sender to actual bound peer */
+    if (connect(tx, (const struct sockaddr *)&address, address_length) != 0)
+        goto failed;
+    failure_stage = -5; /* make both native sockets nonblocking */
 #if defined(_WIN32)
     if (ioctlsocket(tx, FIONBIO, &nonblocking) != 0 ||
         ioctlsocket(rx, FIONBIO, &nonblocking) != 0) goto failed;
@@ -148,6 +156,15 @@ static int native_race_open_udp_pair(native_race_socket sockets[2]) {
     sockets[1] = rx;
     return 0;
 failed:
+    /* Print only sanitized fixture syscall evidence, never socket content.
+       The test's failure-stage code stays stable across OS backends. */
+#if defined(_WIN32)
+    fprintf(stderr, "UDP fixture stage=%d wsa_error=%d\n",
+            failure_stage, WSAGetLastError());
+#else
+    fprintf(stderr, "UDP fixture stage=%d errno=%d\n",
+            failure_stage, errno);
+#endif
     if (tx != NATIVE_RACE_INVALID_SOCKET)
         (void)native_race_close_socket(tx);
     if (rx != NATIVE_RACE_INVALID_SOCKET)
@@ -157,7 +174,7 @@ failed:
 #endif
     sockets[0] = NATIVE_RACE_INVALID_SOCKET;
     sockets[1] = NATIVE_RACE_INVALID_SOCKET;
-    return -1;
+    return failure_stage;
 }
 
 /* Test-only external-progress host. It owns ONE NativeIO backend. CNet
