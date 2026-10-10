@@ -688,8 +688,14 @@ typedef struct scxml_cancel_request {
  * nonblocking and infallible. Non-ACCEPTED results transfer no ticket.
  *
  * `close` is nonblocking and called exactly once after adapter attachment,
- * including initialization failures. Once `is_quiescent` returns true after
- * close, no adapter-owned callback may reach the borrowed session or user.
+ * including initialization failures. A caller may request asynchronous
+ * Session cancellation while prepare callbacks are still executing on its
+ * SerialExecutor; `close` may then run concurrently on the caller's lane.
+ * An adapter MUST synchronize shared close/admission state with those callbacks
+ * and retain its borrowed provider/DSO storage until all accepted work drains.
+ * In-flight effect tickets still settle once; closing never fabricates their
+ * completion. Once `is_quiescent` returns true after close, no adapter-owned
+ * callback may reach the borrowed session or user.
  *
  * A host that implements the SCXML Event I/O Processor owns its session
  * registry, target-access policy, transport/codec boundary, and bounded

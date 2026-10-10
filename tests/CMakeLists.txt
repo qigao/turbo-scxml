@@ -244,6 +244,138 @@ turboscxml_add_test(
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 if(TURBOSCXML_ENABLE_COMPONENT)
+  # Runtime FunctionAbi validation complements, not replaces, C11/C++17
+  # native function-pointer constness checks. Only compile static libraries:
+  # installed SDK linking is separately exercised by the normal CTests.
+  include(CheckCSourceCompiles)
+  include(CheckCXXSourceCompiles)
+  set(_scxml_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+  set(_scxml_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+  set(_scxml_saved_required_flags "${CMAKE_REQUIRED_FLAGS}")
+  # Main target_compile_features(c_std_11) is not inherited by isolated
+  # check_*_source_compiles projects. MSVC defaults to its pre-C11 C dialect
+  # without an explicit flag, so this compiler-only proof must select the
+  # exact production C11 and C++17 language modes itself. No ABI fallback.
+  if(MSVC)
+    set(CMAKE_REQUIRED_FLAGS
+      "${_scxml_saved_required_flags} /std:c11 /experimental:c11atomics")
+  endif()
+  set(_scxml_saved_try_type "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+  # try_compile runs in an isolated project: project-local ALIAS targets
+  # are not visible there. Compile from the exact installed SDK headers,
+  # without linking any placeholder library or bypassing an ABI check.
+  set(CMAKE_REQUIRED_LIBRARIES "")
+  set(CMAKE_REQUIRED_INCLUDES
+    "${PROJECT_SOURCE_DIR}/include"
+    "${SALTS_ROOT_PATH}/include"
+    "${SALTS_UTILS_ROOT_PATH}/include")
+  # The public SCXML umbrella includes generated DataBind/XML Parser headers
+  # with target-specific, installed subdirectory include roots. An isolated
+  # try_compile does NOT inherit main-graph target include paths, so construct
+  # its compile-only include set from each actual imported SDK target.
+  foreach(_sdk_target IN ITEMS
+      Salts::CMeta Salts::CFlow Salts::CSerde
+      Salts::DataBind Salts::XmlParser Salts::Core)
+    get_target_property(_sdk_public_includes
+      ${_sdk_target} INTERFACE_INCLUDE_DIRECTORIES)
+    if(_sdk_public_includes)
+      foreach(_sdk_include IN LISTS _sdk_public_includes)
+        if(NOT _sdk_include MATCHES "^\\$<")
+          list(APPEND CMAKE_REQUIRED_INCLUDES "${_sdk_include}")
+        endif()
+      endforeach()
+    endif()
+  endforeach()
+  list(REMOVE_DUPLICATES CMAKE_REQUIRED_INCLUDES)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+  set(_scxml_intercept_good [=[
+#include <cmeta/ace_interceptor.h>
+/* Same public named C tags, but no need to pull the entire SCXML/IDL include
+   graph into this strictly native function-pointer type-system probe. */
+typedef struct scxml_send_request scxml_send_request;
+typedef struct cflow_statechart_effect_ticket cflow_statechart_effect_ticket;
+CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
+                       cflow_statechart_effect_ticket);
+cmeta_status exact(void *, const scxml_send_request *,
+                   cflow_statechart_effect_ticket *);
+CMETA_STATIC_ASSERT(
+    CMETA_TYPE_MATCHES(&exact, scxml_compile_intercept_target_fn),
+    "exact native callback signature must compile");
+int main(void) { return 0; }
+]=])
+  set(_scxml_intercept_bad [=[
+#include <cmeta/ace_interceptor.h>
+/* Same public named C tags, but no need to pull the entire SCXML/IDL include
+   graph into this strictly native function-pointer type-system probe. */
+typedef struct scxml_send_request scxml_send_request;
+typedef struct cflow_statechart_effect_ticket cflow_statechart_effect_ticket;
+CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
+                       cflow_statechart_effect_ticket);
+cmeta_status mutable_request(void *, scxml_send_request *,
+                             cflow_statechart_effect_ticket *);
+CMETA_STATIC_ASSERT(
+    CMETA_TYPE_MATCHES(&mutable_request, scxml_compile_intercept_target_fn),
+    "mutable request is not a borrowed const request");
+int main(void) { return 0; }
+]=])
+  foreach(_check IN ITEMS
+      SCXML_INTERCEPT_EXACT_C11 SCXML_INTERCEPT_MUTABLE_C11
+      SCXML_INTERCEPT_EXACT_CPP17 SCXML_INTERCEPT_MUTABLE_CPP17)
+    unset("${_check}" CACHE)
+  endforeach()
+  check_c_source_compiles(
+      "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_C11)
+  check_c_source_compiles(
+      "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_C11)
+  if(MSVC)
+    # Salts::CMeta exports /Zc:preprocessor for MSVC C++; isolated
+    # try_compile deliberately has no link target and must carry the exact
+    # same public compiler option, otherwise Enum(...) PP macros are parsed
+    # by MSVC's traditional (nonconforming) preprocessor.
+    set(CMAKE_REQUIRED_FLAGS
+      "${_scxml_saved_required_flags} /std:c++17 /Zc:preprocessor")
+  endif()
+  check_cxx_source_compiles(
+      "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_CPP17)
+  check_cxx_source_compiles(
+      "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_CPP17)
+  if(NOT SCXML_INTERCEPT_EXACT_C11 OR SCXML_INTERCEPT_MUTABLE_C11 OR
+     NOT SCXML_INTERCEPT_EXACT_CPP17 OR SCXML_INTERCEPT_MUTABLE_CPP17)
+    # Keep the full compiler's own message attached to each individual
+    # try_compile probe. A generic regex over CMakeConfigureLog.yaml can
+    # truncate Windows path diagnostics at semicolons or mix unrelated probes.
+    set(_scxml_probe_log "${CMAKE_BINARY_DIR}/CMakeFiles/CMakeConfigureLog.yaml")
+    if(EXISTS "${_scxml_probe_log}")
+      file(READ "${_scxml_probe_log}" _scxml_probe_text)
+      foreach(_scxml_probe IN ITEMS
+          SCXML_INTERCEPT_EXACT_C11 SCXML_INTERCEPT_EXACT_CPP17)
+        string(FIND "${_scxml_probe_text}" "${_scxml_probe}" _scxml_probe_at)
+        if(_scxml_probe_at GREATER_EQUAL 0)
+          string(LENGTH "${_scxml_probe_text}" _scxml_log_size)
+          math(EXPR _scxml_excerpt_len
+            "${_scxml_log_size} - ${_scxml_probe_at}")
+          if(_scxml_excerpt_len GREATER 5000)
+            set(_scxml_excerpt_len 5000)
+          endif()
+          string(SUBSTRING "${_scxml_probe_text}"
+            ${_scxml_probe_at} ${_scxml_excerpt_len} _scxml_probe_excerpt)
+          message(WARNING
+            "SCXML typed Interceptor positive ${_scxml_probe} diagnostic:\n${_scxml_probe_excerpt}")
+        endif()
+      endforeach()
+    endif()
+    message(FATAL_ERROR
+      "SCXML ACE typed Interceptor C11/C++17 native ABI gate failed")
+  endif()
+  set(CMAKE_REQUIRED_LIBRARIES "${_scxml_saved_required_libraries}")
+  set(CMAKE_REQUIRED_INCLUDES "${_scxml_saved_required_includes}")
+  set(CMAKE_REQUIRED_FLAGS "${_scxml_saved_required_flags}")
+  if(_scxml_saved_try_type)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${_scxml_saved_try_type}")
+  else()
+    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+  endif()
+
   foreach(generation IN ITEMS 1 2)
     add_library(scxml_component_dso_${generation} MODULE
       scxml_component_dso_fixture.c)
@@ -265,10 +397,144 @@ if(TURBOSCXML_ENABLE_COMPONENT)
   add_dependencies(scxml_component_dso_test
     scxml_component_dso_1 scxml_component_dso_2)
   set_tests_properties(scxml_component_dso_test PROPERTIES TIMEOUT 60)
+
+  # Explicitly opt in to the microbenchmark via its CTest name. It is built
+  # with the normal full CMake graph but not repeated in the sanitizer/TSan
+  # or cross-RID conformance regex: timing is not a functional gate.
+  add_executable(
+    scxml_component_interceptor_benchmark
+    scxml_component_interceptor_benchmark.c)
+  target_compile_features(scxml_component_interceptor_benchmark PRIVATE c_std_11)
+  set_target_properties(scxml_component_interceptor_benchmark PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+  target_link_libraries(scxml_component_interceptor_benchmark PRIVATE
+    TurboSCXML::Component Salts::Platform)
+  target_compile_definitions(scxml_component_interceptor_benchmark PRIVATE
+    SCXML_COMPONENT_DSO_ONE="$<TARGET_FILE:scxml_component_dso_1>")
+  add_dependencies(scxml_component_interceptor_benchmark
+    scxml_component_dso_1)
+  add_test(NAME scxml_component_interceptor_benchmark
+    COMMAND scxml_component_interceptor_benchmark)
+  set_tests_properties(scxml_component_interceptor_benchmark PROPERTIES
+    LABELS "microbenchmark" TIMEOUT 60)
+
   turboscxml_add_test(
     scxml_component_test
     scxml_component_test.c
     LIBS TurboSCXML::Component)
+  foreach(generation RANGE 1 2)
+    add_library(voicexml_component_resource_dso_${generation} MODULE
+      voicexml_component_resource_dso_fixture.c)
+    target_link_libraries(voicexml_component_resource_dso_${generation}
+      PRIVATE TurboSCXML::SCXML
+        Salts::ComponentPluginABI Salts::PluginABI)
+    target_compile_features(voicexml_component_resource_dso_${generation}
+      PRIVATE c_std_11)
+    target_compile_definitions(voicexml_component_resource_dso_${generation}
+      PRIVATE
+        VOICE_COMPONENT_DSO_MARKER=${generation}00
+        VOICE_COMPONENT_DSO_ID="test.voicexml.resource.${generation}")
+    set_target_properties(voicexml_component_resource_dso_${generation}
+      PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        FOLDER "tests/fixtures")
+  endforeach()
+
+  turboscxml_add_test(
+    voicexml_component_dialog_test
+    voicexml_component_dialog_test.c
+    LIBS TurboSCXML::Component TurboSCXML::VoiceXMLDialogManager
+    DEFINITIONS
+      VOICE_RESOURCE_DSO_ONE="$<TARGET_FILE:voicexml_component_resource_dso_1>"
+      VOICE_RESOURCE_DSO_TWO="$<TARGET_FILE:voicexml_component_resource_dso_2>")
+  add_dependencies(voicexml_component_dialog_test
+    voicexml_component_resource_dso_1 voicexml_component_resource_dso_2)
+  set_tests_properties(voicexml_component_dialog_test PROPERTIES TIMEOUT 60)
+endif()
+
+if(TURBOSCXML_ENABLE_HOST)
+  turboscxml_add_test(
+    scxml_host_router_test
+    scxml_host_router_test.c
+    LIBS TurboSCXML::Host Salts::Core)
+  set_tests_properties(scxml_host_router_test PROPERTIES TIMEOUT 30)
+  turboscxml_add_test(
+    scxml_host_event_io_test
+    scxml_host_event_io_test.c
+    LIBS TurboSCXML::Host Salts::Core)
+  set_tests_properties(scxml_host_event_io_test PROPERTIES TIMEOUT 30)
+  turboscxml_add_test(
+    scxml_host_delay_test
+    scxml_host_delay_test.c
+    LIBS TurboSCXML::Host Salts::Core)
+  set_tests_properties(scxml_host_delay_test PROPERTIES TIMEOUT 30)
+endif()
+
+if(TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  turboscxml_add_test(
+    scxml_cnet_ingress_test
+    scxml_cnet_ingress_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_ingress_test PROPERTIES TIMEOUT 40)
+  turboscxml_add_test(
+    scxml_cnet_egress_test
+    scxml_cnet_egress_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_egress_test PROPERTIES TIMEOUT 40)
+  turboscxml_add_test(
+    scxml_cnet_frame_ingress_test
+    scxml_cnet_frame_ingress_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_frame_ingress_test PROPERTIES TIMEOUT 30)
+  turboscxml_add_test(
+    scxml_cnet_domain_fence_test
+    scxml_cnet_domain_fence_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::Core)
+  set_tests_properties(scxml_cnet_domain_fence_test PROPERTIES TIMEOUT 40)
+  turboscxml_add_test(
+    scxml_cnet_request_generation_test
+    scxml_cnet_request_generation_test.c
+    LIBS TurboSCXML::CNetEventIO Salts::NativeIO Salts::Core)
+  set_tests_properties(scxml_cnet_request_generation_test
+    PROPERTIES TIMEOUT 40)
+  if(WIN32)
+    target_link_libraries(scxml_cnet_request_generation_test PRIVATE ws2_32)
+  endif()
+endif()
+
+if(TURBOSCXML_ENABLE_COMPONENT AND TURBOSCXML_ENABLE_CNET_EVENT_IO)
+  foreach(generation IN ITEMS 1 2)
+    add_library(scxml_invoke_component_dso_${generation} MODULE
+      scxml_component_invoke_dso_fixture.c)
+    target_link_libraries(scxml_invoke_component_dso_${generation} PRIVATE
+      TurboSCXML::SCXML Salts::ComponentPluginABI Salts::PluginABI Salts::CNet)
+    target_compile_features(scxml_invoke_component_dso_${generation} PRIVATE c_std_11)
+    target_compile_definitions(scxml_invoke_component_dso_${generation} PRIVATE
+      SCXML_COMPONENT_DSO_MARKER=${generation}00
+      SCXML_INVOKE_DSO_ID="test.scxml.invoke.component.${generation}")
+    set_target_properties(scxml_invoke_component_dso_${generation} PROPERTIES
+      C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+      FOLDER "tests/fixtures")
+  endforeach()
+  turboscxml_add_test(
+    scxml_component_cnet_invoke_test
+    scxml_component_cnet_invoke_test.c
+    LIBS TurboSCXML::Component TurboSCXML::CNetEventIO Salts::NativeIO Salts::Core
+    DEFINITIONS
+      SCXML_INVOKE_DSO_ONE="$<TARGET_FILE:scxml_invoke_component_dso_1>"
+      SCXML_INVOKE_DSO_TWO="$<TARGET_FILE:scxml_invoke_component_dso_2>")
+  add_dependencies(scxml_component_cnet_invoke_test
+    scxml_invoke_component_dso_1 scxml_invoke_component_dso_2)
+  if(TURBOSCXML_ENABLE_HOST)
+    target_link_libraries(scxml_component_cnet_invoke_test PRIVATE
+      TurboSCXML::Host)
+    target_compile_definitions(scxml_component_cnet_invoke_test PRIVATE
+      SCXML_TEST_COMPONENT_HOST_DELAY=1)
+  endif()
+  if(WIN32)
+    target_link_libraries(scxml_component_cnet_invoke_test PRIVATE ws2_32)
+  endif()
+  set_tests_properties(scxml_component_cnet_invoke_test PROPERTIES TIMEOUT 60)
 endif()
 
 turboscxml_add_test(

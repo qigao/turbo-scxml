@@ -17,6 +17,16 @@ on:
   push:
     branches:
       - feature/component-runtime-conformance
+    paths:
+      - ".github/workflows/component-runtime-conformance.yml"
+      - "CMakeLists.txt"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - "presets/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
   workflow_dispatch:
 
 permissions:
@@ -32,10 +42,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_VERSION: turboscxml-component-linux-x64-v1
-      CMAKE_C_COMPILER_LAUNCHER: sccache
-      CMAKE_CXX_COMPILER_LAUNCHER: sccache
+      # Independent from Native SDK released-graph and sanitizer caches.
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-component-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
     steps:
       - name: Checkout TurboSCXML integration branch
         uses: actions/checkout@v4
@@ -49,10 +62,14 @@ jobs:
         with:
           mode: read
 
-      - name: Set up sccache for Ninja builds
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      - name: Restore ccache compiler objects
+        uses: actions/cache@v4
         with:
-          version: v0.18.0
+          path: ${{ github.workspace }}/.turboscxml-component-ccache
+          key: turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-
+            turboscxml-component-ccache-linux-x64-v1-
 
       - name: Restore Salts host re2c
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
@@ -66,88 +83,108 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config ccache
+          command -v ccache
+          ccache --zero-stats
 
-      # Fail closed: only the exact published prerelease and attested source SHA are valid.
-      # Never check out, compile or fall back to a stable Salts tree here.
-      # Exact run-scoped unmerged 2.3 SDK; no GitHub Packages fallback.
-      - name: Restore and attest ACE 2.3 SDK from Salts Actions artifact
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SALTS_CANDIDATE_VERSION: '2.3.0-ace.shad154d61cc329f4dc70c084b386c1247b5dddbc0c'
-          SALTS_CANDIDATE_SHA: 'd154d61cc329f4dc70c084b386c1247b5dddbc0c'
-          SALTS_RUN_ID: '37880183154'
-        run: |
-          set -euo pipefail
-          test -n "$GH_TOKEN"
-          tmp="$RUNNER_TEMP/salts-ace-candidate"
-          mkdir -p "$tmp/artifact" "$tmp/nuget"
-          test "$(gh api "repos/qigao/salts/actions/runs/$SALTS_RUN_ID" --jq .head_sha)" = "$SALTS_CANDIDATE_SHA"
-          test "$(gh api "repos/qigao/salts/actions/runs/$SALTS_RUN_ID" --jq .conclusion)" = success
-          gh run download "$SALTS_RUN_ID" -R qigao/salts -n salts-native-ace-candidate-linux-x64 -D "$tmp/artifact"
-          sums="$(find "$tmp/artifact" -type f -name SHA256SUMS -print -quit)"
-          test -n "$sums"
-          nupkg="$(find "$tmp/artifact" -type f -name "Salts.Native.$SALTS_CANDIDATE_VERSION.nupkg" -print -quit)"
-          test -n "$nupkg"
-          expected="$(awk -v base="$(basename "$nupkg")" '$2==base || $2=="dist/"base {print $1}' "$sums")"
-          [[ "$expected" =~ ^[[:xdigit:]]{64}$ ]]
-          test "$(sha256sum "$nupkg" | awk '{print $1}')" = "$expected"
-          python3 - "$nupkg" "$tmp/nuget" <<'PY'
-          import sys, zipfile
-          with zipfile.ZipFile(sys.argv[1]) as archive:
-              archive.extractall(sys.argv[2])
-          PY
-          root="$tmp/nuget/sdk/linux-x64"
-          manifest="$root/salts-sdk-manifest.txt"
-          test -f "$root/lib/cmake/Salts/SaltsConfig.cmake"
-          test -f "$root/include/salts/component_plugin.h"
-          test -f "$root/include/salts/component.h"
-          test -f "$manifest"
-          grep -Fxq "version=$SALTS_CANDIDATE_VERSION" "$manifest"
-          grep -Fxq "commit=$SALTS_CANDIDATE_SHA" "$manifest"
-          grep -Fxq 'rid=linux-x64' "$manifest"
-          grep -Fxq 'profile=ace-2.3-candidate' "$manifest"
-          grep -Fq 'Salts::ComponentPlugin' "$root/lib/cmake/Salts/SaltsTargets.cmake"
-          previous_salts_root="${SALTS_ROOT:-}"
-          ld_path="$root/lib"
-          IFS=':' read -r -a ld_entries <<< "${LD_LIBRARY_PATH:-}"
-          for entry in "${ld_entries[@]}"; do
-            if [ -n "$entry" ] && [ "$entry" != "$previous_salts_root/lib" ] && [ "$entry" != "$previous_salts_root/bin" ]; then
-              ld_path="$ld_path:$entry"
-            fi
-          done
-          echo "SALTS_ROOT=$root" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$ld_path" >> "$GITHUB_ENV"
-          echo "SALTS_CANDIDATE_SHA256=$expected" >> "$GITHUB_ENV"
-          echo "Selected exact run $SALTS_RUN_ID Salts.Native $SALTS_CANDIDATE_VERSION ($expected)"
-          
-      - name: Checkout SaltsUtils dependency source
-        uses: actions/checkout@v4
-        with:
-          repository: qigao/salts-utils
-          ref: 1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b
-          path: _deps/salts-utils
-          persist-credentials: false
-
-      - name: Rebuild SaltsUtils against the exact candidate
+      # Consume the same source-tested, published RC SDK graph as the native matrix.
+      # No SDK source checkout, one-off Actions candidate or stable-version fallback.
+      - name: Restore and verify Salts 2.3 / SaltsUtils 4.3 NuGet prereleases
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          QIGAO_TARGET_TRIPLET: x64-linux
-          QIGAO_SDK_RID: linux-x64
-        working-directory: _deps/salts-utils
         run: |
           set -euo pipefail
-          cmake --preset ci-sdk-release-user
-          cmake --build --preset ci-sdk-release-user -j2
-          cmake --build --preset install-ci-sdk-release-user -j2
-          root="$GITHUB_WORKSPACE/_deps/salts-utils/stage/sdk/linux-x64"
-          printf 'source=%s\nsalts_commit=%s\nsalts_package_sha256=%s\nrid=linux-x64\nprofile=release\n' \
-            "$(git rev-parse HEAD)" "d154d61cc329f4dc70c084b386c1247b5dddbc0c" "$SALTS_CANDIDATE_SHA256" > "$root/component-dependency-manifest.txt"
-          echo "SALTS_UTILS_ROOT=$root" >> "$GITHUB_ENV"
-          echo "DATABIND_ROOT=$root" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$root/lib:$root/bin:$SALTS_ROOT/lib" >> "$GITHUB_ENV"
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-component-sdks"
+          project="$RUNNER_TEMP/turboscxml-component-dependencies.csproj"
+          mkdir -p build/component-runtime
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+
+          sdk_root() {
+            local package="$1" version_prefix="$2" rid="$3"
+            local roots=() path version
+            while IFS= read -r path; do roots+=("$path"); done < <(
+              find "$packages/$package" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$rid" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              echo "Expected exactly one $package SDK for $rid, got ${#roots[@]}" >&2
+              return 1
+            fi
+            version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$version" in "$version_prefix"-*) ;; *)
+              echo "Rejected $package $version: expected $version_prefix prerelease" >&2
+              return 1 ;;
+            esac
+            printf '%s' "${roots[0]}"
+          }
+
+          salts_root="$(sdk_root salts.native 2.3.0 linux-x64)"
+          utils_root="$(sdk_root saltsutils.native 4.3.0 linux-x64)"
+          salts_version="$(basename "$(dirname "$(dirname "$salts_root")")")"
+          utils_version="$(basename "$(dirname "$(dirname "$utils_root")")")"
+          salts_manifest="$salts_root/salts-sdk-manifest.txt"
+          utils_manifest="$utils_root/salts-utils-sdk-manifest.txt"
+          for manifest in "$salts_manifest" "$utils_manifest"; do
+            test -f "$manifest" || { echo "Missing SDK manifest: $manifest" >&2; exit 1; }
+            echo "Validating resolved SDK manifest: $manifest"
+            grep -E '^(version|commit|profile|rid)=' "$manifest" || true
+            grep -Fxq 'profile=release' "$manifest" || { echo "SDK profile must be release" >&2; exit 1; }
+            grep -Eq '^commit=[[:xdigit:]]{40}' "$manifest" || { echo "Invalid SDK source SHA in $manifest" >&2; exit 1; }
+          done
+          grep -Fq "version=$salts_version" "$salts_manifest"
+          grep -Fq "version=$utils_version" "$utils_manifest"
+
+          # Exact current RC graph for reproducible multi-RID admission.
+          # All host runners restore identical versions, while manifest SHA
+          # checks reject package/source drift. A new published candidate
+          # requires an explicit simultaneous update, not a fallback.
+          test "$salts_version" = '2.3.0-rc.5'
+          test "$utils_version" = '4.3.0-rc.2'
+          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts_manifest"
+          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$salts_root/include/salts/component_plugin.h"
+          test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          grep -Fq 'Salts::ComponentPlugin' "$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
+
+          # Record the concrete NuGet versions and immutable source SHAs selected
+          # by the current released prerelease graph. Never silently pin an
+          # older SDK or suppress an exported target collision.
+          {
+            printf 'salts_package=%s\n' "$salts_version"
+            printf 'saltsutils_package=%s\n' "$utils_version"
+            sed -n '/^commit=/p' "$salts_manifest" | sed 's/^/salts_/'
+            sed -n '/^commit=/p' "$utils_manifest" | sed 's/^/saltsutils_/'
+            printf 'sdk_rid=linux-x64\n'
+            printf 'sdk_profile=release\n'
+          } > build/component-runtime/sdk-graph.txt
+
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "DATABIND_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$utils_root/lib:$utils_root/bin:$salts_root/lib:$salts_root/bin:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          cat build/component-runtime/sdk-graph.txt
+
+          # Ownership migration gate: the published Salts 2.3 prereleases include
+          # Salts::Unicode but released SaltsUtils 4.3 RC1 still exports it.
+          # Detect that incompatible *latest released* pair before CMake
+          # configure. Never rewrite imported targets, inject shims, or choose
+          # a historical SDK on behalf of the consumer.
+          salts_targets="$salts_root/lib/cmake/Salts/SaltsTargets.cmake"
+          utils_targets="$utils_root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
+          test -f "$salts_targets"
+          test -f "$utils_targets"
+          if grep -Eq '^[[:space:]]*add_library\(Salts::Unicode[[:space:]]' "$salts_targets" &&
+             grep -Eq '^[[:space:]]*add_library\(Salts::Unicode[[:space:]]' "$utils_targets"; then
+            echo "::error::Incompatible published native SDK graph: Salts.Native $salts_version and SaltsUtils.Native $utils_version both export Salts::Unicode. Coordinate qigao/salts#1088 and qigao/salts-utils#610/#611. No fallback or exact old-version pin."
+            exit 1
+          fi
 
       - name: Configure the complete conformance graph
         shell: bash
@@ -161,9 +198,30 @@ jobs:
       - name: Run Component and adjacent business tests
         run: >-
           ctest --preset ci-component-release-user
-          -R '^(scxml_component_test|scxml_component_dso_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test)$'
+          -R '^(scxml_component_test|voicexml_component_dialog_test|scxml_component_dso_test|scxml_provider_test|scxml_plugin_test|scxml_test|scxml_event_io_contract_test|scxml_invoke_child_materialization_test|scxml_cnet_ingress_test|scxml_cnet_egress_test|scxml_host_router_test|scxml_cnet_frame_ingress_test|scxml_host_event_io_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$'
           --no-tests=error --output-on-failure
           --output-junit "$GITHUB_WORKSPACE/build/component-runtime/component-results.xml"
+
+      # Optional observational microbenchmark; no fixed latency threshold.
+      - name: Measure real DSO Interceptor vs direct typed Provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset ci-component-release-user \
+            -R '^scxml_component_interceptor_benchmark$' \
+            --no-tests=error -V \
+            | tee "$GITHUB_WORKSPACE/build/component-runtime/interceptor-benchmark.txt"
+
+      # W3C 422/423 and the mandatory SCXML corpus must remain normative
+      # when Invoke, ACT, Component generations and native I/O are hardened.
+      - name: Run W3C SCXML mandatory corpus and 422/423 gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          ctest --preset ci-component-release-user \
+            -R '^scxml_w3c_conformance_test$' \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/w3c-results.xml"
 
       - name: Install the qualified consumer SDK
         run: cmake --build --preset install-ci-component-release-user -j2
@@ -180,23 +238,72 @@ jobs:
           ctest --preset ci-component-installed-user --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/component-runtime/installed-results.xml"
 
-      - name: Record sccache statistics
-        if: always() && env.SCCACHE_PATH != ''
+      - name: Run bounded CNet/Host ASan and UBSan qualification
+        shell: bash
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-release-user \
+            -S "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/component-sanitized" \
+            -DENABLE_SANITIZER_ADDRESS=ON \
+            -DCMAKE_C_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=undefined" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=undefined"
+          cmake --build build/component-sanitized --parallel 2
+          ctest --test-dir build/component-sanitized \
+            -R '^(scxml_component_test|voicexml_component_dialog_test|scxml_component_dso_test|scxml_cnet_ingress_test|scxml_cnet_egress_test|scxml_host_router_test|scxml_cnet_frame_ingress_test|scxml_host_event_io_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/sanitizer-results.xml"
+
+      # Separate runtime/build from ASan+UBSan: TSan cannot share a process
+      # with ASan. This instruments the local CNet/Host adapters and test DSOs;
+      # imported prerelease Salts SDK libraries are not rebuilt with TSan.
+      - name: Run Linux concurrent Component, Host and CNet TSan gate
+        shell: bash
+        env:
+          TSAN_OPTIONS: "halt_on_error=1:exitcode=66"
+        run: |
+          set -euo pipefail
+          cmake --preset ci-component-release-user \
+            -S "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/component-tsan" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=thread" \
+            -DCMAKE_MODULE_LINKER_FLAGS="-fsanitize=thread"
+          cmake --build build/component-tsan --parallel 2
+          ctest --test-dir build/component-tsan \
+            -R '^(scxml_component_test|voicexml_component_dialog_test|scxml_component_dso_test|scxml_host_router_test|scxml_cnet_ingress_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
+            --repeat until-fail:50 \
+            --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/component-runtime/tsan-results.xml"
+
+      - name: Record ccache statistics
+        if: always()
         shell: bash
         run: |
           mkdir -p build/component-runtime
-          "$SCCACHE_PATH" --show-stats | tee build/component-runtime/sccache-stats.txt
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee build/component-runtime/ccache-stats.txt
+          else
+            printf 'ccache tool unavailable before build\n' > build/component-runtime/ccache-stats.txt
+          fi
 
       - name: Record acceptance identities
         if: always()
         shell: bash
         run: |
           mkdir -p build/component-runtime
-          printf 'consumer_commit=%s\nsalts_commit=%s\nsalts_package_sha256=%s\n' \
-            "$(git rev-parse HEAD)" "d154d61cc329f4dc70c084b386c1247b5dddbc0c" "$SALTS_CANDIDATE_SHA256" > build/component-runtime/acceptance.txt
-          if [ -n "${SALTS_UTILS_ROOT:-}" ]; then
-            printf 'dependency=SaltsUtils\n' >> build/component-runtime/acceptance.txt
-            cat "$SALTS_UTILS_ROOT/component-dependency-manifest.txt" >> build/component-runtime/acceptance.txt
+          printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)" > build/component-runtime/acceptance.txt
+          if [ -f build/component-runtime/sdk-graph.txt ]; then
+            cat build/component-runtime/sdk-graph.txt >> build/component-runtime/acceptance.txt
           fi
 
           printf 'runner_os=%s\nrunner_arch=%s\ncompiler=%s\n' \
@@ -209,8 +316,360 @@ jobs:
           name: component-acceptance-linux-x64
           path: |
             build/component-runtime/acceptance.txt
-            build/component-runtime/sccache-stats.txt
+            build/component-runtime/sdk-graph.txt
+            build/component-runtime/ccache-stats.txt
+            build/component-runtime/interceptor-benchmark.txt
             build/component-runtime/component-results.xml
+            build/component-runtime/w3c-results.xml
             build/component-runtime/installed-results.xml
+            build/component-runtime/sanitizer-results.xml
+            build/component-runtime/tsan-results.xml
+            build/component-tsan/Testing/Temporary/LastTest.log
+            build/component-sanitized/Testing/Temporary/LastTest.log
             build/component-runtime/Testing/Temporary/LastTest.log
             tests/install_consumer/build/component-installed/Testing/Temporary/LastTest.log
+
+  # Post-Linux admission only. This qualifies native IOCP/Kqueue callbacks
+  # and installed ACE Component consumers against the same immutable RC
+  # package names; it does not authorize publication or stable integration.
+  component-multirid:
+    name: ACE Component / ${{ matrix.id }}
+    needs: component-runtime
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: windows-x64
+            runner: windows-2022
+            triplet: x64-windows
+          - id: macos-native
+            runner: macos-15
+            triplet: auto
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-component-multirid-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.id == 'macos-native' && 'ccache' || '' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.id == 'macos-native' && 'ccache' || '' }}
+    steps:
+      - name: Checkout exact TurboSCXML candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Configure existing shared vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore existing Salts host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore macOS ccache objects
+        if: matrix.id == 'macos-native'
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.turboscxml-component-multirid-ccache
+          key: turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-
+
+      - name: Prepare macOS compiler and package RID
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja ccache
+          case "$RUNNER_ARCH" in
+            X64) rid=macos-x64; triplet=x64-osx ;;
+            ARM64) rid=macos-arm64; triplet=arm64-osx ;;
+            *) echo "Unsupported macOS architecture: $RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          echo "NATIVE_SDK_RID=$rid" >> "$GITHUB_ENV"
+          echo "VCPKG_TARGET_TRIPLET=$triplet" >> "$GITHUB_ENV"
+          ccache --zero-stats
+
+      - name: Restore exact Windows x64 Salts and SaltsUtils RC SDKs
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "NuGet.Config"
+          $packages = Join-Path $env:RUNNER_TEMP "turboscxml-component-sdks"
+          $project = Join-Path $env:RUNNER_TEMP "component-dependencies.csproj"
+          '<configuration><packageSources><clear /></packageSources></configuration>' |
+            Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          if ($LASTEXITCODE -ne 0) { throw "NuGet source setup failed" }
+          Copy-Item -LiteralPath "cmake/ci/native-sdk-dependencies.csproj" -Destination $project
+          dotnet restore $project --configfile $config --packages $packages --no-cache
+          if ($LASTEXITCODE -ne 0) { throw "RC SDK restore failed" }
+          function Get-ExactSdk([string]$name, [string]$expected) {
+            $roots = @(
+              Get-ChildItem -LiteralPath (Join-Path $packages $name) -Directory |
+                ForEach-Object { Join-Path $_.FullName "sdk\windows-x64" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+            )
+            if ($roots.Count -ne 1) { throw "Expected exactly one $name/windows-x64 SDK; found $($roots.Count)" }
+            $version = Split-Path (Split-Path (Split-Path $roots[0] -Parent) -Parent) -Leaf
+            if ($version -ne $expected) { throw "Rejected $name/$version; requires $expected" }
+            $manifestName = if ($name -eq "salts.native") { "salts-sdk-manifest.txt" } else { "salts-utils-sdk-manifest.txt" }
+            $manifest = Join-Path $roots[0] $manifestName
+            $rows = @(Get-Content -LiteralPath $manifest)
+            # Salts SDK manifests are os/arch-addressed on Windows, while
+            # SaltsUtils manifests use the RID. Both paths require an exact
+            # package version, release profile and immutable source SHA.
+            $platformValid = if ($name -eq "salts.native") {
+              ($rows -contains "os=windows") -and ($rows -contains "arch=x64")
+            } else {
+              $rows -contains "rid=windows-x64"
+            }
+            if (-not ($rows -contains "version=$expected") -or
+                -not ($rows -contains "profile=release") -or
+                -not $platformValid -or
+                @($rows | Where-Object { $_ -match '^commit=[0-9a-fA-F]{40}$' }).Count -ne 1) {
+              throw "RC SDK manifest mismatch: $manifest"
+            }
+            return $roots[0]
+          }
+          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.5"
+          $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.2"
+          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb")) {
+            throw "Salts SDK source SHA differs from published 2.3.0-rc.5"
+          }
+          if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde")) {
+            throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.2"
+          }
+          "SALTS_ROOT=$salts" >> $env:GITHUB_ENV
+          "SALTS_UTILS_ROOT=$utils" >> $env:GITHUB_ENV
+          "DATABIND_ROOT=$utils" >> $env:GITHUB_ENV
+          "NATIVE_SDK_RID=windows-x64" >> $env:GITHUB_ENV
+          "VCPKG_TARGET_TRIPLET=x64-windows" >> $env:GITHUB_ENV
+
+      - name: Restore exact macOS Salts and SaltsUtils RC SDKs
+        if: matrix.id == 'macos-native'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/NuGet.Config"
+          packages="$RUNNER_TEMP/turboscxml-component-sdks"
+          project="$RUNNER_TEMP/component-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          sdk_root() {
+            local name="$1" expected="$2" manifest_name="$3"
+            local roots=() candidate version
+            while IFS= read -r candidate; do roots+=("$candidate"); done < <(
+              find "$packages/$name" -mindepth 3 -maxdepth 3 -type d -path "*/sdk/$NATIVE_SDK_RID" -print
+            )
+            if [ "${#roots[@]}" -ne 1 ]; then
+              echo "Expected exactly one $name/$NATIVE_SDK_RID SDK; found ${#roots[@]}" >&2
+              return 1
+            fi
+            version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            test "$version" = "$expected"
+            local manifest="${roots[0]}/$manifest_name"
+            test -f "$manifest"
+            grep -Fxq "version=$expected" "$manifest"
+            grep -Fxq "rid=$NATIVE_SDK_RID" "$manifest"
+            grep -Fxq 'profile=release' "$manifest"
+            grep -Eq '^commit=[[:xdigit:]]{40}$' "$manifest"
+            printf '%s' "${roots[0]}"
+          }
+          salts="$(sdk_root salts.native 2.3.0-rc.5 salts-sdk-manifest.txt)"
+          utils="$(sdk_root saltsutils.native 4.3.0-rc.2 salts-utils-sdk-manifest.txt)"
+          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts/salts-sdk-manifest.txt"
+          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils/salts-utils-sdk-manifest.txt"
+          echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
+          echo "DATABIND_ROOT=$utils" >> "$GITHUB_ENV"
+
+      - name: Preflight installed macOS TinyTest native TLS ABI
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/component-multirid-results
+          archive="$SALTS_ROOT/lib/libtinytest.a"
+          manifest="$SALTS_ROOT/salts-sdk-manifest.txt"
+          test -f "$archive"
+          test -f "$manifest"
+          echo "Checking restored, immutable Salts SDK TinyTest ABI:"
+          grep -E '^(version|commit|os|arch|rid|profile)=' "$manifest" \
+            | tee build/component-multirid-results/salts-sdk-identity.txt
+          nm -gU "$archive" > build/component-multirid-results/tinytest-symbols.txt
+          if grep -Fq '___emutls_v.ttest_active_config__' \
+              build/component-multirid-results/tinytest-symbols.txt; then
+            echo "::error::Installed Salts.Native macOS TinyTest exports GCC-emulated TLS, not AppleClang-native TLS. Upstream qigao/salts#1084; exact RC SDK remains blocked."
+            exit 1
+          fi
+          if ! grep -Fq ' _ttest_active_config__' \
+              build/component-multirid-results/tinytest-symbols.txt; then
+            echo "::error::Installed Salts.Native TinyTest lacks the native Mach-O _ttest_active_config__ symbol. Upstream qigao/salts#1084."
+            exit 1
+          fi
+          case "$NATIVE_SDK_RID" in
+            macos-arm64) target_arch=arm64 ;;
+            macos-x64) target_arch=x86_64 ;;
+            *) echo "::error::Unsupported macOS SDK RID $NATIVE_SDK_RID"; exit 1 ;;
+          esac
+          cat > "$RUNNER_TEMP/turboscxml-tinytest-c11.c" <<'EOF'
+          #include <tinytest.h>
+          spec("installed native-TLS TinyTest C11") {
+              it("links and runs from the restored SDK") {
+                  check_equal(1, 1);
+              }
+          }
+          EOF
+          /usr/bin/clang -std=c11 -O2 -arch "$target_arch" \
+            -I"$SALTS_ROOT/include" "$RUNNER_TEMP/turboscxml-tinytest-c11.c" \
+            "$archive" -o "$RUNNER_TEMP/turboscxml-tinytest-c11"
+          "$RUNNER_TEMP/turboscxml-tinytest-c11"
+
+      - name: Restore Windows third-party dependencies from cache only
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:VCPKG_ROOT/vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-windows --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg binary cache-only restore failed" }
+
+      - name: Restore macOS third-party dependencies from cache only
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --only-binarycaching
+
+      - name: Build, test and install Windows IOCP ACE Component
+        if: matrix.id == 'windows-x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $prefix = "$env:GITHUB_WORKSPACE/stage/component"
+          $flags = @(
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_MANIFEST_MODE=OFF",
+            "-DVCPKG_APPLOCAL_DEPS=OFF",
+            "-DCMAKE_INSTALL_PREFIX=$prefix",
+            "-DBUILD_TESTING=ON",
+            "-DTURBOSCXML_ENABLE_COMPONENT=ON",
+            "-DTURBOSCXML_ENABLE_PLUGIN=ON",
+            "-DTURBOSCXML_ENABLE_HOST=ON",
+            "-DTURBOSCXML_ENABLE_CNET_EVENT_IO=ON",
+            "-DTURBOSCXML_ENABLE_QUICKJS=OFF",
+            "-DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF",
+            "-DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF",
+            "-DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF"
+          )
+          cmake -S . -B build/component-multirid -G "Visual Studio 17 2022" -A x64 @flags
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component configure failed" }
+          cmake --build build/component-multirid --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component build failed" }
+          $env:PATH = "$env:SALTS_ROOT/bin;$env:SALTS_UTILS_ROOT/bin;$env:GITHUB_WORKSPACE/vcpkg_installed/x64-windows/bin;$env:PATH"
+          New-Item -ItemType Directory -Force -Path build/component-multirid-results | Out-Null
+          ctest --test-dir build/component-multirid -C Release -R '^(scxml_component_dso_test|scxml_component_test|voicexml_component_dialog_test|scxml_cnet_ingress_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --repeat until-fail:50 --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          if ($LASTEXITCODE -ne 0) { throw "Windows IOCP/DSO runtime tests failed" }
+          # Single W3C corpus pass, separate from 50x native race stress.
+          ctest --test-dir build/component-multirid -C Release -R '^scxml_w3c_conformance_test$' --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/w3c.xml"
+          if ($LASTEXITCODE -ne 0) { throw "Windows W3C 422/423 corpus regression" }
+          cmake --install build/component-multirid --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Windows Component install failed" }
+          $env:TURBOSCXML_ROOT = $prefix
+          $env:PATH = "$prefix/bin;$env:PATH"
+          $consumerFlags = @(
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake",
+            "-DVCPKG_INSTALLED_DIR=$env:GITHUB_WORKSPACE/vcpkg_installed",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_MANIFEST_MODE=OFF",
+            "-DVCPKG_APPLOCAL_DEPS=OFF",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST=ON",
+            "-DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO=ON"
+          )
+          cmake -S tests/install_consumer -B build/component-multirid-consumer -G "Visual Studio 17 2022" -A x64 @consumerFlags
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer configure failed" }
+          cmake --build build/component-multirid-consumer --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer build failed" }
+          ctest --test-dir build/component-multirid-consumer -C Release --no-tests=error --output-on-failure --output-junit "$env:GITHUB_WORKSPACE/build/component-multirid-results/consumer.xml"
+          if ($LASTEXITCODE -ne 0) { throw "Windows SDK consumer test failed" }
+
+      - name: Build, test and install macOS Kqueue ACE Component
+        if: matrix.id == 'macos-native'
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(
+            "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed"
+            "-DVCPKG_TARGET_TRIPLET=$VCPKG_TARGET_TRIPLET"
+            "-DVCPKG_MANIFEST_MODE=OFF"
+            "-DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/stage/component"
+            "-DBUILD_TESTING=ON"
+            "-DTURBOSCXML_ENABLE_COMPONENT=ON"
+            "-DTURBOSCXML_ENABLE_PLUGIN=ON"
+            "-DTURBOSCXML_ENABLE_HOST=ON"
+            "-DTURBOSCXML_ENABLE_CNET_EVENT_IO=ON"
+            "-DTURBOSCXML_ENABLE_QUICKJS=OFF"
+            "-DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF"
+            "-DTURBOSCXML_ENABLE_CHTTP_RESOURCE=OFF"
+            "-DTURBOSCXML_ENABLE_CHTTP_EVENT_IO=OFF"
+          )
+          cmake -S . -B build/component-multirid -G Ninja -DCMAKE_BUILD_TYPE=Release "${flags[@]}"
+          cmake --build build/component-multirid --parallel 2
+          export DYLD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_UTILS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$VCPKG_TARGET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
+          mkdir -p build/component-multirid-results
+          ctest --test-dir build/component-multirid -R '^(scxml_component_dso_test|scxml_component_test|voicexml_component_dialog_test|scxml_cnet_ingress_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/runtime.xml"
+          # Qualify W3C 422/423 under AppleClang/Kqueue host profile.
+          ctest --test-dir build/component-multirid -R '^scxml_w3c_conformance_test$' --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/w3c.xml"
+          cmake --install build/component-multirid
+          export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/component"
+          export DYLD_LIBRARY_PATH="$TURBOSCXML_ROOT/lib:$DYLD_LIBRARY_PATH"
+          cmake -S tests/install_consumer -B build/component-multirid-consumer -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "-DCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+            "-DVCPKG_INSTALLED_DIR=$GITHUB_WORKSPACE/vcpkg_installed" \
+            "-DVCPKG_TARGET_TRIPLET=$VCPKG_TARGET_TRIPLET" \
+            "-DVCPKG_MANIFEST_MODE=OFF" \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST=ON \
+            -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO=ON
+          cmake --build build/component-multirid-consumer --parallel 2
+          ctest --test-dir build/component-multirid-consumer --no-tests=error --output-on-failure --output-junit "$GITHUB_WORKSPACE/build/component-multirid-results/consumer.xml"
+
+      - name: Record cross-platform acceptance identity
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/component-multirid-results
+          printf 'consumer_commit=%s\nrunner_os=%s\nrunner_arch=%s\nrid=%s\n' \
+            "$GITHUB_SHA" "$RUNNER_OS" "$RUNNER_ARCH" "${NATIVE_SDK_RID:-unknown}" > build/component-multirid-results/identity.txt
+
+      - name: Upload cross-platform acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-multirid-${{ matrix.id }}
+          path: |
+            build/component-multirid-results/
+            build/component-multirid/Testing/Temporary/LastTest.log
+            build/component-multirid-consumer/Testing/Temporary/LastTest.log

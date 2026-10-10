@@ -1,7 +1,10 @@
 name: Native SDK CI
 
+# Published-SDK qualification runs only for the stable branch. The unmerged
+# ACE 2.3 integration branch uses its separate exact-candidate conformance CI.
 on:
   pull_request:
+    branches: [main]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -11,10 +14,9 @@ on:
       - "vcpkg.json"
       - "CMakeUserPresets.json"
       - "presets/**"
-      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
   push:
-    branches: [main, feature/component-runtime-conformance]
+    branches: [main]
     paths:
       - "CMakeLists.txt"
       - "cmake/**"
@@ -24,7 +26,6 @@ on:
       - "vcpkg.json"
       - "CMakeUserPresets.json"
       - "presets/**"
-      - "README.md"
       - ".github/workflows/native-sdk-ci.yml"
 
   workflow_dispatch:
@@ -52,47 +53,45 @@ jobs:
             runner: ubuntu-24.04
             rid: linux-x64
             triplet: x64-linux
-            use_sccache: true
-            cache_namespace: turboscxml-native-linux-x64-release-v1
+            cache: ccache
           - id: linux-sanitizers
             label: Linux x64 ASan + UBSan
             family: linux
             runner: ubuntu-24.04
             rid: linux-x64
             triplet: x64-linux
-            use_sccache: true
-            cache_namespace: turboscxml-native-linux-x64-sanitizers-v1
+            cache: ccache
           - id: windows
             label: Windows x64 released SDK
             family: windows
             runner: windows-2022
             rid: windows-x64
             triplet: x64-windows
-            use_sccache: false
-            cache_namespace: turboscxml-native-windows-x64-release-v1
+            cache: none
           - id: macos
             label: macOS released SDK
             family: macos
             runner: macos-15
             rid: ""
             triplet: ""
-            use_sccache: true
-            cache_namespace: turboscxml-native-macos-release-v1
+            cache: ccache
           - id: android
             label: Android arm64-v8a released SDK
             family: android
             runner: ubuntu-24.04
             rid: android-arm64-v8a
             triplet: arm64-android
-            use_sccache: true
-            cache_namespace: turboscxml-native-android-arm64-release-v1
+            cache: ccache
     env:
       NATIVE_SDK_RID: ${{ matrix.rid }}
       VCPKG_TARGET_TRIPLET: ${{ matrix.triplet }}
-      SCCACHE_GHA_ENABLED: ${{ matrix.use_sccache && 'true' || 'false' }}
-      SCCACHE_GHA_VERSION: ${{ matrix.cache_namespace }}
-      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
-      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.use_sccache && 'sccache' || '' }}
+      # The MSVC Visual Studio generator remains native; Ninja host/cross builds use ccache.
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ${{ matrix.cache == 'ccache' && 'ccache' || '' }}
+      CMAKE_CXX_COMPILER_LAUNCHER: ${{ matrix.cache == 'ccache' && 'ccache' || '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -101,23 +100,35 @@ jobs:
         with:
           mode: read
 
-      - name: Set up sccache for Ninja builds
-        if: matrix.use_sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+      # Only compiler outputs are cached here; vcpkg SDKs retain their separate
+      # cache-only restore and package identity verification.
+      - name: Restore ccache compiler objects
+        if: matrix.cache == 'ccache'
+        uses: actions/cache@v4
         with:
-          version: v0.18.0
+          path: ${{ github.workspace }}/.turboscxml-ccache
+          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          restore-keys: |
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
-      - name: Prepare build tools
-        if: matrix.family == 'linux'
+      - name: Prepare Linux-hosted Ninja and ccache toolchain
+        if: matrix.family == 'linux' || matrix.family == 'android'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm ccache
+          if [ "$VCPKG_TARGET_TRIPLET" = "arm64-android" ]; then
+            test -n "${ANDROID_NDK_HOME:-}"
+            test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          fi
+          command -v ccache
+          ccache --zero-stats
 
       - name: Restore current published native SDK graph
         if: matrix.family == 'linux'
@@ -131,18 +142,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -159,11 +160,30 @@ jobs:
                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native linux-x64)" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native linux-x64)" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native linux-x64)" >> "$GITHUB_ENV"
+          salts_root="$(sdk_root salts.native linux-x64)"
+          utils_root="$(sdk_root saltsutils.native linux-x64)"
+          chttp_root="$(sdk_root chttp.native linux-x64)"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.family == 'linux'
@@ -288,24 +308,8 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           if ($LASTEXITCODE -ne 0) { throw "failed to configure NuGet source" }
-          @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          '@ | Set-Content -LiteralPath $project
-          Push-Location $env:RUNNER_TEMP
-          try {
-            dotnet add $project package Salts.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve Salts.Native" }
-            dotnet add $project package SaltsUtils.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve SaltsUtils.Native" }
-            dotnet add $project package CHttp.Native
-            if ($LASTEXITCODE -ne 0) { throw "failed to resolve CHttp.Native" }
-          }
-          finally {
-            Pop-Location
-          }
-          dotnet restore $project --configfile $config --packages $packages --no-cache
+          Copy-Item -LiteralPath "cmake/ci/native-sdk-dependencies.csproj" -Destination $project
+          dotnet restore $project --configfile $config --packages $packages --no-cache -p:IncludeCHttpNative=true
           if ($LASTEXITCODE -ne 0) { throw "failed to restore native SDK graph" }
           function Get-RestoredSdkRoot([string]$packageName, [string]$rid) {
             $packageRoot = Join-Path $packages $packageName
@@ -317,6 +321,23 @@ jobs:
             if ($roots.Count -ne 1) {
               throw "expected exactly one restored $packageName SDK for $rid, found $($roots.Count)"
             }
+            $version = Split-Path (Split-Path (Split-Path $roots[0] -Parent) -Parent) -Leaf
+            if (($packageName -eq "salts.native" -and $version -notmatch '^2\.3\.0-') -or
+                ($packageName -eq "saltsutils.native" -and $version -notmatch '^4\.3\.0-') -or
+                ($packageName -eq "chttp.native" -and $version -ne '2.0.0')) {
+              throw "Unexpected NuGet SDK: $packageName $version"
+            }
+            if ($packageName -eq "salts.native" -or $packageName -eq "saltsutils.native") {
+              $manifestName = if ($packageName -eq "salts.native") { "salts-sdk-manifest.txt" } else { "salts-utils-sdk-manifest.txt" }
+              $manifest = Join-Path $roots[0] $manifestName
+              if (!(Test-Path -LiteralPath $manifest -PathType Leaf)) { throw "SDK manifest missing: $manifest" }
+              $rows = @(Get-Content -LiteralPath $manifest)
+              if (-not ($rows -match ('version=' + [regex]::Escape($version))) -or
+                  -not ($rows -contains 'profile=release')) {
+                throw "SDK manifest mismatch: $packageName $version"
+              }
+            }
+            Write-Host "Restored $packageName version=$version rid=$rid"
             return ($roots[0] -replace '\\', '/')
           }
           $saltsRoot = Get-RestoredSdkRoot "salts.native" "windows-x64"
@@ -381,7 +402,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm
+          brew install ninja nasm ccache
+          command -v ccache
+          ccache --zero-stats
           case "$RUNNER_ARCH" in
             X64)
               rid=macos-x64
@@ -411,18 +434,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -437,11 +450,32 @@ jobs:
               printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          # Assign first: set -e will stop on a missing target RID instead of
+          # silently emitting SALTS_ROOT= after a failing echo substitution.
+          salts_root="$(sdk_root salts.native "$NATIVE_SDK_RID")"
+          utils_root="$(sdk_root saltsutils.native "$NATIVE_SDK_RID")"
+          chttp_root="$(sdk_root chttp.native "$NATIVE_SDK_RID")"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.id == 'macos'
@@ -480,16 +514,6 @@ jobs:
           cmake -S tests/install_consumer -B build/consumer-voicexml-quickjs-macos -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
           cmake --build build/consumer-voicexml-quickjs-macos --parallel 2
 
-      - name: Prepare toolchain
-        if: matrix.id == 'android'
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm
-          test -n "${ANDROID_NDK_HOME:-}"
-          test -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-
       - name: Restore current published native SDK graph
         if: matrix.id == 'android'
         shell: bash
@@ -502,18 +526,8 @@ jobs:
           project="$RUNNER_TEMP/turboscxml-native-dependencies.csproj"
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
-          cat > "$project" <<'EOF'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
-          </Project>
-          EOF
-          (
-            cd "$RUNNER_TEMP"
-            dotnet add "$project" package Salts.Native
-            dotnet add "$project" package SaltsUtils.Native
-            dotnet add "$project" package CHttp.Native
-          )
-          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache -p:IncludeCHttpNative=true
           sdk_root() {
             local package="$1"
             local rid="$2"
@@ -528,11 +542,32 @@ jobs:
               printf 'expected exactly one restored %s SDK for %s, found %s\n'                 "$package" "$rid" "${#roots[@]}" >&2
               return 1
             fi
+            local resolved_version
+            resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
+            case "$package:$resolved_version" in
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
+            esac
+            if [ "$package" = salts.native ]; then
+              test -f "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-sdk-manifest.txt"
+            elif [ "$package" = saltsutils.native ]; then
+              test -f "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fq "version=$resolved_version" "${roots[0]}/salts-utils-sdk-manifest.txt"
+              grep -Fxq 'profile=release' "${roots[0]}/salts-utils-sdk-manifest.txt"
+            fi
+            printf 'Restored %s version=%s rid=%s\n' "$package" "$resolved_version" "$rid" >&2
             printf '%s' "${roots[0]}"
           }
-          echo "SALTS_ROOT=$(sdk_root salts.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$(sdk_root saltsutils.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
-          echo "CHTTP_ROOT=$(sdk_root chttp.native "$NATIVE_SDK_RID")" >> "$GITHUB_ENV"
+          # Assign first: set -e will stop on a missing target RID instead of
+          # silently emitting SALTS_ROOT= after a failing echo substitution.
+          salts_root="$(sdk_root salts.native "$NATIVE_SDK_RID")"
+          utils_root="$(sdk_root saltsutils.native "$NATIVE_SDK_RID")"
+          chttp_root="$(sdk_root chttp.native "$NATIVE_SDK_RID")"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_ROOT=$utils_root" >> "$GITHUB_ENV"
+          echo "CHTTP_ROOT=$chttp_root" >> "$GITHUB_ENV"
 
       - name: Restore third-party dependencies from shared cache only
         if: matrix.id == 'android'
@@ -559,6 +594,25 @@ jobs:
           export TURBOSCXML_ROOT="$GITHUB_WORKSPACE/stage/turboscxml"
           cmake -S tests/install_consumer -B build/consumer-android -G Ninja             -DCMAKE_BUILD_TYPE=Release             -DCMAKE_SYSTEM_NAME=Android             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"             -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"             -DVCPKG_TARGET_TRIPLET="$VCPKG_TARGET_TRIPLET"             -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed"             -DVCPKG_MANIFEST_MODE=OFF             -DANDROID_ABI=arm64-v8a             -DANDROID_PLATFORM=android-26             -DANDROID_STL=c++_shared             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_RESOURCE=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_CHTTP_RESOURCE=ON             -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER=ON -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DOCUMENT_STORE=ON
           cmake --build build/consumer-android --parallel 2
+
+      - name: Record ccache statistics
+        if: always() && matrix.cache == 'ccache'
+        shell: bash
+        run: |
+          mkdir -p build/ci-evidence
+          if command -v ccache >/dev/null 2>&1; then
+            ccache --show-stats | tee "build/ci-evidence/ccache-${{ matrix.id }}.txt"
+          else
+            printf 'ccache tool unavailable before build\n' > "build/ci-evidence/ccache-${{ matrix.id }}.txt"
+          fi
+
+      - name: Upload compiler-cache evidence
+        if: always() && matrix.cache == 'ccache'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccache-native-${{ matrix.id }}-${{ runner.arch }}
+          path: build/ci-evidence/ccache-${{ matrix.id }}.txt
+          if-no-files-found: warn
 
   result:
     name: Native SDK CI result

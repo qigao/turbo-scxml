@@ -1,4 +1,5 @@
 #include "tinytest.h"
+#include "scxml_component_interceptor_probe.h"
 
 #include <scxml/component.h>
 
@@ -346,6 +347,117 @@ spec("TurboSCXML Component provider scope") {
         check_equal(salts_component_plugin_generation_drain(
                         &runtime, &g2.generation),
                     SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_destroy(&runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+    }
+
+    it("admits a static Component through exact native FunctionAbi before invoking a provider") {
+        fixture_state state;
+        generation_fixture generation = {0};
+        salts_component_plugin_runtime runtime = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_component_scope scope = {0};
+        scxml_component_event_io_provider provider = {0}, denied = {0};
+        const scxml_event_io_adapter *adapter;
+        scxml_intercept_probe intercept = {0};
+        scxml_send_request request = {.event = "probe", .event_size = 5u};
+        cflow_statechart_effect_ticket ticket = {0};
+        const char *error = NULL;
+        const cmeta_function_abi_desc *abi =
+            &scxml_intercept_target_contract__function_abi_meta;
+        cmeta_function_abi_desc wrong = *abi;
+        cmeta_abi_carrier carriers[3] = {
+            CMETA_ABI_OBJECT_POINTER, CMETA_ABI_OBJECT_POINTER,
+            CMETA_ABI_UNSPECIFIED
+        };
+
+        fixture_init(&state, 10);
+        check_equal(generation_build(&generation, &state, UINT64_C(51)),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_init(&runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generation.generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(scxml_component_scope_acquire(
+            &scope, &runtime), SCXML_COMPONENT_OK);
+
+        /* Wrong interface ID and impossible capabilities are rejected before
+           binding or Session publication; no hidden Plugin lease is taken. */
+        check_equal(scxml_component_event_io_provider_bind(
+            &denied, &scope, "NoSuchComponent", SCXML_EVENT_IO_CAP_SEND),
+            SCXML_COMPONENT_UNAVAILABLE);
+        check_equal(scxml_component_event_io_provider_bind(
+            &denied, &scope, SCXML_COMPONENT_FIXTURE_ID, UINT64_C(1) << 60),
+            SCXML_COMPONENT_CAPABILITY_MISMATCH);
+        check_equal(scope.binding_count, (size_t)0u);
+        check_false(denied.live);
+
+        check_equal(scxml_component_event_io_provider_bind(
+            &provider, &scope, SCXML_COMPONENT_FIXTURE_ID,
+            SCXML_EVENT_IO_CAP_SEND), SCXML_COMPONENT_OK);
+        adapter = scxml_component_event_io_provider_adapter(&provider);
+        check_not_null(adapter);
+        check_equal(scxml_intercept_probe_init(
+            &intercept, adapter,
+            scxml_component_event_io_provider_user(&provider)), CMETA_OK);
+        check_true(cmeta_function_abi_desc_valid(abi));
+        wrong.param_carriers = carriers;
+        check_equal(scxml_test_send_intercept_admit(
+            &intercept.chain, &intercept, scxml_intercept_target,
+            intercept.hooks, 2u, abi, &wrong), CMETA_TYPE_MISMATCH);
+        check_true(intercept.chain.target == scxml_intercept_target);
+
+        /* Before -> before -> target error -> reverse on_error;
+           this static provider deliberately returns ERROR_EXECUTION. */
+        check_equal(scxml_intercept_prepare_send(
+            &intercept, &request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(error, "component-event");
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(intercept.target_calls, 1u);
+        check_equal(intercept.trace_count, (size_t)5u);
+        check_equal(intercept.trace[0], 11u);
+        check_equal(intercept.trace[1], 12u);
+        check_equal(intercept.trace[2], 9u);
+        check_equal(intercept.trace[3], 32u);
+        check_equal(intercept.trace[4], 31u);
+
+        /* Short circuit and failing before cannot call provider or invent
+           ACCEPTED/ticket; Interceptor hooks have only borrowed contexts. */
+        scxml_intercept_probe_reset_trace(&intercept);
+        intercept.reject_stage = 2u;
+        check_equal(scxml_intercept_prepare_send(
+            &intercept, &request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(ticket.commit);
+        check_equal(intercept.target_calls, 1u);
+        check_equal(intercept.trace_count, (size_t)4u);
+        check_equal(intercept.trace[2], 32u);
+        check_equal(intercept.trace[3], 31u);
+        intercept.reject_stage = 0u;
+        intercept.error_stage = 1u;
+        scxml_intercept_probe_reset_trace(&intercept);
+        check_equal(scxml_intercept_prepare_send(
+            &intercept, &request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_null(ticket.commit);
+        check_equal(intercept.target_calls, 1u);
+        check_equal(intercept.trace_count, (size_t)2u);
+        check_equal(intercept.trace[0], 11u);
+        check_equal(intercept.trace[1], 31u);
+        check_equal(state.anchor, 10);
+
+        adapter->close(scxml_component_event_io_provider_user(&provider));
+        check_equal(scxml_component_event_io_provider_destroy(&provider),
+                    SCXML_COMPONENT_OK);
+        check_equal(scxml_component_scope_release(&scope),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generation.generation), SALTS_COMPONENT_PLUGIN_OK);
         check_equal(salts_component_plugin_runtime_destroy(&runtime),
                     SALTS_COMPONENT_PLUGIN_OK);
     }

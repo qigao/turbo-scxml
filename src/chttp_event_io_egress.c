@@ -1,7 +1,8 @@
 #include "chttp_event_io_internal.h"
 
 #include <salts/error_codes.h>
-#include <salts/platform.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 
 #include <stdatomic.h>
 #include <string.h>
@@ -77,7 +78,7 @@ static void egress_commit(void *user) {
     uint64_t now;
     if (row == NULL || row->processor == NULL) return;
     processor = row->processor;
-    now = salts_monotonic_ms();
+    now = cmeta_monotonic_ms();
     cmeta_mutex_lock(&processor->lock);
     if (row->state != SCXML_CHTTP_EGRESS_RESERVED || row->binding == NULL) {
         ++processor->invariant_failures;
@@ -537,7 +538,7 @@ bool scxml_chttp_egress_submit_one(scxml_chttp_processor_impl *processor) {
     int status;
     if (processor == NULL) return false;
     cmeta_mutex_lock(&processor->lock);
-    row = select_ready_locked(processor, salts_monotonic_ms());
+    row = select_ready_locked(processor, cmeta_monotonic_ms());
     if (row == NULL) {
         cmeta_mutex_unlock(&processor->lock);
         return false;

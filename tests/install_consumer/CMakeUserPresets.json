@@ -13,7 +13,9 @@
         "VCPKG_INSTALLED_DIR": "${sourceDir}/../../vcpkg_installed",
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
         "TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN": "ON",
-        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT": "ON"
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_COMPONENT": "ON",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_HOST": "ON",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_CNET_EVENT_IO": "ON"
       },
       "environment": {
         "VCPKG_INSTALLED_DIR": "${sourceDir}/../../vcpkg_installed",
