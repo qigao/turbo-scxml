@@ -767,6 +767,8 @@ spec("VoiceXML/CCXML Component resource generation") {
         cflow_actor actor = {0};
         cflow_actor_ref old_ref = {0};
         voice_actor_probe probe = {0};
+        voice_actor_generation_publish handoff = {0};
+        cmeta_thread_t publish_thread = {0};
         cflow_machine_action_binding binding = {
             300u, voice_actor_progress, &probe
         };
@@ -807,7 +809,6 @@ spec("VoiceXML/CCXML Component resource generation") {
         cflow_statechart_effect_ticket ticket = {0};
         const char *error = NULL;
         cflow_actor_stats stats = {0};
-        size_t progressed = 0u;
         int state_value = 0;
         int generation_control = 51;
         const cflow_event_view control = {
@@ -849,8 +850,10 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(voice_dso_marker(&scopes[0]), 100);
 
         /* An independent CFlow Machine Actor, NOT a second VoiceXML or
-           SCXML language Session. Its SerialExecutor owns the only
-           DialogManager progress callback and its finite control mailbox. */
+           SCXML language Session. The owner-affine Executor/Scheduler
+           serializes every callback and its stop/control-plane operations.
+           A test-only publisher thread performs the concurrent generation
+           cutover while this Host owner is inside its actual Actor action. */
         atomic_init(&probe.gate_entered, false);
         atomic_init(&probe.gate_release, false);
         atomic_init(&probe.wrong_owner, false);
@@ -865,12 +868,14 @@ spec("VoiceXML/CCXML Component resource generation") {
         probe.expected_control = 51;
         probe.check_generation = true;
         probe.gate_before_ready = true;
-        probe.forbidden_thread = cmeta_thread_current_token();
+        probe.owner_thread = cmeta_thread_current_token();
 
         check_equal(cflow_machine_build(
             &machine, &definition), CFLOW_MACHINE_OK);
-        check_true(cflow_executor_serial_init(&executor));
-        check_true(cflow_scheduler_worker_init(&scheduler, 1u));
+        check_true(cflow_executor_owner_init_with_capacity(
+            &executor, 32u, NULL, NULL));
+        check_true(cflow_scheduler_owner_bind(
+            &scheduler, &executor, 16u));
         {
             cflow_actor_config config = {0};
             config.machine = (cflow_machine_instance_config){
@@ -890,61 +895,53 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(cflow_actor_ref_try_send(
             &old_ref, &control), CFLOW_ACTOR_SEND_ACCEPTED);
         generation_control = 999; /* accepted payload is copied by CFlow */
-        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
-        while (!atomic_load_explicit(
-                   &probe.gate_entered, memory_order_acquire) &&
-               cmeta_monotonic_ms() < deadline)
-            cmeta_sleep_ms(1u);
+        handoff = (voice_actor_generation_publish){
+            .gate = &probe,
+            .runtime = &runtime,
+            .generations = generations,
+            .previous = &previous,
+            .registry = &registry,
+            .old_plugin = plugins[0],
+            .new_scope = &scopes[1],
+            .new_document = &documents[1],
+            .new_manager = &managers[1],
+            .new_upstream = &upstream[1],
+            .new_events = &events[1],
+            .new_request = &next_request
+        };
+        atomic_init(&handoff.outcome, 0);
+        check_equal(cmeta_thread_create(
+            &publish_thread, voice_publish_while_host_actor_paused,
+            &handoff), 0);
+
+        /* Drive only the single existing owner Executor. Its scheduled Actor
+           callback enters an atomic gate while the publisher thread performs
+           gN->gN+1 and runs the NEW manager. That thread then releases the
+           old control callback, which returns to its ORIGINAL DSO Scope.
+           A bounded gate and the publisher's unconditional gate release
+           guarantee that either path fails visibly rather than hanging. */
+        deadline = cmeta_monotonic_ms() + UINT64_C(7000);
+        while ((atomic_load(&probe.actions) != 1 ||
+                atomic_load(&probe.values) != 1) &&
+               cmeta_monotonic_ms() < deadline) {
+            if (!cflow_executor_run_one(&executor))
+                cmeta_sleep_ms(1u);
+        }
+        check_equal(cmeta_thread_join(&publish_thread), 0);
+        check_equal(atomic_load_explicit(
+            &handoff.outcome, memory_order_acquire), 1);
         check_true(atomic_load_explicit(
             &probe.gate_entered, memory_order_acquire));
-        check_equal(atomic_load(&probe.actions), 0);
-        check_equal(voice_dso_marker(&scopes[0]), 100);
-
-        /* gN Host Actor callback is now in flight on its CFlow worker.
-           Publication cannot migrate either that callback or the
-           DialogManager's pending row to the new Component generation. */
-        check_equal(salts_component_plugin_runtime_publish(
-            &runtime, &generations[1].generation, &previous),
-            SALTS_COMPONENT_PLUGIN_OK);
-        check_true(previous == &generations[0].generation);
-        check_equal(salts_component_plugin_generation_drain(
-            &runtime, &generations[0].generation),
-            SALTS_COMPONENT_PLUGIN_BUSY);
-        check_equal(cmeta_plugin_registry_unload(
-            &registry, plugins[0]), CMETA_PLUGIN_BUSY);
-        check_equal(scxml_component_scope_acquire(
-            &scopes[1], &runtime), SCXML_COMPONENT_OK);
-        check_true(voice_resource_bind(
-            &documents[1], &scopes[1], VOICE_DSO_COMPONENT));
+        check_true(atomic_load_explicit(
+            &probe.gate_release, memory_order_acquire));
+        check_equal(scxml_component_scope_generation_id(
+            &scopes[0]), UINT64_C(51));
         check_equal(scxml_component_scope_generation_id(
             &scopes[1]), UINT64_C(52));
-        check_equal(voice_manager_init(
-            &managers[1], &documents[1], &upstream[1], &events[1]),
-            VXML_DIALOG_MANAGER_OK);
-        ticket = (cflow_statechart_effect_ticket){0};
-        check_equal(adapter->prepare_dialog_start(
-            vxml_dialog_manager_ccxml_user(&managers[1]),
-            &next_request, &dialog_id, &ticket, &error),
-            SCXML_ADAPTER_ACCEPTED);
-        ticket.commit(ticket.user);
-        check_equal(vxml_dialog_manager_run_ready(
-            &managers[1], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
         check_equal(events[1].count, (size_t)2u);
         check_equal(events[1].names[0], "dialog.started");
         check_equal(events[1].names[1], "dialog.exit");
-        check_equal(voice_dso_marker(&scopes[1]), 211);
-        check_equal(voice_dso_marker(&scopes[0]), 100);
 
-        /* Release the same old Actor callback. The DSO code executing
-           within run_ready is selected by its frozen scope, not by the
-           new current-generation publication pointer. */
-        atomic_store_explicit(
-            &probe.gate_release, true, memory_order_release);
-        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
-        while ((atomic_load(&probe.values) != 1 ||
-                atomic_load(&probe.actions) != 1) &&
-               cmeta_monotonic_ms() < deadline)
-            cmeta_sleep_ms(1u);
         check_equal(atomic_load(&probe.actions), 1);
         check_equal(atomic_load(&probe.values), 1);
         check_equal(atomic_load(&probe.last_message), 51);
@@ -959,6 +956,15 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(stats.machine.completed, UINT64_C(1));
 
         check_equal(cflow_actor_request_stop(&actor), CFLOW_ACTOR_OK);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (cflow_actor_current_state(&actor) !=
+                   CFLOW_ACTOR_STATE_STOPPED &&
+               cmeta_monotonic_ms() < deadline) {
+            if (!cflow_executor_run_one(&executor))
+                cmeta_sleep_ms(1u);
+        }
+        check_equal(cflow_actor_current_state(
+            &actor), CFLOW_ACTOR_STATE_STOPPED);
         check_equal(cflow_actor_wait(&actor), CFLOW_ACTOR_STATE_STOPPED);
         check_equal(cflow_actor_ref_try_send(
             &old_ref, &control), CFLOW_ACTOR_SEND_STOPPED);
