@@ -1,7 +1,11 @@
 #include <scxml/component.h>
 #include <voicexml/dialog_manager.h>
+#include <cflow/actor.h>
+#include <salts/clock.h>
+#include <salts/thread.h>
 #include <tinytest.h>
 
+#include <stdatomic.h>
 #include <string.h>
 
 /* P3 conformance fixture: the resource Interface is the existing canonical
@@ -339,7 +343,289 @@ static int voice_dso_marker(const scxml_component_scope *scope) {
     return *(const int *)service.object->object;
 }
 
+/* This CFlow Machine is an INDEPENDENT Host control Actor, never a wrapper
+ * around the VoiceXML Session/Program or an additional Statechart instance.
+ * It sends only small native int control messages; DialogManager's one
+ * serialized run_ready() progresses on the Actor owner executor lane. */
+typedef struct voice_actor_probe {
+    vxml_dialog_manager *manager;
+    const void *owner_thread;
+    atomic_bool wrong_owner;
+    atomic_int actions;
+    atomic_int values;
+    atomic_int failures;
+    atomic_int dones;
+    atomic_int last_message;
+} voice_actor_probe;
+
+typedef struct voice_actor_blocker {
+    atomic_bool entered;
+    atomic_bool release;
+} voice_actor_blocker;
+
+static void voice_block_scheduler(void *user) {
+    voice_actor_blocker *gate = (voice_actor_blocker *)user;
+    const uint64_t began = cmeta_monotonic_ms();
+    atomic_store(&gate->entered, true);
+    while (!atomic_load(&gate->release) &&
+           cmeta_monotonic_ms() - began < UINT64_C(5000))
+        cmeta_sleep_ms(1u);
+}
+
+static bool voice_actor_progress(
+    void *user, const void *state, const void *event,
+    void *next_state, void *observation, const char **out_error) {
+    voice_actor_probe *probe = (voice_actor_probe *)user;
+    size_t advanced = 0u;
+    vxml_dialog_manager_status status;
+    if (probe == NULL || state == NULL || event == NULL ||
+        next_state == NULL || observation == NULL || out_error == NULL)
+        return false;
+    if (probe->owner_thread != cmeta_thread_current_token())
+        atomic_store(&probe->wrong_owner, true);
+    status = vxml_dialog_manager_run_ready(probe->manager, 1u, &advanced);
+    if (status != VXML_DIALOG_MANAGER_OK || advanced != 1u) {
+        *out_error = "VoiceXML host Actor cannot advance bounded dialog row";
+        return false;
+    }
+    *(int *)next_state = *(const int *)state + 1;
+    *(int *)observation = *(const int *)event;
+    atomic_fetch_add(&probe->actions, 1);
+    *out_error = NULL;
+    return true;
+}
+
+static bool voice_actor_on_value(
+    void *user, const cmeta_type_desc *type, const void *value) {
+    voice_actor_probe *probe = (voice_actor_probe *)user;
+    if (probe == NULL || value == NULL ||
+        !cmeta_type_equal(type, &cmeta_type_int))
+        return false;
+    if (probe->owner_thread != cmeta_thread_current_token())
+        atomic_store(&probe->wrong_owner, true);
+    atomic_store(&probe->last_message, *(const int *)value);
+    atomic_fetch_add(&probe->values, 1);
+    return true;
+}
+
+static void voice_actor_on_error(void *user, const char *message) {
+    voice_actor_probe *probe = (voice_actor_probe *)user;
+    if (probe != NULL && message != NULL)
+        atomic_fetch_add(&probe->failures, 1);
+}
+
+static void voice_actor_on_done(void *user) {
+    voice_actor_probe *probe = (voice_actor_probe *)user;
+    if (probe != NULL) atomic_fetch_add(&probe->dones, 1);
+}
+
 spec("VoiceXML/CCXML Component resource generation") {
+    it("uses one independent bounded Host Actor for owner-affine DialogManager progress") {
+        static const char source[] = "mem:voice-actor";
+        static const char media[] = "application/voicexml+xml";
+        static const char connection[] = "actor-call";
+        voice_resource_state resource = {0};
+        voice_generation generation = {0};
+        salts_component_plugin_runtime runtime = {0};
+        salts_component_plugin_generation *previous = NULL;
+        scxml_component_scope scope = {0};
+        voice_resource_borrow document = {0};
+        vxml_dialog_manager manager = {0};
+        voice_telephony upstream = {0};
+        voice_events events = {0};
+        cflow_machine machine = {0};
+        cflow_executor actor_executor = {0};
+        cflow_scheduler actor_scheduler = {0};
+        cflow_actor actor = {0};
+        cflow_actor_ref producer = {0};
+        cflow_actor_stats actor_stats = {0};
+        voice_actor_probe probe = {0};
+        voice_actor_blocker gate = {0};
+        const ccxml_telephony_adapter_v1 *adapter =
+            vxml_dialog_manager_ccxml_adapter();
+        const ccxml_dialog_start_request request = {
+            .source = source, .source_size = sizeof(source) - 1u,
+            .media_type = media, .media_type_size = sizeof(media) - 1u,
+            .connection_id = connection,
+            .connection_id_size = sizeof(connection) - 1u
+        };
+        ccxml_string_view dialog = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        cflow_machine_action_binding action_binding = {
+            300u, voice_actor_progress, &probe
+        };
+        const cflow_machine_state states[1] = {
+            {10u, &cmeta_type_int, CFLOW_MACHINE_STATE_ACTIVE}
+        };
+        const cflow_event_type control_events[1] = {
+            {100u, &cmeta_type_int}
+        };
+        const cflow_machine_action actions[1] = {
+            {300u, &cmeta_type_int, 100u, &cmeta_type_int,
+             &cmeta_type_int, CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
+             CMETA_PROP_NO_ALIAS, CFLOW_MACHINE_ACTION_VALUE,
+             &cmeta_type_int, 0u}
+        };
+        const cflow_machine_transition transitions[1] = {
+            {10u, 100u, 0u, 300u, 10u, 1u}
+        };
+        const cflow_machine_definition definition = {
+            states, 1u, 10u,
+            control_events, 1u,
+            NULL, 0u,
+            actions, 1u,
+            transitions, 1u
+        };
+        int state_value = 0;
+        int mutable_control = 1;
+        const cflow_event_view control = {
+            100u, &cmeta_type_int, &mutable_control
+        };
+        const char *error = NULL;
+        uint64_t deadline;
+
+        voice_resource_init(&resource, 100, source);
+        check_equal(voice_generation_build(
+            &generation, &resource, UINT64_C(41)),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_init(&runtime),
+                    SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_publish(
+            &runtime, &generation.generation, &previous),
+            SALTS_COMPONENT_PLUGIN_OK);
+        check_null(previous);
+        check_equal(scxml_component_scope_acquire(
+            &scope, &runtime), SCXML_COMPONENT_OK);
+        check_true(voice_resource_bind(
+            &document, &scope, VOICE_STATIC_COMPONENT));
+        check_equal(voice_manager_init(
+            &manager, &document, &upstream, &events),
+            VXML_DIALOG_MANAGER_OK);
+
+        /* Prepare/commit is CCXML-owned and must NOT open the document.
+           Only an admitted independent Host Actor control message may
+           call the manager's explicitly serialized progress point. */
+        check_equal(adapter->prepare_dialog_start(
+            vxml_dialog_manager_ccxml_user(&manager),
+            &request, &dialog, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
+        check_not_null(ticket.commit);
+        ticket.commit(ticket.user);
+        check_equal(resource.open_count, (size_t)0u);
+        check_equal(events.count, (size_t)0u);
+
+        atomic_init(&gate.entered, false);
+        atomic_init(&gate.release, false);
+        atomic_init(&probe.wrong_owner, false);
+        atomic_init(&probe.actions, 0);
+        atomic_init(&probe.values, 0);
+        atomic_init(&probe.failures, 0);
+        atomic_init(&probe.dones, 0);
+        atomic_init(&probe.last_message, -1);
+        probe.manager = &manager;
+        probe.owner_thread = cmeta_thread_current_token();
+
+        check_equal(cflow_machine_build(
+            &machine, &definition), CFLOW_MACHINE_OK);
+        check_true(cflow_executor_owner_init_with_capacity(
+            &actor_executor, 8u, NULL, NULL));
+        /* Reuse Salts CFlow's existing bounded Scheduler implementation.
+           Its sole worker may schedule work, but the machine transition and
+           DialogManager invocation run only on the owner-driven Executor. */
+        check_true(cflow_scheduler_worker_init_with_capacity(
+            &actor_scheduler, 1u, 4u, 4u));
+        {
+            cflow_actor_config config = {0};
+            config.machine = (cflow_machine_instance_config){
+                &machine, &state_value, &cmeta_type_int,
+                NULL, 0u, &action_binding, 1u, 1u, &actor_executor
+            };
+            config.scheduler = &actor_scheduler;
+            config.callbacks = (cflow_subscriber_callbacks){
+                voice_actor_on_value, voice_actor_on_error,
+                voice_actor_on_done, &probe
+            };
+            check_equal(cflow_actor_init(
+                &actor, &config).status, CFLOW_ACTOR_OK);
+        }
+        check_true(cflow_actor_ref_acquire(&actor, &producer));
+        check_equal(cflow_actor_ref_try_send(
+            &producer, &control), CFLOW_ACTOR_SEND_NOT_STARTED);
+
+        /* Deterministic FULL: hold the one scheduler lane before Actor
+           admission, then fill the capacity-one CFlow-owned Mailbox. No
+           fallback, retry, heap growth, shallow pointer retention or drop. */
+        check_not_equal(cflow_scheduler_post(
+            &actor_scheduler, voice_block_scheduler, &gate),
+            (cflow_task_id)0u);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (!atomic_load(&gate.entered) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_sleep_ms(1u);
+        check_true(atomic_load(&gate.entered));
+        check_equal(cflow_actor_start(&actor), CFLOW_ACTOR_OK);
+        check_equal(cflow_actor_ref_try_send(
+            &producer, &control), CFLOW_ACTOR_SEND_ACCEPTED);
+        mutable_control = 77; /* accepted trivial payload is a copied int */
+        check_equal(cflow_actor_ref_try_send(
+            &producer, &control), CFLOW_ACTOR_SEND_FULL);
+        check_equal(resource.open_count, (size_t)0u);
+
+        atomic_store(&gate.release, true);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while ((atomic_load(&probe.values) < 1 ||
+                atomic_load(&probe.actions) < 1) &&
+               cmeta_monotonic_ms() < deadline) {
+            if (!cflow_executor_run_one(&actor_executor))
+                cmeta_sleep_ms(1u);
+        }
+        check_equal(atomic_load(&probe.actions), 1);
+        check_equal(atomic_load(&probe.values), 1);
+        check_equal(atomic_load(&probe.last_message), 1);
+        check_false(atomic_load(&probe.wrong_owner));
+        check_equal(atomic_load(&probe.failures), 0);
+        check_equal(resource.open_count, (size_t)1u);
+        check_equal(resource.close_count, (size_t)1u);
+        check_equal(events.count, (size_t)2u);
+        check_equal(events.names[0], "dialog.started");
+        check_equal(events.names[1], "dialog.exit");
+        check_true(cflow_actor_get_stats(&actor, &actor_stats));
+        check_equal(actor_stats.machine.accepted, UINT64_C(1));
+        check_equal(actor_stats.machine.completed, UINT64_C(1));
+        check_equal(actor_stats.machine.pending, (size_t)0u);
+
+        check_equal(cflow_actor_request_stop(&actor), CFLOW_ACTOR_OK);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (cflow_actor_current_state(&actor) !=
+                   CFLOW_ACTOR_STATE_STOPPED &&
+               cmeta_monotonic_ms() < deadline) {
+            if (!cflow_executor_run_one(&actor_executor))
+                cmeta_sleep_ms(1u);
+        }
+        check_equal(cflow_actor_wait(&actor), CFLOW_ACTOR_STATE_STOPPED);
+        check_equal(cflow_actor_ref_try_send(
+            &producer, &control), CFLOW_ACTOR_SEND_STOPPED);
+        cflow_actor_destroy(&actor);
+        check_equal(cflow_actor_ref_try_send(
+            &producer, &control), CFLOW_ACTOR_SEND_STALE);
+        cflow_actor_ref_release(&producer);
+        check_null(producer.impl);
+        cflow_scheduler_destroy(&actor_scheduler);
+        cflow_executor_destroy(&actor_executor);
+        cflow_machine_destroy(&machine);
+
+        voice_manager_close_destroy(&manager, &upstream);
+        check_equal(upstream.close_count, (size_t)1u);
+        check_equal(scxml_component_scope_release(&scope),
+                    SCXML_COMPONENT_OK);
+        check_equal(salts_component_plugin_runtime_close(
+            &runtime, &previous), SALTS_COMPONENT_PLUGIN_OK);
+        check_true(previous == &generation.generation);
+        check_equal(salts_component_plugin_generation_drain(
+            &runtime, &generation.generation), SALTS_COMPONENT_PLUGIN_OK);
+        check_equal(salts_component_plugin_runtime_destroy(
+            &runtime), SALTS_COMPONENT_PLUGIN_OK);
+    }
+
     it("pins the prepared dialog to gN while gN+1 starts independently") {
         static const char source_old[] = "mem:voice-gN";
         static const char source_next[] = "mem:voice-gN1";
