@@ -324,26 +324,28 @@ int main(void) { return 0; }
       "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_CPP17)
   if(NOT SCXML_INTERCEPT_EXACT_C11 OR SCXML_INTERCEPT_MUTABLE_C11 OR
      NOT SCXML_INTERCEPT_EXACT_CPP17 OR SCXML_INTERCEPT_MUTABLE_CPP17)
-    # A failing positive probe is an SDK/compiler configuration defect, not
-    # permission to skip the compile-time native signature gate. Print the
-    # short compiler diagnostics to Actions before aborting this configure.
+    # Keep the full compiler's own message attached to each individual
+    # try_compile probe. A generic regex over CMakeConfigureLog.yaml can
+    # truncate Windows path diagnostics at semicolons or mix unrelated probes.
     set(_scxml_probe_log "${CMAKE_BINARY_DIR}/CMakeFiles/CMakeConfigureLog.yaml")
     if(EXISTS "${_scxml_probe_log}")
       file(READ "${_scxml_probe_log}" _scxml_probe_text)
-      string(REGEX MATCHALL
-        "[^\\n]*(error C[0-9]+|fatal error|cannot open include file|error:)[^\\n]*"
-        _scxml_probe_errors "${_scxml_probe_text}")
-      if(_scxml_probe_errors)
-        list(LENGTH _scxml_probe_errors _scxml_probe_count)
-        if(_scxml_probe_count GREATER 30)
-          math(EXPR _scxml_probe_tail "${_scxml_probe_count} - 30")
-          list(SUBLIST _scxml_probe_errors ${_scxml_probe_tail} 30
-            _scxml_probe_errors)
+      foreach(_scxml_probe IN ITEMS
+          SCXML_INTERCEPT_EXACT_C11 SCXML_INTERCEPT_EXACT_CPP17)
+        string(FIND "${_scxml_probe_text}" "${_scxml_probe}" _scxml_probe_at)
+        if(_scxml_probe_at GREATER_EQUAL 0)
+          string(LENGTH "${_scxml_probe_text}" _scxml_log_size)
+          math(EXPR _scxml_excerpt_len
+            "${_scxml_log_size} - ${_scxml_probe_at}")
+          if(_scxml_excerpt_len GREATER 5000)
+            set(_scxml_excerpt_len 5000)
+          endif()
+          string(SUBSTRING "${_scxml_probe_text}"
+            ${_scxml_probe_at} ${_scxml_excerpt_len} _scxml_probe_excerpt)
+          message(WARNING
+            "SCXML typed Interceptor positive ${_scxml_probe} diagnostic:\n${_scxml_probe_excerpt}")
         endif()
-        foreach(_scxml_probe_error IN LISTS _scxml_probe_errors)
-          message(STATUS "SCXML Interceptor compile probe: ${_scxml_probe_error}")
-        endforeach()
-      endif()
+      endforeach()
     endif()
     message(FATAL_ERROR
       "SCXML ACE typed Interceptor C11/C++17 native ABI gate failed")
