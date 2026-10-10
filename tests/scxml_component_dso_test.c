@@ -228,6 +228,52 @@ spec("Component DSO-backed SCXML sessions") {
         check_equal(old.trace[3], 31u);
         old.reject_stage = 0u;
 
+        /* A failing before hook (as opposed to a short circuit) must not
+           invoke real DSO code, fabricate ACCEPTED or transfer a ticket.
+           The borrowed Component Scope remains unchanged and still pins
+           the plugin for later accepted requests. */
+        old.error_stage = 1u;
+        scxml_intercept_probe_reset_trace(&old);
+        error = NULL;
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(error, "interceptor-denied");
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(old.target_calls, 1u);
+        check_equal(old.discarded_on_failure, 0u);
+        check_equal(old.trace_count, (size_t)2u);
+        check_equal(old.trace[0], 11u);
+        check_equal(old.trace[1], 31u);
+        check_equal(marker_value(&test.scopes[0]), 101);
+        check_equal(test.scopes[0].binding_count, (size_t)1u);
+        check_equal(cmeta_plugin_registry_unload(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_BUSY);
+        old.error_stage = 0u;
+
+        /* A target-stage failure BEFORE entering the borrowed DSO is also
+           a no-ticket rejection; provider code may not be called. */
+        old.fail_before_provider = true;
+        scxml_intercept_probe_reset_trace(&old);
+        error = NULL;
+        check_equal(scxml_intercept_prepare_send(
+            &old, &probe_request, &ticket, &error),
+            SCXML_ADAPTER_ERROR_EXECUTION);
+        check_equal(error, "interceptor-denied");
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(old.target_calls, 2u);
+        check_equal(old.discarded_on_failure, 0u);
+        check_equal(old.trace_count, (size_t)5u);
+        check_equal(old.trace[0], 11u);
+        check_equal(old.trace[1], 12u);
+        check_equal(old.trace[2], 9u);
+        check_equal(old.trace[3], 32u);
+        check_equal(old.trace[4], 31u);
+        check_equal(marker_value(&test.scopes[0]), 101);
+        old.fail_before_provider = false;
+
         /* Real DSO rejects an unsupported event without issuing a ticket. */
         check_equal(scxml_intercept_prepare_send(
             &old, &wrong_request, &ticket, &error),
