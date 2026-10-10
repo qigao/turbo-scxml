@@ -129,10 +129,10 @@ static int native_race_open_udp_pair(native_race_socket sockets[2]) {
     address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     address.sin_port = 0;
     if (bind(rx, (const struct sockaddr *)&address,
-             (socklen_t)sizeof(address)) != 0 ||
+             address_length) != 0 ||
         getsockname(rx, (struct sockaddr *)&address, &address_length) != 0 ||
         connect(tx, (const struct sockaddr *)&address,
-                (socklen_t)address_length) != 0) goto failed;
+                address_length) != 0) goto failed;
 #if defined(_WIN32)
     if (ioctlsocket(tx, FIONBIO, &nonblocking) != 0 ||
         ioctlsocket(rx, FIONBIO, &nonblocking) != 0) goto failed;
