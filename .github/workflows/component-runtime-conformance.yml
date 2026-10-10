@@ -171,8 +171,8 @@ jobs:
           utils_targets="$utils_root/lib/cmake/SaltsUtils/SaltsUtilsTargets.cmake"
           test -f "$salts_targets"
           test -f "$utils_targets"
-          if grep -Eq '^[[:space:]]*add_library\\(Salts::Unicode[[:space:]]' "$salts_targets" &&
-             grep -Eq '^[[:space:]]*add_library\\(Salts::Unicode[[:space:]]' "$utils_targets"; then
+          if grep -Eq '^[[:space:]]*add_library\(Salts::Unicode[[:space:]]' "$salts_targets" &&
+             grep -Eq '^[[:space:]]*add_library\(Salts::Unicode[[:space:]]' "$utils_targets"; then
             echo "::error::Incompatible published native SDK graph: Salts.Native $salts_version and SaltsUtils.Native $utils_version both export Salts::Unicode. Coordinate qigao/salts#1088 and qigao/salts-utils#610/#611. No fallback or exact old-version pin."
             exit 1
           fi
