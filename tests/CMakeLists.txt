@@ -422,10 +422,33 @@ int main(void) { return 0; }
     scxml_component_test
     scxml_component_test.c
     LIBS TurboSCXML::Component)
+  foreach(generation RANGE 1 2)
+    add_library(voicexml_component_resource_dso_${generation} MODULE
+      voicexml_component_resource_dso_fixture.c)
+    target_link_libraries(voicexml_component_resource_dso_${generation}
+      PRIVATE TurboSCXML::SCXML
+        Salts::ComponentPluginABI Salts::PluginABI)
+    target_compile_features(voicexml_component_resource_dso_${generation}
+      PRIVATE c_std_11)
+    target_compile_definitions(voicexml_component_resource_dso_${generation}
+      PRIVATE
+        VOICE_COMPONENT_DSO_MARKER=${generation}00
+        VOICE_COMPONENT_DSO_ID="test.voicexml.resource.${generation}")
+    set_target_properties(voicexml_component_resource_dso_${generation}
+      PROPERTIES
+        C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+        FOLDER "tests/fixtures")
+  endforeach()
+
   turboscxml_add_test(
     voicexml_component_dialog_test
     voicexml_component_dialog_test.c
-    LIBS TurboSCXML::Component TurboSCXML::VoiceXMLDialogManager)
+    LIBS TurboSCXML::Component TurboSCXML::VoiceXMLDialogManager
+    DEFINITIONS
+      VOICE_RESOURCE_DSO_ONE="$<TARGET_FILE:voicexml_component_resource_dso_1>"
+      VOICE_RESOURCE_DSO_TWO="$<TARGET_FILE:voicexml_component_resource_dso_2>")
+  add_dependencies(voicexml_component_dialog_test
+    voicexml_component_resource_dso_1 voicexml_component_resource_dso_2)
   set_tests_properties(voicexml_component_dialog_test PROPERTIES TIMEOUT 60)
 endif()
 
