@@ -4,8 +4,11 @@
     <IncludeCHttpNative Condition="'$(IncludeCHttpNative)' == ''">false</IncludeCHttpNative>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="2.3.0-*" />
-    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+    <!-- Exact candidate SDK graph: never resolve a later RC independently
+         on different hosts during one admission run. Update both versions
+         and the workflow source manifests together after a new release. -->
+    <PackageReference Include="Salts.Native" Version="2.3.0-rc.5" />
+    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-rc.2" />
     <!-- The full native SDK matrix also tests the existing CHttp 2.0.0 adapter.
          The optional ACE Component profile stays independent of CHttp. -->
     <PackageReference Include="CHttp.Native" Version="2.0.0"
