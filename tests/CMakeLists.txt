@@ -280,8 +280,11 @@ if(TURBOSCXML_ENABLE_COMPONENT)
   list(REMOVE_DUPLICATES CMAKE_REQUIRED_INCLUDES)
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
   set(_scxml_intercept_good [=[
-#include <scxml/component.h>
 #include <cmeta/ace_interceptor.h>
+/* Same public named C tags, but no need to pull the entire SCXML/IDL include
+   graph into this strictly native function-pointer type-system probe. */
+typedef struct scxml_send_request scxml_send_request;
+typedef struct cflow_statechart_effect_ticket cflow_statechart_effect_ticket;
 CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
                        cflow_statechart_effect_ticket);
 cmeta_status exact(void *, const scxml_send_request *,
@@ -292,8 +295,11 @@ CMETA_STATIC_ASSERT(
 int main(void) { return 0; }
 ]=])
   set(_scxml_intercept_bad [=[
-#include <scxml/component.h>
 #include <cmeta/ace_interceptor.h>
+/* Same public named C tags, but no need to pull the entire SCXML/IDL include
+   graph into this strictly native function-pointer type-system probe. */
+typedef struct scxml_send_request scxml_send_request;
+typedef struct cflow_statechart_effect_ticket cflow_statechart_effect_ticket;
 CMETA_INTERCEPTOR_TYPE(scxml_compile_intercept, scxml_send_request,
                        cflow_statechart_effect_ticket);
 cmeta_status mutable_request(void *, scxml_send_request *,
