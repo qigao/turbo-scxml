@@ -358,20 +358,6 @@ typedef struct voice_actor_probe {
     atomic_int last_message;
 } voice_actor_probe;
 
-typedef struct voice_actor_blocker {
-    atomic_bool entered;
-    atomic_bool release;
-} voice_actor_blocker;
-
-static void voice_block_scheduler(void *user) {
-    voice_actor_blocker *gate = (voice_actor_blocker *)user;
-    const uint64_t began = cmeta_monotonic_ms();
-    atomic_store(&gate->entered, true);
-    while (!atomic_load(&gate->release) &&
-           cmeta_monotonic_ms() - began < UINT64_C(5000))
-        cmeta_sleep_ms(1u);
-}
-
 static bool voice_actor_progress(
     void *user, const void *state, const void *event,
     void *next_state, void *observation, const char **out_error) {
@@ -440,7 +426,6 @@ spec("VoiceXML/CCXML Component resource generation") {
         cflow_actor_ref producer = {0};
         cflow_actor_stats actor_stats = {0};
         voice_actor_probe probe = {0};
-        voice_actor_blocker gate = {0};
         const ccxml_telephony_adapter_v1 *adapter =
             vxml_dialog_manager_ccxml_adapter();
         const ccxml_dialog_start_request request = {
@@ -514,8 +499,6 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(resource.open_count, (size_t)0u);
         check_equal(events.count, (size_t)0u);
 
-        atomic_init(&gate.entered, false);
-        atomic_init(&gate.release, false);
         atomic_init(&probe.wrong_owner, false);
         atomic_init(&probe.actions, 0);
         atomic_init(&probe.values, 0);
@@ -529,11 +512,11 @@ spec("VoiceXML/CCXML Component resource generation") {
             &machine, &definition), CFLOW_MACHINE_OK);
         check_true(cflow_executor_owner_init_with_capacity(
             &actor_executor, 8u, NULL, NULL));
-        /* Reuse Salts CFlow's existing bounded Scheduler implementation.
-           Its sole worker may schedule work, but the machine transition and
-           DialogManager invocation run only on the owner-driven Executor. */
-        check_true(cflow_scheduler_worker_init_with_capacity(
-            &actor_scheduler, 1u, 4u, 4u));
+        /* Bind the scheduler to the SAME owner executor. Both Machine
+           action and Subscription callbacks then run on the Host lane;
+           there is no second worker or Session/Statechart instance. */
+        check_true(cflow_scheduler_owner_bind(
+            &actor_scheduler, &actor_executor, 4u));
         {
             cflow_actor_config config = {0};
             config.machine = (cflow_machine_instance_config){
@@ -552,17 +535,9 @@ spec("VoiceXML/CCXML Component resource generation") {
         check_equal(cflow_actor_ref_try_send(
             &producer, &control), CFLOW_ACTOR_SEND_NOT_STARTED);
 
-        /* Deterministic FULL: hold the one scheduler lane before Actor
-           admission, then fill the capacity-one CFlow-owned Mailbox. No
-           fallback, retry, heap growth, shallow pointer retention or drop. */
-        check_not_equal(cflow_scheduler_post(
-            &actor_scheduler, voice_block_scheduler, &gate),
-            (cflow_task_id)0u);
-        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
-        while (!atomic_load(&gate.entered) &&
-               cmeta_monotonic_ms() < deadline)
-            cmeta_sleep_ms(1u);
-        check_true(atomic_load(&gate.entered));
+        /* Deterministic FULL: do not run the owner executor after start
+           until one typed control message fills capacity-one Actor Mailbox.
+           A concurrent worker scheduler is not required for this gate. */
         check_equal(cflow_actor_start(&actor), CFLOW_ACTOR_OK);
         check_equal(cflow_actor_ref_try_send(
             &producer, &control), CFLOW_ACTOR_SEND_ACCEPTED);
@@ -571,7 +546,6 @@ spec("VoiceXML/CCXML Component resource generation") {
             &producer, &control), CFLOW_ACTOR_SEND_FULL);
         check_equal(resource.open_count, (size_t)0u);
 
-        atomic_store(&gate.release, true);
         deadline = cmeta_monotonic_ms() + UINT64_C(5000);
         while ((atomic_load(&probe.values) < 1 ||
                 atomic_load(&probe.actions) < 1) &&
@@ -602,6 +576,8 @@ spec("VoiceXML/CCXML Component resource generation") {
             if (!cflow_executor_run_one(&actor_executor))
                 cmeta_sleep_ms(1u);
         }
+        check_equal(cflow_actor_current_state(
+            &actor), CFLOW_ACTOR_STATE_STOPPED);
         check_equal(cflow_actor_wait(&actor), CFLOW_ACTOR_STATE_STOPPED);
         check_equal(cflow_actor_ref_try_send(
             &producer, &control), CFLOW_ACTOR_SEND_STOPPED);
