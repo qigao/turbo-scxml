@@ -463,7 +463,8 @@ spec("VoiceXML/CCXML Component resource generation") {
         const cflow_machine_action actions[1] = {
             {300u, &cmeta_type_int, 100u, &cmeta_type_int,
              &cmeta_type_int, CMETA_EFFECT_STATEFUL | CMETA_EFFECT_MAY_FAIL,
-             CMETA_PROP_NO_ALIAS, CFLOW_MACHINE_ACTION_VALUE,
+             CMETA_PROP_DETERMINISTIC | CMETA_PROP_NO_ALIAS,
+             CFLOW_MACHINE_ACTION_VALUE,
              &cmeta_type_int, 0u}
         };
         const cflow_machine_transition transitions[1] = {
