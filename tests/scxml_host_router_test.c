@@ -178,6 +178,187 @@ spec("Generation-checked bounded SCXML Host routing") {
         scxml_program_destroy(&program);
     }
 
+    it("distinguishes two-Session Host FULL from FIFO FULL without bypass or event loss") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='start'>"
+            "<state id='start'><transition event='first' target='next'/></state>"
+            "<state id='next'><transition event='second' target='done'/></state>"
+            "<final id='done'/></scxml>";
+        const scxml_event_metadata metadata = {
+            .abi_version = SCXML_EVENT_METADATA_ABI,
+            .struct_size = sizeof(scxml_event_metadata)
+        };
+        scxml_program program = {0};
+        scxml_diagnostic diagnostic = {0};
+        cflow_executor executors[2] = {{0}, {0}};
+        scxml_session sessions[2] = {{0}, {0}};
+        scxml_host_router router = {0};
+        scxml_host_session_ref refs[2] = {{0}, {0}};
+        scxml_host_session_ref replacement = {0};
+        scxml_host_router_stats stats = {0};
+        cflow_statechart_instance_stats machine = {0};
+        cflow_statechart_effect_ticket ticket = {0};
+        block_probe gate = {0};
+        char event_name[] = "first";
+        char send_id[] = "send-a";
+        char content[] = "PAYLOAD";
+        uint64_t deadline;
+        size_t delivered = 0u;
+
+        atomic_init(&gate.entered, false);
+        atomic_init(&gate.release, false);
+        check_equal(scxml_compile(&program, source, sizeof(source) - 1u,
+                                  NULL, &diagnostic), SCXML_OK);
+        for (size_t i = 0u; i < 2u; ++i) {
+            scxml_session_config config;
+            check_true(cflow_executor_serial_init(&executors[i]));
+            config = session_config(&program, &executors[i]);
+            check_equal(scxml_session_init(&sessions[i], &config),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            check_true(cflow_executor_wait_idle(&executors[i]));
+        }
+        check_equal(scxml_host_router_init(
+            &router, &(scxml_host_router_config){
+                .endpoint_capacity = 2u, .event_capacity = 4u,
+                .max_text_bytes = 8u
+            }), SALTS_OK);
+        for (size_t i = 0u; i < 2u; ++i)
+            check_equal(scxml_host_router_attach(
+                &router, &sessions[i], &refs[i]), SALTS_OK);
+        check_not_equal(refs[0].slot, refs[1].slot);
+
+        /* Block only Session A's existing SerialExecutor, and fill its
+           canonical external FIFO; B's executor remains free to progress.
+           There is no Host-created second Statechart or executor. */
+        check_equal(cflow_executor_try_post(
+            &executors[0], block_executor, &gate), CFLOW_ADMISSION_ACCEPTED);
+        deadline = cmeta_monotonic_ms() + UINT64_C(5000);
+        while (!atomic_load_explicit(&gate.entered, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline)
+            cmeta_thread_yield();
+        check_true(atomic_load_explicit(&gate.entered, memory_order_acquire));
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &sessions[0], "ignore", 6u, &metadata), CFLOW_MAILBOX_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &sessions[0], "ignore", 6u, &metadata), CFLOW_MAILBOX_OK);
+        check_equal(scxml_session_try_send_named_with_metadata(
+            &sessions[0], "ignore", 6u, &metadata), CFLOW_MAILBOX_FULL);
+
+        /* Commit an owned Host effect only AFTER prepare copies all
+           call-scoped event name, sendid and UTF-8 content. Then interleave
+           A/B source traffic into four finite Host rows. */
+        check_equal(scxml_host_router_prepare_target(
+            &router, refs[0], NULL, 0u,
+            event_name, sizeof(event_name) - 1u,
+            send_id, sizeof(send_id) - 1u,
+            &(scxml_content_view){
+                .kind = SCXML_CONTENT_TEXT_UTF8, .bytes = content,
+                .byte_count = sizeof(content) - 1u
+            }, 0u, &ticket), SALTS_OK);
+        event_name[0] = 'x';
+        send_id[0] = 'x';
+        content[0] = 'x';
+        check_equal(scxml_host_router_drain(
+            &router, 4u, &delivered), CFLOW_MAILBOX_EMPTY);
+        check_equal(delivered, (size_t)0u);
+        ticket.commit(ticket.user);
+        check_equal(scxml_host_router_enqueue(
+            &router, refs[1], "first", 5u, NULL, 0u), SALTS_OK);
+        check_equal(scxml_host_router_enqueue(
+            &router, refs[0], "second", 6u, NULL, 0u), SALTS_OK);
+        check_equal(scxml_host_router_enqueue(
+            &router, refs[1], "second", 6u, NULL, 0u), SALTS_OK);
+
+        /* The Host row budget and the Session mailbox budget are distinct.
+           Full Host storage rejects new admission WITHOUT fabricating an
+           ACCEPTED ticket, reallocating rows or discarding prior events. */
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(scxml_host_router_prepare(
+            &router, refs[1], "first", 5u, NULL, 0u, &ticket),
+            SALTS_ENOBUFS);
+        check_null(ticket.commit);
+        check_null(ticket.discard);
+        check_equal(scxml_host_router_enqueue(
+            &router, refs[1], "second", 6u, NULL, 0u), SALTS_ENOBUFS);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)4u);
+        check_equal(stats.reserved, (size_t)0u);
+        check_equal(stats.high_water, (size_t)4u);
+        check_equal(stats.committed, UINT64_C(4));
+        check_equal(stats.rejected_full, UINT64_C(2));
+
+        /* A is the oldest committed Host row, and its Session FIFO is FULL.
+           Draining cannot bypass A in favor of ready Session B, nor discard
+           A's ownership merely because B is available. The caller must
+           explicitly advance the existing A executor. */
+        check_equal(scxml_host_router_drain(
+            &router, 4u, &delivered), CFLOW_MAILBOX_FULL);
+        check_equal(delivered, (size_t)0u);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)4u);
+        check_equal(stats.delivered, UINT64_C(0));
+        check_equal(stats.delivery_errors, UINT64_C(0));
+        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_EBUSY);
+        check_equal(scxml_host_router_detach(&router, refs[1]), SALTS_EBUSY);
+
+        atomic_store_explicit(&gate.release, true, memory_order_release);
+        check_true(cflow_executor_wait_idle(&executors[0]));
+        check_equal(scxml_host_router_drain(
+            &router, 4u, &delivered), CFLOW_MAILBOX_OK);
+        check_equal(delivered, (size_t)4u);
+        check_equal(scxml_host_router_drain(
+            &router, 4u, &delivered), CFLOW_MAILBOX_EMPTY);
+        check_equal(delivered, (size_t)0u);
+        for (size_t i = 0u; i < 2u; ++i) {
+            check_true(cflow_executor_wait_idle(&executors[i]));
+            check_true(scxml_session_get_stats(&sessions[i], &machine));
+            /* If one source's "second" overtook its "first", the real SCXML
+               transition would never reach the terminal state. */
+            check_true(machine.done);
+            check_false(machine.errored);
+        }
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)0u);
+        check_equal(stats.delivered, UINT64_C(4));
+        check_equal(stats.rejected_full, UINT64_C(2));
+        check_equal(stats.delivery_errors, UINT64_C(0));
+        check_equal(stats.invariant_failures, UINT64_C(0));
+
+        /* A discarded move-only ticket never produces a visible Event.
+           Detached generation refs may not re-admit after slot reuse. */
+        check_equal(scxml_host_router_prepare(
+            &router, refs[0], "first", 5u, NULL, 0u, &ticket), SALTS_OK);
+        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_EBUSY);
+        ticket.discard(ticket.user);
+        check_true(scxml_host_router_get_stats(&router, &stats));
+        check_equal(stats.pending, (size_t)0u);
+        check_equal(stats.discarded, UINT64_C(1));
+        check_equal(scxml_host_router_detach(&router, refs[0]), SALTS_OK);
+        check_equal(scxml_host_router_attach(
+            &router, &sessions[0], &replacement), SALTS_OK);
+        check_equal(replacement.slot, refs[0].slot);
+        check_not_equal(replacement.generation, refs[0].generation);
+        ticket = (cflow_statechart_effect_ticket){0};
+        check_equal(scxml_host_router_prepare(
+            &router, refs[0], "first", 5u, NULL, 0u, &ticket),
+            SALTS_ENOENT);
+        check_null(ticket.commit);
+        check_equal(scxml_host_router_detach(
+            &router, replacement), SALTS_OK);
+        check_equal(scxml_host_router_detach(
+            &router, refs[1]), SALTS_OK);
+        check_equal(scxml_host_router_close(&router), SALTS_OK);
+        check_true(scxml_host_router_is_quiescent(&router));
+        check_equal(scxml_host_router_destroy(&router), SALTS_OK);
+        for (size_t i = 0u; i < 2u; ++i) {
+            check_equal(scxml_session_destroy(&sessions[i]),
+                        CFLOW_STATECHART_INSTANCE_OK);
+            cflow_executor_destroy(&executors[i]);
+        }
+        scxml_program_destroy(&program);
+    }
+
     it("requires outstanding effect tickets to settle before detaching") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' initial='run'>"
