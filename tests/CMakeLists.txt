@@ -328,8 +328,12 @@ int main(void) { return 0; }
   check_c_source_compiles(
       "${_scxml_intercept_bad}" SCXML_INTERCEPT_MUTABLE_C11)
   if(MSVC)
+    # Salts::CMeta exports /Zc:preprocessor for MSVC C++; isolated
+    # try_compile deliberately has no link target and must carry the exact
+    # same public compiler option, otherwise Enum(...) PP macros are parsed
+    # by MSVC's traditional (nonconforming) preprocessor.
     set(CMAKE_REQUIRED_FLAGS
-      "${_scxml_saved_required_flags} /std:c++17")
+      "${_scxml_saved_required_flags} /std:c++17 /Zc:preprocessor")
   endif()
   check_cxx_source_compiles(
       "${_scxml_intercept_good}" SCXML_INTERCEPT_EXACT_CPP17)
