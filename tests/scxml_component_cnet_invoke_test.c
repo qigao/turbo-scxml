@@ -446,6 +446,7 @@ typedef struct close_first_invoke_probe {
     atomic_int close_returned;
     atomic_int close_calls;
     atomic_int cancel_calls;
+    atomic_int callback_inflight;
     atomic_int cancel_saw_close;
     atomic_int cancel_status;
     atomic_int ticket_issued;
@@ -465,6 +466,7 @@ static scxml_adapter_status close_first_prepare_cancel(
     const uint64_t deadline = cmeta_monotonic_ms() + UINT64_C(10000);
     scxml_adapter_status status;
 
+    atomic_store_explicit(&p->callback_inflight, 1, memory_order_release);
     atomic_store_explicit(&p->admission.entered, 1, memory_order_release);
     while (!atomic_load_explicit(&p->admission.release,
                                  memory_order_acquire) &&
@@ -487,6 +489,7 @@ static scxml_adapter_status close_first_prepare_cancel(
         ticket != NULL && (ticket->commit != NULL || ticket->discard != NULL),
         memory_order_release);
     atomic_fetch_add_explicit(&p->cancel_calls, 1, memory_order_release);
+    atomic_store_explicit(&p->callback_inflight, 0, memory_order_release);
     return status;
 }
 
@@ -499,7 +502,11 @@ static void close_first_close(void *user) {
 
 static bool close_first_quiescent(void *user) {
     close_first_invoke_probe *p = (close_first_invoke_probe *)user;
-    return p->delegate->is_quiescent(p->delegate_user);
+    /* Test adapter owns the pre-admission callback. The DSO has not
+       entered yet, so its own quiescence cannot account for this borrow. */
+    return atomic_load_explicit(&p->callback_inflight,
+                                memory_order_acquire) == 0 &&
+           p->delegate->is_quiescent(p->delegate_user);
 }
 
 /* Runs concurrently with *actual DSO instructions* inside the CNet owner's
@@ -2224,6 +2231,7 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         atomic_init(&probe.close_returned, 0);
         atomic_init(&probe.close_calls, 0);
         atomic_init(&probe.cancel_calls, 0);
+        atomic_init(&probe.callback_inflight, 0);
         atomic_init(&probe.cancel_saw_close, 0);
         atomic_init(&probe.cancel_status, -1);
         atomic_init(&probe.ticket_issued, 0);
@@ -2266,6 +2274,8 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &probe.admission.entered, memory_order_acquire), 1);
         check_equal(atomic_load_explicit(
             &probe.cancel_calls, memory_order_acquire), 0);
+        check_equal(atomic_load_explicit(
+            &probe.callback_inflight, memory_order_acquire), 1);
         check_equal(atomic_load_explicit(
             &probe.close_calls, memory_order_acquire), 0);
 
