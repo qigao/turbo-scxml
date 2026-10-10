@@ -2887,10 +2887,6 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
         check_equal(invoke_token_from_scope(&f.scopes[0]), old_token);
         check_equal(cmeta_plugin_registry_unload(
             &f.registry, f.plugins[0]), CMETA_PLUGIN_BUSY);
-        check_equal(salts_component_plugin_generation_drain(
-            &f.runtime, &f.generations[0].generation),
-            SALTS_COMPONENT_PLUGIN_BUSY);
-
         /* Host owner changes the *physical timer row* while the DSO CFlow
            worker remains inside prepare_cancel. It does not call or mutate
            that executor, Plugin lease or any NativeIO progress owner. */
@@ -2910,6 +2906,11 @@ spec("DSO-backed Invoke plus real CNet terminal across ACE generation switch") {
             &f.runtime, &f.generations[1].generation, &previous),
             SALTS_COMPONENT_PLUGIN_OK);
         check_true(previous == &f.generations[0].generation);
+        /* Old gN is now DRAINING, but its executing DSO callback still
+           holds the noncopyable Component Scope and forbids retirement. */
+        check_equal(salts_component_plugin_generation_drain(
+            &f.runtime, &f.generations[0].generation),
+            SALTS_COMPONENT_PLUGIN_BUSY);
         check_equal(scxml_component_scope_acquire(
             &f.scopes[1], &f.runtime), SCXML_COMPONENT_OK);
         check_equal(scxml_component_invoke_provider_bind(
