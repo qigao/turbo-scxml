@@ -1,0 +1,262 @@
+name: Component upstream source TSan
+
+on:
+  pull_request:
+    branches:
+      - feature/component-runtime-conformance
+    paths:
+      - ".github/workflows/component-upstream-source-tsan.yml"
+      - "CMakeLists.txt"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: scxml-upstream-tsan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  first-party-source-tsan:
+    name: Linux full first-party Salts/SaltsUtils/SCXML TSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.turboscxml-upstream-tsan-ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 1G
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
+      TSAN_OPTIONS: "halt_on_error=1:exitcode=66"
+    steps:
+      - name: Checkout exact TurboSCXML candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The tested source identity MUST be identical to the published,
+      # manifest-verified SDK graph. Source builds remain private to this job.
+      - name: Checkout published Salts RC4 source identity
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: 233a0d1c2086808d85160ad70010e13b4c63d5c8
+          path: build/upstream-tsan/sources/salts
+          persist-credentials: false
+
+      - name: Checkout published SaltsUtils RC2 source identity
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-utils
+          ref: c96a47b05292e3bbebba0b016c0b18c71bce8cde
+          path: build/upstream-tsan/sources/salts-utils
+          persist-credentials: false
+
+      - name: Configure shared read-only vcpkg binary cache
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+
+      - name: Restore source-build ccache objects
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.turboscxml-upstream-tsan-ccache
+          key: scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          restore-keys: |
+            scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-
+
+      - name: Restore Salts host re2c
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare host build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config ccache python3
+          cmake --version
+          ccache --zero-stats
+
+      - name: Prove published source manifests and immutable checkout SHAs
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/upstream-tsan
+          config="$RUNNER_TEMP/tsan-source-NuGet.Config"
+          packages="$RUNNER_TEMP/tsan-source-nuget"
+          project="$RUNNER_TEMP/tsan-source-dependencies.csproj"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cp cmake/ci/native-sdk-dependencies.csproj "$project"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache
+
+          salts_sdk="$(find "$packages/salts.native" -type d -path '*/sdk/linux-x64' -print)"
+          utils_sdk="$(find "$packages/saltsutils.native" -type d -path '*/sdk/linux-x64' -print)"
+          test "$(printf '%s\n' "$salts_sdk" | grep -c '/sdk/linux-x64$')" -eq 1
+          test "$(printf '%s\n' "$utils_sdk" | grep -c '/sdk/linux-x64$')" -eq 1
+          salts_manifest="$salts_sdk/salts-sdk-manifest.txt"
+          utils_manifest="$utils_sdk/salts-utils-sdk-manifest.txt"
+          test -f "$salts_manifest"
+          test -f "$utils_manifest"
+          salts_sha="$(git -C build/upstream-tsan/sources/salts rev-parse HEAD)"
+          utils_sha="$(git -C build/upstream-tsan/sources/salts-utils rev-parse HEAD)"
+          test "$salts_sha" = 233a0d1c2086808d85160ad70010e13b4c63d5c8
+          test "$utils_sha" = c96a47b05292e3bbebba0b016c0b18c71bce8cde
+          grep -Fxq 'version=2.3.0-rc.4' "$salts_manifest"
+          grep -Fxq 'version=4.3.0-rc.2' "$utils_manifest"
+          grep -Fxq "commit=$salts_sha" "$salts_manifest"
+          grep -Fxq "commit=$utils_sha" "$utils_manifest"
+          grep -Fxq 'profile=release' "$salts_manifest"
+          grep -Fxq 'profile=release' "$utils_manifest"
+          # No mixed header/binary roots, and no fallback to an earlier RC.
+          test -f "$salts_sdk/lib/cmake/Salts/SaltsConfig.cmake"
+          test -f "$utils_sdk/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          {
+            printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'salts_published_version=2.3.0-rc.4\nsalts_source_commit=%s\n' "$salts_sha"
+            printf 'saltsutils_published_version=4.3.0-rc.2\nsaltsutils_source_commit=%s\n' "$utils_sha"
+            printf 'build_profile=first-party-full-source-tsan\n'
+            printf 'host=linux-x64\n'
+            printf 'third_party_vcpkg_prebuilt=not_tsan_instrumented\n'
+          } > build/upstream-tsan/provenance.txt
+          cat build/upstream-tsan/provenance.txt
+
+      - name: Build and install complete first-party Salts with TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_dir="$GITHUB_WORKSPACE/build/upstream-tsan/sources/salts"
+          sdk="$RUNNER_TEMP/tsan-source-sdks/salts"
+          cmake --preset linux-tsan-ci -S "$source_dir" \
+            -B "$GITHUB_WORKSPACE/build/upstream-tsan/build-salts" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX="$sdk" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_THREAD=ON \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+          cmake --build build/upstream-tsan/build-salts --parallel 2
+          cmake --install build/upstream-tsan/build-salts
+          test -f "$sdk/lib/cmake/Salts/SaltsConfig.cmake"
+          printf 'salts_tsan_install=%s\n' "$sdk" >> build/upstream-tsan/provenance.txt
+
+      - name: Build and install complete first-party SaltsUtils with TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/tsan-source-sdks/salts"
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTS_ROOT/bin:$LD_LIBRARY_PATH"
+          source_dir="$GITHUB_WORKSPACE/build/upstream-tsan/sources/salts-utils"
+          sdk="$RUNNER_TEMP/tsan-source-sdks/salts-utils"
+          cmake --preset ci-linux-release-user -S "$source_dir" \
+            -B "$GITHUB_WORKSPACE/build/upstream-tsan/build-utils" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX="$sdk" \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
+            -DSALTS_UTILS_ENABLE_CAPTURE=OFF \
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
+            -DENABLE_SANITIZER_THREAD=ON \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+          cmake --build build/upstream-tsan/build-utils --parallel 2
+          cmake --install build/upstream-tsan/build-utils
+          test -f "$sdk/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
+          printf 'saltsutils_tsan_install=%s\n' "$sdk" >> build/upstream-tsan/provenance.txt
+
+      - name: Build TurboSCXML against the fully source-instrumented first-party graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/tsan-source-sdks/salts"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/tsan-source-sdks/salts-utils"
+          export DATABIND_ROOT="$SALTS_UTILS_ROOT"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:$LD_LIBRARY_PATH"
+          cmake --preset ci-component-release-user -S "$GITHUB_WORKSPACE" \
+            -B "$GITHUB_WORKSPACE/build/upstream-tsan/consumer" \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DENABLE_SANITIZER_ADDRESS=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=thread -g -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread \
+            -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=thread \
+            -DCMAKE_MODULE_LINKER_FLAGS=-fsanitize=thread \
+            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+          cmake --build build/upstream-tsan/consumer --parallel 2
+          grep -F "Salts_DIR:PATH=$SALTS_ROOT" build/upstream-tsan/consumer/CMakeCache.txt
+          grep -F "SaltsUtils_DIR:PATH=$SALTS_UTILS_ROOT" build/upstream-tsan/consumer/CMakeCache.txt
+
+      - name: Assert every first-party compile command was TSan-instrumented
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee build/upstream-tsan/instrumentation.txt
+          import json
+          from pathlib import Path
+          root = Path("build/upstream-tsan").resolve()
+          for name, path in [
+              ("Salts", root / "build-salts/compile_commands.json"),
+              ("SaltsUtils", root / "build-utils/compile_commands.json"),
+              ("TurboSCXML", root / "consumer/compile_commands.json"),
+          ]:
+              entries = json.loads(path.read_text())
+              commands = [item.get("command", " ".join(item.get("arguments", [])))
+                          for item in entries]
+              missing = [item.get("file", "<unknown>") for item, cmd in zip(entries, commands)
+                         if "-fsanitize=thread" not in cmd]
+              print(f"{name}: compiled={len(commands)} missing_tsan={len(missing)}")
+              if not commands or missing:
+                  print("\n".join(missing[:20]))
+                  raise SystemExit(f"{name} contains uninstrumented first-party C/C++ objects")
+          PY
+
+      - name: Run DSO/NativeIO/Host concurrency gates with full first-party TSan
+        shell: bash
+        run: |
+          set -euo pipefail
+          export SALTS_ROOT="$RUNNER_TEMP/tsan-source-sdks/salts"
+          export SALTS_UTILS_ROOT="$RUNNER_TEMP/tsan-source-sdks/salts-utils"
+          export DATABIND_ROOT="$SALTS_UTILS_ROOT"
+          export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:$LD_LIBRARY_PATH"
+          ctest --test-dir build/upstream-tsan/consumer \
+            -R '^(scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
+            --repeat until-fail:50 --no-tests=error --output-on-failure \
+            --output-junit "$GITHUB_WORKSPACE/build/upstream-tsan/results.xml"
+
+      - name: Record source TSan ccache statistics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build/upstream-tsan
+          ccache --show-stats > build/upstream-tsan/ccache-stats.txt || true
+
+      - name: Upload reproducible first-party source TSan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scxml-upstream-source-tsan-linux-x64
+          path: |
+            build/upstream-tsan/provenance.txt
+            build/upstream-tsan/instrumentation.txt
+            build/upstream-tsan/results.xml
+            build/upstream-tsan/ccache-stats.txt
+            build/upstream-tsan/consumer/Testing/Temporary/LastTest.log
+          retention-days: 14
