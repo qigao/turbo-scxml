@@ -26,6 +26,10 @@ typedef struct dso_test {
     scxml_component_event_io_provider providers[SESSION_CAPACITY];
     scxml_program program;
     scxml_session sessions[SESSION_CAPACITY];
+    /* Stable through after_each cleanup: Session retains a borrowed adapter
+       context until Session destroy/initialization rollback finishes. */
+    scxml_intercept_probe intercepted[SESSION_CAPACITY];
+    scxml_event_io_adapter intercepted_io[SESSION_CAPACITY];
     cflow_executor executors[SESSION_CAPACITY];
     bool executor_live[SESSION_CAPACITY];
 } dso_test;
@@ -116,6 +120,87 @@ static bool fire(dso_test *test, size_t slot, const char *event) {
     return scxml_session_try_send_named_with_metadata(
         &test->sessions[slot], event, strlen(event), &metadata) ==
         CFLOW_MAILBOX_OK && cflow_executor_wait_idle(&test->executors[slot]);
+}
+
+/* SCXML still owns the effect journal and move-only ticket settlement;
+   only prepare_send crosses the exact native CMeta Interceptor chain. The
+   bridge never owns an extra Plugin lease, Statechart, executor or poller. */
+static scxml_adapter_status intercepted_session_prepare_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *ticket, const char **error) {
+    return scxml_intercept_prepare_send(
+        (scxml_intercept_probe *)user, request, ticket, error);
+}
+
+static void intercepted_session_close(void *user) {
+    scxml_intercept_probe *probe = (scxml_intercept_probe *)user;
+    if (probe != NULL && probe->provider->close != NULL)
+        probe->provider->close(probe->provider_user);
+}
+
+static bool intercepted_session_quiescent(void *user) {
+    scxml_intercept_probe *probe = (scxml_intercept_probe *)user;
+    return probe != NULL && probe->provider->is_quiescent != NULL &&
+        probe->provider->is_quiescent(probe->provider_user);
+}
+
+static bool init_intercepted_dso(dso_test *test) {
+    const cmeta_plugin_registry_config registry_conf = {.capacity = 1u};
+    salts_component_plugin_generation *previous = NULL;
+    const scxml_event_io_adapter *provider;
+    if (cmeta_plugin_registry_init(&test->registry, &registry_conf) !=
+        CMETA_PLUGIN_OK) return false;
+    test->registry_live = true;
+    if (cmeta_plugin_registry_load(
+            &test->registry, SCXML_COMPONENT_DSO_ONE, &test->plugins[0]) !=
+        CMETA_PLUGIN_OK) return false;
+    if (cmeta_plugin_registry_start(
+            &test->registry, test->plugins[0]) != CMETA_PLUGIN_OK)
+        return false;
+    if (build_generation(test, 0u, 0u, UINT64_C(31)) !=
+        SALTS_COMPONENT_PLUGIN_OK) return false;
+    if (salts_component_plugin_runtime_init(&test->runtime) !=
+        SALTS_COMPONENT_PLUGIN_OK) return false;
+    if (salts_component_plugin_runtime_publish(
+            &test->runtime, &test->generations[0].generation, &previous) !=
+        SALTS_COMPONENT_PLUGIN_OK || previous != NULL) return false;
+    if (scxml_component_scope_acquire(
+            &test->scopes[0], &test->runtime) != SCXML_COMPONENT_OK)
+        return false;
+    if (scxml_component_event_io_provider_bind(
+            &test->providers[0], &test->scopes[0], "ScxmlDsoFixture",
+            SCXML_EVENT_IO_CAP_SEND) != SCXML_COMPONENT_OK)
+        return false;
+    provider = scxml_component_event_io_provider_adapter(&test->providers[0]);
+    if (scxml_intercept_probe_init(
+            &test->intercepted[0], provider,
+            scxml_component_event_io_provider_user(&test->providers[0])) !=
+        CMETA_OK) return false;
+    test->intercepted_io[0] = (scxml_event_io_adapter){
+        .abi_version = SCXML_ADAPTER_ABI,
+        .struct_size = sizeof(scxml_event_io_adapter),
+        .capabilities = SCXML_EVENT_IO_CAP_SEND,
+        .prepare_send = intercepted_session_prepare_send,
+        .close = intercepted_session_close,
+        .is_quiescent = intercepted_session_quiescent
+    };
+    return true;
+}
+
+static scxml_session_config intercepted_session_config(dso_test *test,
+                                                       size_t internal_limit) {
+    return (scxml_session_config){
+        .program = &test->program,
+        .executor = &test->executors[0],
+        .external_event_capacity = 2u,
+        .internal_event_capacity = internal_limit,
+        .completion_capacity = 2u,
+        .microstep_limit = 16u,
+        .effect_capacity = 2u,
+        .adapter_internal_event_capacity = 2u,
+        .event_io = &test->intercepted_io[0],
+        .adapter_user = &test->intercepted[0]
+    };
 }
 
 spec("Component DSO-backed SCXML sessions") {
@@ -355,6 +440,134 @@ spec("Component DSO-backed SCXML sessions") {
             &next, &probe_request, &ticket, &error), SCXML_ADAPTER_ACCEPTED);
         ticket.commit(ticket.user);
         check_equal(marker_value(&test.scopes[1]), 202);
+    }
+
+    it("raises SCXML error.execution from a rejected real DSO Interceptor without a ticket") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='active'>"
+            "<state id='active'><onentry>"
+            "<send event='probe' target='receiver'/>"
+            "<send event='probe' target='receiver'/>"
+            "</onentry>"
+            "<transition event='error.execution' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_session_config config;
+        scxml_intercept_probe *probe = &test.intercepted[0];
+
+        check_true(init_intercepted_dso(&test));
+        check_equal(marker_value(&test.scopes[0]), 100);
+        probe->reject_stage = 2u;
+        check_equal(scxml_compile(
+            &test.program, source, sizeof(source) - 1u,
+            NULL, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&test.executors[0]));
+        test.executor_live[0] = true;
+        config = intercepted_session_config(&test, 2u);
+        check_equal(scxml_session_init(
+            &test.sessions[0], &config), CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&test.executors[0]));
+        check_true(scxml_session_get_stats(&test.sessions[0], &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        /* This final state is reachable ONLY via the real reserved
+           error.execution event, not through normal send success. */
+        check_equal(probe->target_calls, 0u);
+        check_equal(probe->discarded_on_failure, 0u);
+        check_equal(probe->trace_count, (size_t)4u);
+        check_equal(probe->trace[0], 11u);
+        check_equal(probe->trace[1], 12u);
+        check_equal(probe->trace[2], 32u);
+        check_equal(probe->trace[3], 31u);
+        check_equal(marker_value(&test.scopes[0]), 100);
+        check_equal(test.scopes[0].binding_count, (size_t)1u);
+        check_equal(cmeta_plugin_registry_unload(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_BUSY);
+        check_equal(scxml_session_destroy(
+            &test.sessions[0]), CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(marker_value(&test.scopes[0]), 110);
+    }
+
+    it("commits one real DSO send ticket only through the SCXML effect journal") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='active'>"
+            "<state id='active'><onentry>"
+            "<send event='probe' target='receiver'/>"
+            "</onentry><transition event='finish' target='done'/>"
+            "</state><final id='done'/></scxml>";
+        scxml_diagnostic diagnostic = {0};
+        cflow_statechart_instance_stats stats = {0};
+        scxml_session_config config;
+        scxml_intercept_probe *probe = &test.intercepted[0];
+
+        check_true(init_intercepted_dso(&test));
+        check_equal(scxml_compile(
+            &test.program, source, sizeof(source) - 1u,
+            NULL, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&test.executors[0]));
+        test.executor_live[0] = true;
+        config = intercepted_session_config(&test, 2u);
+        check_equal(scxml_session_init(
+            &test.sessions[0], &config), CFLOW_STATECHART_INSTANCE_OK);
+        check_true(cflow_executor_wait_idle(&test.executors[0]));
+        /* A successful prepare returned a move-only ticket, and only the
+           Statechart effect journal may commit it. DSO marker +1 exactly. */
+        check_equal(probe->target_calls, 1u);
+        check_equal(probe->discarded_on_failure, 0u);
+        check_equal(probe->trace_count, (size_t)5u);
+        check_equal(probe->trace[0], 11u);
+        check_equal(probe->trace[1], 12u);
+        check_equal(probe->trace[2], 9u);
+        check_equal(probe->trace[3], 22u);
+        check_equal(probe->trace[4], 21u);
+        check_equal(marker_value(&test.scopes[0]), 101);
+        check_true(fire(&test, 0u, "finish"));
+        check_true(scxml_session_get_stats(&test.sessions[0], &stats));
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(marker_value(&test.scopes[0]), 101);
+        check_equal(scxml_session_destroy(
+            &test.sessions[0]), CFLOW_STATECHART_INSTANCE_OK);
+        check_equal(marker_value(&test.scopes[0]), 111);
+    }
+
+    it("discards a real DSO ticket on SCXML internal-queue rollback") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' "
+            "version='1.0' initial='active'>"
+            "<state id='active'><onentry>"
+            "<send event='probe' target='receiver'/>"
+            "<raise event='one'/><raise event='two'/>"
+            "</onentry></state></scxml>";
+        scxml_diagnostic diagnostic = {0};
+        scxml_session_config config;
+        scxml_intercept_probe *probe = &test.intercepted[0];
+
+        check_true(init_intercepted_dso(&test));
+        check_equal(scxml_compile(
+            &test.program, source, sizeof(source) - 1u,
+            NULL, &diagnostic), SCXML_OK);
+        check_true(cflow_executor_serial_init(&test.executors[0]));
+        test.executor_live[0] = true;
+        config = intercepted_session_config(&test, 1u);
+        check_equal(scxml_session_init(
+            &test.sessions[0], &config),
+            CFLOW_STATECHART_INSTANCE_INTERNAL_QUEUE_FULL);
+        check_null(test.sessions[0].impl);
+        check_true(cflow_executor_wait_idle(&test.executors[0]));
+        /* Interceptor accepted one provider ticket; later CFlow failure
+           must call that DSO discard exactly once. No fake commit (+1).
+           Adapter close on failed Session init contributes precisely +10. */
+        check_equal(probe->target_calls, 1u);
+        check_equal(probe->discarded_on_failure, 0u);
+        check_equal(probe->trace_count, (size_t)5u);
+        check_equal(marker_value(&test.scopes[0]), 1110);
+        check_equal(test.scopes[0].binding_count, (size_t)1u);
+        check_equal(cmeta_plugin_registry_unload(
+            &test.registry, test.plugins[0]), CMETA_PLUGIN_BUSY);
     }
 
     it("keeps old session effects in the old DSO until session and scope retirement") {
