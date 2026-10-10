@@ -139,6 +139,9 @@ jobs:
           } > build/upstream-tsan/provenance.txt
           cat build/upstream-tsan/provenance.txt
 
+      # For a first-party source qualification, a missing exact vcpkg binary
+      # cache entry may be built from the pinned port recipe. This neither
+      # chooses a different dependency version nor adds a runtime fallback.
       - name: Build and install complete first-party Salts with TSan
         shell: bash
         run: |
@@ -151,8 +154,8 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$sdk" \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
-            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_THREAD=ON \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+            -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_THREAD=ON
+
           cmake --build build/upstream-tsan/build-salts --parallel 2
           cmake --install build/upstream-tsan/build-salts
           test -f "$sdk/lib/cmake/Salts/SaltsConfig.cmake"
@@ -174,8 +177,8 @@ jobs:
             -DBUILD_TESTS=OFF -DBUILD_BENCHMARKS=OFF -DBUILD_EXAMPLES=OFF \
             -DSALTS_UTILS_ENABLE_CAPTURE=OFF \
             -DENABLE_SANITIZER_ADDRESS=OFF -DENABLE_SANITIZER_UNDEFINED=OFF \
-            -DENABLE_SANITIZER_THREAD=ON \
-            -DVCPKG_INSTALL_OPTIONS=--only-binarycaching
+            -DENABLE_SANITIZER_THREAD=ON
+
           cmake --build build/upstream-tsan/build-utils --parallel 2
           cmake --install build/upstream-tsan/build-utils
           test -f "$sdk/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
