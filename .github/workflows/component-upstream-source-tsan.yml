@@ -45,11 +45,11 @@ jobs:
 
       # The tested source identity MUST be identical to the published,
       # manifest-verified SDK graph. Source builds remain private to this job.
-      - name: Checkout published Salts RC4 source identity
+      - name: Checkout published Salts RC5 source identity
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
-          ref: 233a0d1c2086808d85160ad70010e13b4c63d5c8
+          ref: d04b3c909a5f1ac49883f36dcaa7b57de71627cb
           path: build/upstream-tsan/sources/salts
           persist-credentials: false
 
@@ -118,9 +118,9 @@ jobs:
           test -f "$utils_manifest"
           salts_sha="$(git -C build/upstream-tsan/sources/salts rev-parse HEAD)"
           utils_sha="$(git -C build/upstream-tsan/sources/salts-utils rev-parse HEAD)"
-          test "$salts_sha" = 233a0d1c2086808d85160ad70010e13b4c63d5c8
+          test "$salts_sha" = d04b3c909a5f1ac49883f36dcaa7b57de71627cb
           test "$utils_sha" = c96a47b05292e3bbebba0b016c0b18c71bce8cde
-          grep -Fxq 'version=2.3.0-rc.4' "$salts_manifest"
+          grep -Fxq 'version=2.3.0-rc.5' "$salts_manifest"
           grep -Fxq 'version=4.3.0-rc.2' "$utils_manifest"
           grep -Fxq "commit=$salts_sha" "$salts_manifest"
           grep -Fxq "commit=$utils_sha" "$utils_manifest"
@@ -131,7 +131,7 @@ jobs:
           test -f "$utils_sdk/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           {
             printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)"
-            printf 'salts_published_version=2.3.0-rc.4\nsalts_source_commit=%s\n' "$salts_sha"
+            printf 'salts_published_version=2.3.0-rc.5\nsalts_source_commit=%s\n' "$salts_sha"
             printf 'saltsutils_published_version=4.3.0-rc.2\nsaltsutils_source_commit=%s\n' "$utils_sha"
             printf 'build_profile=first-party-full-source-tsan\n'
             printf 'host=linux-x64\n'
