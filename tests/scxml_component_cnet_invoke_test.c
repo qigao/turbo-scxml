@@ -1,6 +1,12 @@
 #if defined(_WIN32)
 #include <winsock2.h>
 #include <ws2tcpip.h>
+/* Windows RPC/COM headers reserve `interface` as a macro, while CMeta
+   deliberately has an Interface descriptor field with that C identifier.
+   Keep WinSock types available without letting this macro rewrite CMeta. */
+#ifdef interface
+#undef interface
+#endif
 #else
 #include <fcntl.h>
 #include <sys/socket.h>
