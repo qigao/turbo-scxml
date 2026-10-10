@@ -240,7 +240,7 @@ jobs:
           export DATABIND_ROOT="$SALTS_UTILS_ROOT"
           export LD_LIBRARY_PATH="$SALTS_UTILS_ROOT/lib:$SALTS_UTILS_ROOT/bin:$SALTS_ROOT/lib:$SALTS_ROOT/bin:${LD_LIBRARY_PATH:-}"
           ctest --test-dir build/upstream-tsan/consumer \
-            -R '^(scxml_component_test|scxml_component_dso_test|scxml_host_router_test|scxml_cnet_ingress_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
+            -R '^(scxml_component_test|voicexml_component_dialog_test|scxml_component_dso_test|scxml_host_router_test|scxml_cnet_ingress_test|scxml_host_delay_test|scxml_cnet_domain_fence_test|scxml_cnet_request_generation_test|scxml_component_cnet_invoke_test)$' \
             --repeat until-fail:50 --no-tests=error --output-on-failure \
             --output-junit "$GITHUB_WORKSPACE/build/upstream-tsan/results.xml"
 
