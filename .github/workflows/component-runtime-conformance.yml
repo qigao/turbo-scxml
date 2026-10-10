@@ -141,12 +141,12 @@ jobs:
           grep -Fq "version=$utils_version" "$utils_manifest"
 
           # This particular qualification must consume the published,
-          # published Salts RC4 / SaltsUtils RC2 integration pair. NuGet stays
+          # published Salts RC5 / SaltsUtils RC2 integration pair. NuGet is
           # floating; an incompatible prerelease fails loudly, never pinning
           # or mixing Unicode-export owners. No automatic fallback on SDK drift.
-          test "$salts_version" = '2.3.0-rc.4'
+          test "$salts_version" = '2.3.0-rc.5'
           test "$utils_version" = '4.3.0-rc.2'
-          grep -Fxq 'commit=233a0d1c2086808d85160ad70010e13b4c63d5c8' "$salts_manifest"
+          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts_manifest"
           grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$salts_root/include/salts/component_plugin.h"
@@ -444,10 +444,10 @@ jobs:
             }
             return $roots[0]
           }
-          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.4"
+          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.5"
           $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.2"
-          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=233a0d1c2086808d85160ad70010e13b4c63d5c8")) {
-            throw "Salts SDK source SHA differs from published 2.3.0-rc.4"
+          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb")) {
+            throw "Salts SDK source SHA differs from published 2.3.0-rc.5"
           }
           if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde")) {
             throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.2"
@@ -492,9 +492,9 @@ jobs:
             grep -Eq '^commit=[[:xdigit:]]{40}$' "$manifest"
             printf '%s' "${roots[0]}"
           }
-          salts="$(sdk_root salts.native 2.3.0-rc.4 salts-sdk-manifest.txt)"
+          salts="$(sdk_root salts.native 2.3.0-rc.5 salts-sdk-manifest.txt)"
           utils="$(sdk_root saltsutils.native 4.3.0-rc.2 salts-utils-sdk-manifest.txt)"
-          grep -Fxq 'commit=233a0d1c2086808d85160ad70010e13b4c63d5c8' "$salts/salts-sdk-manifest.txt"
+          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts/salts-sdk-manifest.txt"
           grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils/salts-utils-sdk-manifest.txt"
           echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
