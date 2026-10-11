@@ -81,6 +81,15 @@ configure_profile quickjs "$quickjs_root" \
 consume_profile quickjs "$quickjs_root" \
   -DTURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS=ON
 
+# The CHTTP SDK requires GmSSL; keep this restore separate from the core and
+# CMeta profiles above, and keep QuickJS absent from this installed tree.
+"$VCPKG_ROOT/vcpkg" install \
+  --x-manifest-root=. \
+  --x-install-root="$noquick_root" \
+  --triplet x64-linux \
+  --x-feature=chttp \
+  --only-binarycaching
+
 configure_profile chttp "$noquick_root" \
   -DTURBOSCXML_ENABLE_VOICEXML_CMETA=OFF \
   -DTURBOSCXML_ENABLE_QUICKJS=OFF \
