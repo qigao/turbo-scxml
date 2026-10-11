@@ -1,4 +1,5 @@
 #include "ccxml_internal.h"
+#include "scxml_time.h"
 
 #include <inttypes.h>
 #include <stddef.h>
@@ -154,9 +155,10 @@ static ccxml_status read_delay_milliseconds(
             *out_delay_ms = content->scalar.data.uint;
             return CCXML_OK;
         case SCXML_PAYLOAD_VALUE_FLOAT:
+            /* UINT64_MAX rounds up to 2^64 as double; that endpoint cannot be cast. */
             if (!isfinite(content->scalar.data.number) ||
                 content->scalar.data.number < 0.0 ||
-                content->scalar.data.number > (double)UINT64_MAX ||
+                content->scalar.data.number >= 0x1p64 ||
                 modf(content->scalar.data.number, &whole) != 0.0) {
                 return CCXML_INVALID_CONTRACT;
             }
@@ -214,7 +216,8 @@ static void destroy_string_expressions(ccxml_session_impl *impl) {
         ccxml_string_expression *expressions[] = {
             &impl->action_string_expressions[index].destination,
             &impl->action_string_expressions[index].name,
-            &impl->action_string_expressions[index].target_type};
+            &impl->action_string_expressions[index].target_type,
+            &impl->action_string_expressions[index].delay};
         for (size_t slot = 0u; slot < sizeof(expressions) / sizeof(expressions[0]); ++slot) {
             if (expressions[slot]->impl == NULL) continue;
             impl->datamodel.destroy_string_expression(
@@ -720,7 +723,8 @@ ccxml_status ccxml_session_init(
              ++action_index) {
             const ccxml_action_row *action = &program->actions[action_index];
             const char *error = NULL;
-            if (action->kind == CCXML_ACTION_SEND && action->delay_is_dynamic &&
+            if (action->kind == CCXML_ACTION_SEND &&
+                action->delay_kind == CCXML_SEND_DELAY_LOCATION &&
                 datamodel.validate_payload_location(
                     config->datamodel_user, action->delay, action->delay_size,
                     &error) != SCXML_ADAPTER_ACCEPTED) {
@@ -1184,17 +1188,21 @@ ccxml_status ccxml_session_init(
         const ccxml_action_row *action = &program->actions[action_index];
         ccxml_status status = CCXML_OK;
         if (!action->destination_is_dynamic && !action->name_is_dynamic &&
-            !action->target_type_is_dynamic) continue;
+            !action->target_type_is_dynamic &&
+            action->delay_kind != CCXML_SEND_DELAY_EXPRESSION) continue;
         const char *sources[] = {
             action->destination_is_dynamic ? action->destination : NULL,
             action->name_is_dynamic ? action->name : NULL,
-            action->target_type_is_dynamic ? action->target_type : NULL};
+            action->target_type_is_dynamic ? action->target_type : NULL,
+            action->delay_kind == CCXML_SEND_DELAY_EXPRESSION ? action->delay : NULL};
         const size_t sizes[] = {
-            action->destination_size, action->name_size, action->target_type_size};
+            action->destination_size, action->name_size, action->target_type_size,
+            action->delay_size};
         ccxml_string_expression *expressions[] = {
             &impl->action_string_expressions[action_index].destination,
             &impl->action_string_expressions[action_index].name,
-            &impl->action_string_expressions[action_index].target_type};
+            &impl->action_string_expressions[action_index].target_type,
+            &impl->action_string_expressions[action_index].delay};
         for (size_t slot = 0u; slot < sizeof(expressions) / sizeof(expressions[0]); ++slot) {
             const char *error = NULL;
             scxml_adapter_status adapter_status;
@@ -1708,7 +1716,7 @@ static ccxml_status execute_transition_actions(
                 .payload = {.kind = SCXML_PAYLOAD_NONE}};
             scxml_adapter_status adapter_status;
             ccxml_status status;
-            if (action->delay_is_dynamic) {
+            if (action->delay_kind == CCXML_SEND_DELAY_LOCATION) {
                 scxml_content_view delay_value = {0};
                 adapter_status = impl->datamodel.read_payload(
                     impl->datamodel_user, action->delay, action->delay_size,
@@ -1718,6 +1726,17 @@ static ccxml_status execute_transition_actions(
                     return datamodel_payload_failure_status(adapter_status);
                 }
                 status = read_delay_milliseconds(&delay_value, &request.delay_ms);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+            } else if (action->delay_kind == CCXML_SEND_DELAY_EXPRESSION) {
+                ccxml_string_view delay = {0};
+                status = evaluate_string_expression(impl,
+                    &impl->action_string_expressions[action_index].delay, event, &delay);
+                if (status == CCXML_OK && !scxml_time_parse_ms(
+                        (salts_xml_string_view){delay.data, delay.size}, &request.delay_ms))
+                    status = CCXML_INVALID_CONTRACT;
                 if (status != CCXML_OK) {
                     discard_tickets(impl->tickets, prepared);
                     return status;

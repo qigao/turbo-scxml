@@ -746,16 +746,6 @@ static ccxml_status decode_send_delay(
         value[size] = '\0';
         is_literal = true;
     } else {
-        const salts_xml_string_view location = {value, decoded_size};
-        if (!send_delay_location_has_dot(location) ||
-            !dotted_location_valid(location)) {
-            free(value);
-            return fail(
-                diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                salts_xml_attribute_location(attribute),
-                "CCXML send delay must be a quoted literal or dotted "
-                "NCName location");
-        }
         size = decoded_size;
     }
     *out_value = value;
@@ -3169,9 +3159,11 @@ static ccxml_status copy_program(
                         status = decode_send_delay(
                             delay_attribute, &delay_value, &action_row->delay_size,
                             &delay_is_literal, diagnostic);
-                        if (status != CCXML_OK) return status;
+                        if (status != CCXML_OK) {
+                            free(items);
+                            return status;
+                        }
                         action_row->delay = cursor;
-                        action_row->delay_is_dynamic = !delay_is_literal;
                         memcpy(cursor, delay_value, action_row->delay_size);
                         cursor[action_row->delay_size] = '\0';
                         if (delay_is_literal) {
@@ -3182,14 +3174,21 @@ static ccxml_status copy_program(
                             if (action_row->delay_ms > 0u)
                                 impl->uses_delayed_send = true;
                         } else {
-                            impl->uses_send_delay = true;
+                            const salts_xml_string_view location = {
+                                action_row->delay, action_row->delay_size};
+                            if (send_delay_location_has_dot(location) &&
+                                dotted_location_valid(location)) {
+                                action_row->delay_kind = CCXML_SEND_DELAY_LOCATION;
+                                impl->uses_send_delay = true;
+                            } else {
+                                action_row->delay_kind = CCXML_SEND_DELAY_EXPRESSION;
+                                impl->uses_string_expression = true;
+                            }
                             impl->uses_delayed_send = true;
                             action_row->delay_ms = 0u;
                         }
                         free(delay_value);
                         cursor += action_row->delay_size + 1u;
-                    } else {
-                        action_row->delay_is_dynamic = false;
                     }
                     if (send_id_attribute.impl != NULL) {
                         size_t location_size = 0u;

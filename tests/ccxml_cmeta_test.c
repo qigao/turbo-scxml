@@ -779,6 +779,7 @@ typedef struct send_cancel_probe {
     size_t close_count;
     char send_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t send_id_size;
+    uint64_t delay_ms;
     char cancel_id[SCXML_EVENT_METADATA_CAPACITY + 1u];
     size_t cancel_id_size;
     size_t payload_count;
@@ -815,6 +816,7 @@ static scxml_adapter_status cmeta_prepare_send(
     memcpy(probe->send_id, request->id, request->id_size);
     probe->send_id[request->id_size] = '\0';
     probe->send_id_size = request->id_size;
+    probe->delay_ms = request->delay_ms;
     probe->payload_count = request->payload.entry_count;
     if (request->payload.entry_count <= 3u) {
         size_t index;
@@ -2498,12 +2500,12 @@ spec("CCXML CMeta datamodel") {
         ccxml_program_destroy(&program);
     }
 
-    it("writes and later cancels a send ID through nested CMeta") {
+    it("evaluates a CSS delay then writes and cancels a send ID through nested CMeta") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition event='send.now'>"
             "<send target=\"'session:callee'\" name=\"'call.notice'\" "
-            "delay=\"'10ms'\" sendid='conference.id'/>"
+            "delay='(conference.id)' sendid='conference.id'/>"
             "</transition><transition event='cancel.now'>"
             "<cancel sendid='conference.id'/>"
             "</transition></eventprocessor></ccxml>";
@@ -2522,6 +2524,8 @@ spec("CCXML CMeta datamodel") {
             .name = "cancel.now",
             .name_size = sizeof("cancel.now") - 1u};
 
+        check_equal(text_assign(&state.conference.id,
+            (const unsigned char *)"10ms", 4u, TEST_TEXT_CAPACITY), CMETA_OK);
         check_equal(
             ccxml_compile(
                 &program, source, strlen(source), NULL, &diagnostic),
@@ -2543,6 +2547,7 @@ spec("CCXML CMeta datamodel") {
         check_true(state.conference.id.size > sizeof("send.") - 1u);
         check_equal(state.conference.id.size, event_io.send_id_size);
         check_equal(state.conference.id.data, event_io.send_id);
+        check_equal(event_io.delay_ms, UINT64_C(10));
         check_equal(
             ccxml_session_dispatch(&session, &cancel_event), CCXML_OK);
         check_equal(event_io.cancel_id_size, event_io.send_id_size);

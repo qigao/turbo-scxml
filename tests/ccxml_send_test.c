@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 typedef struct effect_probe effect_probe;
 
@@ -63,6 +64,8 @@ typedef struct datamodel_probe {
     size_t payload_read_count;
     size_t reject_payload_read_at;
     bool malformed_payload;
+    bool has_payload_override;
+    scxml_payload_value payload_override;
 } datamodel_probe;
 
 static size_t transaction_sequence;
@@ -325,6 +328,8 @@ static scxml_adapter_status read_payload(
         out_value->scalar.kind = SCXML_PAYLOAD_VALUE_STRING;
         out_value->scalar.data.string.data = "hello";
         out_value->scalar.data.string.size = sizeof("hello") - 1u;
+    } else if (probe->has_payload_override) {
+        out_value->scalar = probe->payload_override;
     } else {
         out_value->scalar.kind = SCXML_PAYLOAD_VALUE_SINT;
         out_value->scalar.data.sint = INT64_C(42);
@@ -741,7 +746,8 @@ spec("CCXML send") {
                     &program,
                     "<send target=\"'session:callee'\" name=\"'call.notice'\" "
                     "delay='dynamic'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
+                CCXML_OK);
+            ccxml_program_destroy(&program);
             check_equal(
                 compile_actions(
                     &program,
@@ -794,17 +800,17 @@ spec("CCXML send") {
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'>"
                 "<send target='a &amp;&amp; b' name='c &amp;&amp; d' "
-                "targettype='e &amp;&amp; f'/>"
+                "targettype='e &amp;&amp; f' delay='g &amp;&amp; h'/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_limits limits = ccxml_default_limits();
             ccxml_diagnostic diagnostic = {0};
             ccxml_program program = {0};
-            /* go + NUL, plus three decoded six-byte sources with NULs. */
-            limits.max_name_bytes = 23u;
+            /* go + NUL, plus four decoded six-byte sources with NULs. */
+            limits.max_name_bytes = 30u;
             check_equal(ccxml_compile(&program, source, strlen(source),
                 &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
             check_null(program.impl);
-            limits.max_name_bytes = 24u;
+            limits.max_name_bytes = 31u;
             check_equal(ccxml_compile(&program, source, strlen(source),
                 &limits, &diagnostic), CCXML_OK);
             memset(source, 'x', sizeof(source)-1u);
@@ -819,6 +825,11 @@ spec("CCXML send") {
             check_true(impl->actions[0].target_type_is_dynamic);
             check_equal(impl->actions[0].target_type, "e && f");
             check_equal(impl->actions[0].target_type_size, (size_t)6);
+            check_equal(impl->actions[0].delay_kind, CCXML_SEND_DELAY_EXPRESSION);
+            check_equal(impl->actions[0].delay, "g && h");
+            check_equal(impl->actions[0].delay_size, (size_t)6);
+            check_true(impl->uses_delayed_send);
+            check_false(impl->uses_send_delay);
             ccxml_program_destroy(&program);
         }
 
@@ -1612,6 +1623,65 @@ spec("CCXML send") {
             check_equal(send.delay_ms, UINT64_C(42));
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&delayed_program);
+        }
+
+        it("requires expression callbacks for a delay expression without payload reads") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter delayed_adapter = event_io_adapter;
+            delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            check_equal(compile_actions(&program,
+                "<send target=\"'session:callee'\" name=\"'notice'\" "
+                "delay='(duration)'/>"), CCXML_OK);
+            check_equal(init_send_session_with_datamodel(&session, &program,
+                &telephony, &datamodel, &send, &delayed_adapter), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            ccxml_program_destroy(&program);
+        }
+
+        it("checks numeric delay boundaries before converting to uint64") {
+            static const struct {
+                scxml_payload_value value;
+                bool valid;
+                uint64_t milliseconds;
+            } cases[] = {
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = 0x1p64}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = 0x1p65}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = 0x1p64 - 2048.0},
+                    true, UINT64_MAX - UINT64_C(2047)},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = INFINITY}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = NAN}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = -1.0}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = 1.5}, false, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_FLOAT, .data.number = 0.0}, true, 0u},
+                {{.kind = SCXML_PAYLOAD_VALUE_UINT, .data.uint = UINT64_MAX}, true, UINT64_MAX},
+                {{.kind = SCXML_PAYLOAD_VALUE_SINT, .data.sint = -1}, false, 0u}};
+            for (size_t row = 0u; row < sizeof(cases) / sizeof(cases[0]); ++row) {
+                ccxml_program program = {0};
+                ccxml_session session = {0};
+                effect_probe telephony = {.quiescent = true};
+                datamodel_probe datamodel = {.effects.quiescent = true,
+                    .has_payload_override = true, .payload_override = cases[row].value};
+                send_probe send = {.effects.quiescent = true};
+                scxml_event_io_adapter delayed_adapter = event_io_adapter;
+                ccxml_event event = alerting_event();
+                delayed_adapter.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND;
+                check_equal(compile_actions(&program,
+                    "<accept/><send target=\"'session:callee'\" name=\"'notice'\" "
+                    "delay='payload.count'/>"), CCXML_OK);
+                check_equal(init_send_session_with_datamodel(&session, &program,
+                    &telephony, &datamodel, &send, &delayed_adapter), CCXML_OK);
+                check_equal(ccxml_session_dispatch(&session, &event),
+                    cases[row].valid ? CCXML_OK : CCXML_INVALID_CONTRACT);
+                check_equal(send.send_count, cases[row].valid ? (size_t)1u : (size_t)0u);
+                if (cases[row].valid) check_equal(send.delay_ms, cases[row].milliseconds);
+                check_equal(telephony.discard_count, cases[row].valid ? (size_t)0u : (size_t)1u);
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+                ccxml_program_destroy(&program);
+            }
         }
 
         it("rejects dynamic delay values that are not numeric") {

@@ -4,7 +4,7 @@
 
 This slice adds the first bounded CCXML `<send>` profile. It accepts an empty
 action with required `target` and `name` string-expression attributes,
-optional string-expression `targettype`, literal-expression `delay`, and an
+optional string-expression `targettype` and `delay`, and an
 optional dotted-location `sendid` and bounded dotted-location `namelist`:
 
 ```xml
@@ -20,6 +20,8 @@ optional dotted-location `sendid` and bounded dotted-location `namelist`:
 <send target="'session:callee'" name="'call.notice'"
       delay="payload.count"/>
 <send target="'session:callee'" name="'call.notice'"
+      delay="(count * 10 + 'ms')"/>
+<send target="'session:callee'" name="'call.notice'"
       namelist="conference.id count"/>
 <cancel sendid="request.pending"/>
 ```
@@ -29,7 +31,7 @@ is zero. `sendid` is a dotted writable string location populated with a
 generated identifier. `<cancel>` accepts a dotted readable string location or
 a quoted literal identifier. `namelist` accepts at most
 `SCXML_PAYLOAD_MAX_ENTRIES` whitespace-separated dotted locations.
-`target`, `name`, and `targettype` accept dynamic strings through the configured
+`target`, `name`, `targettype`, and expression-form `delay` accept dynamic strings through the configured
 CMeta or QuickJS-NG expression adapter. Inline-content forms and escaped string
 literals remain unsupported.
 
@@ -67,7 +69,7 @@ Both copies are released on provider rejection or any earlier failure; existing
 transaction rollback handles already prepared sends and ID writes. Dispatch
 remains serialized by the Session owner, with no new cross-thread storage.
 
-Each action has separate destination, name, and targettype handles in one bounded allocation;
+Each action has separate destination, name, targettype, and delay handles in one bounded allocation;
 partial admission failure destroys all admitted handles. All share the
 adapter's live-handle capacity. Literal names retain their compile-time grammar
 checks and require no result copy. The new runtime name bound only applies to
@@ -92,9 +94,12 @@ optional. Literal delay values must be exactly one nonempty
 single-quoted or double-quoted string literal. Target, name, and type use the shared decoded
 destination classifier: quoted literals retain their interior; other nonempty
 values retain complete expression source. `sendid` must be a dotted NCName
-location. Dynamic delay may instead be an unquoted dotted location with at least
-one dot. The compiler strips expression quotes for literals and retains decoded
-literal and location bytes in program-owned storage. The default `ccxml` target
+location. Dynamic delay may be an unquoted dotted location with at least
+one dot to preserve numeric-millisecond reads; other nonliteral sources use the
+string-expression adapter and must return a CSS time string. Parentheses select
+string semantics for a dotted location, for example `(settings.delay)`. The compiler
+strips expression quotes for literals and retains decoded literal, location, and
+expression bytes in program-owned storage. The default `ccxml` target
 type is an immutable static value. Cancel requires only `sendid`, accepts a dotted
 location or quoted literal, and must be empty.
 
@@ -105,7 +110,9 @@ letter or underscore, and following characters are ASCII letters, digits,
 underscore, or dot. The retained target, name, explicit target type, and
 explicit delay and each decoded namelist token share the existing
 `max_name_bytes` budget. Dynamic delay locations are validated as payload
-locations and resolved at dispatch time as unsigned scalar values. Namelist
+locations and resolved at dispatch time as non-negative integral milliseconds.
+String delay results are parsed immediately before the next adapter callback;
+no result pointer survives another evaluation. Namelist
 order, duplicates, and qualification are preserved. Non-ignorable child content
 is rejected.
 
@@ -135,7 +142,7 @@ The shared `scxml_send_request` carries CCXML values as follows:
 - `type` is the compiled literal or evaluated `targettype`, defaulting to `ccxml`;
 - `id` is empty unless `sendid` is present; then it is a bounded
   `send.<session-uuid>.<token>` value also staged into the datamodel location;
-- `delay_ms` is the compiled literal or resolved dynamic payload value;
+- `delay_ms` is the compiled literal, numeric payload, or parsed string-expression result;
 - `payload` is empty or an ordered shared named payload containing scalar and
   callback-scoped CMeta object views.
 

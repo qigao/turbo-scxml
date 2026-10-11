@@ -5,10 +5,15 @@
 This facility provides typed dynamic string evaluation to
 `<createcall dest="...">`, `<redirect dest="...">`, optional
 `<createconference confname="...">`, `src` on `<dialogprepare>` and direct
-`<dialogstart>`, and `target`/`name`/`targettype` on `<send>`. Quoted, nonempty literals keep their
+`<dialogstart>`, and `target`/`name`/`targettype`/`delay` on `<send>`. Quoted, nonempty literals keep their
 existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
 the consuming provider prepare callback.
+
+Send delay preserves unparenthesized dotted locations as numeric-millisecond
+payload reads for compatibility. Other nonliteral delay sources use this string
+facility and must return CSS time strings. Parentheses explicitly select string
+semantics for a dotted location; see [delay design](ccxml-send-delay-design.md).
 
 XPath is not part of this design. The built-in CMeta implementation uses the
 existing typed expression compiler. The opt-in QuickJS-NG adapter described
@@ -165,7 +170,7 @@ the same staged scope; evaluated names must satisfy the event-name grammar.
 
 ## Session lifecycle and transaction behavior
 
-Session initialization allocates a zeroed array with destination/name/targettype handles only when
+Session initialization allocates a zeroed array with destination/name/targettype/delay handles only when
 the program uses dynamic string expressions. Every dynamic createcall,
 redirect, createconference, dialogprepare, direct dialogstart, or send action
 is compiled before the session is published. Any failure
@@ -176,7 +181,9 @@ Dispatch evaluates the value immediately before calling the matching
 `prepare_create_call`, `prepare_redirect`, `prepare_create_conference`,
 `prepare_dialog_prepare`, `prepare_dialog_start`, or `prepare_send` operation. Redirect and
 direct dialogstart first validate their mandatory current Event connection.
-Send evaluates and validates name first, then targettype, copying each dynamic
+Send resolves delay first, immediately parsing any string result to integer
+milliseconds before another callback can reuse the adapter scratch. It then
+resolves payload, name, and targettype, copying each dynamic name/type
 result into a temporary `tstr` bounded by the Program's `max_name_bytes`, and
 then evaluates target. The copies survive adapter scratch reuse and are released
 after `prepare_send` or on any intervening failure. Its provider must copy any
@@ -197,8 +204,8 @@ releasing the datamodel owner relationship.
   appended callbacks.
 - Literal-only programs accept legacy adapter prefixes and do not compile or
   evaluate expressions.
-- Conference IDs, assignment values, and delay
-  expressions are not migrated in this facility.
+- Conference IDs and assignment values are not migrated in this facility.
+- Legacy numeric send-delay locations keep their payload-read semantics.
 - General string concatenation and coercion are not added to the CMeta
   expression language.
 - QuickJS-NG is an explicit optional adapter; it does not silently replace

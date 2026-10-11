@@ -37,6 +37,12 @@ typedef enum ccxml_action_kind {
     CCXML_ACTION_ENDFOREACH
 } ccxml_action_kind;
 
+typedef enum ccxml_send_delay_kind {
+    CCXML_SEND_DELAY_LITERAL = 0,
+    CCXML_SEND_DELAY_LOCATION,
+    CCXML_SEND_DELAY_EXPRESSION
+} ccxml_send_delay_kind;
+
 typedef struct ccxml_payload_row {
     const char *name;
     size_t name_size;
@@ -66,7 +72,7 @@ typedef struct ccxml_action_row {
     bool destination_is_dynamic;
     bool name_is_dynamic;
     bool target_type_is_dynamic;
-    bool delay_is_dynamic;
+    ccxml_send_delay_kind delay_kind;
     size_t branch_next;
     size_t block_end;
     size_t payload_first;
@@ -138,6 +144,7 @@ typedef struct ccxml_action_string_expressions {
     ccxml_string_expression destination;
     ccxml_string_expression name;
     ccxml_string_expression target_type;
+    ccxml_string_expression delay;
 } ccxml_action_string_expressions;
 
 typedef struct ccxml_conditional_frame {

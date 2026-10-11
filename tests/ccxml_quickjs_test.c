@@ -649,19 +649,143 @@ spec("CCXML QuickJS-NG expression adapter") {
         check_equal(sends.ids_visible, (size_t)1);
     }
 
-    group("dynamic Event I/O target name and type") {
+    for (size_t row = 0u; row < 12u; ++row) {
+        it("parses dynamic CSS duration result %zu before publishing send or ID", row) {
+            static const struct {
+                const char *text;
+                size_t size;
+                bool valid;
+                uint64_t milliseconds;
+            } cases[] = {
+                {"0ms", 3u, true, 0u},
+                {"+1.5s", 5u, true, 1500u},
+                {".5s", 3u, true, 500u},
+                {"18446744073709551615ms", 22u, true, UINT64_MAX},
+                {"", 0u, false, 0u},
+                {"-1s", 3u, false, 0u},
+                {"1.0001s", 7u, false, 0u},
+                {"1m", 2u, false, 0u},
+                {"18446744073709551616ms", 22u, false, 0u},
+                {"1", 1u, false, 0u},
+                {"1\0s", 3u, false, 0u},
+                {"0.5ms", 5u, false, 0u}};
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'><accept/>"
+                "<send target=\"('session:' + count)\" name=\"('notice.' + event$.name)\" "
+                "targettype=\"('cc' + 'xml')\" delay='id' sendid='id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_datamodel_adapter_v1 expressions_only = *adapter;
+            expressions_only.validate_payload_location = NULL;
+            expressions_only.read_payload = NULL;
+            check_equal(text_assign(&state.id, (const unsigned char *)cases[row].text,
+                cases[row].size, TEST_TEXT_CAPACITY), CMETA_OK);
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = &expressions_only, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event),
+                cases[row].valid ? CCXML_OK : CCXML_INVALID_CONTRACT);
+            if (cases[row].valid) {
+                check_equal(sends.delay, cases[row].milliseconds);
+                check_equal(sends.tickets[0].name, "notice.go");
+                check_equal(sends.tickets[0].type, "ccxml");
+                check_equal(sends.tickets[0].target, "session:7");
+                check_equal(sends.ids_visible, (size_t)1);
+            } else {
+                check_equal(sends.prepared, (size_t)0);
+                check_equal(provider.discarded, (size_t)1);
+                check_equal(state.id.size, cases[row].size);
+                check_equal(memcmp(state.id.data, cases[row].text, cases[row].size), 0);
+            }
+        }
+    }
+
+    for (size_t row = 0u; row < 2u; ++row) {
+        it("rejects nonstring or throwing delay expressions without publication %zu", row) {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'><accept/>"
+                "<send target=\"'session:callee'\" name=\"'notice'\" "
+                "delay='(count === 0 ? 7 : missingDelay)' sendid='id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            state.count = (int)row;
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            scxml_event_io_adapter immediate_only = event_io;
+            immediate_only.capabilities &= ~SCXML_EVENT_IO_CAP_DELAYED_SEND;
+            ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &immediate_only, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            session_config.event_io = &event_io;
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event),
+                row == 0u ? CCXML_INVALID_CONTRACT : CCXML_ADAPTER_ERROR);
+            check_equal(sends.prepared, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+        }
+    }
+
+    for (size_t row = 0u; row < 2u; ++row) {
+        it("reclaims expression capacity when delay admission fails %zu", row) {
+            static const char *const sources[] = {
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name='id' targettype='id' delay='count +'/>"
+                "</transition></eventprocessor></ccxml>",
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name='id' targettype='id' delay='id'/>"
+                "</transition></eventprocessor></ccxml>"};
+            ccxml_diagnostic diagnostic = {0};
+            config.max_expressions = row == 0u ? 4u : 3u;
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, sources[row], strlen(sources[row]),
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config),
+                row == 0u ? CCXML_ADAPTER_ERROR : CCXML_ALLOCATION_FAILED);
+            check_null(session.impl);
+            ccxml_program_destroy(&program);
+            /* Re-admit exactly the available handle count after the failed attempt. */
+            const char *retry_source = row == 0u ? sources[1] :
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name='id' delay='id'/>"
+                "</transition></eventprocessor></ccxml>";
+            check_equal(ccxml_compile(&program, retry_source, strlen(retry_source),
+                NULL, &diagnostic), CCXML_OK);
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        }
+    }
+
+    group("dynamic Event I/O target name type and delay") {
         before_each() {
             static const char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'><accept/>"
                 "<send target=\"('session:' + count + '/' + event$.connectionid)\" "
                 "name=\"('notice.' + event$.name)\" targettype=\"('x-' + event$.name)\" "
-                "sendid='id' namelist='count' delay=\"'1ms'\"/>"
+                "sendid='id' namelist='count' delay=\"(Math.abs(count) + 'ms')\"/>"
                 "<send target=\"(count === 0 ? '' : (count &lt; 0 ? missingTarget : 'session:' + (count + 1)))\" "
                 "name=\"(count === 13 ? 'bad-name' : 'notice.' + (count + 1))\" "
                 "targettype=\"(count === 14 ? '' : count === 15 ? 42 : "
                 "count === 16 ? missingType : count === 17 ? String.fromCharCode(0) : 'ccxml')\" "
-                "sendid='id'/><accept/>"
+                "delay=\"(count === 18 ? '-1s' : '0ms')\" sendid='id'/><accept/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_diagnostic diagnostic = {0};
             check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
@@ -683,7 +807,7 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(sends.tickets[1].type, "ccxml");
             check_equal(sends.committed, (size_t)2);
             check_equal(sends.ids_visible, (size_t)2);
-            check_equal(sends.delay, UINT64_C(1));
+            check_equal(sends.delay, UINT64_C(7));
             check_equal(sends.payload_count, (size_t)1);
             check_equal(sends.payload.kind, SCXML_PAYLOAD_VALUE_SINT);
             check_equal(sends.payload.data.sint, INT64_C(7));
@@ -713,6 +837,7 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(sends.tickets[0].target, "session:9/call-7");
             check_equal(sends.tickets[1].target, "session:10");
             check_equal(sends.tickets[1].name, "notice.10");
+            check_equal(sends.delay, UINT64_C(9));
             check_equal(sends.ids_visible, (size_t)2);
         }
         it("discards both prepared sends and ID writes when a later action fails") {
@@ -748,6 +873,15 @@ spec("CCXML QuickJS-NG expression adapter") {
         it("preserves provider authority to reject an evaluated processor type") {
             sends.rejected_type = "ccxml";
             check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(sends.prepared, (size_t)1);
+            check_equal(sends.discarded, (size_t)1);
+            check_equal(sends.committed, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+        }
+        it("rolls back the first send and ID write when the second delay is invalid") {
+            state.count = 18;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_CONTRACT);
             check_equal(sends.prepared, (size_t)1);
             check_equal(sends.discarded, (size_t)1);
             check_equal(sends.committed, (size_t)0);
