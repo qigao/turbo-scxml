@@ -307,7 +307,11 @@ duplicating field lifecycle or treating a read-only `cmeta_reflect_data` view
 as an owned value. Nested views remain ineligible for snapshots. No stored
 data or public ABI migration is required; consumers needing an older runtime
 can retain their existing legacy descriptor and native lifecycle callbacks.
-SCXML's separate compiler admission rules remain unchanged.
+SCXML additionally requires native storage traits for CFlow Statechart state
+ownership. A generated reflection descriptor alone is insufficient there:
+SCXML QuickJS compilation returns `SCXML_INVALID_ARGUMENT` before acquiring
+script resources if the root lacks native copy/move/destroy support (or its
+trivial equivalent).
 
 The feature is optional and does not redefine the core CFlow Statechart ownership boundary.
 

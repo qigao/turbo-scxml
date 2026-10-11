@@ -2,6 +2,7 @@
 #include "scxml_quickjs.h"
 #include "tinytest.h"
 #include <cstl/typed.h>
+#include <cmeta/data_reflect.h>
 #include <salts/thread.h>
 
 #include <string.h>
@@ -12,6 +13,15 @@ typedef struct quickjs_test_state {
     int value;
     int marker;
 } quickjs_test_state;
+
+cmeta_reflect_value(quickjs_test_state, "test.scxml.quickjs.reflected-state",
+    cmeta_field(int, value)
+    cmeta_field(int, marker)
+);
+typedef struct quickjs_view_state { int value; } quickjs_view_state;
+cmeta_reflect_data(quickjs_view_state, "test.scxml.quickjs.view-state",
+    cmeta_field(int, value)
+);
 
 static const cmeta_type_identity quickjs_test_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.scxml.quickjs.state");
@@ -568,6 +578,35 @@ spec("SCXML optional QuickJS sandbox profile") {
     }
 
 #if TURBOSCXML_HAS_QUICKJS
+    it("rejects roots without native Statechart lifecycle before loading scripts") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='quickjs-sandbox'><script src='memory:test'/>"
+            "<state id='s'/></scxml>";
+        const cmeta_data_desc *roots[] = {
+            cmeta_reflected_data(quickjs_test_state),
+            cmeta_reflected_data(quickjs_view_state)};
+        for (size_t index = 0u; index < sizeof(roots) / sizeof(roots[0]); ++index) {
+            quickjs_text_probe probe = {"value = 2;", SCXML_RESOURCE_OK, 0u, 0u};
+            scxml_quickjs_compile_options_v1 options =
+                scxml_quickjs_default_compile_options(roots[index]);
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            options.script_resources = &quickjs_text_adapter;
+            options.script_resource_user = &probe;
+            const scxml_status status = scxml_compile_quickjs(
+                &program, source, sizeof(source) - 1u, NULL, &options, &diagnostic);
+            const bool empty = program.impl == NULL;
+            scxml_program_destroy(&program);
+            check_equal(status, SCXML_INVALID_ARGUMENT);
+            check_true(empty);
+            check_equal(diagnostic.status, SCXML_INVALID_ARGUMENT);
+            check_contains(diagnostic.message, "native state lifecycle");
+            check_equal(probe.open_count, (size_t)0u);
+            check_equal(probe.close_count, (size_t)0u);
+        }
+    }
+
     it("admits root and executable scripts with compile-time source loading") {
         static const char source[] =
             "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "

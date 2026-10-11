@@ -1353,6 +1353,18 @@ scxml_status scxml_program_compile_quickjs_model(
         options->max_path_depth,
         options->max_literal_bytes,
         options->max_string_bytes};
+    /* CFlow owns the extended state independently of QuickJS transaction
+     * scratch. Its native lifecycle must be available before script loading. */
+    if (!cmeta_state_type_supported(options->root->storage_type)) {
+        if (diagnostic != NULL) {
+            memset(diagnostic, 0, sizeof(*diagnostic));
+            diagnostic->status = SCXML_INVALID_ARGUMENT;
+            (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                "%s", "SCXML QuickJS requires native state lifecycle traits "
+                "(trivial copy/destroy or copy/move/destroy) for CFlow ownership");
+        }
+        return SCXML_INVALID_ARGUMENT;
+    }
     return compile_scxml_model(
         out, input, input_size, limits, SCXML_DATA_MODEL_CMETA,
         options->root, &expression_limits, options->max_iterations,

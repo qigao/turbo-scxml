@@ -453,6 +453,10 @@ typedef struct scxml_text_resource_adapter_v1 {
  * integer range. Bool, integer, float, string, enum, struct, and one-level
  * sequence values are admitted; unsupported or nested generic shapes fail
  * compilation instead of failing during session execution.
+ * The root storage type must also provide native trivial copy/destroy or
+ * copy/move/destroy traits for CFlow Statechart ownership. A generated
+ * cmeta_reflect_value descriptor alone does not provide those native traits;
+ * unsupported roots return SCXML_INVALID_ARGUMENT before script acquisition.
  */
 typedef struct scxml_quickjs_compile_options_v1 {
     uint32_t abi_version;
