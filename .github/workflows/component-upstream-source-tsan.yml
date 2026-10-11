@@ -3,16 +3,34 @@ name: Component upstream source TSan
 on:
   pull_request:
     branches:
+      - main
       - feature/component-runtime-conformance
     paths:
       - ".github/workflows/component-upstream-source-tsan.yml"
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "CMakeUserPresets.json"
       - "cmake/**"
       - "src/**"
       - "include/**"
       - "tests/**"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
+  push:
+    branches:
+      - main
+      - feature/component-runtime-conformance
+    paths:
+      - ".github/workflows/component-upstream-source-tsan.yml"
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "CMakeUserPresets.json"
+      - "cmake/**"
+      - "src/**"
+      - "include/**"
+      - "tests/**"
+      - "vcpkg.json"
+      - "vcpkg-configuration.json"
   workflow_dispatch:
 
 permissions:
@@ -49,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts
-          ref: d04b3c909a5f1ac49883f36dcaa7b57de71627cb
+          ref: 6ba9868a965f3273cf87ab243dab1884072eb7a3
           path: build/upstream-tsan/sources/salts
           persist-credentials: false
 
@@ -57,7 +75,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/salts-utils
-          ref: c96a47b05292e3bbebba0b016c0b18c71bce8cde
+          ref: 3d39b8c23403bad5fc3e04241bb74a7889bd8a03
           path: build/upstream-tsan/sources/salts-utils
           persist-credentials: false
 
@@ -70,10 +88,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.turboscxml-upstream-tsan-ccache
-          key: scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          key: scxml-upstream-source-tsan-linux-v1-6ba9868-3d39b8c-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
           restore-keys: |
-            scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-
-            scxml-upstream-source-tsan-linux-v1-233a0d1-c96a47b-
+            scxml-upstream-source-tsan-linux-v1-6ba9868-3d39b8c-${{ hashFiles('.github/workflows/component-upstream-source-tsan.yml', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            scxml-upstream-source-tsan-linux-v1-6ba9868-3d39b8c-
 
       - name: Restore Salts host re2c
         uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
@@ -118,10 +136,10 @@ jobs:
           test -f "$utils_manifest"
           salts_sha="$(git -C build/upstream-tsan/sources/salts rev-parse HEAD)"
           utils_sha="$(git -C build/upstream-tsan/sources/salts-utils rev-parse HEAD)"
-          test "$salts_sha" = d04b3c909a5f1ac49883f36dcaa7b57de71627cb
-          test "$utils_sha" = c96a47b05292e3bbebba0b016c0b18c71bce8cde
-          grep -Fxq 'version=2.3.0-rc.5' "$salts_manifest"
-          grep -Fxq 'version=4.3.0-rc.2' "$utils_manifest"
+          test "$salts_sha" = 6ba9868a965f3273cf87ab243dab1884072eb7a3
+          test "$utils_sha" = 3d39b8c23403bad5fc3e04241bb74a7889bd8a03
+          grep -Fxq 'version=2.3.0-rc.10' "$salts_manifest"
+          grep -Fxq 'version=4.3.0-rc.8' "$utils_manifest"
           grep -Fxq "commit=$salts_sha" "$salts_manifest"
           grep -Fxq "commit=$utils_sha" "$utils_manifest"
           grep -Fxq 'profile=release' "$salts_manifest"
@@ -131,8 +149,8 @@ jobs:
           test -f "$utils_sdk/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
           {
             printf 'consumer_commit=%s\n' "$(git rev-parse HEAD)"
-            printf 'salts_published_version=2.3.0-rc.5\nsalts_source_commit=%s\n' "$salts_sha"
-            printf 'saltsutils_published_version=4.3.0-rc.2\nsaltsutils_source_commit=%s\n' "$utils_sha"
+            printf 'salts_published_version=2.3.0-rc.10\nsalts_source_commit=%s\n' "$salts_sha"
+            printf 'saltsutils_published_version=4.3.0-rc.8\nsaltsutils_source_commit=%s\n' "$utils_sha"
             printf 'build_profile=first-party-full-source-tsan\n'
             printf 'host=linux-x64\n'
             printf 'third_party_vcpkg_prebuilt=not_tsan_instrumented\n'

@@ -1,0 +1,12 @@
+{
+  "registries": [
+    {
+      "kind": "git",
+      "repository": "https://github.com/qigao/vcpkg-cache",
+      "baseline": "6115feafc309ffdd21f6cf9e53be8105b25e911e",
+      "packages": [
+        "gmssl"
+      ]
+    }
+  ]
+}

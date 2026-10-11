@@ -228,14 +228,12 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS)
     PRIVATE TurboSCXML::VoiceXMLQuickJS)
 endif()
 
-if(TURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY AND
-   (TurboSCXML_QuickJS_FOUND OR
-    TurboSCXML_VoiceXMLQuickJS_FOUND OR
-    TARGET TurboSCXML::_QuickJSSandbox OR
-    TARGET TurboSCXML::VoiceXMLQuickJS OR
-    EXISTS "${TURBOSCXML_ROOT_PATH}/include/voicexml/quickjs.h"))
+# Component availability and exported targets describe the installed profile,
+# even when only VoiceXML is requested. Isolation concerns dependency lookup;
+# CMAKE_DISABLE_FIND_PACKAGE_qjs above also rejects any attempted lookup.
+if(TURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY AND TARGET qjs)
   message(FATAL_ERROR
-    "QuickJS-disabled package unexpectedly exposes QuickJS components")
+    "Isolated package discovery unexpectedly resolves qjs")
 endif()
 
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_PLUGIN AND

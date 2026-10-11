@@ -44,7 +44,7 @@ foreach(_SALTS_UTILS_XML_LIBRARY IN ITEMS xml_parser query_vm)
     "${_SALTS_UTILS_XML_LIBRARY_PATH}")
 endforeach()
 foreach(_SALTS_UTILS_XML_SALTS_LIBRARY IN ITEMS
-    salts salts_cmeta salts_coroutine salts_concurrency salts_platform)
+    salts cmeta_cmeta cmeta_coroutine cmeta_concurrency cmeta_platform)
   unset(_SALTS_UTILS_XML_SALTS_LIBRARY_PATH CACHE)
   unset(_SALTS_UTILS_XML_SALTS_LIBRARY_PATH)
   find_library(_SALTS_UTILS_XML_SALTS_LIBRARY_PATH

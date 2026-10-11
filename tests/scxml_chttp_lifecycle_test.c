@@ -272,6 +272,23 @@ spec("TurboSCXML CHTTP processor and binding lifecycle") {
         check_null(processor.impl);
     }
 
+    it("returns owner initialization failure without publishing a running client") {
+        scxml_chttp_processor_config_v1 config = test_processor_config();
+        scxml_chttp_processor processor = {0};
+        scxml_chttp_processor_stats stats = {0};
+        config.client.request_capacity = 0u;
+        check_equal(scxml_chttp_processor_init(&processor, &config), SALTS_OK);
+        const int start_status = scxml_chttp_processor_start(&processor);
+        const bool have_stats = scxml_chttp_processor_get_stats(&processor, &stats);
+        const int destroy_status = scxml_chttp_processor_destroy(&processor);
+        check_equal(start_status, SALTS_EINVAL);
+        check_true(have_stats);
+        check_equal(stats.running, 0);
+        check_equal(stats.invariant_failures, UINT64_C(0));
+        check_equal(destroy_status, SALTS_OK);
+        check_null(processor.impl);
+    }
+
     it("enforces processor state and fixed endpoint capacity") {
         scxml_chttp_processor_config_v1 config = test_processor_config();
         scxml_chttp_processor processor = {0};

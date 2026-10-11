@@ -19,6 +19,17 @@ target_link_libraries(app PRIVATE TurboSCXML::CHttpEventIO)
 
 ## 生命周期
 
+新版 CNet 将 progress owner 固定在初始化线程。Processor 在 `start()` 创建的
+工作线程上初始化、驱动、停止和销毁异步客户端；复制的 client 配置只含值字段。
+`start()` 等待工作线程的初始化结果后才发布 RUNNING。客户端配置或分配错误因此
+从 `start()` 返回；失败后保留 processor，按停止与销毁协议完成清理。初始化失败
+的线程会被 join，server 也会停止；若清理未完成，调用方须重试 `stop()`。
+这避免了旧实现的“调用线程初始化、工作线程 poll/destroy”跨 owner 操作。
+
+所有队列和 payload 容量、transaction ticket 与完成回调语义保持原契约。
+正常发送、取消、延迟发送、停止超时重试，以及客户端初始化失败后的回滚由
+现有 lifecycle/egress/ingress 测试验证。迁移和回滚均须将宿主与 SDK 一起重建。
+
 严格按以下顺序管理所有权：
 
 ```text

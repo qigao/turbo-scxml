@@ -172,6 +172,8 @@ int main() {
         turboscxml_install_cmeta_peer_value_descriptor()->storage_type;
     const turboscxml_install_cmeta_root initial_root{5};
     vxml_navigation_request_v1 navigation_request{};
+    navigation_request.abi_version = VXML_NAVIGATION_REQUEST_ABI_V1;
+    navigation_request.struct_size = sizeof(navigation_request);
     vxml_cmeta_prompt_view_v1 prompt_view{};
     vxml_cmeta_prompt_media_segment_v1 prompt_media_segment{};
     vxml_cmeta_prompt_media_fallback_v1 prompt_media_fallback{
@@ -462,9 +464,6 @@ int main() {
     initial_request.abi_version =
         VXML_CMETA_INITIAL_COLLECT_REQUEST_ABI_V1;
     initial_request.struct_size = sizeof(initial_request);
-    navigation_request.abi_version =
-        VXML_NAVIGATION_REQUEST_ABI_V1;
-    navigation_request.struct_size = sizeof(navigation_request);
     collect_request_v2.abi_version =
         VXML_CMETA_COLLECT_REQUEST_ABI_V2;
     collect_request_v2.struct_size = sizeof(collect_request_v2);

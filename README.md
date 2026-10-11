@@ -190,9 +190,37 @@ CHTTP_ROOT   # only for CHTTP-enabled profiles
 
 `CHTTP_ROOT` names the installed standalone `CHttp.Native` SDK when an HTTP adapter is enabled.
 
+### Current SDK migration
+
+Resolve the latest published native SDKs, including prereleases (`dotnet add
+... package <name> --prerelease`). The dependency migration was tested locally
+with [Salts 2.3.0-rc.10](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.10),
+[SaltsUtils 4.3.0-rc.8](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.8)
+and [CHttp 2.1.0-rc.3](https://github.com/qigao/chttp/releases/tag/v2.1.0-rc.3).
+CI pins this graph and its source manifests for reproducible qualification;
+update them together when adopting the next published graph.
+
+The current SDK exports `Salts::DataBind` as the public binding target and uses
+`cmeta_*` thread, clock, UUID, logging and Plugin names. The Plugin bridge now
+exposes `cmeta_plugin_*` types and its test DSO exports `cmeta_plugin_query`
+using the SDK's ABI version. Rebuild hosts, plugins and consumers together;
+older Plugin binaries are not interchangeable with this SDK generation.
+Lease ownership and reverse-order teardown remain unchanged.
+
+The CHTTP feature also restores the SDK's GmSSL dependency through the shared
+qigao vcpkg registry. Core and QuickJS-only profiles do not request it. See
+[CHTTP lifecycle migration](docs/scxml-chttp-event-io.md#生命周期) for the owner
+thread and startup error boundary.
+
+The migration follows the published SDK contracts instead of maintaining
+legacy aliases or duplicate DataBind targets. To roll back, restore the prior
+source revision and its matching SDK set together, then rebuild all profiles
+and DSOs. Mixing old headers, libraries or cached package exports is unsupported.
+
 ### Platform qualification
 
-The single `Native SDK CI` workflow consumes the current published native SDK graph without retained dependency versions.
+The `Native SDK CI` workflow consumes the published native SDK graph pinned in
+`cmake/ci/native-sdk-dependencies.csproj`, including prereleases.
 
 | Platform | Qualification |
 | --- | --- |
@@ -297,14 +325,11 @@ This profile integrates VoiceXML data-model behavior with CMeta while preserving
 
 ## Component runtime candidate qualification
 
-The integration-only `Component runtime conformance` workflow checks out the
-consumer event SHA and restores the exact Salts 3.0 prerelease
-`3.0.0-cmeta.06fa2b10b418f997c38f123ddefa00e448897617` for `linux-x64`.
-It verifies package SHA256
-`682122da918658bf958fc409dd148157962e128884b21a91df18c5b7e94589ca`
-and the SDK commit/RID/profile manifest before configuration. SaltsUtils source
-`1c00cab3c5fe4722d4c8488a47f0ada6ec2f3e6b` is rebuilt against that SDK;
-the workflow does not use stable first-party binaries for this candidate.
+The `Component runtime conformance` workflow qualifies `main` and architecture
+integration changes against the exact published Salts/SaltsUtils graph in
+`cmake/ci/native-sdk-dependencies.csproj`. It verifies SDK source manifests on
+Linux, Windows and macOS. `Component upstream source TSan` rebuilds the same
+first-party sources with ThreadSanitizer on Linux.
 
 The DSO test executes real SCXML send effects in old/new sessions, checks generation capacity and closed admission, and verifies each provider closes once before scope retirement and module unload. A session borrows its adapter bridge; destroy the session before its provider bridge and scope. Installed consumers explicitly request `Component`, which requires `Salts::ComponentPlugin`; Plugin handles use the canonical `cmeta_plugin_*` SDK types.
 

@@ -80,6 +80,7 @@ struct scxml_chttp_processor_impl {
     bool stop_requested;
     bool stop_attempt_complete;
     bool worker_started;
+    bool worker_ready;
     bool worker_exited;
     bool server_started;
     bool server_stopped;
@@ -88,6 +89,7 @@ struct scxml_chttp_processor_impl {
     uint64_t stop_deadline_ms;
     uint64_t stop_generation;
     int worker_stop_status;
+    int worker_init_status;
     int shutdown_terminal_status;
     uint16_t bound_port;
     void *storage;

@@ -207,10 +207,6 @@ if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release" AND
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts"
       -XmlOnlySaltsUtilsFixture
         "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/xml_only_salts_utils"
-      -CMetaFixture
-        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/cmeta_salts"
-      -CMetaSaltsUtilsFixture
-        "${CMAKE_CURRENT_SOURCE_DIR}/install_consumer/fixtures/cmeta_salts_utils"
       -VcpkgPrefix
         "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}"
       -CMakeCommand "${CMAKE_COMMAND}")

@@ -107,6 +107,13 @@ typedef struct scxml_chttp_processor_stats {
 int scxml_chttp_processor_init(
     scxml_chttp_processor *processor,
     const scxml_chttp_processor_config_v1 *config);
+/**
+ * Start ingress and the egress owner. The copied client configuration is
+ * admitted on that worker, which owns client initialization, progress and
+ * destruction. Client configuration/allocation errors are returned here;
+ * RUNNING is published only after initialization succeeds. On failure, call
+ * stop if cleanup remains incomplete, then destroy the processor.
+ */
 int scxml_chttp_processor_start(scxml_chttp_processor *processor);
 /**
  * Stop every phase against one timeout budget; zero waits without a limit.

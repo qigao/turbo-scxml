@@ -130,8 +130,7 @@
       "binaryDir": "${sourceDir}/build/Msvc-QuickJS",
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-quickjs/debug",
-        "TURBOSCXML_ENABLE_QUICKJS": "ON",
-        "VCPKG_MANIFEST_FEATURES": "quickjs"
+        "TURBOSCXML_ENABLE_QUICKJS": "ON"
       },
       "environment": {
         "PATH": "${sourceDir}/build/Msvc-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
@@ -144,8 +143,7 @@
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/debug",
         "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
-        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON",
-        "VCPKG_MANIFEST_FEATURES": "chttp"
+        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON"
       },
       "environment": {
         "SALTS_ROOT": "$env{PKG_ROOT}/salts/debug",
@@ -159,8 +157,7 @@
       "binaryDir": "${sourceDir}/build/Msvc-Release-QuickJS",
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-quickjs/release",
-        "TURBOSCXML_ENABLE_QUICKJS": "ON",
-        "VCPKG_MANIFEST_FEATURES": "quickjs"
+        "TURBOSCXML_ENABLE_QUICKJS": "ON"
       },
       "environment": {
         "PATH": "${sourceDir}/build/Msvc-Release-QuickJS/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
@@ -173,8 +170,7 @@
       "cacheVariables": {
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/turboscxml-chttp/release",
         "TURBOSCXML_ENABLE_CHTTP_RESOURCE": "ON",
-        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON",
-        "VCPKG_MANIFEST_FEATURES": "chttp"
+        "TURBOSCXML_ENABLE_CHTTP_EVENT_IO": "ON"
       },
       "environment": {
         "SALTS_ROOT": "$env{PKG_ROOT}/salts/release",

@@ -306,6 +306,19 @@ static int build_access_uri(
 static void processor_worker(void *user) {
     scxml_chttp_processor_impl *processor =
         (scxml_chttp_processor_impl *)user;
+    /* CNet binds progress to the initializing thread. Publish readiness under
+     * the same lock used by start() before accepting any queued work. */
+    const int init_status = chttp_async_client_init(
+        &processor->client, &processor->config.client);
+    cmeta_mutex_lock(&processor->lock);
+    processor->worker_init_status = init_status;
+    processor->worker_ready = true;
+    processor->client_stopped = init_status != SALTS_OK;
+    processor->client_destroyed = init_status != SALTS_OK;
+    processor->worker_exited = init_status != SALTS_OK;
+    cmeta_cond_broadcast(&processor->wake);
+    cmeta_mutex_unlock(&processor->lock);
+    if (init_status != SALTS_OK) return;
     for (;;) {
         size_t completions = 0u;
         int poll_status;
@@ -474,11 +487,9 @@ int scxml_chttp_processor_init(
         (void)chttp_server_destroy(&impl->server);
         goto fail;
     }
-    status = chttp_async_client_init(&impl->client, &config->client);
-    if (status != SALTS_OK) {
-        (void)chttp_server_destroy(&impl->server);
-        goto fail;
-    }
+    /* The client is created on its progress owner during start(). */
+    impl->client_stopped = true;
+    impl->client_destroyed = true;
     impl->state = SCXML_CHTTP_PROCESSOR_INITIALIZED;
     processor->impl = impl;
     return SALTS_OK;
@@ -497,7 +508,8 @@ int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
     if (processor == NULL || processor->impl == NULL) return SALTS_EINVAL;
     impl = (scxml_chttp_processor_impl *)processor->impl;
     cmeta_mutex_lock(&impl->lock);
-    if (impl->state != SCXML_CHTTP_PROCESSOR_INITIALIZED) {
+    if (impl->state != SCXML_CHTTP_PROCESSOR_INITIALIZED ||
+        impl->worker_started) {
         status = impl->state == SCXML_CHTTP_PROCESSOR_RUNNING
             ? SALTS_EALREADY : SALTS_EBUSY;
         cmeta_mutex_unlock(&impl->lock);
@@ -519,6 +531,17 @@ int scxml_chttp_processor_start(scxml_chttp_processor *processor) {
         : cmeta_thread_create(&impl->worker, processor_worker, impl);
     if (status != SALTS_OK) goto stop_server;
     impl->worker_started = true;
+    while (!impl->worker_ready)
+        cmeta_cond_wait(&impl->wake, &impl->lock);
+    status = impl->worker_init_status;
+    if (status != SALTS_OK) {
+        const int join_status = cmeta_thread_join(&impl->worker);
+        if (join_status == SALTS_OK) {
+            cmeta_thread_destroy(&impl->worker);
+            impl->worker_started = false;
+        }
+        goto stop_server;
+    }
     impl->state = SCXML_CHTTP_PROCESSOR_RUNNING;
     cmeta_mutex_unlock(&impl->lock);
     return SALTS_OK;
@@ -527,17 +550,9 @@ stop_server:
     {
         const int server_status = chttp_server_stop(
             &impl->server, impl->config.request_timeout_ms);
-        const int client_status = chttp_async_client_stop(
-            &impl->client, impl->config.request_timeout_ms);
-        int destroy_status = SALTS_EBUSY;
         if (server_status == SALTS_OK) impl->server_stopped = true;
-        if (client_status == SALTS_OK) {
-            impl->client_stopped = true;
-            destroy_status = chttp_async_client_destroy(&impl->client);
-            if (destroy_status == SALTS_OK) impl->client_destroyed = true;
-        }
         impl->state = server_status == SALTS_OK &&
-                      destroy_status == SALTS_OK
+                      impl->client_destroyed && !impl->worker_started
             ? SCXML_CHTTP_PROCESSOR_STOPPED
             : SCXML_CHTTP_PROCESSOR_STOPPING;
     }
@@ -653,22 +668,19 @@ finish:
 
 int scxml_chttp_processor_destroy(scxml_chttp_processor *processor) {
     scxml_chttp_processor_impl *impl;
-    int client_status;
     int server_status;
     if (processor == NULL) return SALTS_EINVAL;
     if (processor->impl == NULL) return SALTS_OK;
     impl = (scxml_chttp_processor_impl *)processor->impl;
     cmeta_mutex_lock(&impl->lock);
     if (impl->state != SCXML_CHTTP_PROCESSOR_STOPPED ||
+        !impl->client_destroyed ||
         impl->live_bindings != 0u) {
         cmeta_mutex_unlock(&impl->lock);
         return SALTS_EBUSY;
     }
     cmeta_mutex_unlock(&impl->lock);
-    client_status = impl->client_destroyed
-        ? SALTS_OK : chttp_async_client_destroy(&impl->client);
     server_status = chttp_server_destroy(&impl->server);
-    if (client_status != SALTS_OK) return client_status;
     if (server_status != SALTS_OK) return server_status;
     cmeta_cond_destroy(&impl->wake);
     cmeta_mutex_destroy(&impl->lock);

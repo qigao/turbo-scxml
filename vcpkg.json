@@ -6,7 +6,10 @@
   ],
   "features": {
     "chttp": {
-      "description": "Enable the optional CHTTP adapters; the HTTP implementation is provided by the standalone installed CHTTP package"
+      "description": "Enable the optional CHTTP adapters; the HTTP implementation is provided by the standalone installed CHTTP package",
+      "dependencies": [
+        "gmssl"
+      ]
     },
     "quickjs": {
       "description": "Bounded quickjs-sandbox SCXML data-model profile",

@@ -7,8 +7,6 @@ param(
     [string]$RealCHttpRoot = "",
     [Parameter(Mandatory = $true)][string]$XmlOnlyFixture,
     [Parameter(Mandatory = $true)][string]$XmlOnlySaltsUtilsFixture,
-    [Parameter(Mandatory = $true)][string]$CMetaFixture,
-    [Parameter(Mandatory = $true)][string]$CMetaSaltsUtilsFixture,
     [Parameter(Mandatory = $true)][string]$VcpkgPrefix,
     [Parameter(Mandatory = $true)][string]$CMakeCommand
 )
@@ -122,8 +120,6 @@ function Test-CMetaIsolation {
         SALTS_UTILS_ROOT = $XmlOnlySaltsUtilsFixture
         SALTS_XML_ONLY_REAL_ROOT = $RealSaltsRoot
         SALTS_UTILS_XML_ONLY_REAL_ROOT = $RealSaltsUtilsRoot
-        SALTS_CMETA_REAL_ROOT = $null
-        SALTS_UTILS_CMETA_REAL_ROOT = $null
         CMAKE_PREFIX_PATH = "$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture"
     } {
         $optionalBuild = Join-Path $ArtifactRoot 'cmeta-optional-missing-salts'
@@ -144,25 +140,23 @@ function Test-CMetaIsolation {
             '-DCMAKE_BUILD_TYPE=Release',
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
             "-DCMAKE_PREFIX_PATH:PATH=$XmlOnlyFixture;$XmlOnlySaltsUtilsFixture") `
-            'Salts::CMeta, Salts::QueryVM'
+            'Salts::CMeta, Salts::CSerde, Salts::DataBind, Salts::QueryVM'
     }
 
     $consumerBuild = Join-Path $ArtifactRoot 'cmeta-enabled'
     Invoke-WithEnvironment @{
         TURBOSCXML_ROOT = $InstallDir
-        SALTS_ROOT = $CMetaFixture
-        SALTS_UTILS_ROOT = $CMetaSaltsUtilsFixture
-        SALTS_CMETA_REAL_ROOT = $RealSaltsRoot
-        SALTS_UTILS_CMETA_REAL_ROOT = $RealSaltsUtilsRoot
+        SALTS_ROOT = $RealSaltsRoot
+        SALTS_UTILS_ROOT = $RealSaltsUtilsRoot
         SALTS_XML_ONLY_REAL_ROOT = $null
         SALTS_UTILS_XML_ONLY_REAL_ROOT = $null
-        CMAKE_PREFIX_PATH = "$CMetaFixture;$CMetaSaltsUtilsFixture"
+        CMAKE_PREFIX_PATH = $VcpkgPrefix
         PATH = "$(Join-Path $RealSaltsRoot 'bin');$(Join-Path $RealSaltsUtilsRoot 'bin');$env:PATH"
     } {
         Configure-Consumer 'CMeta-enabled VoiceXML' $consumerBuild @(
             '-DTURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY=ON',
             '-DTURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY=ON',
-            "-DCMAKE_PREFIX_PATH:PATH=$CMetaFixture;$CMetaSaltsUtilsFixture")
+            "-DCMAKE_PREFIX_PATH:PATH=$VcpkgPrefix")
         Run-Consumers 'CMeta-enabled VoiceXML' $consumerBuild @(
             'turboscxml_voicexml_cmeta_install_consumer',
             'turboscxml_voicexml_cmeta_install_consumer_cpp')
@@ -373,7 +367,7 @@ function Reset-WorktreeDirectory {
 foreach ($requiredDirectory in @(
     $SourceDir, $RealSaltsRoot, $RealSaltsUtilsRoot,
     $XmlOnlyFixture, $XmlOnlySaltsUtilsFixture,
-    $CMetaFixture, $CMetaSaltsUtilsFixture, $VcpkgPrefix)) {
+    $VcpkgPrefix)) {
     if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
         throw "Required package-isolation directory is missing: $requiredDirectory"
     }

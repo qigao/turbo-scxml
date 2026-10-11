@@ -82,6 +82,7 @@ typedef struct ingress_fixture {
 typedef struct blocking_call {
     ingress_fixture *fixture;
     unsigned int status;
+    atomic_bool done;
 } blocking_call;
 
 typedef struct executor_blocker {
@@ -336,8 +337,8 @@ static bool fixture_init(
             &fixture->program) == SALTS_OK;
 }
 
-static unsigned int post_bytes(
-    ingress_fixture *fixture, const char *target,
+static unsigned int post_client_bytes(
+    chttp_client *client, ingress_fixture *fixture, const char *target,
     const char *content_type, const void *body, size_t body_size) {
     chttp_header header = {"Content-Type", content_type};
     chttp_options options = {
@@ -348,10 +349,17 @@ static unsigned int post_bytes(
     chttp_response response = {0};
     chttp_error error = {0};
     unsigned int status = 0u;
-    if (chttp_post(&fixture->client, &options, &response, &error) == SALTS_OK)
+    if (chttp_post(client, &options, &response, &error) == SALTS_OK)
         status = response.status_code;
     chttp_response_destroy(&response);
     return status;
+}
+
+static unsigned int post_bytes(
+    ingress_fixture *fixture, const char *target,
+    const char *content_type, const void *body, size_t body_size) {
+    return post_client_bytes(
+        &fixture->client, fixture, target, content_type, body, body_size);
 }
 
 static unsigned int post(
@@ -363,9 +371,16 @@ static unsigned int post(
 
 static void blocking_http(void *user) {
     blocking_call *call = (blocking_call *)user;
-    call->status = post(
-        call->fixture, call->fixture->target,
-        "application/x-www-form-urlencoded", "param1=2");
+    chttp_client client = {0};
+    const chttp_client_config config = test_client_config();
+    if (chttp_client_init(&client, &config) == SALTS_OK) {
+        call->status = post_client_bytes(
+            &client, call->fixture, call->fixture->target,
+            "application/x-www-form-urlencoded", "param1=2", 8u);
+        if (chttp_client_destroy(&client, 1000u) != SALTS_OK)
+            call->status = 0u;
+    }
+    atomic_store(&call->done, true);
 }
 
 static void fixture_destroy(ingress_fixture *fixture) {
@@ -510,7 +525,19 @@ spec("TurboSCXML CHTTP ingress") {
         atomic_store(&fixture.decode.block, true);
         check_equal(cmeta_thread_create(
                         &http_thread, blocking_http, &call), SALTS_OK);
-        while (!atomic_load(&fixture.decode.entered)) cmeta_thread_yield();
+        {
+            const uint64_t deadline = cmeta_monotonic_ms() + 2000u;
+            while (!atomic_load(&fixture.decode.entered) &&
+                   !atomic_load(&call.done) && cmeta_monotonic_ms() < deadline)
+                cmeta_thread_yield();
+            if (!atomic_load(&fixture.decode.entered)) {
+                atomic_store(&fixture.decode.release, true);
+                (void)cmeta_thread_join(&http_thread);
+                cmeta_thread_destroy(&http_thread);
+                fixture_destroy(&fixture);
+                check_true(atomic_load(&fixture.decode.entered));
+            }
+        }
         check_equal(scxml_session_destroy(&fixture.session),
                     CFLOW_STATECHART_INSTANCE_WOULD_BLOCK);
         check_not_null(fixture.session.impl);

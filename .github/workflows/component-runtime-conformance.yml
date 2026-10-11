@@ -3,10 +3,12 @@ name: Component runtime conformance
 on:
   pull_request:
     branches:
+      - main
       - feature/component-runtime-conformance
     paths:
       - ".github/workflows/component-runtime-conformance.yml"
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "CMakeUserPresets.json"
       - "cmake/**"
       - "presets/**"
@@ -14,12 +16,15 @@ on:
       - "include/**"
       - "tests/**"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
   push:
     branches:
+      - main
       - feature/component-runtime-conformance
     paths:
       - ".github/workflows/component-runtime-conformance.yml"
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "CMakeUserPresets.json"
       - "cmake/**"
       - "presets/**"
@@ -27,6 +32,7 @@ on:
       - "include/**"
       - "tests/**"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
   workflow_dispatch:
 
 permissions:
@@ -66,9 +72,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.turboscxml-component-ccache
-          key: turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-${{ github.sha }}
+          key: turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-${{ github.sha }}
           restore-keys: |
-            turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-
+            turboscxml-component-ccache-linux-x64-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj', '.github/workflows/component-runtime-conformance.yml') }}-
             turboscxml-component-ccache-linux-x64-v1-
 
       - name: Restore Salts host re2c
@@ -144,10 +150,10 @@ jobs:
           # All host runners restore identical versions, while manifest SHA
           # checks reject package/source drift. A new published candidate
           # requires an explicit simultaneous update, not a fallback.
-          test "$salts_version" = '2.3.0-rc.5'
-          test "$utils_version" = '4.3.0-rc.2'
-          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts_manifest"
-          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils_manifest"
+          test "$salts_version" = '2.3.0-rc.10'
+          test "$utils_version" = '4.3.0-rc.8'
+          grep -Fxq 'commit=6ba9868a965f3273cf87ab243dab1884072eb7a3' "$salts_manifest"
+          grep -Fxq 'commit=3d39b8c23403bad5fc3e04241bb74a7889bd8a03' "$utils_manifest"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
           test -f "$salts_root/include/salts/component_plugin.h"
           test -f "$utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake"
@@ -379,9 +385,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.turboscxml-component-multirid-ccache
-          key: turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          key: turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
           restore-keys: |
-            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            turboscxml-component-multirid-macos-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
             turboscxml-component-multirid-macos-${{ runner.arch }}-v1-
 
       - name: Prepare macOS compiler and package RID
@@ -444,13 +450,13 @@ jobs:
             }
             return $roots[0]
           }
-          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.5"
-          $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.2"
-          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb")) {
-            throw "Salts SDK source SHA differs from published 2.3.0-rc.5"
+          $salts = Get-ExactSdk "salts.native" "2.3.0-rc.10"
+          $utils = Get-ExactSdk "saltsutils.native" "4.3.0-rc.8"
+          if (-not ((Get-Content -LiteralPath (Join-Path $salts "salts-sdk-manifest.txt")) -contains "commit=6ba9868a965f3273cf87ab243dab1884072eb7a3")) {
+            throw "Salts SDK source SHA differs from published 2.3.0-rc.10"
           }
-          if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde")) {
-            throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.2"
+          if (-not ((Get-Content -LiteralPath (Join-Path $utils "salts-utils-sdk-manifest.txt")) -contains "commit=3d39b8c23403bad5fc3e04241bb74a7889bd8a03")) {
+            throw "SaltsUtils SDK source SHA differs from published 4.3.0-rc.8"
           }
           "SALTS_ROOT=$salts" >> $env:GITHUB_ENV
           "SALTS_UTILS_ROOT=$utils" >> $env:GITHUB_ENV
@@ -492,10 +498,10 @@ jobs:
             grep -Eq '^commit=[[:xdigit:]]{40}$' "$manifest"
             printf '%s' "${roots[0]}"
           }
-          salts="$(sdk_root salts.native 2.3.0-rc.5 salts-sdk-manifest.txt)"
-          utils="$(sdk_root saltsutils.native 4.3.0-rc.2 salts-utils-sdk-manifest.txt)"
-          grep -Fxq 'commit=d04b3c909a5f1ac49883f36dcaa7b57de71627cb' "$salts/salts-sdk-manifest.txt"
-          grep -Fxq 'commit=c96a47b05292e3bbebba0b016c0b18c71bce8cde' "$utils/salts-utils-sdk-manifest.txt"
+          salts="$(sdk_root salts.native 2.3.0-rc.10 salts-sdk-manifest.txt)"
+          utils="$(sdk_root saltsutils.native 4.3.0-rc.8 salts-utils-sdk-manifest.txt)"
+          grep -Fxq 'commit=6ba9868a965f3273cf87ab243dab1884072eb7a3' "$salts/salts-sdk-manifest.txt"
+          grep -Fxq 'commit=3d39b8c23403bad5fc3e04241bb74a7889bd8a03' "$utils/salts-utils-sdk-manifest.txt"
           echo "SALTS_ROOT=$salts" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_ROOT=$utils" >> "$GITHUB_ENV"
           echo "DATABIND_ROOT=$utils" >> "$GITHUB_ENV"

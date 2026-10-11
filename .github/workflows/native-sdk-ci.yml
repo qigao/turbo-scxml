@@ -7,11 +7,13 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "cmake/**"
       - "src/**"
       - "include/**"
       - "tests/**"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
       - "CMakeUserPresets.json"
       - "presets/**"
       - ".github/workflows/native-sdk-ci.yml"
@@ -19,11 +21,13 @@ on:
     branches: [main]
     paths:
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
       - "cmake/**"
       - "src/**"
       - "include/**"
       - "tests/**"
       - "vcpkg.json"
+      - "vcpkg-configuration.json"
       - "CMakeUserPresets.json"
       - "presets/**"
       - ".github/workflows/native-sdk-ci.yml"
@@ -107,9 +111,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.turboscxml-ccache
-          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
+          key: turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-${{ github.sha }}
           restore-keys: |
-            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
+            turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-${{ hashFiles('CMakeLists.txt', 'CMakeOptions.cmake', 'vcpkg-configuration.json', 'CMakeUserPresets.json', 'vcpkg.json', 'presets/*.json', 'cmake/ci/native-sdk-dependencies.csproj') }}-
             turboscxml-ccache-${{ matrix.id }}-${{ runner.arch }}-v1-
 
       - uses: actions/setup-dotnet@v4
@@ -163,7 +167,7 @@ jobs:
             local resolved_version
             resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
             case "$package:$resolved_version" in
-              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.1.0-rc.3) ;;
               *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
             esac
             if [ "$package" = salts.native ]; then
@@ -324,7 +328,7 @@ jobs:
             $version = Split-Path (Split-Path (Split-Path $roots[0] -Parent) -Parent) -Leaf
             if (($packageName -eq "salts.native" -and $version -notmatch '^2\.3\.0-') -or
                 ($packageName -eq "saltsutils.native" -and $version -notmatch '^4\.3\.0-') -or
-                ($packageName -eq "chttp.native" -and $version -ne '2.0.0')) {
+                ($packageName -eq "chttp.native" -and $version -ne '2.1.0-rc.3')) {
               throw "Unexpected NuGet SDK: $packageName $version"
             }
             if ($packageName -eq "salts.native" -or $packageName -eq "saltsutils.native") {
@@ -453,7 +457,7 @@ jobs:
             local resolved_version
             resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
             case "$package:$resolved_version" in
-              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.1.0-rc.3) ;;
               *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
             esac
             if [ "$package" = salts.native ]; then
@@ -545,7 +549,7 @@ jobs:
             local resolved_version
             resolved_version="$(basename "$(dirname "$(dirname "${roots[0]}")")")"
             case "$package:$resolved_version" in
-              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.0.0) ;;
+              salts.native:2.3.0-*|saltsutils.native:4.3.0-*|chttp.native:2.1.0-rc.3) ;;
               *) echo "Unexpected NuGet SDK: $package $resolved_version" >&2; return 1 ;;
             esac
             if [ "$package" = salts.native ]; then
