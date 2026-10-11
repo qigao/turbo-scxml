@@ -13,10 +13,18 @@ fuzzing.
   initialization/start for successfully compiled mutations.
 - `voicexml_resource_fuzz_smoke`: profile-neutral DocumentStore URI/compiler
   and SubmitResource urlencoded/multipart policy/encoding boundaries with
-  inert local adapters only.
+  inert local adapters only. Fixed request-size sweeps additionally check every
+  advertised byte size through the current urlencoded/multipart structs,
+  exact body/segment/part budgets, zero-field requests, unsupported encoding,
+  canonical timeout values, and fetch-audio request admission.
 - `voicexml_quickjs_fuzz_smoke`: QuickJS VoiceXML compiler metadata
   validation only; arbitrary mutated JavaScript is never executed. This target
-  exists only when QuickJS is enabled.
+  exists only when QuickJS is enabled. Fixed option-size sweeps verify legacy
+  script compatibility, data-tail admission, all eight data-limit enablement
+  combinations, and the exact expression-byte limit. The adjacent
+  `voicexml_quickjs_test` uses fixed static Programs to verify rejection of
+  inconsistent script lengths and mutually exclusive target metadata before
+  target publication; those cases do not evaluate JavaScript.
 
 Each checked-in seed is locally authored and is not copied from an upstream
 conformance suite.
@@ -25,8 +33,12 @@ conformance suite.
 
 - maximum input: 4096 bytes;
 - iterations: 16 mutations per seed;
+- additional struct-size sweeps: one case per byte size from zero through
+  `sizeof` of each tested public struct; backing storage remains fully valid;
+- additional numeric boundaries: fixed exact/one-below limits, with at most
+  two multipart parts and 4096 body bytes;
 - deterministic xorshift mutation schedule;
-- no network, CHTTP, provider, filesystem writes, or background workers;
+- no network, CHTTP, external providers, filesystem writes, or background workers;
 - CMeta runtime is bounded by 128 execution steps;
 - CI smoke runs in the existing ASan+UBSan job;
 - no target uses CHTTP, DNS, sockets or remote providers;

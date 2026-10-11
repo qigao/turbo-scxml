@@ -15,6 +15,10 @@ typedef struct resource_fuzz_probe {
     size_t compile_calls;
     size_t wire_v1_calls;
     size_t wire_v2_calls;
+    size_t body_size;
+    size_t segment_count;
+    bool has_timeout;
+    uint64_t timeout_us;
 } resource_fuzz_probe;
 
 static vxml_dialog_manager_status document_open(
@@ -84,6 +88,10 @@ static vxml_submit_resource_status execute_v1(
     if (probe == NULL || request == NULL ||
         out_response == NULL)
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    probe->body_size = request->body_size;
+    probe->has_timeout = request->struct_size >= sizeof(*request) &&
+        request->has_timeout;
+    probe->timeout_us = probe->has_timeout ? request->timeout_us : 0u;
     ++probe->wire_v1_calls;
     return VXML_SUBMIT_RESOURCE_PROVIDER_ERROR;
 }
@@ -113,6 +121,11 @@ static vxml_submit_resource_status execute_v2(
     }
     if (total != request->body_size)
         return VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT;
+    probe->body_size = request->body_size;
+    probe->segment_count = request->segment_count;
+    probe->has_timeout = request->struct_size >= sizeof(*request) &&
+        request->has_timeout;
+    probe->timeout_us = probe->has_timeout ? request->timeout_us : 0u;
     ++probe->wire_v2_calls;
     return VXML_SUBMIT_RESOURCE_PROVIDER_ERROR;
 }
@@ -138,6 +151,190 @@ typedef struct resource_fuzz_context {
     vxml_document_store store;
     resource_fuzz_probe probe;
 } resource_fuzz_context;
+
+/* These fixed contract cases complement the byte mutations: they vary only
+ * public size/version fields and real, bounded arrays, never pointer storage. */
+static bool submit_matches(
+    resource_fuzz_context *context, const vxml_submit_request_v1 *request,
+    vxml_submit_resource_status expected) {
+    vxml_submit_response response = {.lease = context};
+    context->probe.wire_v1_calls = 0u;
+    const vxml_submit_resource_status status = vxml_submit_resource_execute(
+        &context->store, &SUBMIT, &context->probe, request, &response);
+    const bool matched = status == expected && response.lease == NULL &&
+        response.data == NULL && response.size == 0u &&
+        context->probe.wire_v1_calls ==
+            (expected == VXML_SUBMIT_RESOURCE_PROVIDER_ERROR ? 1u : 0u);
+    if (!matched)
+        fprintf(stderr, "submit contract size=%zu: status=%d expected=%d calls=%zu\n",
+                request->struct_size, (int)status, (int)expected,
+                context->probe.wire_v1_calls);
+    return matched;
+}
+
+static bool multipart_matches(
+    resource_fuzz_context *context,
+    const vxml_submit_multipart_request_v1 *request,
+    vxml_submit_resource_status expected) {
+    vxml_submit_response response = {.lease = context};
+    context->probe.wire_v2_calls = 0u;
+    const vxml_submit_resource_status status =
+        vxml_submit_resource_execute_multipart(
+            &context->store, &SUBMIT, &context->probe, request, &response);
+    const bool matched = status == expected && response.lease == NULL &&
+        response.data == NULL && response.size == 0u &&
+        context->probe.wire_v2_calls ==
+            (expected == VXML_SUBMIT_RESOURCE_PROVIDER_ERROR ? 1u : 0u);
+    if (!matched)
+        fprintf(stderr, "multipart contract size=%zu: status=%d expected=%d calls=%zu\n",
+                request->struct_size, (int)status, (int)expected,
+                context->probe.wire_v2_calls);
+    return matched;
+}
+
+static int run_contract_cases(resource_fuzz_context *context) {
+    static const char target[] = "https://voice.example/upload";
+    static const vxml_submit_field_v1 field = {"text", 4u, "a b", 3u};
+    static const unsigned char recording_bytes[] = {1u, 2u, 3u};
+    static const vxml_submit_recording_field_v1 recording = {
+        "voice", 5u, "voice.raw", 9u, "audio/wav", 9u,
+        recording_bytes, sizeof(recording_bytes)};
+    static const vxml_submit_multipart_part_ref_v1 parts[] = {
+        {VXML_SUBMIT_MULTIPART_PART_RECORDING, 0u},
+        {VXML_SUBMIT_MULTIPART_PART_TEXT, 0u}};
+    vxml_submit_request_v1 request = VXML_SUBMIT_REQUEST_V1_INIT;
+    vxml_submit_multipart_request_v1 multipart =
+        VXML_SUBMIT_MULTIPART_REQUEST_V1_INIT;
+    const size_t submit_prefix = offsetof(vxml_submit_request_v1, has_timeout);
+    const size_t submit_tail = offsetof(vxml_submit_request_v1, timeout_us) +
+        sizeof(request.timeout_us);
+    const size_t multipart_prefix =
+        offsetof(vxml_submit_multipart_request_v1, parts);
+    const size_t ordered_prefix =
+        offsetof(vxml_submit_multipart_request_v1, has_timeout);
+    const size_t multipart_tail =
+        offsetof(vxml_submit_multipart_request_v1, timeout_us) +
+        sizeof(multipart.timeout_us);
+
+    request.target = target;
+    request.target_size = sizeof(target) - 1u;
+    request.method = VXML_SUBMIT_METHOD_POST;
+    request.fields = &field;
+    request.field_count = 1u;
+    request.max_uri_bytes = 256u;
+    request.max_body_bytes = 8u; /* "text=a+b", including '=' but no terminator. */
+    request.max_response_bytes = 256u;
+    request.has_timeout = true;
+    request.timeout_us = 1000u;
+    for (size_t bytes = 0u; bytes <= sizeof(request); ++bytes) {
+        request.struct_size = bytes;
+        const bool admitted = bytes == submit_prefix || bytes >= submit_tail;
+        if (!submit_matches(context, &request, admitted
+                ? VXML_SUBMIT_RESOURCE_PROVIDER_ERROR
+                : VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT)) return 1;
+        if (admitted && (context->probe.body_size != 8u ||
+            context->probe.has_timeout != (bytes >= submit_tail) ||
+            context->probe.timeout_us != (bytes >= submit_tail ? 1000u : 0u)))
+            return 1;
+    }
+    request.struct_size = sizeof(request);
+    request.field_count = 0u;
+    if (!submit_matches(context, &request,
+            VXML_SUBMIT_RESOURCE_PROVIDER_ERROR) ||
+        context->probe.body_size != 0u) return 1;
+    request.field_count = 1u;
+    request.max_body_bytes = 7u;
+    if (!submit_matches(context, &request,
+            VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED)) return 1;
+    request.max_body_bytes = 8u;
+    request.enctype = "application/json";
+    request.enctype_size = sizeof("application/json") - 1u;
+    if (!submit_matches(context, &request,
+            VXML_SUBMIT_RESOURCE_UNSUPPORTED_ENCODING)) return 1;
+    request.enctype = NULL;
+    request.enctype_size = 0u;
+    request.has_timeout = false;
+    if (!submit_matches(context, &request,
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT)) return 1;
+
+    multipart.target = target;
+    multipart.target_size = sizeof(target) - 1u;
+    multipart.fields = &field;
+    multipart.field_count = 1u;
+    multipart.recordings = &recording;
+    multipart.recording_count = 1u;
+    multipart.max_uri_bytes = 256u;
+    multipart.max_body_bytes = 4096u;
+    multipart.max_response_bytes = 256u;
+    multipart.max_parts = 2u;
+    multipart.max_boundary_bytes = 96u;
+    multipart.max_header_bytes = 2048u;
+    multipart.max_segments = 32u;
+    multipart.parts = parts;
+    multipart.part_count = 2u;
+    multipart.has_timeout = true;
+    multipart.timeout_us = 2000u;
+    for (size_t bytes = 0u; bytes <= sizeof(multipart); ++bytes) {
+        multipart.struct_size = bytes;
+        const bool admitted = bytes == multipart_prefix ||
+            bytes == ordered_prefix || bytes >= multipart_tail;
+        if (!multipart_matches(context, &multipart, admitted
+                ? VXML_SUBMIT_RESOURCE_PROVIDER_ERROR
+                : VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT)) return 1;
+        if (admitted && (context->probe.has_timeout != (bytes >= multipart_tail) ||
+            context->probe.timeout_us != (bytes >= multipart_tail ? 2000u : 0u)))
+            return 1;
+    }
+    const size_t body_size = context->probe.body_size;
+    const size_t segments = context->probe.segment_count;
+    if (body_size == 0u || segments < 2u) return 1;
+    multipart.struct_size = sizeof(multipart);
+    multipart.max_body_bytes = body_size;
+    multipart.max_segments = segments;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_PROVIDER_ERROR)) return 1;
+    multipart.max_body_bytes = body_size - 1u;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED)) return 1;
+    multipart.max_body_bytes = body_size;
+    multipart.max_segments = segments - 1u;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED)) return 1;
+    multipart.max_segments = segments;
+    multipart.max_parts = 1u;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_LIMIT_EXCEEDED)) return 1;
+    multipart.max_parts = 2u;
+    multipart.part_count = 1u;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_INVALID_ARGUMENT)) return 1;
+    multipart.part_count = 2u;
+    if (!multipart_matches(context, &multipart,
+            VXML_SUBMIT_RESOURCE_PROVIDER_ERROR)) return 1;
+    vxml_fetch_audio_request_v1 audio = {
+        .abi_version = VXML_FETCH_AUDIO_REQUEST_ABI_V1,
+        .struct_size = sizeof(audio),
+        .uri = target, .uri_size = sizeof(target) - 1u,
+        .has_delay = true, .delay_us = 0u,
+        .has_minimum = true, .minimum_us = 1000u};
+    for (size_t bytes = 0u; bytes <= sizeof(audio); ++bytes) {
+        vxml_fetch_audio_begin_result result = VXML_FETCH_AUDIO_STARTED;
+        vxml_fetch_audio_ticket_v1 ticket = {.user = context};
+        audio.struct_size = bytes;
+        const vxml_document_store_status status =
+            vxml_document_store_fetch_audio_begin(
+                &context->store, &audio, &result, &ticket);
+        if (status != (bytes == sizeof(audio) ? VXML_DOCUMENT_STORE_OK
+                : VXML_DOCUMENT_STORE_INVALID_ARGUMENT) ||
+            result != VXML_FETCH_AUDIO_SKIPPED ||
+            ticket.finish != NULL || ticket.user != NULL) {
+            fprintf(stderr, "fetch-audio contract size=%zu status=%d\n",
+                    bytes, (int)status);
+            return 1;
+        }
+    }
+    return 0;
+}
 
 static int run_case(
     const unsigned char *data,
@@ -334,7 +531,8 @@ int main(void) {
         VXML_DOCUMENT_STORE_OK)
         return 1;
 
-    result = voicexml_fuzz_run(
+    result = run_contract_cases(&context);
+    if (result == 0) result = voicexml_fuzz_run(
         VOICEXML_RESOURCE_FUZZ_CORPUS_DIR,
         seeds, sizeof(seeds) / sizeof(seeds[0]),
         16u, 4096u, run_case, &context);

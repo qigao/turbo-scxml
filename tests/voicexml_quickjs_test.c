@@ -1428,6 +1428,56 @@ spec("VoiceXML QuickJS script target profile") {
         vxml_program_destroy(&program);
     }
 
+    group("static script metadata admission") {
+        static vxml_program program;
+        static vxml_session session;
+        before_each() {
+            static const char document[] =
+                "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+                "<form><block><script src='worker.js'/></block></form></vxml>";
+            program = (vxml_program){0};
+            session = (vxml_session){0};
+            const vxml_quickjs_compile_options_v1 compile =
+                vxml_quickjs_default_compile_options();
+            check_equal(vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u, NULL, &compile, &program, NULL),
+                VXML_OK);
+        }
+        after_each() {
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+        for (size_t variant = 0u; variant != 3u; ++variant) {
+            it("rejects inconsistent static metadata variant %zu before publishing a target", variant) {
+                vxml_program_impl *impl = (vxml_program_impl *)program.impl;
+                check_equal(impl->action_count, (size_t)1u);
+                vxml_action_row *action = &impl->actions[0];
+                /* All storage remains valid. Exercise the logical Program
+                 * consistency checks without evaluating JavaScript. */
+                if (variant == 0u) {
+                    action->script_src_size = 0u;
+                } else if (variant == 1u) {
+                    --action->script_src_size;
+                } else {
+                    action->script_srcexpr = action->script_src;
+                    action->script_srcexpr_size = action->script_src_size;
+                }
+                const vxml_quickjs_session_options_v1 options =
+                    vxml_quickjs_default_session_options();
+                check_equal(vxml_session_init_quickjs(&session, &program, &options),
+                            VXML_OK);
+                check_equal(vxml_session_start(&session), VXML_INVALID_STRUCTURE);
+                check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+                const char *event = NULL;
+                size_t event_size = 0u;
+                check_equal(vxml_quickjs_session_last_event(&session, &event, &event_size),
+                            VXML_OK);
+                check_equal(event_size, sizeof("error.semantic") - 1u);
+                check_equal(memcmp(event, "error.semantic", event_size), 0);
+            }
+        }
+    }
+
     it("keeps static src target handoff unchanged") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
