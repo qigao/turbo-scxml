@@ -5,6 +5,18 @@
   ],
   "configurePresets": [
     {
+      "name": "win-release-voicexml-cmeta-installed-user",
+      "inherits": "win-release-quickjs-installed-user",
+      "binaryDir": "${sourceDir}/build/voicexml-cmeta-installed",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_FEATURES": "",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "OFF",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER": "OFF",
+        "TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY": "ON",
+        "TURBOSCXML_INSTALL_CONSUMER_FORBID_QJS_DISCOVERY": "ON"
+      }
+    },
+    {
       "name": "win-release-quickjs-installed-user",
       "inherits": "win-release-quickjs-user",
       "binaryDir": "${sourceDir}/build/quickjs-installed",
@@ -51,6 +63,10 @@
   ],
   "buildPresets": [
     {
+      "name": "win-release-voicexml-cmeta-installed-user",
+      "configurePreset": "win-release-voicexml-cmeta-installed-user"
+    },
+    {
       "name": "win-release-voicexml-quickjs-installed-user",
       "configurePreset": "win-release-voicexml-quickjs-installed-user"
     },
@@ -64,6 +80,12 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "win-release-voicexml-cmeta-installed-user",
+      "configurePreset": "win-release-voicexml-cmeta-installed-user",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error" }
+    },
     {
       "name": "win-release-voicexml-quickjs-installed-user",
       "configurePreset": "win-release-voicexml-quickjs-installed-user",

@@ -3,6 +3,7 @@
 #include <string.h>
 
 int main(void) {
+    bool progressed = true;
     static const char document[] =
         "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' "
         "datamodel='cmeta'><var name='value' expr='7'/><form><block>"
@@ -517,6 +518,10 @@ int main(void) {
         exit_value.kind != VXML_CMETA_VALUE_SINT ||
         exit_value.data.sint != 8) {
         result = 50;
+        goto cleanup;
+    }
+    if (vxml_session_cmeta_run_ready(&session, &progressed) != VXML_OK || progressed) {
+        result = 55;
         goto cleanup;
     }
     if (vxml_session_close(&session) != VXML_OK) {

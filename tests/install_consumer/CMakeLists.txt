@@ -694,6 +694,10 @@ endif()
 enable_testing()
 foreach(consumer IN ITEMS
     turboscxml_install_consumer
+    turboscxml_voicexml_cmeta_install_consumer
+    turboscxml_voicexml_cmeta_install_consumer_cpp
+    turboscxml_voicexml_subdialog_owner_install_consumer
+    turboscxml_voicexml_subdialog_owner_install_consumer_cpp
     turboscxml_voicexml_quickjs_install_consumer
     turboscxml_voicexml_quickjs_install_consumer_cpp
     turboscxml_dialog_manager_install_consumer

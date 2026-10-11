@@ -8130,6 +8130,9 @@ static vxml_status collect_raise_semantic(
     vxml_status event_status = vxml_session_cmeta_raise(
         session, "error.semantic",
         sizeof("error.semantic") - 1u);
+    if (event_status == VXML_OK)
+        ((vxml_cmeta_session_data *)((vxml_session_impl *)session->impl)->profile_data)
+            ->progress_admission_event_handled = true;
     return event_status == VXML_OK
         ? VXML_SEMANTIC_ERROR : event_status;
 }
@@ -13966,6 +13969,9 @@ static vxml_status prompt_media_raise_semantic(
     vxml_status event_status = vxml_session_cmeta_raise(
         session, "error.semantic",
         sizeof("error.semantic") - 1u);
+    if (event_status == VXML_OK)
+        ((vxml_cmeta_session_data *)((vxml_session_impl *)session->impl)->profile_data)
+            ->progress_admission_event_handled = true;
     return event_status == VXML_OK
         ? VXML_SEMANTIC_ERROR : event_status;
 }
@@ -14020,6 +14026,9 @@ static vxml_status prompt_media_admission_failure(
     else
         return media_status;
     event_status = prompt_media_raise_failure(session, failure);
+    if (event_status == VXML_OK)
+        ((vxml_cmeta_session_data *)((vxml_session_impl *)session->impl)->profile_data)
+            ->progress_admission_event_handled = true;
     return event_status == VXML_OK ? media_status : event_status;
 }
 
@@ -14510,6 +14519,83 @@ static vxml_status prompt_mark_result_publish(
     profile->prompt_mark_result.generation = generation;
     profile->prompt_mark_result.live = true;
     return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_run_ready(
+    vxml_session *session, bool *out_progressed) {
+    vxml_session_impl *impl;
+    vxml_cmeta_session_data *profile;
+    vxml_status status;
+    if (out_progressed != NULL) *out_progressed = false;
+    if (session == NULL || out_progressed == NULL) return VXML_INVALID_ARGUMENT;
+    impl = (vxml_session_impl *)session->impl;
+    if (impl == NULL || impl->state == VXML_SESSION_CLOSED) return VXML_CLOSED;
+    if (impl->program == NULL || impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->profile_data == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state == VXML_SESSION_FAILED) return impl->error;
+    if (impl->state == VXML_SESSION_READY) return VXML_INVALID_STATE;
+    if (impl->state != VXML_SESSION_RUNNING) return VXML_OK;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
+
+    profile->progress_admission_event_handled = false;
+    if (profile->prompt_media_in_flight) {
+        vxml_cmeta_prompt_media_outcome outcome;
+        status = vxml_session_cmeta_prompt_media_run_ready(session, out_progressed, &outcome);
+        if (status != VXML_OK || *out_progressed) return status;
+    }
+    if (profile->subdialog_in_flight)
+        return vxml_session_cmeta_subdialog_run_ready(session, out_progressed);
+    if (profile->record_in_flight)
+        return vxml_session_cmeta_record_run_ready(session, out_progressed);
+    if (profile->transfer_in_flight)
+        return vxml_session_cmeta_transfer_run_ready(session, out_progressed);
+    if (profile->collect_in_flight)
+        return vxml_session_cmeta_collect_run_ready(session, out_progressed);
+
+    if (profile->active_subdialog != VXML_CMETA_NO_INDEX) {
+        status = vxml_session_cmeta_subdialog_prepare(session, NULL);
+        if (status == VXML_OK) status = vxml_session_cmeta_subdialog_commit(session);
+    } else if (profile->active_record != VXML_CMETA_NO_INDEX) {
+        status = vxml_session_cmeta_record_prepare(session, NULL);
+        if (status == VXML_OK) status = vxml_session_cmeta_record_commit(session);
+    } else if (profile->active_transfer != VXML_CMETA_NO_INDEX) {
+        status = vxml_session_cmeta_transfer_prepare(session, NULL);
+        if (status == VXML_OK) status = vxml_session_cmeta_transfer_commit(session);
+    } else if (profile->active_field != VXML_CMETA_NO_INDEX ||
+               profile->active_initial != VXML_CMETA_NO_INDEX ||
+               profile->active_menu != VXML_CMETA_NO_INDEX) {
+        if (profile->active_menu == VXML_CMETA_NO_INDEX &&
+            profile->progress_prompt_generation != profile->collect_generation) {
+            const vxml_cmeta_field_row *field;
+            const vxml_cmeta_prompt_row *prompt;
+            unsigned count;
+            status = selected_prompt_row(impl, &field, &prompt, &count);
+            if (status != VXML_OK) return status;
+            if (prompt != NULL) {
+                status = vxml_session_cmeta_prompt_media_prepare(session, NULL);
+                if (profile->progress_admission_event_handled) {
+                    *out_progressed = true;
+                    return VXML_OK;
+                }
+                if (status == VXML_OK) status = vxml_session_cmeta_prompt_media_commit(session);
+                if (status != VXML_OK) return status;
+                profile->progress_prompt_generation = profile->collect_generation;
+                *out_progressed = true;
+                return VXML_OK;
+            }
+            profile->progress_prompt_generation = profile->collect_generation;
+        }
+        status = vxml_session_cmeta_collect_prepare(session, NULL);
+        if (profile->progress_admission_event_handled) {
+            *out_progressed = true;
+            return VXML_OK;
+        }
+        if (status == VXML_OK) status = vxml_session_cmeta_collect_commit(session);
+    } else {
+        return VXML_INVALID_STATE;
+    }
+    if (status == VXML_OK) *out_progressed = true;
+    return status;
 }
 
 vxml_status vxml_session_cmeta_prompt_media_run_ready(

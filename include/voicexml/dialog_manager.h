@@ -86,6 +86,28 @@ typedef struct vxml_session_factory_v1 {
         size_t current_document_uri_size);
     /** Total callback invocations per dialog, including navigation/submit. */
     size_t max_script_steps;
+
+    /**
+     * Optional bounded, single-owner asynchronous profile progress. Visit at
+     * most one completion or provider admission per call; never wait for a
+     * completion. Set out_progressed false when idle. The manager observes
+     * Session state after return and follows navigation/submit/script or
+     * publishes the terminal Event. It does not repeat dialog.started.
+     * No progress callback runs while an Event is blocked by FULL.
+     *
+     * Supply run_ready and quiesce together. Older prefixes retain manual
+     * asynchronous progress. A partial tail is invalid.
+     */
+    vxml_status (*run_ready)(
+        void *user, vxml_session *session, bool *out_progressed);
+    /**
+     * Before every initialized Session is closed/replaced, stop and join its
+     * external completion producers. May block; must return only when no
+     * producer can enter this Session again. Do not destroy the Session or
+     * its providers, or reenter the manager. Session close then settles its
+     * tickets/leases through the existing provider cancellation contracts.
+     */
+    void (*quiesce)(void *user, vxml_session *session);
 } vxml_session_factory_v1;
 
 /*
@@ -289,7 +311,9 @@ void *vxml_dialog_manager_ccxml_user(vxml_dialog_manager *manager);
 /**
  * Explicit serialized progress point.
  *
- * Processes up to max_work published rows. max_work must be positive. This
+ * Visits up to max_work eligible rows, including idle asynchronous progress
+ * callbacks, in round-robin order and at most once per row per call.
+ * max_work must be positive. This
  * function performs document acquisition, VoiceXML compile/start and Event
  * publication; no such work occurs in effect-ticket commit callbacks.
  */

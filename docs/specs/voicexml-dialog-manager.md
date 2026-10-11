@@ -1,7 +1,65 @@
 # VoiceXML dialog manager
 
-`TurboSCXML::VoiceXMLDialogManager` is the bounded non-media bridge between
-CCXML dialog lifecycle actions and the existing synchronous VoiceXML core.
+## Asynchronous profile progress
+
+The factory's append-only `run_ready` / `quiesce` pair connects a profile's
+existing completion mailboxes to the manager. Both callbacks must be supplied
+or both omitted. Historical prefixes ending at `init` or `max_script_steps`
+retain their behavior; partially supplied tails are rejected.
+
+The manager remains the sole owner of each Session, Program and document
+borrow. Provider producers use the profile's existing bounded, generation-
+checked ingress; the manager adds no payload queue or second interpreter.
+The owner calls `run_ready`, which visits each eligible row at most once per
+call, with a round-robin cursor and at most `max_work` visits. An idle visit
+counts toward that budget. A profile callback performs at most one admission
+or completion, never waits for a completion, and returns its exact status.
+
+After a successful callback the manager observes Session state, follows
+navigation/submit/script handoffs using the existing per-dialog limits, and
+publishes `dialog.exit` at EXITED. `dialog.started` is published only once,
+including across asynchronous navigation and submit. Profile failures use
+the existing `error.dialog.start` status event. FULL retains the event and
+Session; retries publish only, without repeating profile work.
+
+Before releasing any initialized Session (normal exit, failure, terminate,
+close, navigation or submit replacement), the manager calls factory `quiesce`.
+It must stop and join external completion producers for that exact Session;
+no producer may enter it after return. The callback may block and cannot
+reenter the manager or destroy the Session/providers. Session close then
+settles outstanding tickets and owned results before the manager releases
+the Program/document. Callback context and providers outlive manager close.
+Owner-affine providers with no external producers can implement a no-op
+barrier. Cancellation alone is not a barrier.
+
+This keeps profile execution outside the neutral manager and preserves its
+dependency graph. An alternative direct CMeta dependency would make optional
+profiles mandatory; exposing manager-owned Session pointers without a barrier
+would leave replacement/destruction unsafe. Existing applications migrate by
+supplying the complete factory tail and the existing profile/provider context;
+omitting the tail restores manual asynchronous progression. No live Session
+or provider payload is migrated between owners.
+
+For CMeta, forward `run_ready` to `vxml_session_cmeta_run_ready(session,
+out_progressed)`. This selects the active FIA item, admits the selected prompt
+once per collect generation, and prepares/commits the configured collect,
+subdialog, record or transfer provider. It settles at most one ready completion
+per call; playback completion precedes recognition when both are ready.
+No completion is an idle result. A handled admission Event counts as progress,
+so an `error.noresource` or `error.semantic` catch is not replaced by a manager
+failure. Existing manual prepare/commit APIs remain available for hosts that
+choose their own scheduling; do not mix them with the aggregate driver on one
+Session. The application still supplies provider engines, timers, child-owner
+progress, barge-in signals and the producer barrier.
+
+Executable evidence: `voicexml_dialog_cmeta_test` covers real delayed collect,
+FULL, idle-row fairness, failure settlement and asynchronous navigation;
+`voicexml_cmeta_session_test` covers aggregate prompt/collect, record lease,
+transfer, subdialog completion and handled admission errors. These are local
+provider fixtures, not TTS/ASR/telephony device qualification.
+
+`TurboSCXML::VoiceXMLDialogManager` is the bounded, media-engine-neutral bridge
+between CCXML dialog lifecycle actions and VoiceXML profile Sessions.
 
 ## Ownership
 
@@ -114,9 +172,9 @@ row terminal path.
 `dialog.started` is published once for the CCXML dialog after the complete
 synchronous navigation chain settles, not once per leaf document.
 
-The non-media VoiceXML core exits synchronously, so a successful start produces
-`dialog.started` followed by `dialog.exit`. The state machine leaves an
-explicit RUNNING state for later asynchronous VoiceXML slices.
+The non-media base core exits synchronously, so a successful start produces
+`dialog.started` followed by `dialog.exit`. Asynchronous profiles remain
+RUNNING and advance through the optional factory progress callback.
 
 ## Profile-neutral script progress
 
@@ -187,7 +245,9 @@ would duplicate the existing serialized progress and ownership boundary.
 - normal `dialogterminate`: close/destroy retained VoiceXML runtime state and
   publish `dialog.exit`.
 
-Immediate termination is not part of the current non-media profile.
+Immediate termination is not part of the current manager contract. Normal
+termination quiesces external producers before dispatching hangup and closing
+the Session; the barrier is called only once for that Session.
 
 ## Backpressure and limits
 

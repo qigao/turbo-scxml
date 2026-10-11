@@ -4,6 +4,12 @@
 _Static_assert(_Generic(((vxml_session_factory_v1 *)0)->execute_script,
     vxml_status (*)(void *, vxml_session *, const char *, size_t): 1,
     default: 0), "script handoff must retain its public C signature");
+_Static_assert(_Generic(((vxml_session_factory_v1 *)0)->run_ready,
+    vxml_status (*)(void *, vxml_session *, bool *): 1,
+    default: 0), "async progress must retain its public C signature");
+_Static_assert(_Generic(((vxml_session_factory_v1 *)0)->quiesce,
+    void (*)(void *, vxml_session *): 1,
+    default: 0), "quiescence must retain its public C signature");
 
 int main(void) {
     vxml_dialog_manager manager = {0};

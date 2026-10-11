@@ -36,6 +36,8 @@ target_link_libraries(voicexml_api_test PRIVATE
 add_test(NAME voicexml_api_test COMMAND voicexml_api_test)
 
 if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+turboscxml_add_test(voicexml_dialog_cmeta_test voicexml_dialog_cmeta_test.c
+  LIBS TurboSCXML::VoiceXMLCMeta TurboSCXML::VoiceXMLDialogManager)
 add_executable(voicexml_cmeta_api_test voicexml/test_voicexml_cmeta_api.c)
 target_compile_features(voicexml_cmeta_api_test PRIVATE c_std_11)
 set_target_properties(voicexml_cmeta_api_test PROPERTIES

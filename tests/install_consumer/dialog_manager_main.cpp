@@ -20,6 +20,12 @@ static_assert(std::is_standard_layout<vxml_session_factory_v1>::value,
 static_assert(std::is_same<decltype(vxml_session_factory_v1::execute_script),
     vxml_status (*)(void *, vxml_session *, const char *, size_t)>::value,
     "script handoff must retain its public C signature");
+static_assert(std::is_same<decltype(vxml_session_factory_v1::run_ready),
+    vxml_status (*)(void *, vxml_session *, bool *)>::value,
+    "async progress must retain its public C signature");
+static_assert(std::is_same<decltype(vxml_session_factory_v1::quiesce),
+    void (*)(void *, vxml_session *)>::value,
+    "quiescence must retain its public C signature");
 static_assert(std::is_standard_layout<vxml_document_store>::value,
               "document store handle must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_document_fetch_policy_v1>::value,

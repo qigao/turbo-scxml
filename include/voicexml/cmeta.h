@@ -1372,6 +1372,29 @@ vxml_status vxml_session_cmeta_collect_run_ready(
     bool *out_progressed);
 
 /**
+ * Drive one asynchronous FIA admission or completion on the Session owner.
+ * Selects prompt, collect (field/menu/initial), subdialog, record or transfer
+ * using the existing FIA state and providers configured at Session init.
+ * A selected prompt is admitted once per collect generation before collect;
+ * playback and recognition may overlap under the existing barge-in policy.
+ * A ready playback completion is consumed before a recognition completion.
+ *
+ * Never waits for provider completion. Idle returns OK/false. EXITED and
+ * navigation/submit/script handoffs return OK/false for the enclosing owner
+ * to consume. A handled admission Event is successful progress; otherwise
+ * errors propagate unchanged and the enclosing owner must settle
+ * the Session. Does not supply provider progress threads, timers or barriers.
+ * Do not mix this driver with manual prepare/commit/discard for the same
+ * Session. Completion ingress and owner-affine Event/barge-in APIs remain
+ * available. Stop concurrent producers before close/destroy.
+ *
+ * Example: a DialogManager factory run_ready callback forwards to this
+ * function; its quiesce callback stops/joins the application's producers.
+ */
+vxml_status vxml_session_cmeta_run_ready(
+    vxml_session *session, bool *out_progressed);
+
+/**
  * Synchronously inject one byte-counted VoiceXML Event into the active CMeta
  * session. The complete catch/throw chain is one bounded transaction.
  *

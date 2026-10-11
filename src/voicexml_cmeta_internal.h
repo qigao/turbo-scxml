@@ -854,6 +854,10 @@ typedef struct vxml_cmeta_session_data {
     size_t active_menu;
     size_t active_block;
     uint64_t collect_generation;
+    /* Derived admission marker for the opt-in aggregate owner driver. */
+    uint64_t progress_prompt_generation;
+    /* Admission APIs preserve their original status after a handled Event. */
+    bool progress_admission_event_handled;
     const vxml_cmeta_collect_adapter_v1 *collect_adapter;
     void *collect_user;
     vxml_cmeta_collect_ticket_v1 collect_ticket;

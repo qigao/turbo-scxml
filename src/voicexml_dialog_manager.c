@@ -83,6 +83,8 @@ typedef struct vxml_dialog_row {
     const vxml_program *program_view;
     vxml_session session;
     bool session_live;
+    bool session_quiesced;
+    bool started;
     vxml_status voice_status;
 } vxml_dialog_row;
 
@@ -124,6 +126,7 @@ struct vxml_dialog_manager_impl {
     bool session_factory_enabled;
 
     vxml_dialog_row *rows;
+    size_t next_progress_slot;
     bool closed;
     bool upstream_close_called;
 
@@ -161,6 +164,9 @@ static bool session_factory_prefix_valid(
     const size_t script_tail =
         offsetof(vxml_session_factory_v1, max_script_steps) +
         sizeof(factory->max_script_steps);
+    const size_t progress_tail =
+        offsetof(vxml_session_factory_v1, quiesce) +
+        sizeof(factory->quiesce);
     if (factory == NULL ||
         factory->abi_version != VXML_SESSION_FACTORY_ABI_V1 ||
         factory->struct_size < prefix || factory->init == NULL)
@@ -169,8 +175,14 @@ static bool session_factory_prefix_valid(
         return true;
     if (factory->struct_size < script_tail)
         return false;
-    return (factory->execute_script != NULL) ==
-           (factory->max_script_steps != 0u);
+    if ((factory->execute_script != NULL) !=
+        (factory->max_script_steps != 0u))
+        return false;
+    if (factory->struct_size == script_tail)
+        return true;
+    if (factory->struct_size < progress_tail)
+        return false;
+    return (factory->run_ready != NULL) == (factory->quiesce != NULL);
 }
 
 static bool submit_prefix_valid(
@@ -199,9 +211,18 @@ static bool upstream_prefix_valid(
            adapter->is_quiescent != NULL;
 }
 
+static void row_quiesce_session(vxml_dialog_row *row) {
+    if (row == NULL || !row->session_live || row->session_quiesced) return;
+    if (row->owner->session_factory.quiesce != NULL)
+        row->owner->session_factory.quiesce(
+            row->owner->session_factory_user, &row->session);
+    row->session_quiesced = true;
+}
+
 static void row_destroy_runtime(vxml_dialog_row *row) {
     if (row == NULL) return;
     if (row->session_live) {
+        row_quiesce_session(row);
         (void)vxml_session_close(&row->session);
         vxml_session_destroy(&row->session);
         row->session_live = false;
@@ -726,6 +747,7 @@ static vxml_dialog_manager_status publish_event(
         row->state = VXML_DIALOG_ROW_PREPARED;
         break;
     case VXML_DIALOG_EVENT_STARTED:
+        row->started = true;
         if (row->session_live &&
             vxml_session_get_state(&row->session) == VXML_SESSION_EXITED)
             (void)queue_event(row, VXML_DIALOG_EVENT_EXIT, VXML_OK);
@@ -931,6 +953,7 @@ static vxml_status start_current_session(
     if (status != VXML_OK)
         return status;
     row->session_live = true;
+    row->session_quiesced = false;
     return fragment_size != 0u
         ? vxml_session_start_at_form(
               &row->session, fragment, fragment_size)
@@ -1493,8 +1516,12 @@ static vxml_dialog_manager_status follow_session_handoffs(
             return VXML_DIALOG_MANAGER_OK;
         }
     }
-    return queue_event(
-        row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
+    if (!row->started)
+        return queue_event(row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
+    if (vxml_session_get_state(&row->session) == VXML_SESSION_EXITED)
+        return queue_event(row, VXML_DIALOG_EVENT_EXIT, VXML_OK);
+    row->state = VXML_DIALOG_ROW_RUNNING;
+    return VXML_DIALOG_MANAGER_OK;
 }
 
 static vxml_dialog_manager_status start_session(
@@ -1568,6 +1595,7 @@ static vxml_dialog_manager_status progress_row(
         break;
 
     case VXML_DIALOG_ROW_PENDING_TERMINATE: {
+        row_quiesce_session(row);
         const vxml_status voice_status =
             raise_normal_termination_event(row);
         row_destroy_runtime(row);
@@ -1578,6 +1606,27 @@ static vxml_dialog_manager_status progress_row(
 
     case VXML_DIALOG_ROW_EVENT_PENDING:
         break;
+
+    case VXML_DIALOG_ROW_RUNNING: {
+        bool progressed = false;
+        vxml_status voice_status = row->owner->session_factory.run_ready(
+            row->owner->session_factory_user, &row->session, &progressed);
+        const vxml_session_state state = vxml_session_get_state(&row->session);
+        if (voice_status == VXML_OK && state == VXML_SESSION_FAILED) {
+            voice_status = vxml_session_error(&row->session);
+            if (voice_status == VXML_OK) voice_status = VXML_INVALID_STATE;
+        }
+        if (voice_status == VXML_OK &&
+            (state == VXML_SESSION_CLOSED || state == VXML_SESSION_READY))
+            voice_status = VXML_INVALID_STATE;
+        if (voice_status != VXML_OK)
+            (void)queue_event(row, VXML_DIALOG_EVENT_ERROR_START, voice_status);
+        else {
+            status = follow_session_handoffs(row);
+            if (status != VXML_DIALOG_MANAGER_OK) return status;
+        }
+        break;
+    }
 
     default:
         return VXML_DIALOG_MANAGER_INVALID_STATE;
@@ -2040,13 +2089,17 @@ vxml_dialog_manager_status vxml_dialog_manager_run_ready(
         return VXML_DIALOG_MANAGER_CLOSED;
 
     for (index = 0u; index < impl->capacity && processed < max_work; ++index) {
-        vxml_dialog_row *row = &impl->rows[index];
+        vxml_dialog_row *row = &impl->rows[impl->next_progress_slot];
         vxml_dialog_manager_status status;
+        if (++impl->next_progress_slot == impl->capacity)
+            impl->next_progress_slot = 0u;
         if (row->state != VXML_DIALOG_ROW_PENDING_PREPARE &&
             row->state != VXML_DIALOG_ROW_PENDING_DIRECT_START &&
             row->state != VXML_DIALOG_ROW_PENDING_PREPARED_START &&
             row->state != VXML_DIALOG_ROW_PENDING_TERMINATE &&
-            row->state != VXML_DIALOG_ROW_EVENT_PENDING)
+            row->state != VXML_DIALOG_ROW_EVENT_PENDING &&
+            !(row->state == VXML_DIALOG_ROW_RUNNING &&
+              impl->session_factory.run_ready != NULL))
             continue;
         ++processed;
         status = progress_row(row);

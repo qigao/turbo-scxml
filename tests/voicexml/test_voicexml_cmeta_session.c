@@ -2268,6 +2268,257 @@ static bool value_view_is_clear(vxml_cmeta_value_view value) {
         value.data.string.data == NULL && value.data.string.size == 0u;
 }
 
+spec("VoiceXML CMeta aggregate owner progress") {
+    static vxml_program program;
+    static vxml_session session;
+    static bool progressed;
+    static vxml_cmeta_session_root root;
+    static cmeta_collect_probe collect;
+    static cmeta_prompt_media_probe media;
+    static cmeta_record_probe record;
+    static cmeta_transfer_probe transfer;
+    static cmeta_subdialog_probe child;
+    before_each() {
+        program = (vxml_program){0};
+        session = (vxml_session){0};
+        root = (vxml_cmeta_session_root){.value = 7};
+        collect = (cmeta_collect_probe){0};
+        media = (cmeta_prompt_media_probe){0};
+        record = (cmeta_record_probe){0};
+        transfer = (cmeta_transfer_probe){0};
+        child = (cmeta_subdialog_probe){0};
+        progressed = false;
+    }
+    after_each() {
+        vxml_session_destroy(&session);
+        vxml_program_destroy(&program);
+    }
+    it("admits one prompt then collect and settles simultaneous completions without replay") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><prompt>Say a value</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<filled><exit expr='value'/></filled></field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = prompt_compile_options();
+        const vxml_cmeta_collect_adapter_v1 collector = cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        const vxml_cmeta_prompt_media_adapter_v1 player = cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options = event_session_options(&root, &collector, &collect);
+        const vxml_cmeta_name_view undefined[] = {{"value", 5u}};
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        attach_prompt_media(&options, &player, &media);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(media.commit_calls, (size_t)1u);
+        check_equal(collect.commit_calls, (size_t)0u);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.commit_calls, (size_t)1u);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_false(progressed);
+        int value = 9;
+        const vxml_cmeta_collect_completion_v1 result = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .data = &cmeta_data_int, .value = &value};
+        const vxml_cmeta_prompt_media_completion_v1 playback = {
+            .abi_version = VXML_CMETA_PROMPT_MEDIA_COMPLETION_ABI_V1, .struct_size = sizeof(playback),
+            .generation = media.generation, .outcome = VXML_CMETA_PROMPT_MEDIA_OUTCOME_COMPLETED};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_prompt_media_try_complete(&session, &playback), VXML_CMETA_PROMPT_MEDIA_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_false(progressed);
+        check_equal(media.commit_calls, (size_t)1u);
+        check_equal(media.cancel_calls, (size_t)0u);
+        check_equal(collect.commit_calls, (size_t)1u);
+    }
+    it("routes menu choice completion without trying to project a field prompt") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<catch event='done'><exit/></catch><menu id='main' dtmf='true'>"
+            "<choice event='done'/></menu></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = menu_compile_options();
+        const vxml_cmeta_collect_adapter_v1 collector = cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_MENU_CHOICE);
+        const vxml_cmeta_session_options_v1 options = event_session_options(&root, &collector, &collect);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        const vxml_cmeta_menu_completion_v1 result = {
+            .abi_version = VXML_CMETA_MENU_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .choice_index = 0u};
+        check_equal(vxml_session_cmeta_menu_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+    }
+    it("commits initial multi-slot recognition through the aggregate driver") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><grammar type='application/srgs+xml' src='form.grxml'/><initial/>"
+            "<field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='b'/></field>"
+            "<filled mode='all' namelist='value other'><exit expr='value + other'/></filled></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = initial_compile_options();
+        const vxml_cmeta_collect_adapter_v1 collector = cmeta_collect_adapter(
+            VXML_CMETA_COLLECT_CAP_SRGS_XML | VXML_CMETA_COLLECT_CAP_INITIAL_MULTI);
+        vxml_cmeta_session_options_v1 options = initial_session_options(&root, &collector, &collect);
+        const vxml_cmeta_name_view undefined[] = {{"value", 5u}, {"other", 5u}};
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        int value = 2, other = 3;
+        const vxml_cmeta_collect_result_slot_v1 slots[] = {
+            {{"value", 5u}, &cmeta_data_int, &value}, {{"other", 5u}, &cmeta_data_int, &other}};
+        const vxml_cmeta_collect_completion_v2 result = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2, .struct_size = sizeof(result),
+            .generation = collect.generation, .slots = slots, .slot_count = 2u};
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+    }
+    it("preserves a catch that handles prompt provider admission failure") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><prompt>Say a value</prompt>"
+            "<grammar type='application/srgs+xml' src='a'/>"
+            "<catch event='error.noresource'><exit expr='7'/></catch></field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = prompt_compile_options();
+        const vxml_cmeta_collect_adapter_v1 collector = cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        const vxml_cmeta_prompt_media_adapter_v1 player = cmeta_prompt_media_adapter(VXML_CMETA_PROMPT_MEDIA_CAP_TEXT);
+        vxml_cmeta_session_options_v1 options = event_session_options(&root, &collector, &collect);
+        const vxml_cmeta_name_view undefined[] = {{"value", 5u}};
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        media.prepare_status = VXML_LIMIT_EXCEEDED;
+        attach_prompt_media(&options, &player, &media);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(media.commit_calls, (size_t)0u);
+        check_equal(collect.commit_calls, (size_t)0u);
+    }
+    it("preserves a catch that handles dynamic grammar evaluation failure") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' srcexpr='text'/>"
+            "<catch event='error.semantic'><exit/></catch></field></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = event_compile_options();
+        const vxml_cmeta_collect_adapter_v1 collector = cmeta_collect_adapter(VXML_CMETA_COLLECT_CAP_SRGS_XML);
+        vxml_cmeta_session_options_v1 options = event_session_options(&root, &collector, &collect);
+        const vxml_cmeta_name_view undefined[] = {{"value", 5u}};
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(collect.commit_calls, (size_t)0u);
+    }
+    it("moves one recording completion through filled and retains its lease until close") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><record name='voice' type='audio/wav'>"
+            "<filled><exit/></filled></record></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = record_compile_options();
+        const vxml_cmeta_session_options_v1 options = record_session_options(&root, &record,
+            VXML_CMETA_RECORD_CAP_DTMF_TERM | VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_false(progressed);
+        static const unsigned char bytes[] = {1u, 2u};
+        vxml_cmeta_record_completion_v1 result = {
+            .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = session_data(&session)->record_generation,
+            .outcome = VXML_CMETA_RECORD_OUTCOME_SUCCESS, .duration_us = 1000u,
+            .media_type = {"audio/wav", sizeof("audio/wav") - 1u},
+            .recording = {.data = bytes, .size = sizeof(bytes), .lease = &record,
+                .release = cmeta_recording_release, .release_user = &record}};
+        check_equal(vxml_session_cmeta_record_try_complete(&session, &result), VXML_CMETA_RECORD_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(record.release_calls, (size_t)0u);
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(record.release_calls, (size_t)1u);
+        check_equal(record.cancel_calls, (size_t)0u);
+        check_equal(record.quiesce_calls, (size_t)1u);
+    }
+    it("admits and completes transfer without manual prepare or commit") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><transfer name='call' dest='tel:+15551212' bridge='true'>"
+            "<filled><exit/></filled></transfer></form></vxml>";
+        const vxml_cmeta_compile_options_v1 compile = transfer_compile_options();
+        const vxml_cmeta_session_options_v1 options = transfer_session_options(&root, &transfer, VXML_CMETA_TRANSFER_CAP_BRIDGE);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        vxml_cmeta_transfer_completion_v1 result = {
+            .abi_version = VXML_CMETA_TRANSFER_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = session_data(&session)->transfer_generation,
+            .kind = VXML_CMETA_TRANSFER_COMPLETION_RESULT, .result = VXML_CMETA_TRANSFER_RESULT_BUSY};
+        check_equal(vxml_session_cmeta_transfer_try_complete(&session, &result), VXML_CMETA_TRANSFER_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(transfer.cancel_calls, (size_t)0u);
+        check_equal(transfer.quiesce_calls, (size_t)1u);
+    }
+    it("routes an asynchronous child event through the parent catch") {
+        const char source[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><subdialog name='child' src='child.vxml'>"
+            "<catch event='child.done'><exit/></catch></subdialog></form></vxml>";
+        vxml_cmeta_compile_options_v1 compile = subdialog_compile_options();
+        compile.max_event_handlers = 8u;
+        compile.max_event_name_bytes = 64u;
+        const vxml_cmeta_name_view undefined[] = {{"child", 5u}};
+        const vxml_cmeta_subdialog_test_root initial = {0};
+        const vxml_cmeta_session_options_v1 options = subdialog_completion_session_options(&initial, undefined, 1u, &child);
+        check_equal(vxml_compile_cmeta(source, sizeof(source) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        const vxml_cmeta_subdialog_completion_v1 result = {
+            .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = session_data(&session)->subdialog_generation,
+            .kind = VXML_CMETA_SUBDIALOG_RETURN_EVENT,
+            .event = {"child.done", sizeof("child.done") - 1u}};
+        check_equal(vxml_session_cmeta_subdialog_try_complete(&session, &result), VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(child.cancel_calls, (size_t)0u);
+    }
+}
+
 spec("VoiceXML CMeta session execution") {
     it("publishes ordered scalar-recording-scalar multipart submit with policy and borrowed lease") {
         static const char source[] =

@@ -159,6 +159,7 @@ static_assert(
     "external data request V3 must remain C-compatible");
 
 int main() {
+    bool progressed = true;
     static constexpr char document[] =
         "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.0' "
         "datamodel='cmeta'><var name='value' expr='11'/><form><block>"
@@ -603,6 +604,8 @@ int main() {
         exit_name.data != nullptr || exit_name.size != 0u ||
         exit_value.kind != VXML_CMETA_VALUE_SINT ||
         exit_value.data.sint != 13)
+        goto cleanup;
+    if (vxml_session_cmeta_run_ready(&session, &progressed) != VXML_OK || progressed)
         goto cleanup;
     if (vxml_session_close(&session) != VXML_OK)
         goto cleanup;

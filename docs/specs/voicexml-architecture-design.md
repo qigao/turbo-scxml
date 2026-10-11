@@ -308,6 +308,15 @@ Session, and settles script resources before returning. Event backpressure
 retries publication without repeating execution. Historical factory prefixes
 retain manual handoff behavior; see the [script progress contract](voicexml-dialog-manager.md#profile-neutral-script-progress).
 
+The factory's optional `run_ready`/`quiesce` pair drives asynchronous profiles
+without adding a CMeta dependency to the manager. CMeta provides
+`vxml_session_cmeta_run_ready` to admit and settle the current prompt/collect,
+subdialog, record or transfer operation. Running rows share a round-robin work
+budget; asynchronous handoffs keep one dialog identity and one `dialog.started`.
+Before Session replacement or destruction, the factory barrier stops and joins
+its completion producers, then Session close settles provider resources. See
+the [asynchronous progress contract](voicexml-dialog-manager.md#asynchronous-profile-progress).
+
 ## Ownership table
 
 | Resource | Owner | Borrowed by | Settlement |

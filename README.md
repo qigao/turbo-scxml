@@ -99,7 +99,7 @@ lifetime. It does not add a second provider registry or execution model.
 
 See [CMeta provider interfaces](docs/specs/scxml-cmeta-provider-interfaces.md).
 
-The non-media CCXML/VoiceXML lifecycle bridge is documented in [VoiceXML dialog manager](docs/specs/voicexml-dialog-manager.md).
+The CCXML/VoiceXML lifecycle bridge, including bounded asynchronous CMeta progress, is documented in [VoiceXML dialog manager](docs/specs/voicexml-dialog-manager.md).
 
 Multi-document URI resolution and the bounded immutable cache are documented in [VoiceXML document store](docs/specs/voicexml-document-store.md).
 
@@ -302,6 +302,11 @@ For CCXML-hosted VoiceXML, pair the DocumentStore compiler with a Session
 factory and its bounded script callback. DialogManager then advances external
 scripts across navigation and submit responses through its existing serialized
 progress loop. See the [profile-neutral script integration example](docs/specs/voicexml-dialog-manager.md#profile-neutral-script-progress).
+For asynchronous CMeta media, supply the factory's `run_ready`/`quiesce` pair:
+forward progress to `vxml_session_cmeta_run_ready`, and stop/join completion
+producers in the barrier before Session replacement or release. The installed
+CMeta C11/C++17 consumers use `win-release-voicexml-cmeta-installed-user` under
+`tests/install_consumer`, with qjs package discovery forbidden.
 
 VoiceXML typed QuickJS state accepts `cmeta_reflect_value` roots through
 CMeta's canonical fieldwise copy/move/cleanup operations. Reflection storage
