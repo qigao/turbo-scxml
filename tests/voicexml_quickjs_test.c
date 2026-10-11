@@ -1340,6 +1340,53 @@ spec("VoiceXML QuickJS script target profile") {
         vxml_program_destroy(&program);
     }
 
+    group("data request and script target context lifetime") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block>"
+            "<data srcexpr=\"globalThis.requestValue = 'request.json'\"/>"
+            "</block><block>"
+            "<script srcexpr=\"typeof requestValue + '.js'\"/>"
+            "</block></form></vxml>";
+        static const voice_quickjs_state initial = {7};
+        static vxml_program program;
+        static vxml_session session;
+        static quickjs_data_probe probe;
+        before_each() {
+            program = (vxml_program){0};
+            session = (vxml_session){0};
+            probe = (quickjs_data_probe){
+                .open_status = VXML_OK,
+                .body = "{}",
+                .body_size = 2u};
+        }
+        after_each() {
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+        for (size_t typed = 0u; typed < 2u; ++typed) {
+            it("keeps request variables local with typed state %zu", typed) {
+                vxml_quickjs_compile_options_v1 compile =
+                    typed != 0u ? typed_compile_options() : vxml_quickjs_default_compile_options();
+                vxml_quickjs_session_options_v1 options =
+                    typed != 0u ? typed_data_session_options(&initial, &probe) : data_session_options(&probe);
+                vxml_external_script_target_v1 target = {0};
+                check_equal(vxml_compile_quickjs_script_profile(
+                    document, sizeof(document) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+                check_equal(vxml_session_init_quickjs(&session, &program, &options), VXML_OK);
+                check_equal(vxml_session_start(&session), VXML_OK);
+                check_equal(probe.open_calls, (size_t)1u);
+                check_equal(probe.close_calls, (size_t)1u);
+                check_equal(probe.uris[0], "request.json");
+                check_equal(probe.last_field_count, (size_t)0u);
+                check_equal(vxml_session_get_state(&session), VXML_SESSION_SCRIPTING);
+                check_equal(vxml_session_script(&session, &target), VXML_OK);
+                check_equal(target.src_size, sizeof("undefined.js") - 1u);
+                check_equal(memcmp(target.src, "undefined.js", target.src_size), 0);
+            }
+        }
+    }
+
     it("projects dynamic data URI namelist and fetch policy into one V3 attempt") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"

@@ -791,7 +791,7 @@ static vxml_status quickjs_prepare_committed_context(
 }
 
 
-static vxml_status quickjs_prepare_data_context(
+static vxml_status quickjs_prepare_expression_context(
     vxml_session_impl *session) {
     const vxml_quickjs_program_data *program_data;
     vxml_quickjs_session_data *data;
@@ -853,7 +853,7 @@ static vxml_status quickjs_prepare_data_request(
 
     if (row->uri_expression != NULL ||
         row->namelist_count != 0u) {
-        status = quickjs_prepare_data_context(session);
+        status = quickjs_prepare_expression_context(session);
         if (status != VXML_OK)
             return status;
         context_ready = true;
@@ -1295,16 +1295,12 @@ static vxml_status project_script_target(
     if (action->script_srcexpr != NULL) {
         const char *value = NULL;
         size_t value_size = 0u;
-        if (compile_options_state_enabled(&program_data->options)) {
-            quickjs_cmeta_bridge bridge = {0};
-            status = quickjs_prepare_committed_context(
-                session, &bridge);
-            if (status != VXML_OK)
-                return session_fail(
-                    session, status,
-                    semantic_event,
-                    sizeof(semantic_event) - 1u);
-        }
+        status = quickjs_prepare_expression_context(session);
+        if (status != VXML_OK)
+            return session_fail(
+                session, status,
+                semantic_event,
+                sizeof(semantic_event) - 1u);
         if (!program_view_valid(
                 program, action->script_srcexpr,
                 action->script_srcexpr_size))

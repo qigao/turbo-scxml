@@ -154,6 +154,10 @@ bytecode-instruction quota when the pinned engine ABI cannot provide one.
 
 QuickJS `<data>` deliberately discards response bytes. It does not create a
 DOM facade or persistent arbitrary JS object graph.
+One request evaluates its URI expression and namelist in the same context.
+The next request or `script@srcexpr` activation starts a fresh context, including
+in target-only mode without a CMeta root. Only committed typed state is imported
+when a root is configured; temporary JavaScript globals are not carried forward.
 
 ## Session execution and FIA
 
