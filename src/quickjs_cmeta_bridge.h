@@ -135,11 +135,31 @@ bool quickjs_cmeta_export_root(
 bool quickjs_cmeta_state_lifecycle_supported(
     const cmeta_data_desc *root);
 
+/* The same snapshot/move contract for a single lexical binding. */
+bool quickjs_cmeta_value_lifecycle_supported(
+    const cmeta_data_desc *value);
+
 bool quickjs_cmeta_state_snapshot(
     quickjs_cmeta_state_scratch *scratch,
     const cmeta_data_desc *root,
     const void *committed,
     size_t max_snapshot_bytes);
+
+bool quickjs_cmeta_value_snapshot(
+    quickjs_cmeta_state_scratch *scratch,
+    const cmeta_data_desc *value,
+    const void *source,
+    size_t max_snapshot_bytes);
+
+/* Construct a previously unbound typed binding; no source object is borrowed. */
+bool quickjs_cmeta_value_zero_snapshot(
+    quickjs_cmeta_state_scratch *scratch,
+    const cmeta_data_desc *value, size_t max_snapshot_bytes);
+
+/* Move into unconstructed storage after lifecycle admission. */
+bool quickjs_cmeta_value_move_construct(
+    const cmeta_data_desc *value, void *destination,
+    quickjs_cmeta_state_scratch *scratch);
 
 void quickjs_cmeta_state_scratch_destroy(
     quickjs_cmeta_state_scratch *scratch,

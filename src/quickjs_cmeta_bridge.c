@@ -567,10 +567,17 @@ bool quickjs_cmeta_export_value(
         if (!JS_IsString(value)) return false;
         text = JS_ToCStringLen(context, &size, value);
         if (text == NULL) return false;
-        status = cmeta_data_buffer_assign(
-            descriptor, object,
-            (const unsigned char *)text, size,
-            bridge->limits.max_string_bytes);
+        /* Export destinations are caller-owned transaction scratch. CMeta
+         * buffer assign constructs into zero state; it does not replace an
+         * existing owner copied from the committed value. */
+        status = size > bridge->limits.max_string_bytes
+            ? CMETA_CAPACITY_EXCEEDED
+            : cmeta_data_buffer_restore_zero(descriptor, object);
+        if (status == CMETA_OK)
+            status = cmeta_data_buffer_assign(
+                descriptor, object,
+                (const unsigned char *)text, size,
+                bridge->limits.max_string_bytes);
         JS_FreeCString(context, text);
         return status == CMETA_OK;
     }
@@ -940,20 +947,34 @@ bool quickjs_cmeta_state_lifecycle_supported(
         root->kind == CMETA_DATA_STRUCT;
 }
 
+bool quickjs_cmeta_value_lifecycle_supported(
+    const cmeta_data_desc *value) {
+    quickjs_cmeta_state_lifecycle lifecycle;
+    return quickjs_cmeta_state_lifecycle_of(value, &lifecycle);
+}
+
 bool quickjs_cmeta_state_snapshot(
     quickjs_cmeta_state_scratch *scratch,
     const cmeta_data_desc *root,
     const void *committed,
     size_t max_snapshot_bytes) {
+    return root != NULL && root->kind == CMETA_DATA_STRUCT &&
+        quickjs_cmeta_value_snapshot(scratch, root, committed, max_snapshot_bytes);
+}
+
+static bool quickjs_cmeta_value_snapshot_impl(
+    quickjs_cmeta_state_scratch *scratch,
+    const cmeta_data_desc *root,
+    const void *committed,
+    size_t max_snapshot_bytes, bool zero) {
     const cmeta_type_desc *type;
     uintptr_t address;
     uintptr_t aligned;
     size_t allocation_size;
     quickjs_cmeta_state_lifecycle lifecycle;
     if (scratch == NULL || scratch->allocation != NULL ||
-        scratch->value != NULL || committed == NULL ||
+        scratch->value != NULL || (!zero && committed == NULL) ||
         !cmeta_data_desc_valid(root) ||
-        root->kind != CMETA_DATA_STRUCT ||
         root->storage_type == NULL ||
         max_snapshot_bytes == 0u)
         return false;
@@ -976,7 +997,13 @@ bool quickjs_cmeta_state_snapshot(
     aligned = (address + type->align - 1u) &
         ~((uintptr_t)type->align - 1u);
     scratch->value = (void *)aligned;
-    if (lifecycle != QUICKJS_CMETA_STATE_TRIVIAL) {
+    if (zero) {
+        if (cmeta_data_value_init_zero(root, scratch->value) != CMETA_OK) {
+            free(scratch->allocation);
+            memset(scratch, 0, sizeof(*scratch));
+            return false;
+        }
+    } else if (lifecycle != QUICKJS_CMETA_STATE_TRIVIAL) {
         const bool copied = lifecycle == QUICKJS_CMETA_STATE_REFLECTED
             ? cmeta_data_trait_copy_construct(root, scratch->value, committed)
             : type->traits->copy_construct(scratch->value, committed);
@@ -989,6 +1016,34 @@ bool quickjs_cmeta_state_snapshot(
         memcpy(scratch->value, committed, type->size);
     }
     scratch->live = true;
+    return true;
+}
+
+bool quickjs_cmeta_value_snapshot(
+    quickjs_cmeta_state_scratch *scratch, const cmeta_data_desc *value,
+    const void *source, size_t max_snapshot_bytes) {
+    return quickjs_cmeta_value_snapshot_impl(scratch, value, source, max_snapshot_bytes, false);
+}
+
+bool quickjs_cmeta_value_zero_snapshot(
+    quickjs_cmeta_state_scratch *scratch, const cmeta_data_desc *value,
+    size_t max_snapshot_bytes) {
+    return quickjs_cmeta_value_snapshot_impl(scratch, value, NULL, max_snapshot_bytes, true);
+}
+
+bool quickjs_cmeta_value_move_construct(
+    const cmeta_data_desc *value, void *destination,
+    quickjs_cmeta_state_scratch *scratch) {
+    quickjs_cmeta_state_lifecycle lifecycle;
+    if (destination == NULL || scratch == NULL || !scratch->live || scratch->value == NULL ||
+        !quickjs_cmeta_state_lifecycle_of(value, &lifecycle)) return false;
+    if (lifecycle == QUICKJS_CMETA_STATE_REFLECTED) {
+        cmeta_data_trait_move_construct(value, destination, scratch->value);
+        scratch->live = false;
+    } else if (lifecycle == QUICKJS_CMETA_STATE_NATIVE) {
+        value->storage_type->traits->move_construct(destination, scratch->value);
+        scratch->live = false;
+    } else memcpy(destination, scratch->value, value->storage_type->size);
     return true;
 }
 

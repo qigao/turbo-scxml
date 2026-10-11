@@ -511,6 +511,17 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
       Salts::QueryVM
       TurboSCXML::_CMetaRuntime)
 
+  if(TURBOSCXML_ENABLE_QUICKJS)
+    # Internal composition until scripts, media transactions and installed
+    # consumers qualify the complete profile. No installed partial API.
+    add_library(turbo_voicexml_quickjs_fia STATIC src/voicexml_quickjs_fia.c)
+    target_compile_features(turbo_voicexml_quickjs_fia PRIVATE c_std_11)
+    target_include_directories(turbo_voicexml_quickjs_fia PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(turbo_voicexml_quickjs_fia PRIVATE
+      TurboSCXML::VoiceXMLCMeta TurboSCXML::_QuickJSSandbox
+      TurboSCXML::_QuickJSCMetaBridge)
+  endif()
+
   add_library(turbo_voicexml_subdialog_owner STATIC
     src/voicexml_subdialog_owner.c)
   add_library(TurboSCXML::VoiceXMLSubdialogOwner ALIAS

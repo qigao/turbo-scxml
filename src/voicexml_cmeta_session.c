@@ -846,7 +846,8 @@ static bool exit_action_capacity(
             program->expressions == NULL)
             return false;
         entries = 1u;
-        if (session_expression_value_kind(
+        if (program->expressions[action->expression].backend_program != NULL ||
+            session_expression_value_kind(
                 &program->expressions[action->expression]) ==
             VXML_CMETA_VALUE_STRING)
             strings = program->max_string_bytes;
@@ -2371,6 +2372,15 @@ static vxml_status evaluate_expression(
         session->expression_scratch,
         session->expression_scratch_bytes,
         0u};
+    if (program->expressions[expression].backend_program != NULL) {
+        const vxml_cmeta_backend_runtime backend_runtime = {
+            root->storage, root->bound, runtime.root_bound_count,
+            runtime.scopes, runtime.scope_count};
+        return program->expression_backend.evaluate(
+            program->expressions[expression].backend_program,
+            program->expressions[expression].value_kind,
+            &backend_runtime, &scratch, out_value);
+    }
     return vxml_cmeta_expr_evaluate(
         &program->expressions[expression].program,
         &runtime, &scratch, out_value, NULL);

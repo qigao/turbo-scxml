@@ -5398,6 +5398,7 @@ typedef struct cmeta_program_builder {
     vxml_program_impl *impl;
     vxml_cmeta_program_data *profile;
     const vxml_cmeta_compile_options_v1 *options;
+    const void *backend_user;
     vxml_diagnostic *diagnostic;
     size_t external_data_index;
     size_t data_lower_index;
@@ -5463,9 +5464,13 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
         for (index = 0u; index < profile->external_data_count; ++index)
             data_bind_native_plan_free(profile->external_data[index].plan);
     if (profile->expressions != NULL)
-        for (index = 0u; index < profile->expression_count; ++index)
+        for (index = 0u; index < profile->expression_count; ++index) {
+            if (profile->expressions[index].backend_program != NULL)
+                profile->expression_backend.destroy(
+                    profile->expressions[index].backend_program);
             vxml_cmeta_expr_program_destroy(
                 &profile->expressions[index].program);
+        }
     if (profile->scopes != NULL)
         for (index = 0u; index < profile->scope_count; ++index)
             cmeta_scope_schema_destroy(&profile->scopes[index].schema);
@@ -9463,9 +9468,18 @@ static vxml_cmeta_value_kind cmeta_data_value_kind(
     }
 }
 
+static bool cmeta_expression_require_kind(
+    vxml_cmeta_expression_row *row, vxml_cmeta_value_kind expected) {
+    if (row->backend_program != NULL) {
+        row->value_kind = expected;
+        return true; /* Dynamic result is checked before runtime publication. */
+    }
+    return row->value_kind == expected;
+}
+
 static bool cmeta_value_compatible(
-    const cmeta_data_desc *target, vxml_cmeta_value_kind value_kind) {
-    return cmeta_data_value_kind(target) == value_kind;
+    const cmeta_data_desc *target, vxml_cmeta_expression_row *row) {
+    return cmeta_expression_require_kind(row, cmeta_data_value_kind(target));
 }
 
 static salts_xml_string_view cmeta_trim_expression_view(
@@ -9710,13 +9724,6 @@ static vxml_status cmeta_lower_recording_scalar_expression(
         "VoiceXML recording shadow field name does not exist in the active form");
 }
 
-static vxml_cmeta_value_kind cmeta_expression_value_kind(
-    const vxml_cmeta_expression_row *row) {
-    return row != NULL
-        ? row->value_kind
-        : VXML_CMETA_VALUE_UNDEFINED;
-}
-
 static vxml_status cmeta_append_expression(
     cmeta_program_builder *builder, salts_xml_attribute attribute,
     const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count,
@@ -9770,6 +9777,26 @@ static vxml_status cmeta_append_expression(
         }
     }
     row->source_kind = VXML_CMETA_EXPRESSION_GENERIC;
+    if (builder->profile->expression_backend.compile != NULL) {
+        if (source.view.size > limits.max_source_bytes) {
+            cmeta_decoded_value_destroy(&source);
+            return cmeta_program_fail(builder->diagnostic, VXML_LIMIT_EXCEEDED,
+                row->location, "VoiceXML expression exceeds max_expression_bytes");
+        }
+        status = builder->profile->expression_backend.compile(
+            builder->backend_user, source.view.data, source.view.size, condition,
+            builder->profile->root, &row->backend_program, &expression_diagnostic);
+        cmeta_decoded_value_destroy(&source);
+        if (status != VXML_OK)
+            return cmeta_program_fail(builder->diagnostic, status,
+                row->location, expression_diagnostic.message);
+        row->value_kind = condition ? VXML_CMETA_VALUE_BOOL : VXML_CMETA_VALUE_UNDEFINED;
+        scratch_bytes = builder->profile->expression_backend.scratch_bytes(row->backend_program);
+        if (scratch_bytes > builder->profile->expression_scratch_bytes)
+            builder->profile->expression_scratch_bytes = scratch_bytes;
+        *out_expression = builder->expression_index++;
+        return VXML_OK;
+    }
     status = condition
         ? vxml_cmeta_expr_compile_condition(
             &row->program, source.view.data, source.view.size,
@@ -10067,9 +10094,8 @@ static vxml_status cmeta_compile_declaration_expression(
     if (!cmeta_value_compatible(
             builder->profile->scopes[declaration->scope]
                 .schema.slots[declaration->slot].value,
-            cmeta_expression_value_kind(
-                &builder->profile->expressions[
-                    declaration->expression])))
+            &builder->profile->expressions[
+                    declaration->expression]))
         return cmeta_program_fail(
             builder->diagnostic, VXML_SEMANTIC_ERROR,
             salts_xml_attribute_location(expression),
@@ -10170,10 +10196,8 @@ static vxml_status cmeta_lower_prompt_mark_nameexprs_recursive(
                 builder, nameexpr, scopes, scope_count,
                 false, &row->expression);
             if (status != VXML_OK) return status;
-            if (cmeta_expression_value_kind(
-                    &builder->profile->expressions[
-                        row->expression]) !=
-                    VXML_CMETA_VALUE_STRING)
+            if (!cmeta_expression_require_kind(&builder->profile->expressions[
+                        row->expression], VXML_CMETA_VALUE_STRING))
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(nameexpr),
@@ -10441,10 +10465,8 @@ static vxml_status cmeta_lower_external_data_request(
             scopes, scope_count, false,
             &row->uri_expression);
         if (status != VXML_OK) return status;
-        if (cmeta_expression_value_kind(
-                &builder->profile->expressions[
-                    row->uri_expression]) !=
-                VXML_CMETA_VALUE_STRING)
+        if (!cmeta_expression_require_kind(&builder->profile->expressions[
+                    row->uri_expression], VXML_CMETA_VALUE_STRING))
             return cmeta_program_fail(
                 builder->diagnostic,
                 VXML_SEMANTIC_ERROR,
@@ -11253,9 +11275,8 @@ static vxml_status cmeta_lower_simple_action(
             }
             if (!cmeta_value_compatible(
                     slot->value,
-                    cmeta_expression_value_kind(
-                        &builder->profile->expressions[
-                            action->expression]))) {
+                    &builder->profile->expressions[
+                            action->expression])) {
                 cmeta_decoded_value_destroy(&decoded_name);
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
@@ -11284,9 +11305,8 @@ static vxml_status cmeta_lower_simple_action(
             if (status != VXML_OK) return status;
             if (!cmeta_value_compatible(
                     builder->profile->locations[action->target].value,
-                    cmeta_expression_value_kind(
-                        &builder->profile->expressions[
-                            action->expression])))
+                    &builder->profile->expressions[
+                            action->expression]))
                 return cmeta_program_fail(
                     builder->diagnostic, VXML_SEMANTIC_ERROR,
                     salts_xml_attribute_location(expression),
@@ -12015,10 +12035,8 @@ static vxml_status cmeta_lower_program(
                             builder, srcexpr, scopes, 2u, false,
                             &form->grammar_expression);
                         if (status != VXML_OK) return status;
-                        if (cmeta_expression_value_kind(
-                                &builder->profile->expressions[
-                                    form->grammar_expression]) !=
-                                VXML_CMETA_VALUE_STRING)
+                        if (!cmeta_expression_require_kind(&builder->profile->expressions[
+                                    form->grammar_expression], VXML_CMETA_VALUE_STRING))
                             return cmeta_program_fail(
                                 builder->diagnostic,
                                 VXML_SEMANTIC_ERROR,
@@ -12450,10 +12468,8 @@ static vxml_status cmeta_lower_program(
                                 false,
                                 &field->grammar_expression);
                             if (status != VXML_OK) return status;
-                            if (cmeta_expression_value_kind(
-                                    &builder->profile->expressions[
-                                        field->grammar_expression]) !=
-                                    VXML_CMETA_VALUE_STRING)
+                            if (!cmeta_expression_require_kind(&builder->profile->expressions[
+                                        field->grammar_expression], VXML_CMETA_VALUE_STRING))
                                 return cmeta_program_fail(
                                     builder->diagnostic,
                                     VXML_SEMANTIC_ERROR,
@@ -12631,6 +12647,7 @@ static vxml_status cmeta_write_program(
     const char *bytes, size_t size, const vxml_limits *limits,
     const vxml_cmeta_compile_options_v1 *options,
     const cmeta_program_measurement *measurement,
+    const vxml_cmeta_expression_backend *backend, const void *backend_user,
     vxml_program *out, vxml_diagnostic *diagnostic) {
     salts_xml_document document = {0};
     salts_xml_diagnostic xml_diagnostic = {0};
@@ -12654,6 +12671,8 @@ static vxml_status cmeta_write_program(
             diagnostic, VXML_ALLOCATION_FAILED, location,
             "VoiceXML CMeta immutable row allocation failed");
     }
+    if (backend != NULL) profile->expression_backend = *backend;
+    builder.backend_user = backend_user;
     builder.impl = impl;
     builder.profile = profile;
     builder.options = options;
@@ -12736,9 +12755,10 @@ static vxml_status cmeta_write_program(
     return status;
 }
 
-vxml_status vxml_compile_cmeta(
+vxml_status vxml_compile_cmeta_backend(
     const void *bytes, size_t size, const vxml_limits *limits,
     const vxml_cmeta_compile_options_v1 *options,
+    const vxml_cmeta_expression_backend *backend, const void *backend_user,
     vxml_program *out, vxml_diagnostic *diagnostic) {
     const vxml_limits active_limits =
         limits != NULL ? *limits : vxml_default_limits();
@@ -12746,6 +12766,9 @@ vxml_status vxml_compile_cmeta(
     vxml_status status;
 
     if (out != NULL) out->impl = NULL;
+    if (backend != NULL && (backend->compile == NULL || backend->destroy == NULL ||
+        backend->scratch_bytes == NULL || backend->evaluate == NULL))
+        return VXML_INVALID_CONTRACT;
     if (!compile_options_valid(options)) return VXML_INVALID_CONTRACT;
     if (bytes == NULL || size == 0u || out == NULL)
         return VXML_INVALID_CONTRACT;
@@ -12758,7 +12781,15 @@ vxml_status vxml_compile_cmeta(
     if (status != VXML_OK) return status;
     return cmeta_write_program(
         (const char *)bytes, size, &active_limits, options,
-        &measurement, out, diagnostic);
+        &measurement, backend, backend_user, out, diagnostic);
+}
+
+vxml_status vxml_compile_cmeta(
+    const void *bytes, size_t size, const vxml_limits *limits,
+    const vxml_cmeta_compile_options_v1 *options,
+    vxml_program *out, vxml_diagnostic *diagnostic) {
+    return vxml_compile_cmeta_backend(bytes, size, limits, options,
+        NULL, NULL, out, diagnostic);
 }
 
 void vxml_cmeta_program_destroy_profile(vxml_program_impl *program) {

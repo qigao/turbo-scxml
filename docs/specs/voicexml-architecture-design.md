@@ -484,6 +484,62 @@ is the current evidence surface. Issue #51 owns the remaining hardening work:
 Do not infer VoiceXML conformance from the SCXML W3C manifest; they are
 different language surfaces.
 
+## QuickJS and FIA composition work in progress
+
+The combined profile is **internal and not yet qualified or installed**. The
+existing public CMeta and QuickJS support claims are unchanged. Completion
+requires executable JavaScript and script resource handoffs in the same FIA,
+media transaction qualification, CCXML/DialogManager integration, and installed
+C/C++ consumers; an expression-only bridge does not complete this work.
+
+The chosen direction reuses the CMeta compiler, lexical schemas, Session and
+FIA transaction owner. A private expression backend table is copied into the
+immutable Program; each expression owns its source and copied limits. The
+compile-only configuration pointer is not retained. Each evaluation creates a
+fresh hardened QuickJS context and projects the active typed bindings. There
+is no shared interpreter, registry, second Session or parallel authoritative
+application state. CMeta-only never links QuickJS; the internal combined
+library is built only when both features are enabled.
+
+Visible names resolve from the nearest declared lexical slot to the application
+root. An undeclared slot does not hide an outer name; a declared unbound slot
+does. JavaScript writes are converted into independently owned typed scratch
+and published only after the expression result and every conversion succeed.
+Publication to staged state remains subject to the enclosing FIA rollback.
+Conversion errors, exceptions, allocation failures and deadline expiry discard
+scratch. Result strings are copied into Session expression scratch before the
+QuickJS context is destroyed. The bridge reuses CMeta descriptors and lifecycle
+admission; it does not define another reflection or value ownership system.
+
+The evaluation runs exclusively on the Session owner. Source, heap, stack,
+deadline, visible properties, conversion depth, collection size, string size
+and native snapshot storage have explicit limits. The engine deadline remains
+active during conversion because JavaScript getters can execute there. Provider
+callbacks and completion ingress keep their existing ownership and generation
+contracts; the backend adds no threads or providers.
+
+Current private executable evidence is in
+`tests/voicexml_quickjs_fia_test.c`: JavaScript arithmetic and conditions in FIA,
+delayed collect completion followed by JavaScript `filled`, lexical shadowing,
+declared versus bound values, source/configuration ownership, transactional
+exceptions/type failures, deadline interruption and owned-string lifecycle.
+An unbound CMeta field is unconstructed storage; binding constructs it, and
+clearing destroys the previous owner before clearing the bound bit. Shared
+bridge string export restores its private destination to zero before CMeta
+buffer assignment, preserving the original committed string on failure.
+
+Rejected alternatives are a second JavaScript FIA, which would duplicate the
+state machine and media ownership, and an unconditional QuickJS dependency in
+CMeta, which would break feature isolation. No public API migration is required
+while this work is internal. Rollback consists of removing the optional backend
+and its private dispatch while keeping the existing CMeta interpreter intact.
+
+Remaining qualification explicitly includes inline/external scripts, standard
+scope aliases, expression effects across media prepare/discard and prompt
+selection, managed values, failure injection, engine limits, asynchronous
+DialogManager navigation/close and the feature/installed-package matrix. These
+are pending work, not capabilities implied by the private library's existence.
+
 ## Source of truth
 
 This file is the canonical high-level VoiceXML architecture.

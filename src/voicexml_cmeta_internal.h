@@ -2,7 +2,7 @@
 #define TURBO_VOICEXML_CMETA_INTERNAL_H
 
 #include "cmeta_location.h"
-#include "voicexml_cmeta_expr.h"
+#include "voicexml_cmeta_backend.h"
 #include "voicexml_internal.h"
 
 #include <data_bind_native.h>
@@ -355,6 +355,7 @@ typedef enum vxml_cmeta_expression_source_kind {
 
 typedef struct vxml_cmeta_expression_row {
     vxml_cmeta_expr_program program;
+    void *backend_program;
     salts_xml_location location;
     vxml_cmeta_expression_source_kind source_kind;
     vxml_cmeta_value_kind value_kind;
@@ -510,6 +511,7 @@ static inline bool vxml_cmeta_event_token_valid(
 
 typedef struct vxml_cmeta_program_data {
     const cmeta_data_desc *root;
+    vxml_cmeta_expression_backend expression_backend;
     vxml_cmeta_fetchaudio_policy document_fetchaudio;
     vxml_cmeta_data_fetch_policy document_data_fetch;
     const cmeta_data_desc **semantic_data;

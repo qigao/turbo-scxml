@@ -668,6 +668,17 @@ if(TURBOSCXML_ENABLE_QUICKJS)
     TurboSCXML::VoiceXMLDialogManager
     Salts::TinyTest)
   add_test(NAME voicexml_quickjs_test COMMAND voicexml_quickjs_test)
+
+  if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
+    add_executable(voicexml_quickjs_fia_test voicexml_quickjs_fia_test.c)
+    target_compile_features(voicexml_quickjs_fia_test PRIVATE c_std_11)
+    target_include_directories(voicexml_quickjs_fia_test PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    target_link_libraries(voicexml_quickjs_fia_test PRIVATE
+      turbo_voicexml_quickjs_fia TurboSCXML::VoiceXMLCMeta
+      TurboSCXML::_QuickJSSandbox Salts::TinyTest)
+    add_test(NAME voicexml_quickjs_fia_test COMMAND voicexml_quickjs_fia_test)
+    set_tests_properties(voicexml_quickjs_fia_test PROPERTIES TIMEOUT 30)
+  endif()
 endif()
 set_tests_properties(scxml_quickjs_test PROPERTIES
   TIMEOUT 30)
@@ -692,6 +703,9 @@ if(TURBOSCXML_ENABLE_QUICKJS)
     quickjs_cmeta_bridge_test
     quickjs_cmeta_bridge_test.c)
   target_compile_features(quickjs_cmeta_bridge_test PRIVATE c_std_11)
+  # Canonical Salts tstr metadata includes the C11 atomic core declarations.
+  target_compile_options(quickjs_cmeta_bridge_test PRIVATE
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/experimental:c11atomics>)
   set_target_properties(quickjs_cmeta_bridge_test PROPERTIES
     C_STANDARD 11
     C_STANDARD_REQUIRED ON

@@ -4,6 +4,7 @@
 #include <cmeta/cmeta.h>
 #include <cmeta/data.h>
 #include <cmeta/data_reflect.h>
+#include <cmeta_cmeta_data.h>
 #include <quickjs.h>
 
 #include <stddef.h>
@@ -275,6 +276,45 @@ static quickjs_cmeta_limits bridge_limits(void) {
 }
 
 spec("private QuickJS CMeta bridge") {
+    it("replaces a copied owning string only in transaction scratch") {
+        const quickjs_sandbox_options sandbox = sandbox_options();
+        const quickjs_cmeta_limits limits = bridge_limits();
+        quickjs_sandbox_runtime runtime = {0};
+        quickjs_cmeta_bridge bridge = {0};
+        quickjs_cmeta_state_scratch scratch = {0};
+        tstr committed = tstr_dup("original");
+        check_not_null(committed);
+        check_equal(quickjs_sandbox_runtime_init(&runtime, &sandbox, NULL, 0u), QUICKJS_SANDBOX_OK);
+        check_true(quickjs_cmeta_bridge_init(&bridge, &runtime, &bridge_state_data, &limits, NULL, NULL));
+        check_true(quickjs_cmeta_value_snapshot(&scratch, SALTS_TSTR_CMETA_DATA_REF,
+            &committed, limits.max_snapshot_bytes));
+        JSValue replacement = JS_NewString(runtime.context, "replacement");
+        const bool converted = quickjs_cmeta_export_value(&bridge, SALTS_TSTR_CMETA_DATA_REF,
+            SALTS_TSTR_CMETA_TYPE_REF, NULL, replacement, scratch.value, 1u);
+        JS_FreeValue(runtime.context, replacement);
+        check_true(converted);
+        check_equal(committed, "original");
+        check_equal(*(tstr *)scratch.value, "replacement");
+        check_true(quickjs_cmeta_state_publish(SALTS_TSTR_CMETA_DATA_REF, &committed, &scratch));
+        check_equal(committed, "replacement");
+        quickjs_cmeta_state_scratch_destroy(&scratch, SALTS_TSTR_CMETA_DATA_REF);
+        tstr_free(committed);
+        quickjs_sandbox_runtime_destroy(&runtime);
+    }
+    it("snapshots one typed binding without weakening root-only admission") {
+        quickjs_cmeta_state_scratch scratch = {0};
+        int value = 7;
+        check_false(quickjs_cmeta_state_lifecycle_supported(&cmeta_data_int));
+        check_false(quickjs_cmeta_state_snapshot(&scratch, &cmeta_data_int, &value, sizeof(value)));
+        check_true(quickjs_cmeta_value_lifecycle_supported(&cmeta_data_int));
+        check_true(quickjs_cmeta_value_snapshot(&scratch, &cmeta_data_int, &value, sizeof(value)));
+        *(int *)scratch.value = 19;
+        check_equal(value, 7);
+        check_true(quickjs_cmeta_state_publish(&cmeta_data_int, &value, &scratch));
+        check_equal(value, 19);
+        quickjs_cmeta_state_scratch_destroy(&scratch, &cmeta_data_int);
+        check_null(scratch.value);
+    }
     group("reflected state lifecycle") {
         static quickjs_cmeta_state_scratch scratch;
         static bridge_state committed;
