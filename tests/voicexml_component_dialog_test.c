@@ -56,6 +56,8 @@ typedef struct voice_events {
     char names[6][48];
     char dialog_ids[6][48];
     size_t count;
+    bool full;
+    size_t accepted_before_full;
 } voice_events;
 
 typedef struct voice_telephony {
@@ -244,6 +246,8 @@ static vxml_dialog_event_sink_status voice_publish(
         event->name_size >= sizeof(sink->names[0]) ||
         event->dialog_id_size >= sizeof(sink->dialog_ids[0]))
         return VXML_DIALOG_EVENT_INVALID_ARGUMENT;
+    if (sink->full && sink->count >= sink->accepted_before_full)
+        return VXML_DIALOG_EVENT_FULL;
     n = sink->count++;
     memcpy(sink->names[n], event->name, event->name_size);
     sink->names[n][event->name_size] = '\0';
@@ -1695,6 +1699,116 @@ spec("VoiceXML/CCXML Component resource generation") {
                 }
                 check_equal(cmeta_plugin_registry_destroy(&registry), CMETA_PLUGIN_OK);
             }
+        }
+
+        it("retries only the old terminal Event while a new generation starts independently") {
+            salts_component_plugin_generation *previous = NULL;
+            vxml_dialog_manager_stats stats = {0};
+            size_t progressed = 0u;
+            events[0].full = true;
+            events[0].accepted_before_full = 1u;
+
+            check_equal(voice_controller_dispatch(&controllers[0], "direct"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_EVENT_FULL);
+            check_equal(events[0].count, (size_t)1u);
+            check_equal(events[0].names[0], "dialog.started");
+            check_equal(events[0].dialog_ids[0], controllers[0].dialog_id);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_false(documents[0].active);
+
+            check_equal(salts_component_plugin_runtime_publish(
+                &runtime, &generations[1].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            check_true(previous == &generations[0].generation);
+            check_equal(scxml_component_scope_acquire(
+                &scopes[1], &runtime), SCXML_COMPONENT_OK);
+            check_true(voice_resource_bind(
+                &documents[1], &scopes[1], VOICE_DSO_COMPONENT));
+            check_equal(voice_manager_init(
+                &managers[1], &documents[1], &upstream[1], &events[1]),
+                VXML_DIALOG_MANAGER_OK);
+            check_equal(voice_controller_init(&controllers[1], &managers[1]), CCXML_OK);
+            check_equal(voice_controller_dispatch(&controllers[1], "direct"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[1], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[1].count, (size_t)2u);
+            check_equal(events[1].names[0], "dialog.started");
+            check_equal(events[1].names[1], "dialog.exit");
+            check_equal(voice_dso_marker(&scopes[1]), 211);
+
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_EVENT_FULL);
+            check_equal(events[0].count, (size_t)1u);
+            check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+            check_equal(stats.active, (size_t)1u);
+            check_equal(stats.event_pending, (size_t)1u);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_equal(salts_component_plugin_generation_drain(
+                &runtime, &generations[0].generation), SALTS_COMPONENT_PLUGIN_BUSY);
+
+            events[0].full = false;
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[0].count, (size_t)2u);
+            check_equal(events[0].names[1], "dialog.exit");
+            check_equal(events[0].dialog_ids[1], controllers[0].dialog_id);
+            check_equal(controllers[0].commits, (size_t)1u);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+            check_equal(stats.active, (size_t)0u);
+            check_equal(stats.event_pending, (size_t)0u);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(progressed, (size_t)0u);
+            check_equal(events[0].count, (size_t)2u);
+            check_equal(events[1].count, (size_t)2u);
+        }
+
+        it("cleans the old dialog on controller close while its terminal Event remains blocked") {
+            salts_component_plugin_generation *previous = NULL;
+            vxml_dialog_manager_stats stats = {0};
+            size_t progressed = 0u;
+            events[0].full = true;
+            events[0].accepted_before_full = 1u;
+
+            check_equal(voice_controller_dispatch(&controllers[0], "direct"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_EVENT_FULL);
+            check_equal(events[0].count, (size_t)1u);
+            check_equal(events[0].names[0], "dialog.started");
+            check_equal(salts_component_plugin_runtime_publish(
+                &runtime, &generations[1].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            check_true(previous == &generations[0].generation);
+
+            check_equal(ccxml_session_destroy(&controllers[0].session), CCXML_BUSY);
+            check_not_null(controllers[0].session.impl);
+            check_equal(upstream[0].close_count, (size_t)1u);
+            check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+            check_true(stats.closed);
+            check_equal(stats.active, (size_t)0u);
+            check_equal(stats.event_pending, (size_t)0u);
+            check_false(documents[0].active);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_equal(ccxml_session_destroy(&controllers[0].session), CCXML_BUSY);
+            check_equal(upstream[0].close_count, (size_t)1u);
+            events[0].full = false;
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_CLOSED);
+            check_equal(progressed, (size_t)0u);
+            check_equal(events[0].count, (size_t)1u);
+            check_equal(voice_controller_dispatch(&controllers[0], "direct"), CCXML_CLOSED);
+
+            upstream[0].quiescent = true;
+            check_equal(ccxml_session_destroy(&controllers[0].session), CCXML_OK);
+            voice_manager_close_destroy(&managers[0], &upstream[0]);
+            check_equal(upstream[0].close_count, (size_t)1u);
+            check_equal(salts_component_plugin_generation_drain(
+                &runtime, &generations[0].generation), SALTS_COMPONENT_PLUGIN_BUSY);
+            check_equal(scxml_component_scope_release(&scopes[0]), SCXML_COMPONENT_OK);
+            check_equal(salts_component_plugin_generation_drain(
+                &runtime, &generations[0].generation), SALTS_COMPONENT_PLUGIN_OK);
         }
 
         it("restores the old prepared Program when a later action rejects start or terminate") {

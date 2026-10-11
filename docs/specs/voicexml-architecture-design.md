@@ -410,6 +410,15 @@ staged ID and reserved row while preserving the previous committed ID; the one
 dialog slot is then reusable through the original generation. Generation drain
 remains BUSY until the owning scope is released in teardown.
 
+The group also backpressures `dialog.exit` after accepting `dialog.started`.
+An independent gN+1 dialog completes while gN retains exactly one pending
+terminal Event. Retrying gN publishes only that exit, with the original ID and
+without another document open. A separate close path clears the blocked row,
+rejects later progress/dispatch, and closes upstream once across BUSY retries;
+after upstream quiescence, controller/manager destruction and scope release
+permit the old generation to drain. Closing does not fabricate delivery of the
+previously rejected exit Event.
+
 With the Component-enabled graph and matching SDK roots, the focused Windows
 VS developer-environment commands are:
 
