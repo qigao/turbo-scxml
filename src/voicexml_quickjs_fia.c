@@ -324,11 +324,7 @@ static vxml_status bindings_create(const fia_expression *expression,
         if (form != VXML_CMETA_NO_INDEX) {
             const vxml_cmeta_program_data *program = runtime->program;
             if (form >= program->form_count) return VXML_INVALID_CONTRACT;
-            const vxml_cmeta_form_row *row = &program->forms[form];
-            for (size_t j = 0u; j < row->field_count; ++j)
-                if (program->fields[row->first_field + j].root_field == i) dialog_result = true;
-            for (size_t j = 0u; j < row->subdialog_count; ++j)
-                if (program->subdialogs[row->first_subdialog + j].root_field == i) dialog_result = true;
+            dialog_result = vxml_cmeta_form_uses_root_field(program, form, i);
         }
         bindings[count++] = (fia_binding){
             .name = field->name, .name_size = name_size, .data = field->value,
@@ -630,7 +626,7 @@ done:
 
 const vxml_cmeta_expression_backend vxml_quickjs_fia_backend = {
     expression_compile, expression_destroy, expression_scratch_bytes, expression_evaluate,
-    external_script_compile};
+    external_script_compile, true};
 
 vxml_status vxml_session_init_quickjs_fia(
     vxml_session *session, const vxml_program *program,

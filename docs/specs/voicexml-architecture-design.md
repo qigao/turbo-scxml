@@ -527,7 +527,7 @@ host-root slots, document properties to declared document slots, and dialog
 properties to declared form slots. Current-form field and subdialog result
 properties additionally alias their existing root-backed result storage. That
 projection does not relocate those results or change the CMeta location lookup
-contract. Anonymous executable variables remain unqualified. An unavailable
+contract in the public CMeta-only profile. Anonymous executable variables remain unqualified. An unavailable
 scope has no predefined object.
 
 Every typed slot has one evaluation-local JavaScript cell. Nonconfigurable
@@ -553,14 +553,36 @@ This is the **existing typed-profile mapping**, not the complete standard scope
 model in [VoiceXML 2.0 section 5.1.2](https://www.w3.org/TR/voicexml20/#dml5.1.2).
 Host-root application storage remains distinct from document declarations;
 application-root document aliasing, read-only session variables and persistent
-JavaScript declarations remain pending. Qualified XML location attributes
-(`assign@name`, `clear@namelist`, and other compiled locations) still use the
-existing CMeta resolver and are not enabled by expression/script projection.
-They require separate admission and shadowing work before public qualification.
+JavaScript declarations remain pending.
+
+The private combined backend also opts into qualified XML locations, including
+`assign@name`, `clear@namelist`, and exit snapshots. The compiler retains the
+original qualified name and resolves it into the existing native location
+candidates; runtime state, declared bits and ownership remain in the CMeta
+Session. Namespace lookup selects only the named owner's declarations or the
+current form's root-backed field/subdialog results. It does not fall through to
+an unrelated outer variable when the requested property is absent. Closer native
+declarations can hide a namespace; a declared but unbound shadow still wins and
+cannot redirect an assignment to an outer scope. Repeated self qualifiers are
+processed iteratively, and every qualifier counts toward the path-depth limit.
+
+This remains typed location admission: all possible native shadow paths must be
+valid and type-compatible at compilation, even if a particular branch will not
+declare a shadow at runtime. It does not implement arbitrary ECMAScript lvalues,
+computed property names or heterogeneous dynamic shadow types. Missing targets
+and assignments to an unshadowed namespace object fail compilation. Candidate
+storage is bounded by location count and configured path depth, with overflow
+checks; public CMeta-only compilation keeps its original candidate budget and
+lookup semantics. Qualified field clears use the original root-field identity
+to reset FIA selection and admit a new collect generation. Exit snapshots retain
+the attribute's original spelling while owning the selected value.
 
 Tests exercise all existing lexical levels, shared scalar/object identity,
 declared/undefined timing, scope-name shadowing, invalid-property rejection,
 owning-string clear/reconstruction and rollback, and hidden-slot budget failure.
+Qualified XML tests additionally cover native shadow timing, repeated aliases,
+named-block and field reactivation, stale collect completions, FULL without
+replay, exit names/values, path-depth bounds and source-relative diagnostics.
 Prompt/grammar discard and subdialog error recovery also use qualified accesses;
 the real CCXML asynchronous fixture writes its recognition result through
 `dialog.value` while reading the same storage through `application.value`.
@@ -719,8 +741,7 @@ CMeta, which would break feature isolation. No public API migration is required
 while this work is internal. Rollback consists of removing the optional backend
 and its private dispatch while keeping the existing CMeta interpreter intact.
 
-Remaining qualification explicitly includes the qualified-location and
-standard-scope work above,
+Remaining qualification explicitly includes the standard-scope work above,
 expression effects across the remaining media
 prepare/discard paths, additional managed values, allocation failure injection,
 broader engine limits, and the feature/installed-package matrix. The language

@@ -67,6 +67,23 @@ static const cmeta_data_desc *alias_descriptor(void) {
     return &data;
 }
 
+typedef struct fia_location_root { int value, other; fia_root document; } fia_location_root;
+cmeta_reflect_value(fia_location_root, "test.voicexml.quickjs.fia.location",
+    cmeta_field(int, value)
+    cmeta_field(int, other)
+    cmeta_data_field(fia_root, document, &root_data, &root_type)
+);
+static const cmeta_type_identity location_identity = CMETA_TYPE_ID_ATOM_INIT("test.fia.location.native");
+static const cmeta_type_desc location_type = {
+    .name = "fia_location_root", .size = sizeof(fia_location_root), .align = _Alignof(fia_location_root),
+    .kind = CMETA_T_OBJECT, .traits = &root_traits, .identity = &location_identity};
+static const cmeta_data_desc *location_descriptor(void) {
+    static cmeta_data_desc data;
+    data = *cmeta_reflected_data(fia_location_root);
+    data.storage_type = &location_type;
+    return &data;
+}
+
 /* The current CMeta FIA root contract requires native storage traits. Keep
  * reflection as the field/lifecycle fact source and provide those exact native
  * callbacks at its existing admission boundary. */
@@ -985,6 +1002,212 @@ spec("Internal QuickJS and CMeta FIA composition") {
         check_equal(vxml_session_start(&session), VXML_OK);
         check_equal(committed(&session)->value, 8);
         check_equal(exit_value(&session).data.sint, (int64_t)8);
+    }
+    it("assigns and snapshots qualified XML locations at each lexical level") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><var name='value' expr='20'/>"
+            "<block><var name='value' expr='30'/><assign name='application.value' expr='4'/>"
+            "<assign name='document.value' expr='12'/><assign name='dialog.value' expr='23'/>"
+            "<assign name='value' expr='34'/><exit namelist='application.value document.value dialog.value value'/>"
+            "</block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        static const char *names[] = {"application.value", "document.value", "dialog.value", "value"};
+        static const int64_t values[] = {4, 12, 23, 34};
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)4u);
+        for (size_t i = 0u; i < 4u; ++i) {
+            vxml_cmeta_name_view name = {0};
+            vxml_cmeta_value_view value = {0};
+            check_equal(vxml_session_cmeta_exit_at(&session, i, &name, &value), VXML_OK);
+            check_equal(name.size, strlen(names[i]));
+            check_equal(name.data, names[i], name.size);
+            check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+            check_equal(value.data.sint, values[i]);
+        }
+        check_equal(committed(&session)->value, 4);
+    }
+    it("resolves an XML namespace name again after a local declaration shadows it") {
+        const char *source = VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<assign name='document.value' expr='11'/><var name='document'/>"
+            "<script>document = {value:20, other:0};</script><assign name='document.value' expr='21'/>"
+            "<assign name='application.other' expr='document.value'/></block>"
+            "<block><exit expr='application.other*100 + document.value'/></block></form>" VXML_END;
+        const fia_location_root initial = {3, 5, {4, 9}};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = location_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        options.initial_root = &initial;
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)2111);
+        const vxml_cmeta_session_data *state = ((vxml_session_impl *)session.impl)->profile_data;
+        const fia_location_root *value = (const fia_location_root *)state->committed_root.storage;
+        check_equal(value->document.value, 4);
+        check_equal(value->value, 3);
+    }
+    it("does not fall through a declared undefined namespace shadow on XML assignment") {
+        const char *source = VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<var name='document'/><assign name='document.value' expr='99'/></block></form>" VXML_END;
+        const fia_location_root initial = {3, 5, {4, 9}};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = location_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        options.initial_root = &initial;
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_SEMANTIC_ERROR);
+        const vxml_cmeta_session_data *state = ((vxml_session_impl *)session.impl)->profile_data;
+        const fia_location_root *value = (const fia_location_root *)state->committed_root.storage;
+        check_equal(value->document.value, 4);
+        check_equal(value->value, 3);
+    }
+    it("uses repeated self qualifiers without creating a second location owner") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><var name='value' expr='20'/>"
+            "<block><assign name='application.application.value' expr='4'/>"
+            "<assign name='document.document.document.value' expr='12'/>"
+            "<assign name='dialog.dialog.value' expr='23'/><exit expr='application.value+document.value+dialog.value'/>"
+            "</block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)39);
+    }
+    it("rolls qualified XML writes back with a later failed script in the same FIA turn") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<assign name='application.value' expr='99'/><assign name='document.value' expr='88'/>"
+            "<script>throw new Error();</script></block>"
+            "<catch event='error.semantic'><exit expr='application.value*100+document.value'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)310);
+        check_equal(committed(&session)->value, 3);
+    }
+    it("clears and reconstructs a qualified owning slot once through two aliases") {
+        const char *source = VXML_BEGIN "<var name='text' expr='&quot;document&quot;'/><form><block>"
+            "<assign name='application.text' expr='&quot;root&quot;'/><clear namelist='document.text document.document.text'/>"
+            "<script>if (document.text !== undefined || application.text !== 'root') throw new Error();</script>"
+            "<assign name='document.text' expr='&quot;restored&quot;'/><exit expr='application.text + &quot;:&quot; + document.text'/>"
+            "</block></form>" VXML_END;
+        fia_owned_root initial = {3, tstr_dup("initial")};
+        check_not_null(initial.text);
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        options.initial_root = &initial;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_cmeta(&session, &program, &options) : compiled;
+        tstr_free(initial.text);
+        check_equal(initialized, VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_value_view value = exit_value(&session);
+        check_equal(value.data.string.size, strlen("root:restored"));
+        check_equal(value.data.string.data, "root:restored", value.data.string.size);
+    }
+    it("rearms a named block through its qualified dialog guard") {
+        check_equal(compile(VXML_BEGIN "<form><block name='again'>"
+            "<assign name='application.other' expr='application.other+1'/>"
+            "<if cond='application.other===6'><clear namelist='dialog.again'/><else/>"
+            "<exit expr='application.other'/></if></block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)7);
+    }
+    it("rearms qualified field storage with a fresh collect generation and exit snapshot") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/><filled>"
+            "<assign name='application.other' expr='application.other+1'/>"
+            "<if cond='application.other===6'><clear namelist='dialog.value'/><else/>"
+            "<exit namelist='dialog.value application.other'/></if>"
+            "</filled></field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        const uint64_t first_generation = collect.generation;
+        int value = 8;
+        vxml_cmeta_collect_completion_v1 result = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = first_generation, .data = &cmeta_data_int, .value = &value};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_FULL);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_not_equal(collect.generation, first_generation);
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_STALE);
+        result.generation = collect.generation;
+        value = 9;
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.prepares, (size_t)2u);
+        check_equal(collect.commits, (size_t)2u);
+        check_equal(committed(&session)->value, 9);
+        check_equal(committed(&session)->other, 7);
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)2u);
+        static const char *names[] = {"dialog.value", "application.other"};
+        static const int64_t values[] = {9, 7};
+        for (size_t i = 0u; i < 2u; ++i) {
+            vxml_cmeta_name_view name = {0};
+            vxml_cmeta_value_view output = {0};
+            check_equal(vxml_session_cmeta_exit_at(&session, i, &name, &output), VXML_OK);
+            check_equal(name.size, strlen(names[i]));
+            check_equal(name.data, names[i], name.size);
+            check_equal(output.kind, VXML_CMETA_VALUE_SINT);
+            check_equal(output.data.sint, values[i]);
+        }
+    }
+    it("reports nested location offsets relative to the original qualified attribute") {
+        const char *source = VXML_BEGIN "<form><block>"
+            "<assign name='application.document.missing' expr='7'/></block></form>" VXML_END;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = location_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        vxml_diagnostic diagnostic = {0};
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, &diagnostic), VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
+        check_not_null(strstr(diagnostic.message, "byte offset 21"));
+    }
+    it("rejects nonexistent qualified properties and readonly namespace locations") {
+        static const char *sources[] = {
+            VXML_BEGIN "<form><block><assign name='document.missing' expr='7'/></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><assign name='dialog.value' expr='7'/></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><assign name='application.missing' expr='7'/></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><assign name='document' expr='7'/></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><assign name='session.value' expr='7'/></block></form>" VXML_END};
+        const vxml_cmeta_compile_options_v1 config = compile_options();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            check_equal(vxml_compile_cmeta_backend(sources[i], strlen(sources[i]), NULL, &config,
+                &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_SEMANTIC_ERROR);
+            check_null(program.impl);
+        }
+    }
+    it("counts namespace prefixes in the configured XML path depth") {
+        const char *source = VXML_BEGIN "<form><block><assign name='application.application.value' expr='7'/>"
+            "<exit/></block></form>" VXML_END;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.max_path_depth = 2u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_LIMIT_EXCEEDED);
+        check_null(program.impl);
+    }
+    it("does not enable qualified XML namespaces in the ordinary CMeta profile") {
+        const char *source = VXML_BEGIN "<form><block><assign name='application.value' expr='7'/>"
+            "<exit/></block></form>" VXML_END;
+        const vxml_cmeta_compile_options_v1 config = compile_options();
+        check_equal(vxml_compile_cmeta(source, strlen(source), NULL, &config, &program, NULL), VXML_SEMANTIC_ERROR);
+        check_null(program.impl);
     }
     it("rolls every qualified write back before a typed-conversion error reaches catch") {
         check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><block>"

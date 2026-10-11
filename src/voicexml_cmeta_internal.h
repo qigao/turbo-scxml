@@ -1032,5 +1032,7 @@ vxml_status vxml_cmeta_session_raise_event_profile(
     size_t event_name_size);
 void vxml_cmeta_session_destroy_profile(vxml_session_impl *session);
 void vxml_cmeta_program_destroy_profile(vxml_program_impl *program);
+bool vxml_cmeta_form_uses_root_field(
+    const vxml_cmeta_program_data *program, size_t form, size_t root_field);
 
 #endif /* TURBO_VOICEXML_CMETA_INTERNAL_H */

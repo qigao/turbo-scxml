@@ -5642,15 +5642,24 @@ static void cmeta_program_data_destroy(vxml_cmeta_program_data *profile) {
 static bool cmeta_allocate_rows(
     const cmeta_program_measurement *measurement, size_t input_size,
     const vxml_cmeta_compile_options_v1 *options,
+    bool qualified_locations,
     vxml_program_impl **out_impl, vxml_cmeta_program_data **out_profile) {
     vxml_program_impl *impl = NULL;
     vxml_cmeta_program_data *profile = NULL;
     size_t candidate_count;
+    size_t candidates_per_location = 4u;
     size_t string_capacity;
-    if (measurement->location_count > SIZE_MAX / 4u ||
+    if (qualified_locations) {
+        /* Three lexical levels plus root, with at most one additional native
+         * candidate per repeated self qualifier. Source bytes bound the path. */
+        const size_t depth = options->max_path_depth < input_size ? options->max_path_depth : input_size;
+        if (depth > SIZE_MAX - candidates_per_location) return false;
+        candidates_per_location += depth;
+    }
+    if (measurement->location_count > SIZE_MAX / candidates_per_location ||
         input_size == SIZE_MAX)
         return false;
-    candidate_count = measurement->location_count * 4u;
+    candidate_count = measurement->location_count * candidates_per_location;
     string_capacity = input_size + 1u;
     /*
      * Historical retained views are bounded by the source size. Static menu
@@ -10087,6 +10096,134 @@ static vxml_status cmeta_location_compile_error(
     return status;
 }
 
+bool vxml_cmeta_form_uses_root_field(
+    const vxml_cmeta_program_data *program, size_t form, size_t root_field) {
+    if (program == NULL || form >= program->form_count || program->forms == NULL) return false;
+    const vxml_cmeta_form_row *row = &program->forms[form];
+    if (!range_valid(row->first_field, row->field_count, program->field_count) ||
+        !range_valid(row->first_subdialog, row->subdialog_count, program->subdialog_count) ||
+        (row->field_count != 0u && program->fields == NULL) ||
+        (row->subdialog_count != 0u && program->subdialogs == NULL)) return false;
+    for (size_t i = 0u; i < row->field_count; ++i)
+        if (program->fields[row->first_field + i].root_field == root_field) return true;
+    for (size_t i = 0u; i < row->subdialog_count; ++i)
+        if (program->subdialogs[row->first_subdialog + i].root_field == root_field) return true;
+    return false;
+}
+
+static size_t cmeta_location_first_size(salts_xml_string_view name) {
+    size_t size = 0u;
+    while (size < name.size && name.data[size] != '.') ++size;
+    return size;
+}
+
+static vxml_status cmeta_append_scope_candidate(
+    cmeta_program_builder *builder, vxml_cmeta_location_row *row,
+    salts_xml_string_view name, const vxml_cmeta_expr_compile_scope *scope,
+    size_t source_offset) {
+    const size_t first_size = cmeta_location_first_size(name);
+    size_t slot_index = VXML_CMETA_NO_INDEX;
+    const cmeta_scope_slot *slot = cmeta_scope_find(scope->schema, name.data, first_size, &slot_index);
+    if (slot == NULL) return VXML_OK;
+    cmeta_location location = {0};
+    location.root = builder->profile->root;
+    location.value = slot->value;
+    location.storage_size = slot->value->storage_type->size;
+    location.slot = slot_index;
+    location.kind = CMETA_LOCATION_SCOPE;
+    if (first_size < name.size) {
+        cmeta_location nested = {0};
+        cmeta_location_diagnostic detail = {0};
+        const cmeta_location_status status = cmeta_location_compile_detailed(
+            &nested, name.data + first_size + 1u, name.size - first_size - 1u,
+            slot->value, builder->options->max_path_depth - 1u, &detail);
+        if (status != CMETA_LOCATION_OK) {
+            detail.byte_offset += source_offset + first_size + 1u;
+            return cmeta_location_compile_error(builder, status, &detail, row->location);
+        }
+        location.value = nested.value;
+        location.offset = nested.offset;
+        location.storage_size = nested.storage_size;
+    }
+    return cmeta_add_location_candidate(builder, row, scope->scope_id,
+        VXML_CMETA_NO_INDEX, scope->schema, location);
+}
+
+static vxml_status cmeta_append_root_candidate(
+    cmeta_program_builder *builder, vxml_cmeta_location_row *row,
+    salts_xml_string_view name, size_t root_field, size_t source_offset) {
+    cmeta_location location = {0};
+    cmeta_location_diagnostic detail = {0};
+    const cmeta_location_status status = cmeta_location_compile_detailed(
+        &location, name.data, name.size, builder->profile->root,
+        builder->options->max_path_depth, &detail);
+    if (status != CMETA_LOCATION_OK) {
+        detail.byte_offset += source_offset;
+        return cmeta_location_compile_error(builder, status, &detail, row->location);
+    }
+    return cmeta_add_location_candidate(builder, row, VXML_CMETA_NO_INDEX,
+        root_field, NULL, location);
+}
+
+/* A namespace is not a second lookup chain: after resolving its name, only
+ * that owner's slots (or its predefined self reference) can supply a target.
+ * Native shadow candidates precede the self reference; resolve_location keeps
+ * using declared bits, so an unbound declaration never falls through. */
+static vxml_status cmeta_append_namespace_candidates(
+    cmeta_program_builder *builder, vxml_cmeta_location_row *row,
+    salts_xml_string_view name, const char *namespace_name,
+    const vxml_cmeta_expr_compile_scope *scope, size_t source_offset) {
+    while (name.size != 0u) {
+        const size_t first_size = cmeta_location_first_size(name);
+        const salts_xml_string_view first = {name.data, first_size};
+        size_t root_index = VXML_CMETA_NO_INDEX;
+        const cmeta_data_field_desc *root = cmeta_root_field(builder->profile->root, first, &root_index);
+        if (scope != NULL) {
+            const vxml_status status = cmeta_append_scope_candidate(builder, row, name, scope, source_offset);
+            if (status != VXML_OK) return status;
+            const vxml_cmeta_scope_row *owner = &builder->profile->scopes[scope->scope_id];
+            if (owner->kind == VXML_CMETA_SCOPE_FORM && root != NULL &&
+                vxml_cmeta_form_uses_root_field(builder->profile, owner->owner, root_index))
+                return cmeta_append_root_candidate(builder, row, name, root_index, source_offset);
+        } else if (root != NULL) {
+            /* Application fields are always declared; they hide the self name. */
+            return cmeta_append_root_candidate(builder, row, name, root_index, source_offset);
+        }
+        if (!raw_view_equal(first, namespace_name) || first_size == name.size) return VXML_OK;
+        source_offset += first_size + 1u;
+        name.data += first_size + 1u;
+        name.size -= first_size + 1u;
+    }
+    return VXML_OK;
+}
+
+static vxml_status cmeta_append_path_candidates(
+    cmeta_program_builder *builder, vxml_cmeta_location_row *row,
+    salts_xml_string_view name, const vxml_cmeta_expr_compile_scope *scopes, size_t scope_count) {
+    const size_t first_size = cmeta_location_first_size(name);
+    const salts_xml_string_view first = {name.data, first_size};
+    const size_t prefix = first_size < name.size ? first_size + 1u : first_size;
+    const salts_xml_string_view suffix = {name.data + prefix, name.size - prefix};
+    const bool qualified = builder->profile->expression_backend.qualified_locations;
+    for (size_t i = 0u; i < scope_count; ++i) {
+        const vxml_status status = cmeta_append_scope_candidate(builder, row, name, &scopes[i], 0u);
+        if (status != VXML_OK) return status;
+        if (qualified) {
+            const vxml_cmeta_scope_kind kind = builder->profile->scopes[scopes[i].scope_id].kind;
+            const char *namespace_name = kind == VXML_CMETA_SCOPE_DOCUMENT ? "document"
+                : kind == VXML_CMETA_SCOPE_FORM ? "dialog" : NULL;
+            if (namespace_name != NULL && raw_view_equal(first, namespace_name))
+                return cmeta_append_namespace_candidates(builder, row, suffix, namespace_name, &scopes[i], prefix);
+        }
+    }
+    size_t root_index = VXML_CMETA_NO_INDEX;
+    if (cmeta_root_field(builder->profile->root, first, &root_index) != NULL)
+        return cmeta_append_root_candidate(builder, row, name, root_index, 0u);
+    if (qualified && raw_view_equal(first, "application"))
+        return cmeta_append_namespace_candidates(builder, row, suffix, "application", NULL, prefix);
+    return VXML_OK;
+}
+
 static vxml_status cmeta_append_location_view(
     cmeta_program_builder *builder, salts_xml_string_view name,
     salts_xml_location source_location,
@@ -10094,10 +10231,7 @@ static vxml_status cmeta_append_location_view(
     bool collection, size_t *out_location) {
     vxml_cmeta_location_row *row;
     size_t index;
-    size_t first_size = 0u;
     size_t path_depth = 1u;
-    size_t root_field_index = VXML_CMETA_NO_INDEX;
-    const cmeta_data_field_desc *root_field;
     if (builder->location_index >= builder->profile->location_count)
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
@@ -10113,8 +10247,6 @@ static vxml_status cmeta_append_location_view(
         return cmeta_location_compile_error(
             builder, location_status, &detail, source_location);
     }
-    while (first_size < name.size && name.data[first_size] != '.')
-        ++first_size;
     for (index = 0u; index < name.size; ++index) {
         if (name.data[index] == '.') {
             if (path_depth == SIZE_MAX ||
@@ -10134,64 +10266,8 @@ static vxml_status cmeta_append_location_view(
         return cmeta_program_fail(
             builder->diagnostic, VXML_LIMIT_EXCEEDED,
             row->location, "VoiceXML retained location storage overflow");
-    for (index = 0u; index < scope_count; ++index) {
-        const cmeta_scope_slot *slot;
-        size_t slot_index = VXML_CMETA_NO_INDEX;
-        cmeta_location location = {0};
-        slot = cmeta_scope_find(
-            scopes[index].schema, name.data, first_size, &slot_index);
-        if (slot == NULL) continue;
-        location.root = builder->profile->root;
-        location.value = slot->value;
-        location.storage_size = slot->value->storage_type->size;
-        location.slot = slot_index;
-        location.kind = CMETA_LOCATION_SCOPE;
-        if (first_size < name.size) {
-            cmeta_location nested = {0};
-            cmeta_location_diagnostic detail = {0};
-            const char *suffix = name.data + first_size + 1u;
-            const size_t suffix_size = name.size - first_size - 1u;
-            const cmeta_location_status location_status =
-                cmeta_location_compile_detailed(
-                    &nested, suffix, suffix_size, slot->value,
-                    builder->options->max_path_depth - 1u, &detail);
-            if (location_status != CMETA_LOCATION_OK) {
-                detail.byte_offset += first_size + 1u;
-                return cmeta_location_compile_error(
-                    builder, location_status, &detail, source_location);
-            }
-            location.value = nested.value;
-            location.offset = nested.offset;
-            location.storage_size = nested.storage_size;
-        }
-        {
-            const vxml_status status = cmeta_add_location_candidate(
-                builder, row, scopes[index].scope_id,
-                VXML_CMETA_NO_INDEX, scopes[index].schema, location);
-            if (status != VXML_OK) return status;
-        }
-    }
-    root_field = cmeta_root_field(
-        builder->profile->root,
-        (salts_xml_string_view){name.data, first_size},
-        &root_field_index);
-    if (root_field != NULL) {
-        cmeta_location location = {0};
-        cmeta_location_diagnostic detail = {0};
-        const cmeta_location_status location_status =
-            cmeta_location_compile_detailed(
-                &location, name.data, name.size, builder->profile->root,
-                builder->options->max_path_depth, &detail);
-        if (location_status != CMETA_LOCATION_OK)
-            return cmeta_location_compile_error(
-                builder, location_status, &detail, source_location);
-        {
-            const vxml_status status = cmeta_add_location_candidate(
-                builder, row, VXML_CMETA_NO_INDEX,
-                root_field_index, NULL, location);
-            if (status != VXML_OK) return status;
-        }
-    }
+    const vxml_status status = cmeta_append_path_candidates(builder, row, name, scopes, scope_count);
+    if (status != VXML_OK) return status;
     if (row->candidate_count == 0u)
         return cmeta_location_compile_error(
             builder, CMETA_LOCATION_UNKNOWN, NULL, row->location);
@@ -12857,7 +12933,7 @@ static vxml_status cmeta_write_program(
             diagnostic, map_cmeta_xml_status(xml_status),
             xml_diagnostic.location, xml_diagnostic.message);
     if (!cmeta_allocate_rows(
-            measurement, size, options, &impl, &profile)) {
+            measurement, size, options, backend != NULL && backend->qualified_locations, &impl, &profile)) {
         const salts_xml_location location =
             salts_xml_node_location(salts_xml_document_root(&document));
         salts_xml_document_destroy(&document);

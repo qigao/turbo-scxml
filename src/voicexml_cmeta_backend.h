@@ -51,6 +51,8 @@ typedef struct vxml_cmeta_expression_backend {
         bool dynamic, const char *charset, size_t charset_size,
         const cmeta_data_desc *root, void **out,
         vxml_cmeta_expr_diagnostic *diagnostic);
+    /* Opt in to typed application/document/dialog XML location qualifiers. */
+    bool qualified_locations;
 } vxml_cmeta_expression_backend;
 
 /* Internal until QuickJS script handoffs, media prepare rollback and installed
