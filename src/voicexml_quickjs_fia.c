@@ -22,8 +22,11 @@ typedef struct fia_session {
     size_t max_source_bytes;
 } fia_session;
 
-/* One visible name has exactly one destination. Hidden and undeclared slots
- * are never exported into, so an inner binding cannot overwrite its parent. */
+enum { FIA_APPLICATION, FIA_DOCUMENT, FIA_DIALOG, FIA_ANONYMOUS, FIA_NAMED_SCOPES = FIA_ANONYMOUS };
+static const char *const scope_names[FIA_NAMED_SCOPES] = {"application", "document", "dialog"};
+
+/* One typed slot has one JS cell, shared by its qualified and unqualified
+ * accessors. Hidden outer slots remain reachable through their owning scope. */
 typedef struct fia_binding {
     const char *name;
     size_t name_size;
@@ -35,6 +38,9 @@ typedef struct fia_binding {
     unsigned char *bound;
     const cmeta_scope_view *scope;
     size_t slot;
+    size_t rank;
+    unsigned namespace_id;
+    bool dialog_result;
     bool defined;
     quickjs_cmeta_state_scratch pending;
 } fia_binding;
@@ -257,54 +263,81 @@ static bool binding_exists(const fia_binding *bindings, size_t count,
 }
 
 static vxml_status bindings_create(const fia_expression *expression,
-    const vxml_cmeta_backend_runtime *runtime, fia_binding **out, size_t *out_count) {
+    const vxml_cmeta_backend_runtime *runtime, fia_binding **out, size_t *out_count,
+    size_t ranks[FIA_NAMED_SCOPES]) {
     const cmeta_data_struct_shape *shape = expression->root->shape;
     const size_t capacity = expression->limits.values.max_properties;
     size_t count = 0u, bytes = 0u;
     fia_binding *bindings;
+    size_t form = VXML_CMETA_NO_INDEX;
     *out = NULL;
     *out_count = 0u;
     if (runtime == NULL || runtime->root == NULL || runtime->root_bound == NULL ||
         runtime->root_bound_count != shape->field_count ||
         (runtime->scope_count != 0u && runtime->scopes == NULL))
         return VXML_INVALID_CONTRACT;
-    if (capacity > SIZE_MAX / sizeof(*bindings)) return VXML_LIMIT_EXCEEDED;
+    if (capacity > UINT32_MAX || capacity > SIZE_MAX / sizeof(*bindings)) return VXML_LIMIT_EXCEEDED;
     bindings = vxml_calloc(capacity, sizeof(*bindings));
     if (bindings == NULL) return VXML_ALLOCATION_FAILED;
     *out = bindings;
+    ranks[FIA_APPLICATION] = runtime->scope_count;
+    ranks[FIA_DOCUMENT] = ranks[FIA_DIALOG] = SIZE_MAX;
     for (size_t i = 0u; i < runtime->scope_count; ++i) {
         const vxml_cmeta_expr_runtime_scope *scope = &runtime->scopes[i];
         const cmeta_scope_view *view = scope->view;
+        unsigned namespace_id = FIA_ANONYMOUS;
+        if (runtime->program == NULL || scope->scope_id >= runtime->program->scope_count)
+            return VXML_INVALID_CONTRACT;
+        const vxml_cmeta_scope_row *row = &runtime->program->scopes[scope->scope_id];
+        if (row->kind == VXML_CMETA_SCOPE_DOCUMENT) namespace_id = FIA_DOCUMENT;
+        else if (row->kind == VXML_CMETA_SCOPE_FORM) {
+            namespace_id = FIA_DIALOG;
+            form = row->owner;
+        }
+        if (namespace_id != FIA_ANONYMOUS) {
+            if (ranks[namespace_id] != SIZE_MAX) return VXML_INVALID_CONTRACT;
+            ranks[namespace_id] = i;
+        }
         if (!cmeta_scope_view_valid(view) ||
             scope->declared_count != view->schema->slot_count ||
             (scope->declared_count != 0u && scope->declared == NULL))
             return VXML_INVALID_CONTRACT;
         for (size_t j = 0u; j < scope->declared_count; ++j) {
             const cmeta_scope_slot *slot = &view->schema->slots[j];
-            if (!scope->declared[j] || binding_exists(bindings, count, slot->name, slot->name_size))
-                continue;
+            if (!scope->declared[j]) continue;
             if (count == capacity) return VXML_LIMIT_EXCEEDED;
             bindings[count++] = (fia_binding){
                 .name = slot->name, .name_size = slot->name_size,
                 .data = slot->value, .type = slot->value->storage_type,
                 .destination = view->storage + slot->offset,
                 .prototype = view->bound[j] ? view->storage + slot->offset : NULL,
-                .bound = &view->bound[j], .scope = view, .slot = j};
+                .bound = &view->bound[j], .scope = view, .slot = j,
+                .rank = i, .namespace_id = namespace_id};
         }
     }
     for (size_t i = 0u; i < shape->field_count; ++i) {
         const cmeta_data_field_desc *field = &shape->fields[i];
         const cmeta_field_desc *layout = cmeta_struct_field(shape->layout, i);
         const size_t name_size = strlen(field->name);
-        if (binding_exists(bindings, count, field->name, name_size)) continue;
         if (count == capacity) return VXML_LIMIT_EXCEEDED;
+        bool dialog_result = false;
+        if (form != VXML_CMETA_NO_INDEX) {
+            const vxml_cmeta_program_data *program = runtime->program;
+            if (form >= program->form_count) return VXML_INVALID_CONTRACT;
+            const vxml_cmeta_form_row *row = &program->forms[form];
+            for (size_t j = 0u; j < row->field_count; ++j)
+                if (program->fields[row->first_field + j].root_field == i) dialog_result = true;
+            for (size_t j = 0u; j < row->subdialog_count; ++j)
+                if (program->subdialogs[row->first_subdialog + j].root_field == i) dialog_result = true;
+        }
         bindings[count++] = (fia_binding){
             .name = field->name, .name_size = name_size, .data = field->value,
             .type = layout->type, .declared_type = layout->declared_type,
             .destination = (unsigned char *)runtime->root + field->offset,
             .prototype = runtime->root_bound[i]
                 ? (const unsigned char *)runtime->root + field->offset : NULL,
-            .bound = runtime->root_bound + i};
+            .bound = runtime->root_bound + i, .rank = runtime->scope_count,
+            .namespace_id = FIA_APPLICATION, .dialog_result = dialog_result};
     }
     *out_count = count;
     for (size_t i = 0u; i < count; ++i) {
@@ -321,6 +354,88 @@ static vxml_status bindings_create(const fia_expression *expression,
         bytes += type->size + type->align - 1u;
     }
     return VXML_OK;
+}
+
+static JSValue cell_get(JSContext *context, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data) {
+    uint32_t index;
+    (void)self; (void)argc; (void)argv; (void)magic;
+    if (JS_ToUint32(context, &index, data[1]) != 0) return JS_EXCEPTION;
+    return JS_GetPropertyUint32(context, data[0], index);
+}
+static JSValue cell_set(JSContext *context, JSValueConst self, int argc,
+    JSValueConst *argv, int magic, JSValue *data) {
+    uint32_t index;
+    (void)self; (void)magic;
+    if (JS_ToUint32(context, &index, data[1]) != 0) return JS_EXCEPTION;
+    if (JS_SetPropertyUint32(context, data[0], index,
+        JS_DupValue(context, argc != 0 ? argv[0] : JS_UNDEFINED)) < 0) return JS_EXCEPTION;
+    return JS_UNDEFINED;
+}
+static bool define_cell(JSContext *context, JSValueConst object, const fia_binding *binding,
+    JSValueConst cells, size_t index) {
+    JSValue data[] = {cells, JS_NewUint32(context, (uint32_t)index)};
+    JSValue get = JS_NewCFunctionData(context, cell_get, 0, 0, 2, data);
+    if (JS_IsException(get)) return false;
+    JSValue set = JS_NewCFunctionData(context, cell_set, 1, 0, 2, data);
+    if (JS_IsException(set)) {
+        JS_FreeValue(context, get);
+        return false;
+    }
+    JSAtom name = JS_NewAtomLen(context, binding->name, binding->name_size);
+    if (name == JS_ATOM_NULL) {
+        JS_FreeValue(context, get);
+        JS_FreeValue(context, set);
+        return false;
+    }
+    const int result = JS_DefinePropertyGetSet(context, object, name, get, set, JS_PROP_ENUMERABLE);
+    JS_FreeAtom(context, name);
+    return result > 0;
+}
+static bool name_is(const fia_binding *binding, const char *name) {
+    return binding->name_size == strlen(name) && memcmp(binding->name, name, binding->name_size) == 0;
+}
+static bool project_bindings(quickjs_cmeta_bridge *bridge, JSValueConst global,
+    JSValueConst cells, JSValue scopes[FIA_NAMED_SCOPES], const size_t ranks[FIA_NAMED_SCOPES],
+    const fia_binding *bindings, size_t count) {
+    JSContext *context = bridge->context;
+    for (unsigned s = 0u; s < FIA_NAMED_SCOPES; ++s) {
+        if (ranks[s] == SIZE_MAX) continue;
+        scopes[s] = JS_NewObjectProto(context, JS_NULL);
+        if (JS_IsException(scopes[s])) return false;
+    }
+    bridge->properties = count;
+    for (size_t i = 0u; i < count; ++i) {
+        const fia_binding *binding = &bindings[i];
+        JSValue imported = *binding->bound ? quickjs_cmeta_import_value(bridge,
+            binding->data, binding->type, binding->declared_type, binding->destination, 1u) : JS_UNDEFINED;
+        if (JS_IsException(imported)) return false;
+        if (JS_SetPropertyUint32(context, cells, (uint32_t)i, imported) < 0) return false;
+        if (binding->namespace_id != FIA_ANONYMOUS &&
+            !define_cell(context, scopes[binding->namespace_id], binding, cells, i)) return false;
+        if (binding->dialog_result && !define_cell(context, scopes[FIA_DIALOG], binding, cells, i)) return false;
+        bool visible = !binding_exists(bindings, i, binding->name, binding->name_size);
+        for (unsigned s = 0u; s < FIA_NAMED_SCOPES; ++s)
+            if (ranks[s] < binding->rank && name_is(binding, scope_names[s])) visible = false;
+        if (visible && !define_cell(context, global, binding, cells, i)) return false;
+    }
+    for (unsigned s = 0u; s < FIA_NAMED_SCOPES; ++s) {
+        if (ranks[s] == SIZE_MAX) continue;
+        bool hidden = false, self_hidden = false;
+        for (size_t i = 0u; i < count; ++i) {
+            const fia_binding *binding = &bindings[i];
+            if (!name_is(binding, scope_names[s])) continue;
+            if (binding->rank <= ranks[s]) hidden = true;
+            if (binding->namespace_id == s || (s == FIA_DIALOG && binding->dialog_result)) self_hidden = true;
+        }
+        if (!self_hidden && JS_DefinePropertyValueStr(context, scopes[s], scope_names[s],
+            JS_DupValue(context, scopes[s]), JS_PROP_ENUMERABLE) <= 0) return false;
+        if (!hidden && JS_DefinePropertyValueStr(context, global, scope_names[s],
+            JS_DupValue(context, scopes[s]), JS_PROP_ENUMERABLE) <= 0) return false;
+        /* Typed scopes cannot acquire undeclared slots or mutable prototypes. */
+        if (JS_PreventExtensions(context, scopes[s]) < 0) return false;
+    }
+    return true;
 }
 
 static vxml_status result_export(const fia_expression *expression,
@@ -392,7 +507,9 @@ static vxml_status expression_evaluate(const void *opaque, vxml_cmeta_value_kind
     quickjs_sandbox_runtime engine = {0};
     quickjs_cmeta_bridge bridge = {0};
     JSContext *context = NULL;
-    JSValue global = JS_UNDEFINED, result = JS_UNDEFINED;
+    JSValue global = JS_UNDEFINED, result = JS_UNDEFINED, cells = JS_UNDEFINED;
+    JSValue scopes[FIA_NAMED_SCOPES] = {JS_UNDEFINED, JS_UNDEFINED, JS_UNDEFINED};
+    size_t ranks[FIA_NAMED_SCOPES];
     bool owns_deadline = false;
     vxml_cmeta_value_view value = {0};
     vxml_status status;
@@ -402,7 +519,7 @@ static vxml_status expression_evaluate(const void *opaque, vxml_cmeta_value_kind
     if (runtime != NULL && runtime->failure_event != NULL)
         *runtime->failure_event = (vxml_cmeta_name_view){0};
     scratch->used = 0u;
-    status = bindings_create(expression, runtime, &bindings, &count);
+    status = bindings_create(expression, runtime, &bindings, &count, ranks);
     if (status != VXML_OK) goto done;
     status = engine_status(quickjs_sandbox_runtime_init(&engine, &expression->limits.engine, NULL, 0u));
     if (status != VXML_OK) goto done;
@@ -414,23 +531,9 @@ static vxml_status expression_evaluate(const void *opaque, vxml_cmeta_value_kind
     }
     owns_deadline = quickjs_sandbox_deadline_begin(&engine, expression->limits.engine.max_eval_milliseconds);
     global = JS_GetGlobalObject(context);
-    bridge.properties = count;
-    for (size_t i = 0u; i < count; ++i) {
-        const fia_binding *binding = &bindings[i];
-        JSValue imported = *binding->bound ? quickjs_cmeta_import_value(&bridge,
-            binding->data, binding->type, binding->declared_type, binding->destination, 1u) : JS_UNDEFINED;
-        JSAtom name;
-        if (JS_IsException(imported)) goto exception;
-        name = JS_NewAtomLen(context, binding->name, binding->name_size);
-        if (name == JS_ATOM_NULL) {
-            JS_FreeValue(context, imported);
-            goto exception;
-        }
-        const int defined = JS_DefinePropertyValue(context, global, name, imported,
-            JS_PROP_WRITABLE | JS_PROP_ENUMERABLE);
-        JS_FreeAtom(context, name);
-        if (defined <= 0) goto exception;
-    }
+    cells = JS_NewObjectProto(context, JS_NULL);
+    if (JS_IsException(cells) || !project_bindings(&bridge, global, cells, scopes, ranks, bindings, count))
+        goto exception;
     JS_UpdateStackTop((JSRuntime *)engine.runtime);
     if (expression->external) {
         status = external_script_evaluate(expression, runtime, &engine, &owns_deadline, &result);
@@ -445,11 +548,7 @@ static vxml_status expression_evaluate(const void *opaque, vxml_cmeta_value_kind
     bridge.properties = count;
     for (size_t i = 0u; i < count; ++i) {
         fia_binding *binding = &bindings[i];
-        JSAtom name = JS_NewAtomLen(context, binding->name, binding->name_size);
-        JSValue exported;
-        if (name == JS_ATOM_NULL) goto exception;
-        exported = JS_GetProperty(context, global, name);
-        JS_FreeAtom(context, name);
+        JSValue exported = JS_GetPropertyUint32(context, cells, (uint32_t)i);
         if (JS_IsException(exported)) goto exception;
         binding->defined = !JS_IsUndefined(exported);
         if (binding->defined) {
@@ -513,6 +612,8 @@ done:
     if (context != NULL) {
         JS_FreeValue(context, result);
         JS_FreeValue(context, global);
+        JS_FreeValue(context, cells);
+        for (unsigned s = 0u; s < FIA_NAMED_SCOPES; ++s) JS_FreeValue(context, scopes[s]);
     }
     if (expression != NULL && runtime != NULL &&
         expression->kind == VXML_CMETA_CODE_SCRIPT && runtime->failure_event != NULL &&

@@ -454,7 +454,7 @@ spec("CCXML language with asynchronous QuickJS FIA dialogs") {
         probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
             "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
             "<filled><script src='scripts/filled.js'/><exit expr='value'/></filled></field></form></vxml>";
-        probe.script = "value = value ** 2;";
+        probe.script = "dialog.value = application.value ** 2;";
         config = setup(&probe, &factory);
         language_init(&language, &probe, &config);
     }

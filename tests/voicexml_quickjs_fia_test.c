@@ -49,6 +49,24 @@ cmeta_reflect_value(fia_owned_root, "test.voicexml.quickjs.fia.owned",
     cmeta_data_field(tstr, text, SALTS_TSTR_CMETA_DATA_REF, SALTS_TSTR_CMETA_TYPE_REF)
 );
 
+typedef struct fia_alias_root { int value, application, document, dialog; } fia_alias_root;
+cmeta_reflect_value(fia_alias_root, "test.voicexml.quickjs.fia.alias",
+    cmeta_field(int, value)
+    cmeta_field(int, application)
+    cmeta_field(int, document)
+    cmeta_field(int, dialog)
+);
+static const cmeta_type_identity alias_identity = CMETA_TYPE_ID_ATOM_INIT("test.fia.alias.native");
+static const cmeta_type_desc alias_type = {
+    .name = "fia_alias_root", .size = sizeof(fia_alias_root), .align = _Alignof(fia_alias_root),
+    .kind = CMETA_T_OBJECT, .traits = &root_traits, .identity = &alias_identity};
+static const cmeta_data_desc *alias_descriptor(void) {
+    static cmeta_data_desc data;
+    data = *cmeta_reflected_data(fia_alias_root);
+    data.storage_type = &alias_type;
+    return &data;
+}
+
 /* The current CMeta FIA root contract requires native storage traits. Keep
  * reflection as the field/lifecycle fact source and provide those exact native
  * callbacks at its existing admission boundary. */
@@ -380,8 +398,8 @@ spec("Internal QuickJS and CMeta FIA composition") {
     it("rolls back grammar and prompt selection together on discard and retry") {
         attach_media(&options, &prompt, &collect);
         check_equal(compile(VXML_BEGIN "<form><field name='value'>"
-            "<prompt cond='++other === 6'>selected</prompt>"
-            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "<prompt cond='++application.other === 6'>selected</prompt>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++application.other}`'/>"
             "</field></form>" VXML_END, &program), VXML_OK);
         check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
         check_equal(vxml_session_start(&session), VXML_OK);
@@ -943,6 +961,170 @@ spec("Internal QuickJS and CMeta FIA composition") {
         check_equal(committed(&session)->value, 3);
         check_equal(committed(&session)->other, 21);
         check_equal(exit_value(&session).data.sint, (int64_t)21);
+    }
+    it("writes qualified outer scopes without overwriting a same-named inner variable") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form>"
+            "<var name='value' expr='20'/><block><var name='value' expr='30'/>"
+            "<script>application.value += 1; document.value += 2; dialog.value += 3; value += 4;"
+            "application.other = application.value*1000 + document.value*100 + dialog.value*10 + value;"
+            "</script><exit expr='application.other'/></block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->value, 4);
+        check_equal(committed(&session)->other, 5464);
+        check_equal(exit_value(&session).data.sint, (int64_t)5464);
+    }
+    it("shares one live JS cell between qualified and unqualified names") {
+        check_equal(compile(VXML_BEGIN "<form><block><script>"
+            "application.value = 7; if (value !== 7) throw new Error();"
+            "value++; if (application.value !== 8) throw new Error();"
+            "if (application !== application.application || document !== document.document || "
+            "dialog !== dialog.dialog) throw new Error();"
+            "</script><exit expr='application.value'/></block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->value, 8);
+        check_equal(exit_value(&session).data.sint, (int64_t)8);
+    }
+    it("rolls every qualified write back before a typed-conversion error reaches catch") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<script>application.value = 55; document.value = 'invalid';</script></block>"
+            "<catch event='error.semantic'><exit expr='application.value*100+document.value'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->value, 3);
+        check_equal(exit_value(&session).data.sint, (int64_t)310);
+    }
+    it("retains qualified undefined and reconstructs the same lexical slot in the next script") {
+        check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<script>document.value = undefined; if (value !== undefined) throw new Error();</script>"
+            "<script>if (document.value !== undefined) throw new Error(); value = 11;</script>"
+            "<exit expr='document.value'/></block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->value, 3);
+        check_equal(exit_value(&session).data.sint, (int64_t)11);
+    }
+    it("does not publish a later dialog declaration into its scope object early") {
+        check_equal(compile(VXML_BEGIN "<form><script>"
+            "if ('value' in dialog || value !== 3) throw new Error();</script>"
+            "<var name='value'/><block><exit expr='"
+            "typeof dialog.value === &quot;undefined&quot; &amp;&amp; application.value === 3 ? 1 : 0'/>"
+            "</block></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)1);
+    }
+    it("keeps typed scope objects closed to undeclared additions and alias replacement") {
+        static const char *sources[] = {
+            VXML_BEGIN "<form><block><script>application.value = 99; document.missing = 1;"
+                "</script></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><script>application.value = 99; document = {};"
+                "</script></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><script>application.value = 99; delete application.value;"
+                "</script></block></form>" VXML_END,
+            VXML_BEGIN "<form><block><script>application.value = 99; Object.setPrototypeOf(document, {});"
+                "</script></block></form>" VXML_END};
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            check_equal(compile(sources[i], &program), VXML_OK);
+            check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_SEMANTIC_ERROR);
+            check_equal(committed(&session)->value, 3);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+    it("allows typed declarations to shadow predefined scope names at the owning level") {
+        const char *source = VXML_BEGIN "<form><script>"
+            "if (application !== 40 || typeof document !== 'object' || typeof dialog !== 'object') throw new Error();"
+            "</script><block><var name='document' expr='11'/><var name='dialog' expr='12'/>"
+            "<exit expr='application + document + dialog'/></block></form>" VXML_END;
+        fia_alias_root initial = {3, 40, 50, 60};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = alias_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        options.initial_root = &initial;
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)63);
+    }
+    it("counts hidden but qualified slots against the binding budget") {
+        const char *source = VXML_BEGIN "<var name='value' expr='10'/><form><block>"
+            "<exit expr='document.value'/></block></form>" VXML_END;
+        const vxml_cmeta_compile_options_v1 config = compile_options();
+        vxml_quickjs_fia_limits limits = engine_limits();
+        limits.values.max_properties = 2u;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_LIMIT_EXCEEDED);
+        check_equal(committed(&session)->value, 3);
+    }
+    it("shares structured values through qualified aliases instead of importing duplicate JS objects") {
+        const char *source = VXML_BEGIN "<form><block><script>"
+            "if (application.child !== child) throw new Error();"
+            "child.value = 9; application.child.other = child.value + 1;"
+            "</script><exit expr='child.value*100 + application.child.other'/></block></form>" VXML_END;
+        const fia_child_root initial = {{3, 5}, 0};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = child_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        options.initial_root = &initial;
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)910);
+    }
+    it("keeps qualified managed owners independent across clear and reconstruction") {
+        const char *source = VXML_BEGIN "<var name='text' expr='&quot;document&quot;'/><form>"
+            "<block><script>application.text = 'root'; document.text = undefined;</script></block>"
+            "<block><script>if (text !== undefined || application.text !== 'root') throw new Error();"
+            "document.text = 'restored';</script><exit expr='application.text + &quot;:&quot; + text'/>"
+            "</block></form>" VXML_END;
+        fia_owned_root initial = {3, tstr_dup("initial")};
+        check_not_null(initial.text);
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        options.initial_root = &initial;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_cmeta(&session, &program, &options) : compiled;
+        tstr_free(initial.text);
+        check_equal(initialized, VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_value_view value = exit_value(&session);
+        check_equal(value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value.data.string.size, strlen("root:restored"));
+        check_equal(value.data.string.data, "root:restored", value.data.string.size);
+    }
+    it("discards a qualified managed replacement together with a later invalid lexical export") {
+        const char *source = VXML_BEGIN "<var name='text' expr='&quot;document&quot;'/><form>"
+            "<block><script>application.text = 'replacement'; document.text = {};</script></block>"
+            "<catch event='error.semantic'><exit expr='application.text + &quot;:&quot; + document.text'/></catch>"
+            "</form>" VXML_END;
+        fia_owned_root initial = {3, tstr_dup("initial")};
+        check_not_null(initial.text);
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        options.initial_root = &initial;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_cmeta(&session, &program, &options) : compiled;
+        tstr_free(initial.text);
+        check_equal(initialized, VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_value_view value = exit_value(&session);
+        check_equal(value.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(value.data.string.size, strlen("initial:document"));
+        check_equal(value.data.string.data, "initial:document", value.data.string.size);
     }
     it("does not let an undeclared later slot hide an outer binding") {
         check_equal(compile(VXML_BEGIN "<var name='value' expr='10'/><form><block>"
@@ -1594,8 +1776,9 @@ spec("External scripts inside the QuickJS FIA transaction") {
         config.max_subdialog_uri_bytes = 128u;
         const vxml_quickjs_fia_limits limits = engine_limits();
         const char *source = VXML_BEGIN "<form><subdialog name='child' src='child.vxml'>"
-            "<filled><script>other = child.value;</script><script src='missing.js'/></filled>"
-            "<catch event='error.badfetch'><script>other += child === undefined ? 1 : 90;</script>"
+            "<filled><script>if (dialog.child !== application.child) throw new Error();"
+            "other = dialog.child.value;</script><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><script>other += dialog.child === undefined ? 1 : 90;</script>"
             "<exit expr='other'/></catch></subdialog>"
             "<catch event='error.badfetch'><exit expr='99'/></catch></form>" VXML_END;
         check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,

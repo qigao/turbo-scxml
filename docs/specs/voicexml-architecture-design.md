@@ -502,9 +502,9 @@ is no shared interpreter, registry, second Session or parallel authoritative
 application state. CMeta-only never links QuickJS; the internal combined
 library is built only when both features are enabled.
 
-Visible names resolve from the nearest declared lexical slot to the application
-root. An undeclared slot does not hide an outer name; a declared unbound slot
-does. JavaScript writes are converted into independently owned typed scratch
+Unqualified names resolve from the nearest declared lexical slot to the
+application root. An undeclared slot does not hide an outer name; a declared
+unbound slot does. JavaScript writes are converted into independently owned typed scratch
 and published only after the expression result and every conversion succeed.
 Publication to staged state remains subject to the enclosing FIA rollback.
 Conversion errors, exceptions, allocation failures and deadline expiry discard
@@ -518,6 +518,52 @@ and native snapshot storage have explicit limits. The engine deadline remains
 active during conversion because JavaScript getters can execute there. Provider
 callbacks and completion ingress keep their existing ownership and generation
 contracts; the backend adds no threads or providers.
+
+#### Qualified typed scope access
+
+The private JavaScript evaluator now projects `application`, `document`, and
+`dialog` objects from the existing CMeta owners. Application properties refer to
+host-root slots, document properties to declared document slots, and dialog
+properties to declared form slots. Current-form field and subdialog result
+properties additionally alias their existing root-backed result storage. That
+projection does not relocate those results or change the CMeta location lookup
+contract. Anonymous executable variables remain unqualified. An unavailable
+scope has no predefined object.
+
+Every typed slot has one evaluation-local JavaScript cell. Nonconfigurable
+accessors forward qualified and visible unqualified reads/writes to that cell,
+including structured values; assigning through one name is immediately visible
+through the other. Hidden outer slots have their own cells and remain reachable
+through their scope. Export converts each cell once into independent native
+scratch before publishing any of them. Existing outer FIA rollback still owns
+the final commit. This avoids duplicate imports with divergent writes or two
+cleanup obligations for one CMeta slot. All declared slots, including hidden
+ones, count toward property and native snapshot bounds. Engine heap limits also
+cover namespace objects, accessor functions and cells.
+
+Predefined names follow their owner's precedence: a closer declared variable
+can hide a scope name, while a document/form predefined name hides a host-root
+field with that name. Each scope contains its own predefined name unless a
+typed declaration at that level hides it. Namespace objects have null,
+nonmutable prototypes and cannot acquire undeclared properties; predefined
+references cannot be replaced. They and their accessor closures live only in
+the current hardened context and retain no native pointers or provider leases.
+
+This is the **existing typed-profile mapping**, not the complete standard scope
+model in [VoiceXML 2.0 section 5.1.2](https://www.w3.org/TR/voicexml20/#dml5.1.2).
+Host-root application storage remains distinct from document declarations;
+application-root document aliasing, read-only session variables and persistent
+JavaScript declarations remain pending. Qualified XML location attributes
+(`assign@name`, `clear@namelist`, and other compiled locations) still use the
+existing CMeta resolver and are not enabled by expression/script projection.
+They require separate admission and shadowing work before public qualification.
+
+Tests exercise all existing lexical levels, shared scalar/object identity,
+declared/undefined timing, scope-name shadowing, invalid-property rejection,
+owning-string clear/reconstruction and rollback, and hidden-slot budget failure.
+Prompt/grammar discard and subdialog error recovery also use qualified accesses;
+the real CCXML asynchronous fixture writes its recognition result through
+`dialog.value` while reading the same storage through `application.value`.
 
 Current private executable evidence is in
 `tests/voicexml_quickjs_fia_test.c`: JavaScript arithmetic and conditions in FIA,
@@ -673,7 +719,8 @@ CMeta, which would break feature isolation. No public API migration is required
 while this work is internal. Rollback consists of removing the optional backend
 and its private dispatch while keeping the existing CMeta interpreter intact.
 
-Remaining qualification explicitly includes standard scope aliases,
+Remaining qualification explicitly includes the qualified-location and
+standard-scope work above,
 expression effects across the remaining media
 prepare/discard paths, additional managed values, allocation failure injection,
 broader engine limits, and the feature/installed-package matrix. The language

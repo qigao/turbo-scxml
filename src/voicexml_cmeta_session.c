@@ -2386,7 +2386,7 @@ static vxml_status evaluate_expression(
             root->storage, root->bound, runtime.root_bound_count,
             runtime.scopes, runtime.scope_count,
             session->backend_session, session->document_context,
-            &session->backend_failure_event};
+            &session->backend_failure_event, program};
         return program->expression_backend.evaluate(
             program->expressions[expression].backend_program,
             program->expressions[expression].value_kind,

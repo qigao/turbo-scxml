@@ -9,6 +9,7 @@ typedef enum vxml_cmeta_code_kind {
     VXML_CMETA_CODE_SCRIPT
 } vxml_cmeta_code_kind;
 struct vxml_session_document_context;
+struct vxml_cmeta_program_data;
 
 /* Explicit write authority supplied only by the Session owner. The QueryVM
  * evaluator's read-only runtime carrier remains unchanged. Scope views expose
@@ -23,6 +24,8 @@ typedef struct vxml_cmeta_backend_runtime {
     const struct vxml_session_document_context *document;
     /* Optional static Event name; survives rollback without borrowing engine data. */
     vxml_cmeta_name_view *failure_event;
+    /* Borrowed immutable scope/form ownership; never a second state owner. */
+    const struct vxml_cmeta_program_data *program;
 } vxml_cmeta_backend_runtime;
 
 /* Private composition seam. The compiler copies this table; user is borrowed
