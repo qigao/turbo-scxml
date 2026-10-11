@@ -178,11 +178,19 @@ typedef struct send_ticket {
     tstr target, id, name, type;
     bool live;
 } send_ticket;
+typedef struct cancel_ticket {
+    send_probe *owner;
+    tstr id;
+    bool live;
+} cancel_ticket;
 struct send_probe {
     send_ticket tickets[2];
+    cancel_ticket cancels[2];
     const test_state *state;
     size_t prepared, committed, discarded, ids_visible;
     bool full;
+    bool cancel_full;
+    size_t cancel_prepared, cancel_committed, cancel_discarded;
     const char *rejected_type;
     uint64_t delay;
     size_t payload_count;
@@ -239,11 +247,38 @@ static scxml_adapter_status prepare_send(void *user, const scxml_send_request *r
     *out = (cflow_statechart_effect_ticket){commit_send, discard_send, ticket};
     return SCXML_ADAPTER_ACCEPTED;
 }
+static void commit_cancel(void *user) {
+    cancel_ticket *ticket = user;
+    if (!ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->cancel_committed;
+}
+static void discard_cancel(void *user) {
+    cancel_ticket *ticket = user;
+    if (!ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->cancel_discarded;
+}
+static scxml_adapter_status prepare_cancel(void *user, const scxml_cancel_request *request,
+    cflow_statechart_effect_ticket *out, const char **error) {
+    send_probe *probe = user;
+    if (error != NULL) *error = NULL;
+    if (probe->cancel_full || probe->cancel_prepared == 2u) return SCXML_ADAPTER_FULL;
+    cancel_ticket *ticket = &probe->cancels[probe->cancel_prepared];
+    ticket->id = tstr_new_len(request->send_id, request->send_id_size);
+    if (ticket->id == NULL) return SCXML_ADAPTER_FULL;
+    ticket->owner = probe;
+    ticket->live = true;
+    ++probe->cancel_prepared;
+    *out = (cflow_statechart_effect_ticket){commit_cancel, discard_cancel, ticket};
+    return SCXML_ADAPTER_ACCEPTED;
+}
 static const scxml_event_io_adapter event_io = {
     .abi_version = SCXML_ADAPTER_ABI, .struct_size = sizeof(scxml_event_io_adapter),
     .capabilities = SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_DELAYED_SEND |
-        SCXML_EVENT_IO_CAP_PAYLOAD,
-    .prepare_send = prepare_send, .close = close_provider, .is_quiescent = quiescent};
+        SCXML_EVENT_IO_CAP_PAYLOAD | SCXML_EVENT_IO_CAP_CANCEL,
+    .prepare_send = prepare_send, .close = close_provider, .is_quiescent = quiescent,
+    .prepare_cancel = prepare_cancel};
 
 spec("CCXML QuickJS-NG expression adapter") {
     static test_state state;
@@ -284,6 +319,8 @@ spec("CCXML QuickJS-NG expression adapter") {
             tstr_free(sends.tickets[index].id);
             tstr_free(sends.tickets[index].name);
             tstr_free(sends.tickets[index].type);
+            check_false(sends.cancels[index].live);
+            tstr_free(sends.cancels[index].id);
         }
         if (manager.impl != NULL) {
             vxml_dialog_manager_close(&manager);
@@ -887,6 +924,167 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(sends.committed, (size_t)0);
             check_equal(provider.discarded, (size_t)1);
             check_equal(state.id.data, "old");
+        }
+    }
+
+    group("dynamic cancel expressions") {
+        before_each() {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target=\"'session:callee'\" name=\"'notice'\" delay=\"'1s'\" sendid='id'/>"
+                "</transition><transition event='cancel'><accept/>"
+                "<cancel sendid=\"(id + '')\"/>"
+                "<cancel sendid=\"(count === 13 ? '' : 'fixed.' + count)\"/><accept/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            scxml_event_io_adapter no_cancel = event_io;
+            no_cancel.capabilities &= ~SCXML_EVENT_IO_CAP_CANCEL;
+            no_cancel.prepare_cancel = NULL;
+            ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &no_cancel, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            session_config.event_io = &event_io;
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        }
+        it("passes a committed send ID and preserves both results across scratch reuse") {
+            const ccxml_event cancel = {.name = "cancel", .name_size = 6u,
+                .connection_id = "call-7", .connection_id_size = 6u};
+            check_equal(ccxml_session_dispatch(&session, &cancel), CCXML_OK);
+            check_equal(sends.cancels[0].id, sends.tickets[0].id);
+            check_equal(sends.cancels[1].id, "fixed.7");
+            check_equal(sends.cancel_committed, (size_t)2);
+            check_equal(sends.cancel_discarded, (size_t)0);
+        }
+        it("retries a refused cancel against current state without publishing failed work") {
+            const ccxml_event cancel = {.name = "cancel", .name_size = 6u,
+                .connection_id = "call-7", .connection_id_size = 6u};
+            sends.cancel_full = true;
+            check_equal(ccxml_session_dispatch(&session, &cancel), CCXML_ADAPTER_ERROR);
+            check_equal(sends.cancel_prepared, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            sends.cancel_full = false;
+            state.count = 12;
+            check_equal(ccxml_session_dispatch(&session, &cancel), CCXML_OK);
+            check_equal(sends.cancels[0].id, sends.tickets[0].id);
+            check_equal(sends.cancels[1].id, "fixed.12");
+            check_equal(sends.cancel_committed, (size_t)2);
+        }
+        it("discards the first cancellation when the second ID expression is invalid") {
+            const ccxml_event cancel = {.name = "cancel", .name_size = 6u,
+                .connection_id = "call-7", .connection_id_size = 6u};
+            state.count = 13;
+            check_equal(ccxml_session_dispatch(&session, &cancel), CCXML_INVALID_CONTRACT);
+            check_equal(sends.cancel_prepared, (size_t)1);
+            check_equal(sends.cancel_discarded, (size_t)1);
+            check_equal(sends.cancel_committed, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+        }
+        it("discards both prepared cancellations when a later action fails") {
+            const ccxml_event cancel = {.name = "cancel", .name_size = 6u,
+                .connection_id = "call-7", .connection_id_size = 6u};
+            provider.reject_accept_at = 2u;
+            check_equal(ccxml_session_dispatch(&session, &cancel), CCXML_ADAPTER_ERROR);
+            check_equal(sends.cancel_prepared, (size_t)2);
+            check_equal(sends.cancel_discarded, (size_t)2);
+            check_equal(sends.cancel_committed, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, sends.tickets[0].id);
+        }
+    }
+
+    it("keeps a staged send ID invisible to a cancel expression in the same transition") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<send target=\"'session:callee'\" name=\"'notice'\" delay=\"'1s'\" sendid='id'/>"
+            "<cancel sendid='(id)'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_diagnostic diagnostic = {0};
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+            NULL, &diagnostic), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = &telephony, .telephony_user = &provider,
+            .event_io = &event_io, .event_io_user = &sends};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(sends.cancels[0].id, "old");
+        check_equal(state.id.data, sends.tickets[0].id);
+        check_equal(sends.ids_visible, (size_t)1);
+        check_equal(sends.cancel_committed, (size_t)1);
+    }
+
+    for (size_t row = 0u; row < 6u; ++row) {
+        it("validates computed cancel ID result %zu before provider admission", row) {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'><accept/>"
+                "<cancel sendid=\"(count === 0 ? '' : count === 1 ? 7 : "
+                "count === 2 ? missingId : count === 3 ? String.fromCharCode(0) : 'x'.repeat(count))\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_datamodel_adapter_v1 expressions_only = *adapter;
+            expressions_only.read_string = NULL;
+            expressions_only.validate_readable_string_location = NULL;
+            config.state_config.max_string_bytes = SCXML_EVENT_METADATA_CAPACITY + 1u;
+            state.count = row < 4u ? (int)row :
+                (int)SCXML_EVENT_METADATA_CAPACITY + (row == 4u ? 1 : 0);
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = &expressions_only, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event),
+                row == 5u ? CCXML_OK : row == 2u ? CCXML_ADAPTER_ERROR : CCXML_INVALID_CONTRACT);
+            if (row == 5u) {
+                check_equal(tstr_len(sends.cancels[0].id), (size_t)SCXML_EVENT_METADATA_CAPACITY);
+                check_equal(sends.cancel_committed, (size_t)1);
+            } else {
+                check_equal(sends.cancel_prepared, (size_t)0);
+                check_equal(provider.discarded, (size_t)1);
+            }
+        }
+    }
+
+    for (size_t row = 0u; row < 2u; ++row) {
+        it("releases prior handles when cancel expression admission fails %zu", row) {
+            static const char *const sources[] = {
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name=\"'notice'\"/><cancel sendid='request..id'/>"
+                "</transition></eventprocessor></ccxml>",
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name=\"'notice'\"/><cancel sendid='(id)'/>"
+                "</transition></eventprocessor></ccxml>"};
+            ccxml_diagnostic diagnostic = {0};
+            config.max_expressions = row == 0u ? 2u : 1u;
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, sources[row], strlen(sources[row]),
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config),
+                row == 0u ? CCXML_ADAPTER_ERROR : CCXML_ALLOCATION_FAILED);
+            check_null(session.impl);
+            check_equal(adapter->compile_string_expression(&owner, "id", 2u,
+                &expression, &error), SCXML_ADAPTER_ACCEPTED);
+            if (row == 0u) check_equal(adapter->compile_condition(&owner, "true", 4u,
+                &condition, &error), SCXML_ADAPTER_ACCEPTED);
         }
     }
 

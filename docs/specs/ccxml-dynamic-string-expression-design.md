@@ -5,7 +5,8 @@
 This facility provides typed dynamic string evaluation to
 `<createcall dest="...">`, `<redirect dest="...">`, optional
 `<createconference confname="...">`, `src` on `<dialogprepare>` and direct
-`<dialogstart>`, and `target`/`name`/`targettype`/`delay` on `<send>`. Quoted, nonempty literals keep their
+`<dialogstart>`, `target`/`name`/`targettype`/`delay` on `<send>`, and `sendid` on
+`<cancel>`. Quoted, nonempty literals keep their
 existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
 the consuming provider prepare callback.
@@ -14,6 +15,8 @@ Send delay preserves unparenthesized dotted locations as numeric-millisecond
 payload reads for compatibility. Other nonliteral delay sources use this string
 facility and must return CSS time strings. Parentheses explicitly select string
 semantics for a dotted location; see [delay design](ccxml-send-delay-design.md).
+Cancel likewise preserves plain paths as readable-string locations; parenthesized
+paths or computed IDs use expressions and the existing Event metadata limit.
 
 XPath is not part of this design. The built-in CMeta implementation uses the
 existing typed expression compiler. The opt-in QuickJS-NG adapter described
@@ -172,14 +175,14 @@ the same staged scope; evaluated names must satisfy the event-name grammar.
 
 Session initialization allocates a zeroed array with destination/name/targettype/delay handles only when
 the program uses dynamic string expressions. Every dynamic createcall,
-redirect, createconference, dialogprepare, direct dialogstart, or send action
+redirect, createconference, dialogprepare, direct dialogstart, send, or cancel action
 is compiled before the session is published. Any failure
 destroys all handles that compiled successfully, then follows normal session
 rollback.
 
 Dispatch evaluates the value immediately before calling the matching
 `prepare_create_call`, `prepare_redirect`, `prepare_create_conference`,
-`prepare_dialog_prepare`, `prepare_dialog_start`, or `prepare_send` operation. Redirect and
+`prepare_dialog_prepare`, `prepare_dialog_start`, `prepare_send`, or `prepare_cancel` operation. Redirect and
 direct dialogstart first validate their mandatory current Event connection.
 Send resolves delay first, immediately parsing any string result to integer
 milliseconds before another callback can reuse the adapter scratch. It then

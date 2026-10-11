@@ -634,56 +634,6 @@ static ccxml_status decode_destination_value(
     return CCXML_OK;
 }
 
-static ccxml_status decode_send_literal(
-    salts_xml_attribute attribute, char **out_value, size_t *out_size,
-    ccxml_diagnostic *diagnostic) {
-    char *value = NULL;
-    char quote;
-    size_t decoded_size = 0u;
-    size_t value_size;
-    size_t index;
-    ccxml_status status = decode_attribute_value(
-        attribute, &value, &decoded_size, diagnostic);
-    if (status != CCXML_OK) return status;
-    if (decoded_size < 2u) {
-        free(value);
-        return fail(
-            diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            salts_xml_attribute_location(attribute),
-            "CCXML send value must be a quoted string literal");
-    }
-    if ((value[0] != '\'' && value[0] != '"') ||
-        value[decoded_size - 1u] != value[0]) {
-        free(value);
-        return fail(
-            diagnostic, CCXML_UNSUPPORTED_FEATURE,
-            salts_xml_attribute_location(attribute),
-            "CCXML send value must be a quoted string literal");
-    }
-    if (decoded_size == 2u) {
-        free(value);
-        return fail(
-            diagnostic, CCXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(attribute),
-            "CCXML send string literal must be nonempty");
-    }
-    quote = value[0];
-    for (index = 1u; index + 1u < decoded_size; ++index) {
-        if (value[index] == '\\' || value[index] == quote) {
-            free(value);
-            return fail(
-                diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                salts_xml_attribute_location(attribute),
-                "CCXML send literal decodes to an unsupported escape or quote");
-        }
-    }
-    value_size = decoded_size - 2u;
-    memmove(value, value + 1u, value_size);
-    *out_value = value;
-    *out_size = value_size;
-    return CCXML_OK;
-}
-
 static bool send_delay_location_has_dot(salts_xml_string_view location) {
     return location.data != NULL && location.size > 0u &&
            memchr(location.data, '.', location.size) != NULL;
@@ -979,64 +929,25 @@ static ccxml_status validate_cancel_action(
     salts_xml_node action, ccxml_measurement *measurement,
     const ccxml_limits *limits, ccxml_diagnostic *diagnostic) {
     salts_xml_attribute send_id_attribute = {0};
-    salts_xml_string_view expression;
     char *decoded_expression = NULL;
     size_t decoded_expression_size = 0u;
-    char *literal = NULL;
+    bool is_dynamic = false;
     size_t retained_size = 0u;
-    size_t literal_size = 0u;
     size_t index;
     ccxml_status status = validate_attributes(
         action, "sendid", true, &send_id_attribute, diagnostic);
     if (status != CCXML_OK) return status;
-    expression = salts_xml_attribute_value(send_id_attribute);
-    if (expression.data == NULL || expression.size == 0u) {
-        return fail(
-            diagnostic, CCXML_INVALID_STRUCTURE,
-            salts_xml_attribute_location(send_id_attribute),
-            "CCXML cancel sendid must be nonempty");
-    }
-    status = decode_attribute_value(
-        send_id_attribute, &decoded_expression,
-        &decoded_expression_size, diagnostic);
+    status = decode_destination_value(
+        send_id_attribute, true, &decoded_expression,
+        &decoded_expression_size, &is_dynamic, diagnostic);
     if (status != CCXML_OK) goto cleanup;
-    if (decoded_expression_size == 0u) {
+    if ((!is_dynamic && decoded_expression_size > SCXML_EVENT_METADATA_CAPACITY) ||
+        !checked_add(decoded_expression_size, 1u, &retained_size)) {
         status = fail(
-            diagnostic, CCXML_INVALID_STRUCTURE,
+            diagnostic, CCXML_LIMIT_EXCEEDED,
             salts_xml_attribute_location(send_id_attribute),
-            "CCXML cancel sendid must be nonempty");
+            "CCXML cancel sendid limit exceeded");
         goto cleanup;
-    }
-    if (decoded_expression[0] == '\'' || decoded_expression[0] == '"') {
-        status = decode_send_literal(
-            send_id_attribute, &literal, &literal_size, diagnostic);
-        if (status != CCXML_OK) goto cleanup;
-        if (literal_size > SCXML_EVENT_METADATA_CAPACITY) {
-            status = fail(
-                diagnostic, CCXML_LIMIT_EXCEEDED,
-                salts_xml_attribute_location(send_id_attribute),
-                "CCXML cancel sendid exceeds Event I/O metadata capacity");
-            goto cleanup;
-        }
-        retained_size = literal_size + 1u;
-    } else {
-        if (!dotted_location_valid((salts_xml_string_view){
-                decoded_expression, decoded_expression_size})) {
-            status = fail(
-                diagnostic, CCXML_UNSUPPORTED_FEATURE,
-                salts_xml_attribute_location(send_id_attribute),
-                "CCXML cancel sendid must be a quoted string or dotted "
-                "NCName location");
-            goto cleanup;
-        }
-        if (!checked_add(
-                decoded_expression_size, 1u, &retained_size)) {
-            status = fail(
-                diagnostic, CCXML_LIMIT_EXCEEDED,
-                salts_xml_attribute_location(send_id_attribute),
-                "CCXML cancel sendid limit exceeded");
-            goto cleanup;
-        }
     }
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
@@ -1064,7 +975,6 @@ static ccxml_status validate_cancel_action(
 
 cleanup:
     free(decoded_expression);
-    free(literal);
     return status;
 }
 
@@ -3242,26 +3152,34 @@ static ccxml_status copy_program(
                 } else if (view_equal(action_name, "cancel")) {
                     const salts_xml_attribute send_id_attribute =
                         node_unqualified_attribute(action, "sendid");
-                    const salts_xml_string_view expression =
-                        salts_xml_attribute_value(send_id_attribute);
+                    char *value = NULL;
                     size_t decoded_size = 0u;
+                    bool is_dynamic = false;
                     action_row->kind = CCXML_ACTION_CANCEL;
-                    (void)scxml_xml_decode_attribute_entities(
-                        expression.data, expression.size, cursor,
-                        expression.size, &decoded_size);
-                    if (cursor[0] == '\'' || cursor[0] == '"') {
+                    status = decode_destination_value(
+                        send_id_attribute, true, &value, &decoded_size,
+                        &is_dynamic, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
+                    memcpy(cursor, value, decoded_size);
+                    free(value);
+                    cursor[decoded_size] = '\0';
+                    if (!is_dynamic) {
                         action_row->id1 = cursor;
-                        memmove(cursor, cursor + 1u, decoded_size - 2u);
-                        action_row->id1_size = decoded_size - 2u;
-                        cursor[action_row->id1_size] = '\0';
-                        cursor += action_row->id1_size + 1u;
-                    } else {
+                        action_row->id1_size = decoded_size;
+                    } else if (dotted_location_valid((salts_xml_string_view){cursor, decoded_size})) {
                         action_row->location = cursor;
                         action_row->location_size = decoded_size;
-                        cursor[decoded_size] = '\0';
-                        cursor += decoded_size + 1u;
                         impl->uses_datamodel_read = true;
+                    } else {
+                        action_row->destination = cursor;
+                        action_row->destination_size = decoded_size;
+                        action_row->destination_is_dynamic = true;
+                        impl->uses_string_expression = true;
                     }
+                    cursor += decoded_size + 1u;
                     impl->uses_cancel = true;
                 } else {
                     size_t bridge_attribute_index;

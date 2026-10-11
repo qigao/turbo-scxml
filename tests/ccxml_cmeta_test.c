@@ -2507,7 +2507,7 @@ spec("CCXML CMeta datamodel") {
             "<send target=\"'session:callee'\" name=\"'call.notice'\" "
             "delay='(conference.id)' sendid='conference.id'/>"
             "</transition><transition event='cancel.now'>"
-            "<cancel sendid='conference.id'/>"
+            "<cancel sendid='(conference.id)'/>"
             "</transition></eventprocessor></ccxml>";
         ccxml_program program = {0};
         ccxml_session session = {0};

@@ -1888,7 +1888,13 @@ static ccxml_status execute_transition_actions(
             const char *error = NULL;
             scxml_adapter_status adapter_status;
             ccxml_status status;
-            if (action->location != NULL) {
+            if (action->destination_is_dynamic) {
+                status = evaluate_action_string_expression(impl, action_index, event, &send_id);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+            } else if (action->location != NULL) {
                 adapter_status = impl->datamodel.read_string(
                     impl->datamodel_user, action->location,
                     action->location_size, &send_id, &error);

@@ -28,8 +28,8 @@ optional dotted-location `sendid` and bounded dotted-location `namelist`:
 
 When `targettype` is omitted, the compiled value is `ccxml`; omitted `delay`
 is zero. `sendid` is a dotted writable string location populated with a
-generated identifier. `<cancel>` accepts a dotted readable string location or
-a quoted literal identifier. `namelist` accepts at most
+generated identifier. `<cancel>` accepts a dotted readable string location,
+a quoted literal identifier, or a dynamic string expression. `namelist` accepts at most
 `SCXML_PAYLOAD_MAX_ENTRIES` whitespace-separated dotted locations.
 `target`, `name`, `targettype`, and expression-form `delay` accept dynamic strings through the configured
 CMeta or QuickJS-NG expression adapter. Inline-content forms and escaped string
@@ -101,7 +101,7 @@ string semantics for a dotted location, for example `(settings.delay)`. The comp
 strips expression quotes for literals and retains decoded literal, location, and
 expression bytes in program-owned storage. The default `ccxml` target
 type is an immutable static value. Cancel requires only `sendid`, accepts a dotted
-location or quoted literal, and must be empty.
+location, quoted literal, or dynamic string expression, and must be empty.
 
 The delay literal uses the shared bounded CSS-time parser and is compiled to an
 exact `uint64_t` millisecond value. The event name uses the CCXML lexical subset:

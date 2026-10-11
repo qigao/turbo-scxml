@@ -498,6 +498,33 @@ spec("CCXML send") {
             ccxml_program_destroy(&program);
         }
 
+        it("retains decoded cancel expression bytes with exact budget accounting") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<cancel sendid='a &amp;&amp; b'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_program program = {0};
+            ccxml_diagnostic diagnostic = {0};
+            limits.max_name_bytes = 9u;
+            check_equal(ccxml_compile(&program, source, strlen(source),
+                &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+            limits.max_name_bytes = 10u;
+            check_equal(ccxml_compile(&program, source, strlen(source),
+                &limits, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source)-1u);
+            const ccxml_program_impl *impl = program.impl;
+            check_true(impl->uses_cancel);
+            check_true(impl->uses_string_expression);
+            check_false(impl->uses_datamodel_read);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_equal(impl->actions[0].destination, "a && b");
+            check_equal(impl->actions[0].destination_size, (size_t)6u);
+            ccxml_program_destroy(&program);
+        }
+
         it("rejects invalid sendid locations") {
             ccxml_program program = {0};
             check_equal(
@@ -545,12 +572,6 @@ spec("CCXML send") {
                 compile_actions(
                     &program, "<cancel sendid='&apos;&apos;'/>"),
                 CCXML_INVALID_STRUCTURE);
-            check_equal(
-                compile_actions(&program, "<cancel sendid='request..id'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_equal(
-                compile_actions(&program, "<cancel sendid='makeId()'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
             check_equal(
                 compile_actions(
                     &program,
@@ -1054,6 +1075,23 @@ spec("CCXML send") {
                 CCXML_OK);
             if (session.impl != NULL)
                 check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires expression callbacks for computed cancel identifiers") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe telephony = {.quiescent = true};
+            datamodel_probe datamodel = {.effects.quiescent = true};
+            send_probe send = {.effects.quiescent = true};
+            scxml_event_io_adapter capable = event_io_adapter;
+            capable.capabilities |= SCXML_EVENT_IO_CAP_DELAYED_SEND | SCXML_EVENT_IO_CAP_CANCEL;
+            capable.prepare_cancel = prepare_cancel;
+            check_equal(compile_actions(&program,
+                "<cancel sendid='(request.pending)'/>"), CCXML_OK);
+            check_equal(init_send_session_with_datamodel(&session, &program,
+                &telephony, &datamodel, &send, &capable), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
             ccxml_program_destroy(&program);
         }
 
