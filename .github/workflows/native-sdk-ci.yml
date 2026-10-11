@@ -195,7 +195,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --x-feature=quickjs --x-feature=chttp --only-binarycaching
 
       - name: Configure
         if: matrix.id == 'linux-release'
@@ -357,7 +357,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           if (Test-Path -LiteralPath vcpkg_installed) { Remove-Item -Recurse -Force vcpkg_installed }
-          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" --triplet x64-windows --x-feature=quickjs --only-binarycaching
+          & "$env:VCPKG_ROOT\vcpkg.exe" install --x-manifest-root=. --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" --triplet x64-windows --x-feature=quickjs --x-feature=chttp --only-binarycaching
           if ($LASTEXITCODE -ne 0) { throw "vcpkg cache-only restore failed" }
 
       - name: Configure
@@ -487,7 +487,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --x-feature=chttp --only-binarycaching
 
       - name: Configure
         if: matrix.id == 'macos'
@@ -579,7 +579,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf vcpkg_installed
-          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --only-binarycaching
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$VCPKG_TARGET_TRIPLET" --x-feature=quickjs --x-feature=chttp --only-binarycaching
 
       - name: Configure and build
         if: matrix.id == 'android'
