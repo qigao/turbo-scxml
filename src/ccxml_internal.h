@@ -64,6 +64,7 @@ typedef struct ccxml_action_row {
     size_t delay_size;
     uint64_t delay_ms;
     bool destination_is_dynamic;
+    bool name_is_dynamic;
     bool delay_is_dynamic;
     size_t branch_next;
     size_t block_end;
@@ -102,6 +103,7 @@ typedef struct ccxml_program_impl {
     size_t max_transition_effects;
     size_t max_foreach_iterations;
     size_t max_foreach_storage_bytes;
+    size_t max_name_bytes;
     bool uses_create_call;
     bool uses_string_expression;
     bool uses_disconnect;
@@ -131,6 +133,11 @@ typedef struct ccxml_program_impl {
 
 typedef struct ccxml_transition_binding ccxml_transition_binding;
 
+typedef struct ccxml_action_string_expressions {
+    ccxml_string_expression destination;
+    ccxml_string_expression name;
+} ccxml_action_string_expressions;
+
 typedef struct ccxml_conditional_frame {
     size_t block_end;
     bool branch_taken;
@@ -159,7 +166,7 @@ typedef struct ccxml_session_impl {
     cflow_statechart_executable_binding *executable_bindings;
     ccxml_transition_binding *transition_bindings;
     ccxml_condition *action_conditions;
-    ccxml_string_expression *action_string_expressions;
+    ccxml_action_string_expressions *action_string_expressions;
     ccxml_conditional_frame *conditional_frames;
     scxml_scope_schema foreach_scope;
     scxml_scope_view foreach_scope_committed;
@@ -196,6 +203,8 @@ struct ccxml_transition_binding {
 };
 
 extern const cmeta_type_desc ccxml_event_cmeta_type;
+
+bool ccxml_send_event_name_valid(const char *name, size_t name_size);
 
 scxml_adapter_status ccxml_cmeta_compile_foreach_scope(
     void *user, const char *array, size_t array_size,

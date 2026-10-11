@@ -576,7 +576,7 @@ spec("CCXML send") {
                 CCXML_INVALID_STRUCTURE);
         }
 
-        it("rejects empty values and nonliteral name or type") {
+        it("rejects empty values and nonliteral type") {
             ccxml_program program = {0};
             check_equal(
                 compile_actions(
@@ -608,8 +608,8 @@ spec("CCXML send") {
             check_equal(
                 compile_actions(
                     &program,
-                    "<send target=\"'session:callee'\" name='eventName'/>"),
-                CCXML_UNSUPPORTED_FEATURE);
+                    "<send target=\"'session:callee'\" name=''/>"),
+                CCXML_INVALID_STRUCTURE);
         }
 
         it("rejects invalid event names") {
@@ -795,21 +795,21 @@ spec("CCXML send") {
             ccxml_program_destroy(&program);
         }
 
-        it("retains decoded dynamic target source within the exact name budget") {
+        it("retains decoded dynamic target and name within the exact byte budget") {
             char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'>"
-                "<send target='a &amp;&amp; b' name=\"'e'\"/>"
+                "<send target='a &amp;&amp; b' name='c &amp;&amp; d'/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_limits limits = ccxml_default_limits();
             ccxml_diagnostic diagnostic = {0};
             ccxml_program program = {0};
-            /* go + NUL, a && b + NUL, e + NUL. */
-            limits.max_name_bytes = 11u;
+            /* go + NUL, a && b + NUL, c && d + NUL. */
+            limits.max_name_bytes = 16u;
             check_equal(ccxml_compile(&program, source, strlen(source),
                 &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
             check_null(program.impl);
-            limits.max_name_bytes = 12u;
+            limits.max_name_bytes = 17u;
             check_equal(ccxml_compile(&program, source, strlen(source),
                 &limits, &diagnostic), CCXML_OK);
             memset(source, 'x', sizeof(source)-1u);
@@ -818,10 +818,13 @@ spec("CCXML send") {
             check_true(impl->actions[0].destination_is_dynamic);
             check_equal(impl->actions[0].destination, "a && b");
             check_equal(impl->actions[0].destination_size, (size_t)6);
+            check_true(impl->actions[0].name_is_dynamic);
+            check_equal(impl->actions[0].name, "c && d");
+            check_equal(impl->actions[0].name_size, (size_t)6);
             ccxml_program_destroy(&program);
         }
 
-        it("requires the string-expression adapter tail only for dynamic targets") {
+        it("requires the string-expression adapter tail for dynamic target or name") {
             ccxml_program program = {0};
             ccxml_session session = {0};
             effect_probe provider = {.quiescent = true};
@@ -831,6 +834,12 @@ spec("CCXML send") {
                 "<send target='destination' name=\"'call.notice'\"/>"), CCXML_OK);
             check_equal(init_send_session(&session, &program, &provider,
                 &send, &event_io_adapter), CCXML_INVALID_ARGUMENT);
+            check_equal(init_send_session_with_datamodel(&session, &program,
+                &provider, &datamodel, &send, &event_io_adapter), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            ccxml_program_destroy(&program);
+            check_equal(compile_actions(&program,
+                "<send target=\"'session:callee'\" name='eventName'/>"), CCXML_OK);
             check_equal(init_send_session_with_datamodel(&session, &program,
                 &provider, &datamodel, &send, &event_io_adapter), CCXML_INVALID_ARGUMENT);
             check_null(session.impl);

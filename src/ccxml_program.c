@@ -782,7 +782,7 @@ static ccxml_status decode_send_delay(
     return CCXML_OK;
 }
 
-static bool send_event_name_valid(const char *name, size_t name_size) {
+bool ccxml_send_event_name_valid(const char *name, size_t name_size) {
     size_t index;
     if (name == NULL || name_size == 0u) return false;
     if (!((name[0] >= 'A' && name[0] <= 'Z') ||
@@ -816,6 +816,7 @@ static ccxml_status validate_send_action(
     char *namelist_value = NULL;
     bool delay_is_literal = false;
     bool target_is_dynamic = false;
+    bool name_is_dynamic = false;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
@@ -867,10 +868,11 @@ static ccxml_status validate_send_action(
         target_attribute, true, &target_value, &target_size,
         &target_is_dynamic, diagnostic);
     if (status != CCXML_OK) goto cleanup;
-    status = decode_send_literal(
-        name_attribute, &name_value, &name_size, diagnostic);
+    status = decode_destination_value(
+        name_attribute, true, &name_value, &name_size,
+        &name_is_dynamic, diagnostic);
     if (status != CCXML_OK) goto cleanup;
-    if (!send_event_name_valid(name_value, name_size)) {
+    if (!name_is_dynamic && !ccxml_send_event_name_valid(name_value, name_size)) {
         status = fail(
             diagnostic, CCXML_INVALID_STRUCTURE,
             salts_xml_attribute_location(name_attribute),
@@ -3123,6 +3125,7 @@ static ccxml_status copy_program(
                         node_unqualified_attribute(action, "namelist");
                     static const char default_type[] = "ccxml";
                     char *target_value = NULL;
+                    char *name_value = NULL;
                     action_row->kind = CCXML_ACTION_SEND;
                     action_row->payload_first = payload_index;
                     status = decode_destination_value(
@@ -3140,9 +3143,20 @@ static ccxml_status copy_program(
                     free(target_value);
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
+                    status = decode_destination_value(
+                        name_attribute, true, &name_value,
+                        &action_row->name_size,
+                        &action_row->name_is_dynamic, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
+                    if (action_row->name_is_dynamic)
+                        impl->uses_string_expression = true;
                     action_row->name = cursor;
-                    action_row->name_size =
-                        copy_send_literal(name_attribute, cursor);
+                    memcpy(cursor, name_value, action_row->name_size);
+                    free(name_value);
+                    cursor[action_row->name_size] = '\0';
                     cursor += action_row->name_size + 1u;
                     if (type_attribute.impl != NULL) {
                         action_row->target_type = cursor;
@@ -3423,6 +3437,7 @@ ccxml_status ccxml_compile(
     impl->max_transition_effects = measurement.max_transition_effects;
     impl->max_foreach_iterations = limits.max_foreach_iterations;
     impl->max_foreach_storage_bytes = limits.max_foreach_storage_bytes;
+    impl->max_name_bytes = limits.max_name_bytes;
     status = copy_program(
         impl, salts_xml_document_root(&document), diagnostic);
     if (status != CCXML_OK) goto cleanup;

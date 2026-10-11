@@ -33,6 +33,7 @@ typedef struct ccxml_limits {
     salts_xml_limits xml;
     size_t max_transitions;
     size_t max_actions;
+    /** Retained string budget; also bounds each dynamic send-name result. */
     size_t max_name_bytes;
     /** Maximum body iterations permitted by one foreach dispatch. */
     size_t max_foreach_iterations;

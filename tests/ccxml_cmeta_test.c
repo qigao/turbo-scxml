@@ -576,6 +576,7 @@ struct foreach_provider_probe {
     size_t reject_on_prepare;
     size_t close_count;
     char destinations[4][TEST_TEXT_CAPACITY + 1u];
+    char event_names[4][TEST_TEXT_CAPACITY + 1u];
     size_t destination_sizes[4];
     const char *conference_id_result;
     size_t conference_id_result_size;
@@ -720,6 +721,11 @@ static bool foreach_provider_quiescent(void *user) {
 static scxml_adapter_status foreach_prepare_send(
     void *user, const scxml_send_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    foreach_provider_probe *probe = user;
+    if (probe->prepare_count >= 4u || request->event_size > TEST_TEXT_CAPACITY)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
+    memcpy(probe->event_names[probe->prepare_count], request->event, request->event_size);
+    probe->event_names[probe->prepare_count][request->event_size] = '\0';
     const ccxml_create_call_request destination = {
         .destination = request->target, .destination_size = request->target_size};
     return foreach_prepare_create_call(user, &destination, out_ticket, out_error);
@@ -1348,14 +1354,14 @@ spec("CCXML CMeta datamodel") {
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'>"
                 "<foreach array='values' item='item'>"
-                "<send target='item.destination' name=\"'notice'\"/>"
+                "<send target='item.destination' name='item.destination'/>"
                 "</foreach>"
                 "</transition></eventprocessor></ccxml>"};
             const char *source = sources[sending];
             static const ccxml_foreach_record elements[] = {
-                {.destination = {.size = 7u, .data = "tel:111"}, .code = 11},
-                {.destination = {.size = 7u, .data = "tel:222"}, .code = 22},
-                {.destination = {.size = 7u, .data = "tel:333"}, .code = 33}};
+                {.destination = {.size = 7u, .data = "tel.111"}, .code = 11},
+                {.destination = {.size = 7u, .data = "tel.222"}, .code = 22},
+                {.destination = {.size = 7u, .data = "tel.333"}, .code = 33}};
             const cmeta_data_desc *semantic_data[] = {
                 &foreach_record_alias_data};
             ccxml_limits limits = ccxml_default_limits();
@@ -1411,8 +1417,8 @@ spec("CCXML CMeta datamodel") {
             check_equal(
                 ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
             check_equal(provider.prepare_count, (size_t)2u);
-            check_equal(provider.destinations[0], "tel:111");
-            check_equal(provider.destinations[1], "tel:222");
+            check_equal(provider.destinations[0], "tel.111");
+            check_equal(provider.destinations[1], "tel.222");
             check_equal(provider.commit_count, (size_t)0u);
             check_equal(provider.discard_count, (size_t)1u);
             {
@@ -1434,8 +1440,10 @@ spec("CCXML CMeta datamodel") {
                 check_equal(provider.prepare_count, (size_t)3);
                 check_equal(provider.commit_count, (size_t)3);
                 check_equal(provider.discard_count, (size_t)0);
-                check_equal(provider.destinations[0], "tel:111");
-                check_equal(provider.destinations[2], "tel:333");
+                check_equal(provider.destinations[0], "tel.111");
+                check_equal(provider.destinations[2], "tel.333");
+                check_equal(provider.event_names[0], "tel.111");
+                check_equal(provider.event_names[2], "tel.333");
             }
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_cmeta_datamodel_destroy(&datamodel);

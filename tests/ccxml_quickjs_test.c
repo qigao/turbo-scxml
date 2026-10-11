@@ -175,7 +175,7 @@ static const vxml_dialog_event_sink_v1 events = {
 typedef struct send_probe send_probe;
 typedef struct send_ticket {
     send_probe *owner;
-    tstr target, id;
+    tstr target, id, name;
     bool live;
 } send_ticket;
 struct send_probe {
@@ -211,9 +211,11 @@ static scxml_adapter_status prepare_send(void *user, const scxml_send_request *r
     send_ticket *ticket = &probe->tickets[probe->prepared];
     ticket->target = tstr_new_len(request->target, request->target_size);
     ticket->id = tstr_new_len(request->id, request->id_size);
-    if (ticket->target == NULL || ticket->id == NULL) {
+    ticket->name = tstr_new_len(request->event, request->event_size);
+    if (ticket->target == NULL || ticket->id == NULL || ticket->name == NULL) {
         tstr_free(ticket->target);
         tstr_free(ticket->id);
+        tstr_free(ticket->name);
         *ticket = (send_ticket){0};
         return SCXML_ADAPTER_FULL;
     }
@@ -272,6 +274,7 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_false(sends.tickets[index].live);
             tstr_free(sends.tickets[index].target);
             tstr_free(sends.tickets[index].id);
+            tstr_free(sends.tickets[index].name);
         }
         if (manager.impl != NULL) {
             vxml_dialog_manager_close(&manager);
@@ -467,12 +470,11 @@ spec("CCXML QuickJS-NG expression adapter") {
         check_null(owner.impl);
     }
 
-    it("releases earlier send handles when a later target fails syntax admission") {
+    it("releases the target handle when name fails syntax admission") {
         static const char source[] =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition event='go'>"
-            "<send target='id' name=\"'notice'\"/>"
-            "<send target='count +' name=\"'notice'\"/>"
+            "<send target='id' name='count +'/>"
             "</transition></eventprocessor></ccxml>";
         ccxml_diagnostic diagnostic = {0};
         config.max_expressions = 2u;
@@ -492,15 +494,93 @@ spec("CCXML QuickJS-NG expression adapter") {
             &condition, &error), SCXML_ADAPTER_ACCEPTED);
     }
 
-    group("dynamic Event I/O targets") {
+    it("shares handle capacity between target and name and cleans up failed admission") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<send target='id' name='id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_diagnostic diagnostic = {0};
+        config.max_expressions = 1u;
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+            NULL, &diagnostic), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = &telephony, .telephony_user = &provider,
+            .event_io = &event_io, .event_io_user = &sends};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_ALLOCATION_FAILED);
+        check_null(session.impl);
+        check_equal(adapter->compile_string_expression(&owner, "'ok'", 4u,
+            &expression, &error), SCXML_ADAPTER_ACCEPTED);
+    }
+
+    for (size_t row = 0u; row < 5u; ++row) {
+        it("rejects invalid dynamic event name %zu before publishing any send", row) {
+            static const char *const names[] = {"", "1notice", ".notice", "bad-name", "a\0b"};
+            static const size_t sizes[] = {0u, 7u, 7u, 8u, 3u};
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'><accept/>"
+                "<send target=\"('session:' + count)\" name='id' sendid='id'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            check_equal(text_assign(&state.id, (const unsigned char *)names[row],
+                sizes[row], TEST_TEXT_CAPACITY), CMETA_OK);
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_CONTRACT);
+            check_equal(sends.prepared, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.size, sizes[row]);
+            check_equal(memcmp(state.id.data, names[row], sizes[row]), 0);
+        }
+    }
+
+    it("bounds the dynamic name copy and accepts the exact limit after retry") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'><accept/>"
+            "<send target=\"'session:callee'\" name=\"('n'.repeat(count))\" sendid='id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_limits limits = ccxml_default_limits();
+        limits.max_name_bytes = 64u;
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+            &limits, &diagnostic), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = &telephony, .telephony_user = &provider,
+            .event_io = &event_io, .event_io_user = &sends};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        state.count = 65;
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_LIMIT_EXCEEDED);
+        check_equal(sends.prepared, (size_t)0);
+        check_equal(provider.discarded, (size_t)1);
+        check_equal(state.id.data, "old");
+        state.count = 64;
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(tstr_len(sends.tickets[0].name), (size_t)64);
+        check_equal(sends.tickets[0].target, "session:callee");
+        check_equal(sends.ids_visible, (size_t)1);
+    }
+
+    group("dynamic Event I/O target and name") {
         before_each() {
             static const char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'><accept/>"
                 "<send target=\"('session:' + count + '/' + event$.connectionid)\" "
-                "name=\"'notice'\" sendid='id' namelist='count' delay=\"'1ms'\"/>"
+                "name=\"('notice.' + event$.name)\" sendid='id' namelist='count' delay=\"'1ms'\"/>"
                 "<send target=\"(count === 0 ? '' : (count &lt; 0 ? missingTarget : 'session:' + (count + 1)))\" "
-                "name=\"'notice'\" sendid='id'/><accept/>"
+                "name=\"(count === 13 ? 'bad-name' : 'notice.' + (count + 1))\" sendid='id'/><accept/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_diagnostic diagnostic = {0};
             check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
@@ -516,6 +596,8 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
             check_equal(sends.tickets[0].target, "session:7/call-7");
             check_equal(sends.tickets[1].target, "session:8");
+            check_equal(sends.tickets[0].name, "notice.go");
+            check_equal(sends.tickets[1].name, "notice.8");
             check_equal(sends.committed, (size_t)2);
             check_equal(sends.ids_visible, (size_t)2);
             check_equal(sends.delay, UINT64_C(1));
@@ -547,6 +629,7 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
             check_equal(sends.tickets[0].target, "session:9/call-7");
             check_equal(sends.tickets[1].target, "session:10");
+            check_equal(sends.tickets[1].name, "notice.10");
             check_equal(sends.ids_visible, (size_t)2);
         }
         it("discards both prepared sends and ID writes when a later action fails") {
@@ -555,6 +638,15 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(sends.prepared, (size_t)2);
             check_equal(sends.committed, (size_t)0);
             check_equal(sends.discarded, (size_t)2);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+        }
+        it("rolls back the first send when the second event name is invalid") {
+            state.count = 13;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_CONTRACT);
+            check_equal(sends.prepared, (size_t)1);
+            check_equal(sends.discarded, (size_t)1);
+            check_equal(sends.committed, (size_t)0);
             check_equal(provider.discarded, (size_t)1);
             check_equal(state.id.data, "old");
         }
