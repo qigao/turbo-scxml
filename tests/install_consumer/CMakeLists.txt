@@ -696,6 +696,8 @@ foreach(consumer IN ITEMS
     turboscxml_install_consumer
     turboscxml_voicexml_quickjs_install_consumer
     turboscxml_voicexml_quickjs_install_consumer_cpp
+    turboscxml_dialog_manager_install_consumer
+    turboscxml_dialog_manager_install_consumer_cpp
     turboscxml_provider_install_consumer turboscxml_provider_install_consumer_cpp
     turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp
     turboscxml_plugin_install_consumer turboscxml_plugin_install_consumer_cpp

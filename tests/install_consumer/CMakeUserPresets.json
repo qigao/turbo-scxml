@@ -11,7 +11,8 @@
       "cacheVariables": {
         "VCPKG_MANIFEST_DIR": "${sourceDir}/../..",
         "VCPKG_MANIFEST_FEATURES": "quickjs",
-        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "ON"
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "ON",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER": "ON"
       },
       "environment": {
         "TURBOSCXML_ROOT": "$penv{TURBOSCXML_ROOT}",
@@ -24,6 +25,7 @@
       "binaryDir": "${sourceDir}/build/voicexml-quickjs-installed",
       "cacheVariables": {
         "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "OFF",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_DIALOG_MANAGER": "OFF",
         "TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS": "ON"
       }
     },

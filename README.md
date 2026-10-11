@@ -298,6 +298,11 @@ resource provider, verify committed-state isolation and exception rollback,
 and check exact lease settlement. CTest registers these consumers separately
 from the SCXML/CCXML profile.
 
+For CCXML-hosted VoiceXML, pair the DocumentStore compiler with a Session
+factory and its bounded script callback. DialogManager then advances external
+scripts across navigation and submit responses through its existing serialized
+progress loop. See the [profile-neutral script integration example](docs/specs/voicexml-dialog-manager.md#profile-neutral-script-progress).
+
 VoiceXML typed QuickJS state accepts `cmeta_reflect_value` roots through
 CMeta's canonical fieldwise copy/move/cleanup operations. Reflection storage
 descriptors deliberately do not supply native storage traits, so the shared

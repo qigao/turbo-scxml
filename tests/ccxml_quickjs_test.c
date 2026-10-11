@@ -1,5 +1,6 @@
 #include <ccxml/quickjs.h>
 #include <voicexml/dialog_manager.h>
+#include <voicexml/quickjs.h>
 #include <cmeta/cmeta.h>
 #include "tinytest.h"
 #include <tstr.h>
@@ -172,6 +173,84 @@ static const vxml_dialog_event_sink_v1 events = {
     .abi_version = VXML_DIALOG_EVENT_SINK_ABI_V1, .struct_size = sizeof(events),
     .try_publish = publish_event};
 
+typedef struct voice_script_probe {
+    vxml_document_store store;
+    size_t opened, closed, executed;
+    int committed_count;
+} voice_script_probe;
+
+static vxml_status compile_voice_script(void *user, const void *source,
+    size_t size, vxml_program *program, vxml_diagnostic *diagnostic) {
+    vxml_quickjs_compile_options_v1 options = vxml_quickjs_default_compile_options();
+    (void)user;
+    options.root = &state_desc;
+    return vxml_compile_quickjs_script_profile(source, size, NULL, &options,
+        program, diagnostic);
+}
+
+static vxml_status init_voice_script(void *user, vxml_session *session,
+    const vxml_program *program) {
+    const test_state initial = {.count = 3};
+    vxml_quickjs_session_options_v1 options = vxml_quickjs_default_session_options();
+    (void)user;
+    options.initial_state = &initial;
+    return vxml_session_init_quickjs(session, program, &options);
+}
+
+static vxml_dialog_manager_status open_script_document(void *user, const char *source,
+    size_t size, const char *media, size_t media_size, size_t max_bytes,
+    vxml_dialog_document *out) {
+    static const char document[] =
+        "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+        "<block><script srcexpr=\"'script'+count+'.js'\"/></block>"
+        "<block><exit/></block></form></vxml>";
+    static const char expected[] = "https://voice.example/app7.vxml";
+    (void)media; (void)media_size;
+    if (size != sizeof(expected)-1u || memcmp(source, expected, size) != 0 ||
+        sizeof(document)-1u > max_bytes) return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+    ++((dialog_probe *)user)->opened;
+    *out = (vxml_dialog_document){.data = document, .size = sizeof(document)-1u, .lease = user};
+    return VXML_DIALOG_MANAGER_OK;
+}
+
+static vxml_script_resource_status open_voice_script(void *user,
+    const char *uri, size_t size, const char *charset, size_t charset_size,
+    size_t max_bytes, vxml_script_source *out) {
+    static const char expected[] = "https://voice.example/script3.js";
+    static const char script[] = "count += 4;";
+    (void)charset; (void)charset_size;
+    if (size != sizeof(expected)-1u || memcmp(uri, expected, size) != 0 ||
+        sizeof(script)-1u > max_bytes) return VXML_SCRIPT_RESOURCE_INVALID_ARGUMENT;
+    ++((voice_script_probe *)user)->opened;
+    *out = (vxml_script_source){.data = script, .size = sizeof(script)-1u, .lease = user};
+    return VXML_SCRIPT_RESOURCE_OK;
+}
+
+static void close_voice_script(void *user, vxml_script_source *source) {
+    if (source->lease == user) ++((voice_script_probe *)user)->closed;
+    *source = (vxml_script_source){0};
+}
+
+static vxml_status execute_voice_script(void *user, vxml_session *session,
+    const char *uri, size_t size) {
+    static const vxml_script_resource_adapter_v1 scripts = {
+        .abi_version = VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1, .struct_size = sizeof(scripts),
+        .open = open_voice_script, .close = close_voice_script};
+    voice_script_probe *probe = user;
+    const void *state = NULL;
+    vxml_quickjs_script_execution_v1 execution = VXML_QUICKJS_SCRIPT_EXECUTION_V1_INIT;
+    execution.resolver = &probe->store;
+    execution.script_resources = &scripts;
+    execution.script_resource_user = probe;
+    execution.base_document_uri = uri;
+    execution.base_document_uri_size = size;
+    ++probe->executed;
+    vxml_status status = vxml_quickjs_session_execute_script(session, &execution);
+    if (status == VXML_OK && vxml_quickjs_session_state(session, &state) == VXML_OK)
+        probe->committed_count = ((const test_state *)state)->count;
+    return status;
+}
+
 typedef struct send_probe send_probe;
 typedef struct send_ticket {
     send_probe *owner;
@@ -290,6 +369,7 @@ spec("CCXML QuickJS-NG expression adapter") {
     static ccxml_session session;
     static vxml_dialog_manager manager;
     static dialog_probe provider;
+    static voice_script_probe voice;
     static send_probe sends;
     static const ccxml_datamodel_adapter_v1 *adapter;
     static const char *error;
@@ -303,6 +383,7 @@ spec("CCXML QuickJS-NG expression adapter") {
         session = (ccxml_session){0};
         manager = (vxml_dialog_manager){0};
         provider = (dialog_probe){0};
+        voice = (voice_script_probe){0};
         sends = (send_probe){.state = &state};
         config = ccxml_quickjs_default_datamodel_config();
         config.state_config.root = &state_desc;
@@ -326,6 +407,9 @@ spec("CCXML QuickJS-NG expression adapter") {
             vxml_dialog_manager_close(&manager);
             check_equal(vxml_dialog_manager_destroy(&manager), VXML_DIALOG_MANAGER_OK);
         }
+        if (voice.store.impl != NULL)
+            check_equal(vxml_document_store_destroy(&voice.store), VXML_DOCUMENT_STORE_OK);
+        check_equal(voice.opened, voice.closed);
         adapter->destroy_string_expression(&owner, &expression);
         adapter->destroy_condition(&owner, &condition);
         ccxml_quickjs_datamodel_destroy(&owner);
@@ -1086,6 +1170,64 @@ spec("CCXML QuickJS-NG expression adapter") {
             if (row == 0u) check_equal(adapter->compile_condition(&owner, "true", 4u,
                 &condition, &error), SCXML_ADAPTER_ACCEPTED);
         }
+    }
+
+    it("runs a CCXML QuickJS-selected dialog through a VoiceXML QuickJS script to exit") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<dialogstart dialogid='id' src=\"('app'+count+'.vxml')\" "
+            "connectionid='event$.connectionid'/></transition></eventprocessor></ccxml>";
+        static const vxml_document_compile_adapter_v1 compiler = {
+            .abi_version = VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1, .struct_size = sizeof(compiler),
+            .compile = compile_voice_script};
+        static const vxml_dialog_document_adapter_v1 script_documents = {
+            .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1, .struct_size = sizeof(script_documents),
+            .open = open_script_document, .close = close_document};
+        static const vxml_session_factory_v1 factory = {
+            .abi_version = VXML_SESSION_FACTORY_ABI_V1, .struct_size = sizeof(factory),
+            .init = init_voice_script, .execute_script = execute_voice_script, .max_script_steps = 1u};
+        vxml_document_store_config_v1 store_config = {
+            .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1, .struct_size = sizeof(store_config),
+            .application_uri = "https://voice.example/root.vxml",
+            .application_uri_size = sizeof("https://voice.example/root.vxml")-1u,
+            .capacity = 1u, .max_uri_bytes = 255u, .max_document_bytes = 1024u,
+            .max_cache_bytes = 2048u, .documents = &script_documents, .document_user = &provider,
+            .compiler = &compiler};
+        store_config.voice_limits = vxml_default_limits();
+        check_equal(vxml_document_store_init(&voice.store, &store_config), VXML_DOCUMENT_STORE_OK);
+        vxml_dialog_manager_config_v2 manager_config = vxml_dialog_manager_default_config_v2();
+        manager_config.capacity = 1u;
+        manager_config.document_store = &voice.store;
+        manager_config.upstream = &telephony;
+        manager_config.upstream_user = &provider;
+        manager_config.events = &events;
+        manager_config.event_user = &provider;
+        manager_config.session_factory = &factory;
+        manager_config.session_factory_user = &voice;
+        check_equal(vxml_dialog_manager_init_v2(&manager, &manager_config), VXML_DIALOG_MANAGER_OK);
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u, NULL, NULL), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = vxml_dialog_manager_ccxml_adapter(),
+            .telephony_user = vxml_dialog_manager_ccxml_user(&manager)};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_not_equal(state.id.data, "old");
+        check_equal(voice.executed, (size_t)0u);
+        size_t processed = 0u;
+        check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(provider.opened, (size_t)1u);
+        check_equal(provider.closed, (size_t)1u);
+        check_equal(voice.opened, (size_t)1u);
+        check_equal(voice.closed, (size_t)1u);
+        check_equal(voice.executed, (size_t)1u);
+        check_equal(voice.committed_count, 7);
+        check_equal(provider.events, (size_t)2u);
+        vxml_dialog_manager_stats stats = {0};
+        check_true(vxml_dialog_manager_get_stats(&manager, &stats));
+        check_equal(stats.active, (size_t)0u);
     }
 
     group("real VoiceXML dialog transaction") {

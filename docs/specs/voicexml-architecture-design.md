@@ -300,6 +300,14 @@ DialogManager linking either target or switching on profile names.
 Initial documents, external navigation targets and submit-response Programs use
 the same compiler/runtime pair.
 
+The factory's optional `execute_script`/`max_script_steps` tail also lets
+`run_ready()` consume synchronous `SCRIPTING` handoffs. Its per-dialog budget
+survives navigation and submit-response Session replacement, independently of
+the navigation-hop budget. The callback borrows the current document URI and
+Session, and settles script resources before returning. Event backpressure
+retries publication without repeating execution. Historical factory prefixes
+retain manual handoff behavior; see the [script progress contract](voicexml-dialog-manager.md#profile-neutral-script-progress).
+
 ## Ownership table
 
 | Resource | Owner | Borrowed by | Settlement |

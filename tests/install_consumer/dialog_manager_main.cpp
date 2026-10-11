@@ -17,6 +17,9 @@ static_assert(std::is_standard_layout<vxml_dialog_event_v1>::value,
               "dialog manager event must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_session_factory_v1>::value,
               "session factory must remain C-compatible");
+static_assert(std::is_same<decltype(vxml_session_factory_v1::execute_script),
+    vxml_status (*)(void *, vxml_session *, const char *, size_t)>::value,
+    "script handoff must retain its public C signature");
 static_assert(std::is_standard_layout<vxml_document_store>::value,
               "document store handle must remain C-compatible");
 static_assert(std::is_standard_layout<vxml_document_fetch_policy_v1>::value,

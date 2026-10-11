@@ -1,6 +1,10 @@
 #include <voicexml/dialog_manager.h>
 #include <voicexml/document_store.h>
 
+_Static_assert(_Generic(((vxml_session_factory_v1 *)0)->execute_script,
+    vxml_status (*)(void *, vxml_session *, const char *, size_t): 1,
+    default: 0), "script handoff must retain its public C signature");
+
 int main(void) {
     vxml_dialog_manager manager = {0};
     vxml_dialog_manager_config_v1 v1 =

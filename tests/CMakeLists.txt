@@ -647,7 +647,8 @@ turboscxml_add_test(
 
 if(TURBOSCXML_ENABLE_QUICKJS)
   turboscxml_add_test(ccxml_quickjs_test ccxml_quickjs_test.c
-    LIBS TurboSCXML::CCXMLQuickJS TurboSCXML::VoiceXMLDialogManager)
+    LIBS TurboSCXML::CCXMLQuickJS TurboSCXML::VoiceXMLDialogManager
+      TurboSCXML::VoiceXMLQuickJS TurboSCXML::VoiceXMLScriptResource)
   set_tests_properties(ccxml_quickjs_test PROPERTIES TIMEOUT 30)
   add_executable(
     voicexml_quickjs_test
@@ -662,6 +663,7 @@ if(TURBOSCXML_ENABLE_QUICKJS)
   target_link_libraries(voicexml_quickjs_test PRIVATE
     TurboSCXML::VoiceXMLQuickJS
     TurboSCXML::VoiceXMLScriptResource
+    TurboSCXML::VoiceXMLDialogManager
     Salts::TinyTest)
   add_test(NAME voicexml_quickjs_test COMMAND voicexml_quickjs_test)
 endif()

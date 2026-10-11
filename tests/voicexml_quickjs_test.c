@@ -1,5 +1,6 @@
 #include <voicexml/quickjs.h>
 #include <voicexml/script_resource.h>
+#include <voicexml/dialog_manager.h>
 #include <cmeta/data_reflect.h>
 #include <tstr.h>
 
@@ -545,6 +546,342 @@ script_execution(vxml_document_store *store) {
 
 static vxml_quickjs_session_options_v1 session_options(void) {
     return vxml_quickjs_default_session_options();
+}
+
+/* The application owns the profile adapters; DialogManager only sees its
+ * neutral factory and the DocumentStore. All resources outlive the manager. */
+typedef struct quickjs_dialog_probe {
+    vxml_document_store store;
+    vxml_dialog_manager manager;
+    quickjs_script_probe scripts;
+    const char *documents[2];
+    size_t opens, closes, inits, executions, submits, submit_closes;
+    size_t event_count;
+    tstr event_names[4];
+    vxml_status event_status[4];
+    tstr last_base;
+    int committed_value;
+    bool full, no_progress;
+} quickjs_dialog_probe;
+
+static const char *const quickjs_dialog_uris[] = {
+    "https://voice.example/app/dialogs/current.vxml",
+    "https://voice.example/app/next/result.vxml"};
+
+static vxml_dialog_manager_status quickjs_dialog_open(
+    void *user, const char *uri, size_t uri_size,
+    const char *media, size_t media_size, size_t max_bytes,
+    vxml_dialog_document *out) {
+    quickjs_dialog_probe *probe = user;
+    (void)media; (void)media_size;
+    for (size_t i = 0u; i < 2u; ++i) {
+        if (strlen(quickjs_dialog_uris[i]) != uri_size ||
+            memcmp(quickjs_dialog_uris[i], uri, uri_size) != 0)
+            continue;
+        if (probe->documents[i] == NULL || strlen(probe->documents[i]) > max_bytes)
+            return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+        ++probe->opens;
+        *out = (vxml_dialog_document){.data = probe->documents[i],
+            .size = strlen(probe->documents[i]), .lease = probe};
+        return VXML_DIALOG_MANAGER_OK;
+    }
+    return VXML_DIALOG_MANAGER_DOCUMENT_ERROR;
+}
+
+static void quickjs_dialog_close_document(void *user, vxml_dialog_document *document) {
+    quickjs_dialog_probe *probe = user;
+    if (document->lease == probe) ++probe->closes;
+    *document = (vxml_dialog_document){0};
+}
+
+static vxml_status quickjs_dialog_compile(void *user, const void *source,
+    size_t size, vxml_program *program, vxml_diagnostic *diagnostic) {
+    vxml_quickjs_compile_options_v1 options = typed_compile_options();
+    (void)user;
+    return vxml_compile_quickjs_script_profile(source, size, NULL,
+        &options, program, diagnostic);
+}
+
+static vxml_status quickjs_dialog_init_session(void *user, vxml_session *session,
+    const vxml_program *program) {
+    quickjs_dialog_probe *probe = user;
+    const voice_quickjs_state initial = {1};
+    vxml_quickjs_session_options_v1 options = typed_session_options(&initial);
+    ++probe->inits;
+    return vxml_session_init_quickjs(session, program, &options);
+}
+
+static vxml_status quickjs_dialog_execute(void *user, vxml_session *session,
+    const char *uri, size_t uri_size) {
+    quickjs_dialog_probe *probe = user;
+    const void *state = NULL;
+    vxml_quickjs_script_execution_v1 execution = script_execution(&probe->store);
+    ++probe->executions;
+    if (probe->no_progress) return VXML_OK;
+    tstr_free(probe->last_base);
+    probe->last_base = tstr_new_len(uri, uri_size);
+    if (probe->last_base == NULL) return VXML_ALLOCATION_FAILED;
+    execution.base_document_uri = uri;
+    execution.base_document_uri_size = uri_size;
+    execution.script_resource_user = &probe->scripts;
+    vxml_status status = vxml_quickjs_session_execute_script(session, &execution);
+    if (vxml_quickjs_session_state(session, &state) == VXML_OK)
+        probe->committed_value = ((const voice_quickjs_state *)state)->value;
+    return status;
+}
+
+static vxml_dialog_event_sink_status quickjs_dialog_event(
+    void *user, const vxml_dialog_event_v1 *event) {
+    quickjs_dialog_probe *probe = user;
+    if (probe->full) return VXML_DIALOG_EVENT_FULL;
+    if (probe->event_count >= 4u) return VXML_DIALOG_EVENT_FULL;
+    tstr name = tstr_new_len(event->name, event->name_size);
+    if (name == NULL) return VXML_DIALOG_EVENT_FULL;
+    probe->event_names[probe->event_count] = name;
+    probe->event_status[probe->event_count++] = event->voice_status;
+    return VXML_DIALOG_EVENT_ACCEPTED;
+}
+
+static scxml_adapter_status quickjs_dialog_accept(void *user,
+    const ccxml_accept_request *request, cflow_statechart_effect_ticket *ticket,
+    const char **error) {
+    (void)user; (void)request; (void)ticket; (void)error;
+    return SCXML_ADAPTER_ERROR_EXECUTION;
+}
+static void quickjs_dialog_close_upstream(void *user) { (void)user; }
+static bool quickjs_dialog_quiescent(void *user) { (void)user; return true; }
+
+static vxml_submit_resource_status quickjs_dialog_submit(void *user,
+    const vxml_submit_wire_request_v1 *request, vxml_submit_response *out) {
+    quickjs_dialog_probe *probe = user;
+    (void)request;
+    ++probe->submits;
+    *out = (vxml_submit_response){
+        .data = probe->documents[1], .size = strlen(probe->documents[1]),
+        .media_type = "application/voicexml+xml",
+        .media_type_size = sizeof("application/voicexml+xml") - 1u,
+        .effective_uri = quickjs_dialog_uris[1],
+        .effective_uri_size = strlen(quickjs_dialog_uris[1]), .lease = probe};
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+
+static void quickjs_dialog_close_submit(void *user, vxml_submit_response *response) {
+    quickjs_dialog_probe *probe = user;
+    if (response->lease == probe) ++probe->submit_closes;
+    *response = (vxml_submit_response){0};
+}
+
+static vxml_dialog_manager_config_v3 quickjs_dialog_config(quickjs_dialog_probe *probe) {
+    static const ccxml_telephony_adapter_v1 upstream = {
+        .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1, .struct_size = sizeof(upstream),
+        .prepare_accept = quickjs_dialog_accept, .close = quickjs_dialog_close_upstream,
+        .is_quiescent = quickjs_dialog_quiescent};
+    static const vxml_dialog_event_sink_v1 events = {
+        .abi_version = VXML_DIALOG_EVENT_SINK_ABI_V1, .struct_size = sizeof(events),
+        .try_publish = quickjs_dialog_event};
+    vxml_dialog_manager_config_v3 config = vxml_dialog_manager_default_config_v3();
+    config.capacity = 1u;
+    config.upstream = &upstream;
+    config.document_store = &probe->store;
+    config.events = &events;
+    config.event_user = probe;
+    config.session_factory_user = probe;
+    return config;
+}
+
+static void quickjs_dialog_start(quickjs_dialog_probe *probe) {
+    const ccxml_telephony_adapter_v1 *adapter = vxml_dialog_manager_ccxml_adapter();
+    ccxml_dialog_start_request request = {
+        .source = "dialogs/current.vxml", .source_size = sizeof("dialogs/current.vxml") - 1u,
+        .media_type = "application/voicexml+xml", .media_type_size = sizeof("application/voicexml+xml") - 1u,
+        .connection_id = "call-js", .connection_id_size = sizeof("call-js") - 1u};
+    ccxml_string_view id = {0};
+    cflow_statechart_effect_ticket ticket = {0};
+    check_equal(adapter->prepare_dialog_start(vxml_dialog_manager_ccxml_user(&probe->manager),
+        &request, &id, &ticket, NULL), SCXML_ADAPTER_ACCEPTED);
+    ticket.commit(ticket.user);
+}
+
+spec("VoiceXML QuickJS DialogManager handoffs") {
+    static quickjs_dialog_probe probe;
+    static vxml_session_factory_v1 factory;
+    static vxml_dialog_manager_config_v3 config;
+    static size_t processed;
+    before_each() {
+        static const vxml_dialog_document_adapter_v1 documents = {
+            .abi_version = VXML_DIALOG_DOCUMENT_ADAPTER_ABI_V1, .struct_size = sizeof(documents),
+            .open = quickjs_dialog_open, .close = quickjs_dialog_close_document};
+        static const vxml_document_compile_adapter_v1 compiler = {
+            .abi_version = VXML_DOCUMENT_COMPILE_ADAPTER_ABI_V1, .struct_size = sizeof(compiler),
+            .compile = quickjs_dialog_compile};
+        probe = (quickjs_dialog_probe){0};
+        processed = 0u;
+        probe.documents[0] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+            "<block><script src='scripts/first.js'/></block>"
+            "<block><script srcexpr=\"'scripts/'+value+'.js'\"/></block>"
+            "<block><exit/></block></form></vxml>";
+        probe.scripts = (quickjs_script_probe){
+            .first_body = "value = 7;", .first_body_size = sizeof("value = 7;") - 1u,
+            .second_body = "value = 9;", .second_body_size = sizeof("value = 9;") - 1u};
+        vxml_document_store_config_v1 store_config = {
+            .abi_version = VXML_DOCUMENT_STORE_CONFIG_ABI_V1, .struct_size = sizeof(store_config),
+            .application_uri = "https://voice.example/app/root.vxml",
+            .application_uri_size = sizeof("https://voice.example/app/root.vxml") - 1u,
+            .capacity = 2u, .max_uri_bytes = 255u, .max_document_bytes = 1024u,
+            .max_cache_bytes = 4096u, .documents = &documents, .document_user = &probe,
+            .compiler = &compiler};
+        store_config.voice_limits = vxml_default_limits();
+        check_equal(vxml_document_store_init(&probe.store, &store_config), VXML_DOCUMENT_STORE_OK);
+        factory = (vxml_session_factory_v1){
+            .abi_version = VXML_SESSION_FACTORY_ABI_V1, .struct_size = sizeof(factory),
+            .init = quickjs_dialog_init_session, .execute_script = quickjs_dialog_execute,
+            .max_script_steps = 2u};
+        config = quickjs_dialog_config(&probe);
+        config.session_factory = &factory;
+    }
+    after_each() {
+        if (probe.manager.impl != NULL) {
+            vxml_dialog_manager_close(&probe.manager);
+            check_equal(vxml_dialog_manager_destroy(&probe.manager), VXML_DIALOG_MANAGER_OK);
+        }
+        check_equal(vxml_document_store_destroy(&probe.store), VXML_DOCUMENT_STORE_OK);
+        check_equal(probe.opens, probe.closes);
+        check_equal(probe.scripts.open_calls, probe.scripts.close_calls);
+        tstr_free(probe.last_base);
+        for (size_t i = 0u; i < 4u; ++i) tstr_free(probe.event_names[i]);
+    }
+    it("executes static and dynamic scripts once despite event backpressure") {
+        probe.full = true;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        /* The manager must own a table copy, not a borrow of this local table. */
+        factory.execute_script = NULL;
+        quickjs_dialog_start(&probe);
+        check_equal(probe.executions, (size_t)0u);
+        check_equal(probe.opens, (size_t)0u);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.executions, (size_t)2u);
+        check_equal(probe.committed_value, 9);
+        check_equal(probe.scripts.last_uri, "https://voice.example/app/dialogs/scripts/7.js");
+        check_equal(probe.scripts.close_calls, (size_t)2u);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        probe.full = false;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.executions, (size_t)2u);
+        check_equal(probe.event_count, (size_t)2u);
+        check_equal(probe.event_names[0], "dialog.started");
+        check_equal(probe.event_names[1], "dialog.exit");
+        check_equal(probe.opens, (size_t)1u);
+        /* A reused row receives a fresh script budget. */
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.executions, (size_t)4u);
+        check_equal(probe.event_count, (size_t)4u);
+        check_equal(probe.event_names[3], "dialog.exit");
+    }
+    it("settles a throwing script and publishes its failure without retrying") {
+        probe.scripts.first_body = "value = 8; throw new Error('stop');";
+        probe.scripts.first_body_size = strlen(probe.scripts.first_body);
+        probe.full = true;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.committed_value, 1);
+        check_equal(probe.scripts.close_calls, (size_t)1u);
+        probe.full = false;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.executions, (size_t)1u);
+        check_equal(probe.event_count, (size_t)1u);
+        check_equal(probe.event_names[0], "error.dialog.start");
+        check_equal(probe.event_status[0], VXML_SEMANTIC_ERROR);
+    }
+    it("bounds a callback that returns success without advancing its Session") {
+        probe.no_progress = true;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.executions, (size_t)2u);
+        check_equal(probe.scripts.open_calls, (size_t)0u);
+        check_equal(probe.event_count, (size_t)1u);
+        check_equal(probe.event_names[0], "error.dialog.start");
+        check_equal(probe.event_status[0], VXML_LIMIT_EXCEEDED);
+    }
+    it("resolves scripts against the navigated document and preserves the dialog budget") {
+        probe.documents[0] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+            "<block><script src='first.js'/></block>"
+            "<block><goto next='../next/result.vxml'/></block></form></vxml>";
+        probe.documents[1] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+            "<block><script src='second.js'/></block>"
+            "<block><script src='third.js'/></block><block><exit/></block></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.inits, (size_t)2u);
+        check_equal(probe.executions, (size_t)2u);
+        check_equal(probe.last_base, quickjs_dialog_uris[1]);
+        check_equal(probe.scripts.last_uri, "https://voice.example/app/next/second.js");
+        check_equal(probe.event_names[0], "error.dialog.start");
+        check_equal(probe.event_status[0], VXML_LIMIT_EXCEEDED);
+    }
+    it("executes scripts from a submit-response Program using its effective URI") {
+        static const vxml_submit_resource_adapter_v1 submit = {
+            .abi_version = VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1, .struct_size = sizeof(submit),
+            .execute = quickjs_dialog_submit, .close = quickjs_dialog_close_submit};
+        vxml_dialog_manager_config_v4 submit_config = vxml_dialog_manager_default_config_v4();
+        submit_config.capacity = 1u;
+        submit_config.upstream = config.upstream;
+        submit_config.document_store = config.document_store;
+        submit_config.events = config.events;
+        submit_config.event_user = &probe;
+        submit_config.session_factory = &factory;
+        submit_config.session_factory_user = &probe;
+        submit_config.submit = &submit;
+        submit_config.submit_user = &probe;
+        submit_config.max_navigation_hops = 1u;
+        probe.documents[0] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+            "<block><script src='first.js'/></block>"
+            "<block><submit next='../submit' method='post'/></block></form></vxml>";
+        probe.documents[1] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'><form>"
+            "<block><script src='second.js'/></block><block><exit/></block></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v4(&probe.manager, &submit_config), VXML_DIALOG_MANAGER_OK);
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.inits, (size_t)2u);
+        check_equal(probe.executions, (size_t)2u);
+        check_equal(probe.submits, (size_t)1u);
+        check_equal(probe.submit_closes, (size_t)1u);
+        check_equal(probe.last_base, quickjs_dialog_uris[1]);
+        check_equal(probe.scripts.last_uri, "https://voice.example/app/next/second.js");
+        check_equal(probe.event_count, (size_t)2u);
+        check_equal(probe.event_names[0], "dialog.started");
+        check_equal(probe.event_names[1], "dialog.exit");
+    }
+    it("keeps the historical factory prefix on the manual script handoff path") {
+        factory.struct_size = offsetof(vxml_session_factory_v1, init) + sizeof(factory.init);
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        quickjs_dialog_start(&probe);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_OK);
+        check_equal(probe.executions, (size_t)0u);
+        check_equal(probe.event_count, (size_t)1u);
+        check_equal(probe.event_names[0], "dialog.started");
+    }
+    it("rejects partial script tails and unpaired callbacks or budgets") {
+        factory.struct_size = offsetof(vxml_session_factory_v1, max_script_steps);
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_INVALID_ARGUMENT);
+        check_null(probe.manager.impl);
+        factory.struct_size = sizeof(factory);
+        factory.max_script_steps = 0u;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_INVALID_ARGUMENT);
+        factory.max_script_steps = 2u;
+        factory.execute_script = NULL;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_INVALID_ARGUMENT);
+        factory.max_script_steps = 0u;
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+    }
 }
 
 spec("VoiceXML QuickJS script target profile") {

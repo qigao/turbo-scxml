@@ -74,6 +74,7 @@ typedef struct vxml_dialog_row {
     char *current_document_uri;
     size_t current_document_uri_size;
     size_t navigation_hops;
+    size_t script_steps;
 
     vxml_program program;
     bool program_live;
@@ -157,10 +158,19 @@ static bool session_factory_prefix_valid(
     const size_t prefix =
         offsetof(vxml_session_factory_v1, init) +
         sizeof(factory->init);
-    return factory != NULL &&
-        factory->abi_version == VXML_SESSION_FACTORY_ABI_V1 &&
-        factory->struct_size >= prefix &&
-        factory->init != NULL;
+    const size_t script_tail =
+        offsetof(vxml_session_factory_v1, max_script_steps) +
+        sizeof(factory->max_script_steps);
+    if (factory == NULL ||
+        factory->abi_version != VXML_SESSION_FACTORY_ABI_V1 ||
+        factory->struct_size < prefix || factory->init == NULL)
+        return false;
+    if (factory->struct_size == prefix)
+        return true;
+    if (factory->struct_size < script_tail)
+        return false;
+    return (factory->execute_script != NULL) ==
+           (factory->max_script_steps != 0u);
 }
 
 static bool submit_prefix_valid(
@@ -1279,7 +1289,7 @@ static vxml_dialog_manager_status follow_one_submit(
     return VXML_DIALOG_MANAGER_OK;
 }
 
-static vxml_dialog_manager_status follow_external_navigation(
+static vxml_dialog_manager_status follow_session_handoffs(
     vxml_dialog_row *row) {
     vxml_dialog_manager_impl *impl;
     if (row == NULL || row->owner == NULL)
@@ -1290,7 +1300,10 @@ static vxml_dialog_manager_status follow_external_navigation(
            (vxml_session_get_state(&row->session) ==
                 VXML_SESSION_NAVIGATING ||
             vxml_session_get_state(&row->session) ==
-                VXML_SESSION_SUBMITTING)) {
+                VXML_SESSION_SUBMITTING ||
+            (vxml_session_get_state(&row->session) ==
+                 VXML_SESSION_SCRIPTING &&
+             impl->session_factory.execute_script != NULL))) {
         vxml_navigation_request_v1 navigation = {0};
         vxml_document_view next_view = {0};
         vxml_document_ref next_ref = {0};
@@ -1298,6 +1311,27 @@ static vxml_dialog_manager_status follow_external_navigation(
         vxml_resolved_uri_v1 resolved;
         vxml_document_store_status store_status;
         vxml_status voice_status;
+
+        if (vxml_session_get_state(&row->session) ==
+            VXML_SESSION_SCRIPTING) {
+            if (row->script_steps >= impl->session_factory.max_script_steps)
+                return queue_event(row, VXML_DIALOG_EVENT_ERROR_START,
+                                   VXML_LIMIT_EXCEEDED);
+            ++row->script_steps;
+            voice_status = impl->session_factory.execute_script(
+                impl->session_factory_user, &row->session,
+                row->current_document_uri, row->current_document_uri_size);
+            if (voice_status == VXML_OK &&
+                vxml_session_get_state(&row->session) == VXML_SESSION_FAILED) {
+                voice_status = vxml_session_error(&row->session);
+                if (voice_status == VXML_OK)
+                    voice_status = VXML_INVALID_STATE;
+            }
+            if (voice_status != VXML_OK)
+                return queue_event(row, VXML_DIALOG_EVENT_ERROR_START,
+                                   voice_status);
+            continue;
+        }
 
         if (vxml_session_get_state(&row->session) ==
             VXML_SESSION_SUBMITTING) {
@@ -1484,13 +1518,7 @@ static vxml_dialog_manager_status start_session(
             row, VXML_DIALOG_EVENT_ERROR_START, status);
         return VXML_DIALOG_MANAGER_OK;
     }
-    if (vxml_session_get_state(&row->session) ==
-            VXML_SESSION_NAVIGATING ||
-        vxml_session_get_state(&row->session) ==
-            VXML_SESSION_SUBMITTING)
-        return follow_external_navigation(row);
-    return queue_event(
-        row, VXML_DIALOG_EVENT_STARTED, VXML_OK);
+    return follow_session_handoffs(row);
 }
 
 static vxml_status raise_normal_termination_event(

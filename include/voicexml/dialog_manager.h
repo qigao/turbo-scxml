@@ -64,6 +64,28 @@ typedef struct vxml_session_factory_v1 {
         void *user,
         vxml_session *session,
         const vxml_program *program);
+
+    /**
+     * Optional append-only synchronous SCRIPTING handoff. The callback borrows
+     * session and the current absolute document URI only until return; it must
+     * settle all script-resource leases and must not reenter the manager.
+     * Execute one pending script and resume the Session, returning its status.
+     * A failure publishes error.dialog.start with that status. No script is
+     * executed by effect-ticket commit or retried because the Event sink is FULL.
+     *
+     * Supply this callback together with a nonzero max_script_steps, or leave
+     * both zero. Historical factory prefixes ending at init remain supported;
+     * a partial script tail is invalid. The manager copies the table and borrows
+     * user until destruction. See docs/specs/voicexml-dialog-manager.md for a
+     * QuickJS adapter example.
+     */
+    vxml_status (*execute_script)(
+        void *user,
+        vxml_session *session,
+        const char *current_document_uri,
+        size_t current_document_uri_size);
+    /** Total callback invocations per dialog, including navigation/submit. */
+    size_t max_script_steps;
 } vxml_session_factory_v1;
 
 /*

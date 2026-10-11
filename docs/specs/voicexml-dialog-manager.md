@@ -118,6 +118,64 @@ The non-media VoiceXML core exits synchronously, so a successful start produces
 `dialog.started` followed by `dialog.exit`. The state machine leaves an
 explicit RUNNING state for later asynchronous VoiceXML slices.
 
+## Profile-neutral script progress
+
+Store-backed V2/V3/V4 managers pair a DocumentStore compiler with
+`vxml_session_factory_v1`. Its optional `execute_script`/`max_script_steps`
+tail lets the same serialized `run_ready()` owner consume `SCRIPTING` handoffs.
+This closes the gap where a QuickJS Session could be initialized but an external
+script left the dialog waiting indefinitely after `dialog.started`.
+
+The manager copies the complete factory table and borrows its user until
+destruction. Each callback borrows the current Session and absolute document
+URI only during the call, executes one script, settles its resource leases,
+and resumes the Session. It must not reenter the manager. The Session remains
+the committed-state owner; the manager neither inspects JavaScript nor copies
+profile state. A QuickJS application adapter can use:
+
+```c
+/* app owns the Store, script provider/user, and matching Session init options. */
+static vxml_status execute_script(void *user, vxml_session *session,
+    const char *uri, size_t uri_size) {
+    struct app *app = user;
+    vxml_quickjs_script_execution_v1 execution =
+        VXML_QUICKJS_SCRIPT_EXECUTION_V1_INIT;
+    execution.resolver = app->store;
+    execution.script_resources = app->scripts;
+    execution.script_resource_user = app->script_user;
+    execution.base_document_uri = uri;
+    execution.base_document_uri_size = uri_size;
+    return vxml_quickjs_session_execute_script(session, &execution);
+}
+```
+
+Set the callback and a nonzero `max_script_steps` together. Every invocation
+consumes one step before executing; the counter belongs to the dialog row and
+survives navigation and submit-response Session replacement. It resets only
+when the row is released. Exhaustion produces `error.dialog.start` with
+`VXML_LIMIT_EXCEEDED`. This bounds even a callback returning success without
+advancing the Session. It is independent of `max_navigation_hops` and of
+QuickJS's per-evaluation heap, stack, and time limits. `max_work` still counts
+dialog rows, not scripts; a callback must enforce its own time/I/O bounds.
+
+Script, navigation, and submit handoffs compose in the same start chain.
+Navigation/submit updates the base URI before the next script callback.
+Callback failures produce `error.dialog.start` with their `vxml_status`, and
+the existing terminal-row path destroys the Session and releases the Program.
+`dialog.started` is published once after the chain settles; an exited Session
+then produces `dialog.exit`. FULL retries only the pending event and never
+reexecutes a script. Close releases retained rows before upstream close; the
+application must retain the factory user/providers until manager destruction.
+
+The additive tail preserves factories ending at the historical `init` prefix
+and full tables with both new fields zero. These keep the original manual
+handoff behavior. Partial tails or mismatched callback/budget pairs fail
+initialization. Migration consists of wiring the application callback and
+budget; rollback removes both fields. No additional package dependency is
+introduced. Directly linking QuickJS into DialogManager was rejected because
+it would couple neutral host progress to one profile; a separate executor
+would duplicate the existing serialized progress and ownership boundary.
+
 ## Dialog operations
 
 - `dialogprepare`: compile and retain one program, then publish
