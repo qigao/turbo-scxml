@@ -1,6 +1,10 @@
 # ACE 2.3 CNet: framed Host routing slice
 
-Tracks TurboSCXML #297, #298 and #299 in Draft PR #307. **DO NOT MERGE / DO NOT PUBLISH.**
+Tracks TurboSCXML #297, #298 and #299. The slice originated in Draft PR #307;
+current mainline implementation and completed qualification are indexed in the
+[architecture ledger](scxml-architecture-qualification.md#mainline-workstream-evidence).
+Mainline integration does not imply stable SDK publication or full wire-profile
+conformance.
 
 ## One semantic owner per Session
 
@@ -110,8 +114,15 @@ microstep ticket commit/discard, a blocked executor causing true external
 FIFO FULL with retained Host head, TCP split/coalesced frames, Host FULL,
 stale CNet generation rejection, invalid length and terminal teardown.
 
-**Remaining:** named/scalar/CMETA data-model conversion and complete normative
-SCXML Event wire codec/target mapping, bidirectional observer composition,
-cross-Owner Host Actor controls, full Invoke ACT and NativeIO terminal
-cancellation races, generation fencing, TSan, Windows/macOS and complete
-stable SDK qualification. Linux ASan+UBSan does not replace these gates.
+**Remaining in this wire profile:** named/scalar/CMETA data-model conversion,
+complete normative SCXML Event wire codec/target mapping, and bidirectional
+observer composition. Cross-owner Host Actor controls are separate from this
+serialized router; the independent VoiceXML Host Actor fixture does not extend
+the framed protocol.
+
+ACT/Invoke, NativeIO terminal cancellation, domain generation fencing, selected
+TSan tests and Windows/macOS runtime qualification now have separate executable
+witnesses and completed runs in the
+[architecture ledger](scxml-architecture-qualification.md#mainline-workstream-evidence).
+Those results qualify their stated cases, not arbitrary races, all backend
+combinations or a complete stable SDK release.

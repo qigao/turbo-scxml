@@ -126,3 +126,54 @@ consumer package discovery does not impose a new `EXACT` version requirement.
 Android evidence is build/install-consumer qualification, not device execution.
 Workflow configuration describes intended coverage; actual pass/fail claims
 must identify the tested commit and completed run.
+
+## Mainline workstream evidence
+
+This ledger reconciles the implementation with the open tracking issues in
+[ACE epic #297](https://github.com/qigao/turbo-scxml/issues/297). It records
+delivered code and bounded qualification, not issue closure or stable release
+admission. Historical draft-branch restrictions and earlier SDK failures in
+those issues describe their original snapshots.
+
+| Workstream | Mainline executable evidence | Scope / remaining boundary |
+| --- | --- | --- |
+| [#295](https://github.com/qigao/turbo-scxml/issues/295) Component selection and scopes | [`scxml_component_test.c`](../../tests/scxml_component_test.c), [`scxml_component_dso_test.c`](../../tests/scxml_component_dso_test.c) | Static and real DSO provider admission, borrowed scope lifetime and generation retirement; no live interpreter-state migration |
+| [#287](https://github.com/qigao/turbo-scxml/issues/287), [#292](https://github.com/qigao/turbo-scxml/issues/292), [#294](https://github.com/qigao/turbo-scxml/issues/294) ownership | [Ownership witnesses above](#ownership-and-failure-atomic-cleanup) | Provider leases, combined close/quiescence and managed-root startup rollback; not exhaustive allocation-failure injection |
+| [#298](https://github.com/qigao/turbo-scxml/issues/298) Host routing | [`scxml_host_router_test.c`](../../tests/scxml_host_router_test.c), [`scxml_host_event_io_test.c`](../../tests/scxml_host_event_io_test.c), [`scxml_host_delay_test.c`](../../tests/scxml_host_delay_test.c) | Two Sessions, distinct Host/FIFO FULL, transaction tickets, slot generations and delayed-send cancellation; each Session retains one Statechart owner |
+| [#299](https://github.com/qigao/turbo-scxml/issues/299) optional CNet bridge | [`scxml_cnet_ingress_test.c`](../../tests/scxml_cnet_ingress_test.c), [`scxml_cnet_egress_test.c`](../../tests/scxml_cnet_egress_test.c), [`scxml_cnet_frame_ingress_test.c`](../../tests/scxml_cnet_frame_ingress_test.c) | Real loopback transport, bounded ownership and explicit owner progress; experimental framing is not a complete SCXML Event wire codec |
+| [#300](https://github.com/qigao/turbo-scxml/issues/300) ACT / Invoke terminal | [`scxml_component_cnet_invoke_test.c`](../../tests/scxml_component_cnet_invoke_test.c), [`scxml_cnet_request_generation_test.c`](../../tests/scxml_cnet_request_generation_test.c), [`scxml_host_delay_test.c`](../../tests/scxml_host_delay_test.c) | Actual DSO Invoke, NativeIO ACT, stale request generations and controlled cancel/terminal/slot-reuse overlap; not every possible concurrent interleaving |
+| [#301](https://github.com/qigao/turbo-scxml/issues/301) domain fencing | [`scxml_cnet_domain_fence_test.c`](../../tests/scxml_cnet_domain_fence_test.c), [`scxml_component_cnet_invoke_test.c`](../../tests/scxml_component_cnet_invoke_test.c) | One real listener, generation fencing, failed activation, native drain and restart; domain ownership stays distinct from code generation lifetime |
+| [#302](https://github.com/qigao/turbo-scxml/issues/302) Interceptor / Extension Interface | [`scxml_component_test.c`](../../tests/scxml_component_test.c), [`scxml_component_dso_test.c`](../../tests/scxml_component_dso_test.c), [`scxml_component_interceptor_benchmark.c`](../../tests/scxml_component_interceptor_benchmark.c) | Exact static/DSO admission, rejection cleanup and Session effect journal; benchmark output is observational, not a speedup guarantee |
+| [#303](https://github.com/qigao/turbo-scxml/issues/303) VoiceXML / CCXML and independent Host Actor | [`voicexml_component_dialog_test.c`](../../tests/voicexml_component_dialog_test.c), [`ccxml_session_test.c`](../../tests/ccxml_session_test.c) | Real controllers and DialogManager, DSO publication, rollback, terminal Event backpressure, bounded Actor FULL/STALE and teardown; fixture composition does not expose an installed Actor facade or qualify concurrent dispatch into one Session |
+| [#51](https://github.com/qigao/turbo-scxml/issues/51), [#276](https://github.com/qigao/turbo-scxml/issues/276), [#286](https://github.com/qigao/turbo-scxml/issues/286) VoiceXML hardening | [Support matrix](voicexml-support-matrix.md), [bounded fuzz targets](../../tests/fuzz/README.md), [security policy](voicexml-security-policy.md), Native SDK profile tests | All four scoped smoke targets are present; local evidence and explicit profile limits do not imply full VoiceXML conformance |
+
+The distinct Statechart Actor adoption study
+[#304](https://github.com/qigao/turbo-scxml/issues/304) remains deferred. It
+requires comparable throughput, latency, memory and shutdown measurements plus
+a single-instance ownership design before a GO/NO-GO decision. The current
+implementation deliberately keeps the existing Session owner; a test-local
+independent Host Actor is not evidence for replacing that owner.
+
+### Completed qualification snapshot
+
+At code [`ef370be985949deb22cbcd198f770747042fba8e`](https://github.com/qigao/turbo-scxml/commit/ef370be985949deb22cbcd198f770747042fba8e),
+all three workflows completed successfully:
+
+- [Native SDK CI #38107251325](https://github.com/qigao/turbo-scxml/actions/runs/38107251325):
+  Linux, Windows and macOS release, Linux ASan+UBSan, Android arm64
+  build/install-consumer and the configured installed/profile checks.
+- [Component conformance #38107251320](https://github.com/qigao/turbo-scxml/actions/runs/38107251320):
+  selected Linux/Windows IOCP/macOS Kqueue runtime and DSO tests, installed
+  consumers, W3C SCXML gate and selected sanitizer tests.
+- [First-party source TSan #38107251414](https://github.com/qigao/turbo-scxml/actions/runs/38107251414):
+  selected concurrency tests against instrumented Salts, SaltsUtils and
+  TurboSCXML source, rather than only instrumented consumer objects.
+
+The coordinated graph uses Salts `2.3.0-rc.10` at
+`6ba9868a965f3273cf87ab243dab1884072eb7a3`, SaltsUtils `4.3.0-rc.8` at
+`3d39b8c23403bad5fc3e04241bb74a7889bd8a03`, and CHTTP `2.1.0-rc.3` in the
+CHTTP-enabled native profiles. The source-TSan lane validates the published
+Salts/SaltsUtils manifest identities before instrumenting those sources.
+This is a prerelease host qualification snapshot, not a stable SDK release,
+all-downstream acceptance, Android/iOS device execution, or exhaustive race
+proof. Later changes need their own completed run evidence.
