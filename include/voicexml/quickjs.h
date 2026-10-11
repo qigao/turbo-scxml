@@ -143,6 +143,12 @@ vxml_quickjs_default_session_options(void);
  * validated once. Base vxml_compile() and
  * vxml_compile_external_script_profile() remain fail-closed for these
  * QuickJS-only additions.
+ *
+ * With a non-NULL root, compilation rejects unsupported owning snapshot
+ * lifecycle with VXML_INVALID_CONTRACT and root storage larger than
+ * max_snapshot_bytes with VXML_LIMIT_EXCEEDED. Both failures leave out empty
+ * and populate diagnostic when supplied. Session allocation and state copy
+ * can still fail at runtime.
  */
 vxml_status vxml_compile_quickjs_script_profile(
     const void *bytes, size_t size,

@@ -1,5 +1,6 @@
 #include <voicexml/quickjs.h>
 #include <voicexml/script_resource.h>
+#include <cmeta/data_reflect.h>
 
 #include "tinytest.h"
 #include "voicexml_internal.h"
@@ -11,6 +12,19 @@
 typedef struct voice_quickjs_state {
     int value;
 } voice_quickjs_state;
+
+cmeta_reflect_value(voice_quickjs_state, "test.voicexml.quickjs.reflected-state",
+    cmeta_field(int, value)
+);
+typedef struct voice_quickjs_view { int value; } voice_quickjs_view;
+cmeta_reflect_data(voice_quickjs_view, "test.voicexml.quickjs.view",
+    cmeta_field(int, value)
+);
+typedef struct voice_quickjs_view_parent { voice_quickjs_view child; } voice_quickjs_view_parent;
+cmeta_reflect_value(voice_quickjs_view_parent, "test.voicexml.quickjs.view-parent",
+    cmeta_data_field(voice_quickjs_view, child, cmeta_reflected_data(voice_quickjs_view),
+        cmeta_reflected_storage(voice_quickjs_view))
+);
 
 static const cmeta_type_identity voice_quickjs_state_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.voicexml.quickjs.state");
@@ -449,6 +463,72 @@ static vxml_quickjs_session_options_v1 session_options(void) {
 }
 
 spec("VoiceXML QuickJS script target profile") {
+    group("typed state admission") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script srcexpr=\"'scripts/' + value + '.js'\"/>"
+            "</block></form></vxml>";
+        static vxml_program program;
+        static vxml_session session;
+        static vxml_diagnostic diagnostic;
+        static vxml_quickjs_compile_options_v1 compile;
+        before_each() {
+            program = (vxml_program){0};
+            session = (vxml_session){0};
+            diagnostic = (vxml_diagnostic){0};
+            compile = typed_compile_options();
+        }
+        after_each() {
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+        it("rejects read-only and traitless roots during compilation") {
+            cmeta_type_desc traitless_type = voice_quickjs_state_type;
+            cmeta_data_desc traitless_data = voice_quickjs_state_data;
+            traitless_type.traits = NULL;
+            traitless_data.storage_type = &traitless_type;
+            const cmeta_data_desc *roots[] = {
+                cmeta_reflected_data(voice_quickjs_view),
+                cmeta_reflected_data(voice_quickjs_view_parent),
+                &traitless_data};
+            for (size_t index = 0u; index < sizeof(roots) / sizeof(roots[0]); ++index) {
+                compile.root = roots[index];
+                check_equal(vxml_compile_quickjs_script_profile(document, sizeof(document) - 1u,
+                    NULL, &compile, &program, &diagnostic), VXML_INVALID_CONTRACT);
+                check_null(program.impl);
+                check_equal(diagnostic.status, VXML_INVALID_CONTRACT);
+                check_contains(diagnostic.message, "snapshot lifecycle");
+            }
+        }
+        it("rejects an impossible root snapshot budget before Session init") {
+            compile.max_snapshot_bytes = sizeof(voice_quickjs_state) - 1u;
+            check_equal(vxml_compile_quickjs_script_profile(document, sizeof(document) - 1u,
+                NULL, &compile, &program, &diagnostic), VXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+            check_equal(diagnostic.status, VXML_LIMIT_EXCEEDED);
+            check_contains(diagnostic.message, "max_snapshot_bytes");
+        }
+        it("admits a reflected VALUE at the exact snapshot bound and owns its copy") {
+            voice_quickjs_state initial = {7};
+            vxml_quickjs_session_options_v1 options = typed_session_options(&initial);
+            const void *state = NULL;
+            vxml_external_script_target_v1 target = {0};
+            compile.root = cmeta_reflected_data(voice_quickjs_state);
+            compile.max_snapshot_bytes = sizeof(initial);
+            check_equal(vxml_compile_quickjs_script_profile(document, sizeof(document) - 1u,
+                NULL, &compile, &program, &diagnostic), VXML_OK);
+            check_equal(vxml_session_init_quickjs(&session, &program, &options), VXML_OK);
+            initial.value = 9;
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(vxml_quickjs_session_state(&session, &state), VXML_OK);
+            check_not_null(state);
+            check_equal(((const voice_quickjs_state *)state)->value, 7);
+            check_equal(vxml_session_script(&session, &target), VXML_OK);
+            check_equal(target.src_size, sizeof("scripts/7.js") - 1u);
+            check_equal(memcmp(target.src, "scripts/7.js", target.src_size), 0);
+        }
+    }
+
     it("executes static and dynamic scripts transactionally and resumes after each action") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"

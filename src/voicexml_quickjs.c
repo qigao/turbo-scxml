@@ -1868,6 +1868,22 @@ vxml_status vxml_compile_quickjs_script_profile(
             vxml_program_destroy(out);
             return VXML_INVALID_CONTRACT;
         }
+        if (!quickjs_cmeta_state_lifecycle_supported(active.root)) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_INVALID_CONTRACT,
+                (salts_xml_location){0},
+                "VoiceXML QuickJS CMeta root lacks an owning snapshot lifecycle");
+            vxml_program_destroy(out);
+            return VXML_INVALID_CONTRACT;
+        }
+        if (active.root->storage_type->size > active.max_snapshot_bytes) {
+            quickjs_compile_diagnostic(
+                diagnostic, VXML_LIMIT_EXCEEDED,
+                (salts_xml_location){0},
+                "VoiceXML QuickJS CMeta root exceeds max_snapshot_bytes");
+            vxml_program_destroy(out);
+            return VXML_LIMIT_EXCEEDED;
+        }
     }
 
     profile = (vxml_quickjs_program_data *)vxml_malloc(sizeof(*profile));

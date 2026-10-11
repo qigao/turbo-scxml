@@ -307,6 +307,10 @@ duplicating field lifecycle or treating a read-only `cmeta_reflect_data` view
 as an owned value. Nested views remain ineligible for snapshots. No stored
 data or public ABI migration is required; consumers needing an older runtime
 can retain their existing legacy descriptor and native lifecycle callbacks.
+VoiceXML compilation rejects unsupported snapshot lifecycle with
+`VXML_INVALID_CONTRACT` and root storage exceeding `max_snapshot_bytes` with
+`VXML_LIMIT_EXCEEDED`, before publishing a Program. Allocation and state-copy
+failures remain runtime errors.
 SCXML additionally requires native storage traits for CFlow Statechart state
 ownership. A generated reflection descriptor alone is insufficient there:
 SCXML QuickJS compilation returns `SCXML_INVALID_ARGUMENT` before acquiring

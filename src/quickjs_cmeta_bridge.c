@@ -933,6 +933,13 @@ static bool quickjs_cmeta_state_lifecycle_of(
     return true;
 }
 
+bool quickjs_cmeta_state_lifecycle_supported(
+    const cmeta_data_desc *root) {
+    quickjs_cmeta_state_lifecycle lifecycle;
+    return quickjs_cmeta_state_lifecycle_of(root, &lifecycle) &&
+        root->kind == CMETA_DATA_STRUCT;
+}
+
 bool quickjs_cmeta_state_snapshot(
     quickjs_cmeta_state_scratch *scratch,
     const cmeta_data_desc *root,

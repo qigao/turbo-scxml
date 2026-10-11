@@ -131,6 +131,10 @@ bool quickjs_cmeta_export_root(
     void *state);
 #endif
 
+/* Uses the same owning lifecycle admission as state snapshots. */
+bool quickjs_cmeta_state_lifecycle_supported(
+    const cmeta_data_desc *root);
+
 bool quickjs_cmeta_state_snapshot(
     quickjs_cmeta_state_scratch *scratch,
     const cmeta_data_desc *root,
