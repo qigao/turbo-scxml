@@ -1,6 +1,7 @@
 #include <ccxml/ccxml.h>
 #ifdef TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
 #include <ccxml/quickjs.h>
+#include "ccxml_quickjs_cases.h"
 #endif
 
 int main() {
@@ -16,6 +17,8 @@ int main() {
         init_js(&js_owner, &js_config) != CCXML_INVALID_ARGUMENT ||
         js_owner.impl != nullptr) return 2;
     ccxml_quickjs_datamodel_destroy(&js_owner);
+    const int js_result = installed_ccxml_quickjs_cases();
+    if (js_result != 0) return js_result;
 #endif
     ccxml_session session{};
     ccxml_cmeta_datamodel datamodel{};

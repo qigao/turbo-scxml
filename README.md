@@ -282,6 +282,15 @@ writeback ownership; JavaScript mutations are discarded. See the
 [expression adapter contract and example](docs/specs/ccxml-dynamic-string-expression-design.md#quickjs-ng-adapter)
 for bounds, lifetime rules and unsupported syntax.
 
+The existing C11 and C++17 CCXML installed consumers execute the same
+[QuickJS session cases](tests/install_consumer/ccxml_quickjs_cases.h) when
+`TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS` is enabled. They cover current
+state/Event imports, conditions, dynamic send fields and cancel IDs, rollback,
+retry, and adapter shutdown. On Windows, after installing with
+`install-win-release-quickjs-user`, set `TURBOSCXML_ROOT` to that SDK and run
+configure/build/CTest with `win-release-quickjs-installed-user` from
+`tests/install_consumer`.
+
 The feature is optional and does not redefine the core CFlow Statechart ownership boundary.
 
 ## Optional CHTTP adapters
