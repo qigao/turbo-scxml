@@ -29,7 +29,8 @@ typedef enum vxml_cmeta_action_kind {
     VXML_CMETA_ACTION_REPROMPT,
     VXML_CMETA_ACTION_GOTO,
     VXML_CMETA_ACTION_SUBMIT,
-    VXML_CMETA_ACTION_DATA
+    VXML_CMETA_ACTION_DATA,
+    VXML_CMETA_ACTION_SCRIPT
 } vxml_cmeta_action_kind;
 
 typedef struct vxml_cmeta_scope_row {
@@ -333,7 +334,8 @@ typedef struct vxml_cmeta_declaration_row {
 
 typedef enum vxml_cmeta_initializer_kind {
     VXML_CMETA_INITIALIZER_DECLARATION = 0,
-    VXML_CMETA_INITIALIZER_DATA
+    VXML_CMETA_INITIALIZER_DATA,
+    VXML_CMETA_INITIALIZER_SCRIPT
 } vxml_cmeta_initializer_kind;
 
 typedef struct vxml_cmeta_initializer_row {
@@ -901,7 +903,16 @@ typedef struct vxml_cmeta_session_data {
     unsigned char *prompt_foreach_snapshot_allocation;
     unsigned char *prompt_foreach_snapshot;
     size_t prompt_foreach_snapshot_capacity;
-    bool prompt_foreach_transaction;
+    bool prompt_media_transaction;
+    /* One selected row per admitted backend prompt activation. The immutable
+     * rows borrow this Session's Program; abort invalidates the selection. */
+    bool prompt_selection_valid;
+    uint64_t prompt_selection_generation;
+    size_t prompt_selection_field_index;
+    size_t prompt_selection_initial_index;
+    const vxml_cmeta_field_row *prompt_selection_field;
+    const vxml_cmeta_prompt_row *prompt_selection_row;
+    unsigned prompt_selection_count;
     bool prompt_media_noop_prepared;
     char *prompt_media_dynamic_mark_storage;
     size_t prompt_media_dynamic_mark_storage_capacity;

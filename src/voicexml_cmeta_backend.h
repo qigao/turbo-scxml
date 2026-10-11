@@ -3,6 +3,12 @@
 
 #include "voicexml_cmeta_expr.h"
 
+typedef enum vxml_cmeta_code_kind {
+    VXML_CMETA_CODE_VALUE = 0,
+    VXML_CMETA_CODE_CONDITION,
+    VXML_CMETA_CODE_SCRIPT
+} vxml_cmeta_code_kind;
+
 /* Explicit write authority supplied only by the Session owner. The QueryVM
  * evaluator's read-only runtime carrier remains unchanged. Scope views expose
  * mutable slot storage/bound bits; declarations and schemas remain read-only. */
@@ -19,7 +25,7 @@ typedef struct vxml_cmeta_backend_runtime {
  * No interpreter or mutable state is stored in a shared Program. */
 typedef struct vxml_cmeta_expression_backend {
     vxml_status (*compile)(
-        const void *user, const char *source, size_t source_size, bool condition,
+        const void *user, const char *source, size_t source_size, vxml_cmeta_code_kind kind,
         const cmeta_data_desc *root, void **out,
         vxml_cmeta_expr_diagnostic *diagnostic);
     void (*destroy)(void *expression);

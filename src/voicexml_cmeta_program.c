@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <tstr.h>
 
 #define VXML_NAMESPACE "http://www.w3.org/2001/vxml"
 
@@ -559,6 +560,8 @@ typedef struct cmeta_program_measurement {
     size_t prompt_foreach_count;
     size_t prompt_fallback_count;
     bool version_21;
+    bool scripts_enabled;
+    size_t script_initializer_count;
     size_t filled_count;
     size_t filled_target_count;
     size_t event_handler_count;
@@ -1290,6 +1293,59 @@ static vxml_status cmeta_measure_conditional(
     return VXML_OK;
 }
 
+/* XML parser views preserve CDATA and entity-bearing text separately. Decode
+ * ordinary text exactly once and concatenate text nodes without inventing
+ * whitespace around comments or processing instructions. */
+static vxml_status cmeta_script_text(
+    salts_xml_node node, char *output, size_t capacity, size_t *out_size,
+    vxml_diagnostic *diagnostic) {
+    size_t used = 0u;
+    for (size_t i = 0u; i < salts_xml_node_child_count(node); ++i) {
+        const salts_xml_node child = salts_xml_node_child_at(node, i);
+        const salts_xml_node_kind kind = salts_xml_node_type(child);
+        if (kind == SALTS_XML_COMMENT || kind == SALTS_XML_PROCESSING_INSTRUCTION) continue;
+        if (kind != SALTS_XML_TEXT)
+            return cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(child), "VoiceXML script requires text or CDATA");
+        const salts_xml_string_view text = salts_xml_node_text_view(child);
+        size_t count = text.size;
+        if (salts_xml_node_text_has_entity_reference(child)) {
+            if (!cmeta_decode_entities(text, output != NULL ? output + used : NULL,
+                output != NULL ? capacity - used : 0u, &count))
+                return cmeta_program_fail(diagnostic, VXML_XML_ERROR,
+                    salts_xml_node_location(child), "invalid VoiceXML script XML text");
+        } else if (output != NULL) {
+            if (count > capacity - used) return VXML_INVALID_STRUCTURE;
+            memcpy(output + used, text.data, count);
+        }
+        if (count > SIZE_MAX - used) return VXML_LIMIT_EXCEEDED;
+        used += count;
+    }
+    *out_size = used;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_measure_script(
+    salts_xml_node node, const vxml_cmeta_compile_options_v1 *options,
+    cmeta_program_measurement *measurement, bool initializer,
+    vxml_diagnostic *diagnostic) {
+    size_t size = 0u;
+    if (!measurement->scripts_enabled)
+        return cmeta_program_fail(diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(node), "script requires the QuickJS FIA backend");
+    vxml_status status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
+    if (status != VXML_OK) return status;
+    status = cmeta_script_text(node, NULL, 0u, &size, diagnostic);
+    if (status != VXML_OK) return status;
+    if (size > options->max_expression_bytes ||
+        !cmeta_measure_increment(&measurement->expression_count) ||
+        (initializer && (!cmeta_measure_increment(&measurement->initializer_count) ||
+                         !cmeta_measure_increment(&measurement->script_initializer_count))))
+        return cmeta_program_fail(diagnostic, VXML_LIMIT_EXCEEDED,
+            salts_xml_node_location(node), "VoiceXML script source or row limit exceeded");
+    return VXML_OK;
+}
+
 static vxml_status cmeta_measure_executable(
     salts_xml_node node, salts_xml_node parent, size_t child_index,
     bool event_handler,
@@ -1321,7 +1377,8 @@ static vxml_status cmeta_measure_executable(
          !cmeta_node_named(node, "reprompt") &&
          !cmeta_node_named(node, "goto") &&
          !cmeta_node_named(node, "submit") &&
-         !cmeta_node_named(node, "data")))
+         !cmeta_node_named(node, "data") &&
+         !cmeta_node_named(node, "script")))
         return cmeta_program_fail(
             diagnostic,
             cmeta_known_profile_element(node)
@@ -1330,7 +1387,9 @@ static vxml_status cmeta_measure_executable(
             cmeta_known_profile_element(node)
                 ? "VoiceXML element is invalid in executable content"
                 : "unsupported VoiceXML executable element");
-    if (cmeta_node_named(node, "data")) {
+    if (cmeta_node_named(node, "script")) {
+        status = cmeta_measure_script(node, options, measurement, false, diagnostic);
+    } else if (cmeta_node_named(node, "data")) {
         status = cmeta_measure_data(
             node, options, measurement, limits, diagnostic);
     } else if (cmeta_node_named(node, "var")) {
@@ -1630,7 +1689,7 @@ static vxml_status cmeta_measure_executable(
         }
     }
     if (!cmeta_node_named(node, "if") &&
-        !cmeta_node_named(node, "var")) {
+        !cmeta_node_named(node, "var") && !cmeta_node_named(node, "script")) {
         status = cmeta_validate_empty_element(node, diagnostic);
         if (status != VXML_OK) return status;
     }
@@ -4797,6 +4856,16 @@ static vxml_status cmeta_measure_form(
             continue;
         }
 
+        if (cmeta_node_named(child, "script")) {
+            if (saw_block || saw_directed || saw_filled)
+                return cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child), "form scripts must precede form items");
+            const vxml_status script_status = cmeta_measure_script(
+                child, options, measurement, true, diagnostic);
+            if (script_status != VXML_OK) return script_status;
+            continue;
+        }
+
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
@@ -5201,7 +5270,7 @@ static vxml_status cmeta_measure_data(
 static vxml_status cmeta_measure_program(
     const char *bytes, size_t size, const vxml_limits *limits,
     const vxml_cmeta_compile_options_v1 *options,
-    cmeta_program_measurement *measurement,
+    cmeta_program_measurement *measurement, bool scripts_enabled,
     vxml_diagnostic *diagnostic) {
     salts_xml_document document = {0};
     salts_xml_diagnostic xml_diagnostic = {0};
@@ -5213,6 +5282,7 @@ static vxml_status cmeta_measure_program(
     vxml_status status = VXML_OK;
     memset(measurement, 0, sizeof(*measurement));
     measurement->scope_count = 1u;
+    measurement->scripts_enabled = scripts_enabled;
     xml_status = salts_xml_parse(
         &document, bytes, size, &limits->xml, &xml_diagnostic);
     if (xml_status != SALTS_XML_OK)
@@ -5326,6 +5396,16 @@ static vxml_status cmeta_measure_program(
             if (status != VXML_OK) break;
             continue;
         }
+        if (cmeta_node_named(child, "script")) {
+            if (saw_form) {
+                status = cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+                    salts_xml_node_location(child), "document scripts must precede forms");
+                break;
+            }
+            status = cmeta_measure_script(child, options, measurement, true, diagnostic);
+            if (status != VXML_OK) break;
+            continue;
+        }
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute expression =
                 cmeta_attribute(child, "expr");
@@ -5385,7 +5465,9 @@ static vxml_status cmeta_measure_program(
     if (status == VXML_OK &&
         (measurement->declaration_count > limits->max_actions ||
          measurement->action_count >
-             limits->max_actions - measurement->declaration_count))
+             limits->max_actions - measurement->declaration_count ||
+         measurement->script_initializer_count > limits->max_actions -
+             measurement->declaration_count - measurement->action_count))
         status = cmeta_program_fail(
             diagnostic, VXML_LIMIT_EXCEEDED,
             salts_xml_node_location(root),
@@ -5434,6 +5516,19 @@ typedef struct cmeta_program_builder {
     size_t generic_action_index;
     size_t string_index;
 } cmeta_program_builder;
+
+static vxml_status cmeta_append_script(
+    cmeta_program_builder *builder, salts_xml_node node, size_t *out_expression);
+
+static vxml_status cmeta_append_script_initializer(
+    cmeta_program_builder *builder, salts_xml_node node, bool document) {
+    if (builder->initializer_index >= builder->profile->initializer_count)
+        return VXML_INVALID_STRUCTURE;
+    vxml_cmeta_initializer_row *row = &builder->profile->initializers[builder->initializer_index++];
+    row->kind = VXML_CMETA_INITIALIZER_SCRIPT;
+    if (document) ++builder->profile->document_initializer_count;
+    return cmeta_append_script(builder, node, &row->index);
+}
 
 static void *cmeta_scope_allocate(void *user, size_t size) {
     (void)user;
@@ -8778,6 +8873,11 @@ static vxml_status cmeta_build_schemas(
             }
             continue;
         }
+        if (cmeta_node_named(child, "script")) {
+            status = cmeta_append_script_initializer(builder, child, true);
+            if (status != VXML_OK) return status;
+            continue;
+        }
         if (cmeta_node_named(child, "var")) {
             const salts_xml_attribute name_attribute =
                 cmeta_attribute(child, "name");
@@ -9024,6 +9124,11 @@ static vxml_status cmeta_build_schemas(
                     continue;
                 }
 
+                if (cmeta_node_named(item, "script")) {
+                    status = cmeta_append_script_initializer(builder, item, false);
+                    if (status != VXML_OK) return status;
+                    continue;
+                }
                 if (cmeta_node_named(item, "var")) {
                     const salts_xml_attribute name_attribute =
                         cmeta_attribute(item, "name");
@@ -9784,7 +9889,8 @@ static vxml_status cmeta_append_expression(
                 row->location, "VoiceXML expression exceeds max_expression_bytes");
         }
         status = builder->profile->expression_backend.compile(
-            builder->backend_user, source.view.data, source.view.size, condition,
+            builder->backend_user, source.view.data, source.view.size,
+            condition ? VXML_CMETA_CODE_CONDITION : VXML_CMETA_CODE_VALUE,
             builder->profile->root, &row->backend_program, &expression_diagnostic);
         cmeta_decoded_value_destroy(&source);
         if (status != VXML_OK)
@@ -9829,6 +9935,39 @@ static vxml_status cmeta_append_expression(
         vxml_cmeta_expr_program_scratch_bytes(&row->program);
     if (scratch_bytes > builder->profile->expression_scratch_bytes)
         builder->profile->expression_scratch_bytes = scratch_bytes;
+    *out_expression = builder->expression_index++;
+    return VXML_OK;
+}
+
+static vxml_status cmeta_append_script(
+    cmeta_program_builder *builder, salts_xml_node node, size_t *out_expression) {
+    size_t size = 0u, written = 0u;
+    vxml_cmeta_expr_diagnostic detail = {0};
+    if (builder->profile->expression_backend.compile == NULL ||
+        builder->expression_index >= builder->profile->expression_count)
+        return VXML_INVALID_STRUCTURE;
+    vxml_status status = cmeta_script_text(node, NULL, 0u, &size, builder->diagnostic);
+    if (status != VXML_OK) return status;
+    if (size > builder->options->max_expression_bytes) return VXML_LIMIT_EXCEEDED;
+    tstr source = size != 0u ? tstr_new_len(NULL, size) : tstr_dup(";");
+    if (source == NULL) return VXML_ALLOCATION_FAILED;
+    status = cmeta_script_text(node, source, size, &written, builder->diagnostic);
+    vxml_cmeta_expression_row *row = &builder->profile->expressions[builder->expression_index];
+    row->location = salts_xml_node_location(node);
+    row->source_kind = VXML_CMETA_EXPRESSION_GENERIC;
+    row->source_field = VXML_CMETA_NO_INDEX;
+    if (status == VXML_OK && written != size) status = VXML_INVALID_STRUCTURE;
+    if (status == VXML_OK)
+        status = builder->profile->expression_backend.compile(builder->backend_user,
+            source, tstr_len(source), VXML_CMETA_CODE_SCRIPT, builder->profile->root,
+            &row->backend_program, &detail);
+    tstr_free(source);
+    if (status != VXML_OK)
+        return cmeta_program_fail(builder->diagnostic, status, row->location,
+            detail.message[0] != '\0' ? detail.message : "VoiceXML script compilation failed");
+    const size_t scratch = builder->profile->expression_backend.scratch_bytes(row->backend_program);
+    if (scratch > builder->profile->expression_scratch_bytes)
+        builder->profile->expression_scratch_bytes = scratch;
     *out_expression = builder->expression_index++;
     return VXML_OK;
 }
@@ -11168,7 +11307,11 @@ static vxml_status cmeta_lower_simple_action(
     action = &builder->profile->actions[builder->action_index];
     cmeta_action_init(action);
     action->location = salts_xml_node_location(node);
-    if (cmeta_node_named(node, "data")) {
+    if (cmeta_node_named(node, "script")) {
+        action->kind = VXML_CMETA_ACTION_SCRIPT;
+        status = cmeta_append_script(builder, node, &action->expression);
+        if (status != VXML_OK) return status;
+    } else if (cmeta_node_named(node, "data")) {
         const salts_xml_attribute name_attribute =
             cmeta_attribute(node, "name");
         const vxml_cmeta_data_fetch_policy *inherited =
@@ -11894,7 +12037,7 @@ static vxml_status cmeta_lower_program(
         const salts_xml_node child =
             salts_xml_node_child_at(root, root_child);
         if (cmeta_node_ignorable(child)) continue;
-        if (cmeta_node_named(child, "property"))
+        if (cmeta_node_named(child, "property") || cmeta_node_named(child, "script"))
             continue;
         if (cmeta_node_named(child, "data")) {
             const vxml_cmeta_expr_compile_scope scope = {
@@ -11980,7 +12123,7 @@ static vxml_status cmeta_lower_program(
                 const salts_xml_node item =
                     salts_xml_node_child_at(child, form_child);
                 if (cmeta_node_ignorable(item)) continue;
-                if (cmeta_node_named(item, "property"))
+                if (cmeta_node_named(item, "property") || cmeta_node_named(item, "script"))
                     continue;
                 if (cmeta_node_named(item, "data")) {
                     size_t data_index;
@@ -12777,7 +12920,7 @@ vxml_status vxml_compile_cmeta_backend(
     if (status != VXML_OK) return status;
     status = cmeta_measure_program(
         (const char *)bytes, size, &active_limits, options,
-        &measurement, diagnostic);
+        &measurement, backend != NULL, diagnostic);
     if (status != VXML_OK) return status;
     return cmeta_write_program(
         (const char *)bytes, size, &active_limits, options,

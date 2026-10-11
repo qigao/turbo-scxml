@@ -678,6 +678,12 @@ if(TURBOSCXML_ENABLE_QUICKJS)
       TurboSCXML::_QuickJSSandbox Salts::TinyTest)
     add_test(NAME voicexml_quickjs_fia_test COMMAND voicexml_quickjs_fia_test)
     set_tests_properties(voicexml_quickjs_fia_test PROPERTIES TIMEOUT 30)
+    turboscxml_add_test(voicexml_dialog_quickjs_fia_test voicexml_dialog_cmeta_test.c
+      LIBS turbo_voicexml_quickjs_fia TurboSCXML::VoiceXMLCMeta
+        TurboSCXML::VoiceXMLDialogManager TurboSCXML::_QuickJSSandbox
+      INCLUDES ${PROJECT_SOURCE_DIR}/src
+      DEFINITIONS TURBOSCXML_TEST_QUICKJS_FIA=1)
+    set_tests_properties(voicexml_dialog_quickjs_fia_test PROPERTIES TIMEOUT 30)
   endif()
 endif()
 set_tests_properties(scxml_quickjs_test PROPERTIES

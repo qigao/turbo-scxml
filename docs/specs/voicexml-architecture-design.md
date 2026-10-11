@@ -528,16 +528,52 @@ clearing destroys the previous owner before clearing the bound bit. Shared
 bridge string export restores its private destination to zero before CMeta
 buffer assignment, preserving the original committed string on failure.
 
+Inline scripts now use this same backend and FIA transaction for document/form
+initializers, blocks, conditional actions, filled handlers and event handlers.
+Initializers execute in source order. XML text references are decoded once;
+CDATA is retained literally. Script completion values are ignored. Scripts can
+define temporary JavaScript helpers for that evaluation, but only admitted typed
+bindings persist into the next evaluation: script-local functions and arbitrary
+global object graphs are not retained. Source size, engine deadline and FIA
+execution-step limits also apply to scripts. External `src`/`srcexpr` scripts
+remain pending in this combined profile and are rejected at compilation.
+
+Backend prompt selection and dynamic mark evaluation share the Session's media
+transaction with existing foreach projection. The Session owner stages changes
+at prepare, publishes at commit, and destroys staged owners on refusal, discard
+or close. A single cached selection (including a selected absence) borrows
+immutable Program rows and is keyed by the active field/initial and collect
+generation; it is invalidated on abort or a new preparation. Request projection,
+collect policy and completion metadata reuse this result without rerunning
+JavaScript conditions. Public prompt queries before preparation evaluate a
+temporary snapshot and discard its effects. If aggregate progress selects no
+prompt, selection effects commit once before collection starts. The existing
+QueryVM path remains pure and keeps its previous behavior. No provider callback,
+new queue, worker or unbounded storage is introduced.
+
+Regression evidence includes counted prompt side effects, provider refusal,
+discard/retry, prepared close, dynamic marks, owning string rollback, and actual
+prompt and collect completions followed by an inline-script filled handler.
+These tests qualify that prompt path; other media expressions and their
+prepare/discard boundaries still need corresponding combined-profile evidence.
+`voicexml_dialog_quickjs_fia_test` also runs the existing DialogManager async
+ownership fixtures with this private compiler backend. A real delayed collect
+completion executes JavaScript in `filled`, produces the squared exit value,
+and survives event-sink FULL without replay; navigation, producer quiescence
+and historical factory prefixes use the same fixtures. The entry in these
+fixtures is the CCXML adapter ticket boundary, not a CCXML language Session.
+
 Rejected alternatives are a second JavaScript FIA, which would duplicate the
 state machine and media ownership, and an unconditional QuickJS dependency in
 CMeta, which would break feature isolation. No public API migration is required
 while this work is internal. Rollback consists of removing the optional backend
 and its private dispatch while keeping the existing CMeta interpreter intact.
 
-Remaining qualification explicitly includes inline/external scripts, standard
-scope aliases, expression effects across media prepare/discard and prompt
-selection, managed values, failure injection, engine limits, asynchronous
-DialogManager navigation/close and the feature/installed-package matrix. These
+Remaining qualification explicitly includes external scripts, standard
+scope aliases, expression effects across the remaining media prepare/discard
+paths, additional managed values, failure injection, engine limits, script URI
+and resource lifetime across asynchronous DialogManager navigation/close, a full
+CCXML language Session composition, and the feature/installed-package matrix. These
 are pending work, not capabilities implied by the private library's existence.
 
 ## Source of truth

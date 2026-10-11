@@ -9,7 +9,7 @@ typedef struct fia_expression {
     vxml_quickjs_fia_limits limits;
     const cmeta_data_desc *root;
     tstr source;
-    bool condition;
+    vxml_cmeta_code_kind kind;
 } fia_expression;
 
 /* One visible name has exactly one destination. Hidden and undeclared slots
@@ -47,14 +47,15 @@ static void expression_destroy(void *opaque) {
 }
 
 static vxml_status expression_compile(
-    const void *user, const char *source, size_t size, bool condition,
+    const void *user, const char *source, size_t size, vxml_cmeta_code_kind kind,
     const cmeta_data_desc *root, void **out,
     vxml_cmeta_expr_diagnostic *diagnostic) {
     const vxml_quickjs_fia_limits *limits = user;
     fia_expression *expression;
     quickjs_sandbox_status status;
     *out = NULL;
-    if (limits == NULL || !quickjs_sandbox_limits_valid(&limits->engine) ||
+    if ((kind != VXML_CMETA_CODE_VALUE && kind != VXML_CMETA_CODE_CONDITION &&
+         kind != VXML_CMETA_CODE_SCRIPT) || limits == NULL || !quickjs_sandbox_limits_valid(&limits->engine) ||
         !quickjs_cmeta_limits_valid(&limits->values) ||
         !quickjs_cmeta_schema_supported(root, &limits->values,
             quickjs_cmeta_default_collection_adapter(), NULL, 0u) ||
@@ -63,24 +64,30 @@ static vxml_status expression_compile(
     if (size > SIZE_MAX - 5u || size > limits->engine.max_source_bytes ||
         root->storage_type->size > limits->values.max_snapshot_bytes)
         return VXML_LIMIT_EXCEEDED;
-    status = quickjs_sandbox_validate_expression(&limits->engine, source, size,
-        "<voicexml-fia-expression>", diagnostic->message, sizeof(diagnostic->message));
+    status = kind == VXML_CMETA_CODE_SCRIPT
+        ? quickjs_sandbox_validate_source(&limits->engine, source, size,
+            "<voicexml-fia-script>", diagnostic->message, sizeof(diagnostic->message))
+        : quickjs_sandbox_validate_expression(&limits->engine, source, size,
+            "<voicexml-fia-expression>", diagnostic->message, sizeof(diagnostic->message));
     if (status != QUICKJS_SANDBOX_OK) return engine_status(status);
     expression = vxml_calloc(1u, sizeof(*expression));
     if (expression == NULL) return VXML_ALLOCATION_FAILED;
     /* The engine requires a NUL-terminated source. tstr owns the wrapper and
      * checks its allocation; the bytes are immutable after publication. */
-    expression->source = tstr_new_len(NULL, size + 4u);
+    expression->source = kind == VXML_CMETA_CODE_SCRIPT
+        ? tstr_new_len(source, size) : tstr_new_len(NULL, size + 4u);
     if (expression->source == NULL) {
         expression_destroy(expression);
         return VXML_ALLOCATION_FAILED;
     }
-    memcpy(expression->source, "(\n", 2u);
-    memcpy(expression->source + 2u, source, size);
-    memcpy(expression->source + 2u + size, "\n)", 2u);
+    if (kind != VXML_CMETA_CODE_SCRIPT) {
+        memcpy(expression->source, "(\n", 2u);
+        memcpy(expression->source + 2u, source, size);
+        memcpy(expression->source + 2u + size, "\n)", 2u);
+    }
     expression->root = root;
     expression->limits = *limits;
-    expression->condition = condition;
+    expression->kind = kind;
     *out = expression;
     return VXML_OK;
 }
@@ -168,7 +175,11 @@ static vxml_status result_export(const fia_expression *expression,
     JSContext *context, JSValueConst result, vxml_cmeta_value_kind expected,
     vxml_cmeta_expr_scratch *scratch, vxml_cmeta_value_view *out) {
     vxml_cmeta_value_view value = {0};
-    if (expression->condition) {
+    if (expression->kind == VXML_CMETA_CODE_SCRIPT) {
+        *out = value; /* Script completion values are not VoiceXML exit values. */
+        return VXML_OK;
+    }
+    if (expression->kind == VXML_CMETA_CODE_CONDITION) {
         const int boolean = JS_ToBool(context, result);
         if (boolean < 0) return VXML_SEMANTIC_ERROR;
         value.kind = VXML_CMETA_VALUE_BOOL;

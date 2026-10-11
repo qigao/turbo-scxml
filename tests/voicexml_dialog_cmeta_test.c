@@ -3,6 +3,9 @@
 #include <voicexml/document_store.h>
 #include <tinytest.h>
 #include <string.h>
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+#include "voicexml_quickjs_fia.h"
+#endif
 
 typedef struct dialog_value { int value; } dialog_value;
 static const cmeta_type_identity root_identity = CMETA_TYPE_ID_ATOM_INIT("test.dialog.cmeta");
@@ -44,6 +47,7 @@ struct dialog_probe {
     vxml_status statuses[EVENT_CAPACITY];
     bool full;
     vxml_status progress_status;
+    int64_t last_exit_value;
 };
 
 static void collect_commit(void *user) { ++((collect_probe *)user)->commits; }
@@ -78,7 +82,15 @@ static vxml_status compile_document(void *user, const void *bytes, size_t size,
         .max_literal_bytes = 1024u, .max_string_bytes = 1024u, .max_scope_slots = 32u,
         .max_scope_storage_bytes = 4096u, .max_conditional_depth = 8u,
         .max_fields = 4u, .max_grammar_bytes = 256u};
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    const vxml_quickjs_fia_limits limits = {
+        .engine = {1024u, 1024u, 4u * 1024u * 1024u, 256u * 1024u, 100u},
+        .values = {16u, 128u, 128u, 4096u, 1024u}};
+    vxml_status status = vxml_compile_cmeta_backend(bytes, size, NULL, &options,
+        &vxml_quickjs_fia_backend, &limits, program, diagnostic);
+#else
     vxml_status status = vxml_compile_cmeta(bytes, size, NULL, &options, program, diagnostic);
+#endif
     check(status == VXML_OK, "%s", diagnostic != NULL ? diagnostic->message : "compile failed");
     return status;
 }
@@ -129,7 +141,15 @@ static vxml_status progress_session(void *user, vxml_session *session, bool *pro
     ++collect->progress_calls;
     *progressed = false;
     if (probe->progress_status != VXML_OK) return probe->progress_status;
-    return vxml_session_cmeta_run_ready(session, progressed);
+    const vxml_status status = vxml_session_cmeta_run_ready(session, progressed);
+    if (status == VXML_OK && vxml_session_cmeta_exit_count(session) == 1u) {
+        vxml_cmeta_name_view name = {0};
+        vxml_cmeta_value_view value = {0};
+        check_equal(vxml_session_cmeta_exit_at(session, 0u, &name, &value), VXML_OK);
+        check_equal(value.kind, VXML_CMETA_VALUE_SINT);
+        probe->last_exit_value = value.data.sint;
+    }
+    return status;
 }
 static void quiesce_session(void *user, vxml_session *session) {
     collect_probe *collect = find_collect(user, session);
@@ -222,7 +242,12 @@ spec("DialogManager asynchronous CMeta ownership") {
         probe = (dialog_probe){0};
         probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
             "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+            "<filled><script>value = Math.pow(value, 2);</script><exit expr='value'/></filled>"
+            "</field></form></vxml>";
+#else
             "<filled><exit/></filled></field></form></vxml>";
+#endif
         config = setup(&probe, &factory);
     }
     after_each() {
@@ -256,6 +281,9 @@ spec("DialogManager asynchronous CMeta ownership") {
         probe.full = false;
         tick(&probe);
         check_equal(probe.events[1], "dialog.exit");
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+        check_equal(probe.last_exit_value, (int64_t)49);
+#endif
         check_equal(probe.collect[0].barriers, (size_t)1u);
         check_equal(probe.collect[0].cancels, (size_t)0u);
     }

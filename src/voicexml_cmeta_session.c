@@ -1127,9 +1127,10 @@ static void settle_prompt_media(
         session->prompt_media_adapter->cancel(
             session->prompt_media_user, generation);
     }
-    if (session->prompt_foreach_transaction && program != NULL) {
+    if (session->prompt_media_transaction && program != NULL) {
         transaction_reset(session, program);
-        session->prompt_foreach_transaction = false;
+        session->prompt_media_transaction = false;
+        session->prompt_selection_valid = false;
     }
     session->prompt_media_noop_prepared = false;
     session->prompt_media_generation = 0u;
@@ -2845,6 +2846,11 @@ static vxml_status initialize_initializers(
             status = initialize_declarations(
                 session, program, initializer->index, 1u,
                 scopes, scope_count);
+        } else if (initializer->kind == VXML_CMETA_INITIALIZER_SCRIPT) {
+            vxml_cmeta_value_view ignored;
+            if (!consume_step(session)) return VXML_LIMIT_EXCEEDED;
+            status = evaluate_expression(session, program, true, initializer->index,
+                scopes, scope_count, &ignored);
         } else if (initializer->kind == VXML_CMETA_INITIALIZER_DATA) {
             const vxml_cmeta_external_data_row *row;
             if (initializer->index >= program->external_data_count ||
@@ -4309,6 +4315,13 @@ static vxml_status execute_action_range(
                         session, program, action);
                 if (status != VXML_OK) return status;
                 return VXML_OK;
+            }
+            case VXML_CMETA_ACTION_SCRIPT: {
+                vxml_cmeta_value_view ignored;
+                const vxml_status status = evaluate_expression(session, program, true,
+                    action->expression, scopes, scope_count, &ignored);
+                if (status != VXML_OK) return status;
+                break;
             }
             case VXML_CMETA_ACTION_DATA: {
                 vxml_status status;
@@ -12496,8 +12509,8 @@ static unsigned prompt_retry_count(
     return count;
 }
 
-static vxml_status selected_prompt_row(
-    const vxml_session_impl *impl,
+static vxml_status select_prompt_row(
+    const vxml_session_impl *impl, bool staged,
     const vxml_cmeta_field_row **out_field,
     const vxml_cmeta_prompt_row **out_prompt,
     unsigned *out_prompt_count) {
@@ -12738,7 +12751,7 @@ static vxml_status selected_prompt_row(
             const size_t scopes[2] = {
                 form->scope, program->document_scope};
             const vxml_status status = evaluate_condition(
-                profile, program, false,
+                profile, program, staged,
                 row->condition, scopes, 2u, &eligible);
             if (status != VXML_OK) return status;
         }
@@ -12749,6 +12762,63 @@ static vxml_status selected_prompt_row(
     *out_field = field;
     *out_prompt = best;
     *out_prompt_count = prompt_count;
+    return VXML_OK;
+}
+
+/* Queries preview writable expressions in scratch; only a prepared media
+ * transaction retains their effects. All subsequent projections and completion
+ * metadata use the selected immutable row instead of executing its condition
+ * again. QueryVM remains on its existing pure path. */
+static vxml_status selected_prompt_row(
+    const vxml_session_impl *impl,
+    const vxml_cmeta_field_row **out_field,
+    const vxml_cmeta_prompt_row **out_prompt,
+    unsigned *out_prompt_count) {
+    if (impl == NULL || impl->program == NULL ||
+        impl->program->profile_data == NULL || impl->profile_data == NULL ||
+        impl->state != VXML_SESSION_RUNNING || out_field == NULL ||
+        out_prompt == NULL || out_prompt_count == NULL)
+        return select_prompt_row(impl, false, out_field, out_prompt, out_prompt_count);
+    const vxml_cmeta_program_data *program = impl->program->profile_data;
+    vxml_cmeta_session_data *profile = impl->profile_data;
+    if (program->expression_backend.evaluate == NULL)
+        return select_prompt_row(impl, false, out_field, out_prompt, out_prompt_count);
+    if (profile->prompt_selection_valid &&
+        profile->prompt_selection_generation == profile->collect_generation &&
+        profile->prompt_selection_field_index == profile->active_field &&
+        profile->prompt_selection_initial_index == profile->active_initial) {
+        *out_field = profile->prompt_selection_field;
+        *out_prompt = profile->prompt_selection_row;
+        *out_prompt_count = profile->prompt_selection_count;
+        return VXML_OK;
+    }
+    const bool preview = !profile->prompt_media_transaction;
+    if (preview && !transaction_begin(profile, program))
+        return VXML_ALLOCATION_FAILED;
+    const vxml_status status = select_prompt_row(
+        impl, true, out_field, out_prompt, out_prompt_count);
+    if (preview) {
+        transaction_reset(profile, program);
+    } else if (status == VXML_OK) {
+        profile->prompt_selection_valid = true;
+        profile->prompt_selection_generation = profile->collect_generation;
+        profile->prompt_selection_field_index = profile->active_field;
+        profile->prompt_selection_initial_index = profile->active_initial;
+        profile->prompt_selection_field = *out_field;
+        profile->prompt_selection_row = *out_prompt;
+        profile->prompt_selection_count = *out_prompt_count;
+    }
+    return status;
+}
+
+static vxml_status prompt_media_begin_transaction(
+    vxml_cmeta_session_data *profile,
+    const vxml_cmeta_program_data *program) {
+    if (program->expression_backend.evaluate == NULL) return VXML_OK;
+    if (profile->prompt_media_transaction) return VXML_INVALID_STATE;
+    profile->prompt_selection_valid = false;
+    if (!transaction_begin(profile, program)) return VXML_ALLOCATION_FAILED;
+    profile->prompt_media_transaction = true;
     return VXML_OK;
 }
 
@@ -13506,14 +13576,15 @@ static vxml_status prompt_media_project_fallbacks(
     return VXML_OK;
 }
 
-static void prompt_foreach_abort_transaction(
+static void prompt_media_abort_transaction(
     vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program) {
     if (profile == NULL || program == NULL ||
-        !profile->prompt_foreach_transaction)
+        !profile->prompt_media_transaction)
         return;
     transaction_reset(profile, program);
-    profile->prompt_foreach_transaction = false;
+    profile->prompt_media_transaction = false;
+    profile->prompt_selection_valid = false;
 }
 
 typedef struct prompt_foreach_projection_context {
@@ -13797,9 +13868,11 @@ static vxml_status prompt_media_project_foreach(
         program, prompt, context.prompt_index);
     if (status != VXML_OK) return status;
 
-    if (!transaction_begin(profile, program))
-        return VXML_ALLOCATION_FAILED;
-    profile->prompt_foreach_transaction = true;
+    if (!profile->prompt_media_transaction) {
+        if (!transaction_begin(profile, program))
+            return VXML_ALLOCATION_FAILED;
+        profile->prompt_media_transaction = true;
+    }
     profile->prompt_media_projected_generation = UINT64_C(0);
     profile->prompt_media_projected_first_segment = SIZE_MAX;
     profile->prompt_media_projected_segment_count = 0u;
@@ -13835,7 +13908,7 @@ static vxml_status prompt_media_project_foreach(
     return VXML_OK;
 
 failure:
-    prompt_foreach_abort_transaction(profile, program);
+    prompt_media_abort_transaction(profile, program);
     profile->prompt_media_projected_generation = UINT64_C(0);
     profile->prompt_media_projected_first_segment = SIZE_MAX;
     profile->prompt_media_projected_segment_count = 0u;
@@ -13931,7 +14004,7 @@ static vxml_status prompt_media_project_dynamic_marks(
             return VXML_INVALID_STRUCTURE;
         status = prompt_media_project_mark(
             profile, program, prompt, absolute_segment,
-            scopes, false,
+            scopes, profile->prompt_media_transaction,
             &profile->prompt_media_projected_segments[
                 relative_segment],
             &storage_used);
@@ -14042,8 +14115,8 @@ static vxml_status prompt_media_admission_failure(
     return event_status == VXML_OK ? media_status : event_status;
 }
 
-vxml_status vxml_session_cmeta_prompt_media_prepare(
-    vxml_session *session, const char **out_error) {
+static vxml_status prompt_media_prepare(
+    vxml_session *session, const char **out_error, bool selection_ready) {
     vxml_session_impl *impl;
     vxml_cmeta_session_data *profile;
     const vxml_cmeta_program_data *program;
@@ -14069,20 +14142,25 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         return VXML_INVALID_CONTRACT;
     if (profile->prompt_media_prepared ||
         profile->prompt_media_in_flight ||
-        profile->prompt_foreach_transaction)
+        (profile->prompt_media_transaction && !selection_ready))
         return VXML_INVALID_STATE;
     if (profile->collect_generation != 0u &&
         profile->prompt_media_barged_generation ==
             profile->collect_generation)
         return VXML_INVALID_STATE;
 
+    if (!selection_ready) {
+        status = prompt_media_begin_transaction(profile, program);
+        if (status != VXML_OK) return status;
+    }
     status = prompt_media_batch_request_from_impl(impl, &batch);
-    if (status != VXML_OK) return status;
-    if (batch.segment_count == 0u)
-        return VXML_INVALID_STATE;
+    if (status != VXML_OK || batch.segment_count == 0u) {
+        prompt_media_abort_transaction(profile, program);
+        return status != VXML_OK ? status : VXML_INVALID_STATE;
+    }
     status = prompt_media_project_batch(impl, &batch);
     if (status != VXML_OK) {
-        prompt_foreach_abort_transaction(profile, program);
+        prompt_media_abort_transaction(profile, program);
         return status == VXML_SEMANTIC_ERROR
             ? prompt_media_raise_semantic(session)
             : status;
@@ -14105,7 +14183,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if ((profile->prompt_media_adapter->capabilities &
          batch.required_capabilities) !=
         batch.required_capabilities) {
-        prompt_foreach_abort_transaction(profile, program);
+        prompt_media_abort_transaction(profile, program);
         return prompt_media_admission_failure(
             session, VXML_UNSUPPORTED_FEATURE);
     }
@@ -14127,7 +14205,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
             .bargein_type = batch.bargein_type
         };
         if (profile->prompt_media_adapter->prepare == NULL) {
-            prompt_foreach_abort_transaction(profile, program);
+            prompt_media_abort_transaction(profile, program);
             return VXML_INVALID_CONTRACT;
         }
         status = profile->prompt_media_adapter->prepare(
@@ -14140,7 +14218,7 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
         if (profile->prompt_media_adapter->struct_size <
                 batch_field_size ||
             profile->prompt_media_adapter->prepare_batch == NULL) {
-            prompt_foreach_abort_transaction(profile, program);
+            prompt_media_abort_transaction(profile, program);
             return prompt_media_admission_failure(
                 session, VXML_UNSUPPORTED_FEATURE);
         }
@@ -14154,13 +14232,13 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     if (status != VXML_OK) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        prompt_foreach_abort_transaction(profile, program);
+        prompt_media_abort_transaction(profile, program);
         return prompt_media_admission_failure(session, status);
     }
     if (ticket.commit == NULL || ticket.discard == NULL) {
         if (ticket.discard != NULL)
             ticket.discard(ticket.user);
-        prompt_foreach_abort_transaction(profile, program);
+        prompt_media_abort_transaction(profile, program);
         return VXML_INVALID_CONTRACT;
     }
     profile->prompt_media_ticket = ticket;
@@ -14168,6 +14246,11 @@ vxml_status vxml_session_cmeta_prompt_media_prepare(
     profile->prompt_media_prepared = true;
     profile->prompt_media_noop_prepared = false;
     return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_prompt_media_prepare(
+    vxml_session *session, const char **out_error) {
+    return prompt_media_prepare(session, out_error, false);
 }
 
 vxml_status vxml_session_cmeta_prompt_media_commit(
@@ -14201,9 +14284,9 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
         return VXML_INVALID_STATE;
 
     if (noop) {
-        if (profile->prompt_foreach_transaction) {
+        if (profile->prompt_media_transaction) {
             transaction_commit(profile, program);
-            profile->prompt_foreach_transaction = false;
+            profile->prompt_media_transaction = false;
         }
         profile->prompt_media_ticket =
             (vxml_cmeta_prompt_media_ticket_v1){0};
@@ -14222,9 +14305,9 @@ vxml_status vxml_session_cmeta_prompt_media_commit(
             memory_order_acquire) !=
             VXML_CMETA_PROMPT_MEDIA_MAILBOX_DISARMED)
         return VXML_INVALID_STATE;
-    if (profile->prompt_foreach_transaction) {
+    if (profile->prompt_media_transaction) {
         transaction_commit(profile, program);
-        profile->prompt_foreach_transaction = false;
+        profile->prompt_media_transaction = false;
     }
     profile->prompt_media_mark_generation =
         profile->prompt_media_generation;
@@ -14284,7 +14367,7 @@ vxml_status vxml_session_cmeta_prompt_media_discard(
     ticket = profile->prompt_media_ticket;
     profile->prompt_media_ticket =
         (vxml_cmeta_prompt_media_ticket_v1){0};
-    prompt_foreach_abort_transaction(profile, program);
+    prompt_media_abort_transaction(profile, program);
     profile->prompt_media_generation = 0u;
     profile->prompt_media_prepared = false;
     profile->prompt_media_noop_prepared = false;
@@ -14579,10 +14662,18 @@ vxml_status vxml_session_cmeta_run_ready(
             const vxml_cmeta_field_row *field;
             const vxml_cmeta_prompt_row *prompt;
             unsigned count;
-            status = selected_prompt_row(impl, &field, &prompt, &count);
+            const vxml_cmeta_program_data *program = impl->program->profile_data;
+            status = prompt_media_begin_transaction(profile, program);
             if (status != VXML_OK) return status;
+            status = selected_prompt_row(impl, &field, &prompt, &count);
+            if (status != VXML_OK) {
+                prompt_media_abort_transaction(profile, program);
+                return status;
+            }
             if (prompt != NULL) {
-                status = vxml_session_cmeta_prompt_media_prepare(session, NULL);
+                status = prompt_media_prepare(session, NULL, true);
+                if (status != VXML_OK)
+                    prompt_media_abort_transaction(profile, program);
                 if (profile->progress_admission_event_handled) {
                     *out_progressed = true;
                     return VXML_OK;
@@ -14592,6 +14683,10 @@ vxml_status vxml_session_cmeta_run_ready(
                 profile->progress_prompt_generation = profile->collect_generation;
                 *out_progressed = true;
                 return VXML_OK;
+            }
+            if (profile->prompt_media_transaction) {
+                transaction_commit(profile, program);
+                profile->prompt_media_transaction = false;
             }
             profile->progress_prompt_generation = profile->collect_generation;
         }

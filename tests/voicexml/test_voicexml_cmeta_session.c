@@ -15777,7 +15777,7 @@ spec("VoiceXML CMeta session execution") {
             const vxml_cmeta_session_data *runtime =
                 session_data(&session);
             size_t offset;
-            check_false(runtime->prompt_foreach_transaction);
+            check_false(runtime->prompt_media_transaction);
             for (offset = 0u;
                  offset < compiled->prompts[0].foreach_count;
                  ++offset) {
@@ -16099,7 +16099,7 @@ spec("VoiceXML CMeta session execution") {
                     foreach_row->scope].view.bound[
                         foreach_row->item_slot],
                 (unsigned char)0u);
-            check_false(runtime->prompt_foreach_transaction);
+            check_false(runtime->prompt_media_transaction);
         }
 
         vxml_session_destroy(&session);
@@ -16192,7 +16192,7 @@ spec("VoiceXML CMeta session execution") {
                     foreach_row->scope].view.bound[
                         foreach_row->item_slot],
                 (unsigned char)0u);
-            check_false(runtime->prompt_foreach_transaction);
+            check_false(runtime->prompt_media_transaction);
         }
 
         vxml_session_destroy(&session);
