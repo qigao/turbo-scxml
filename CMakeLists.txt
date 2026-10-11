@@ -519,7 +519,7 @@ if(TURBOSCXML_ENABLE_VOICEXML_CMETA)
     target_include_directories(turbo_voicexml_quickjs_fia PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(turbo_voicexml_quickjs_fia PRIVATE
       TurboSCXML::VoiceXMLCMeta TurboSCXML::_QuickJSSandbox
-      TurboSCXML::_QuickJSCMetaBridge)
+      TurboSCXML::_QuickJSCMetaBridge TurboSCXML::VoiceXMLScriptResource)
   endif()
 
   add_library(turbo_voicexml_subdialog_owner STATIC

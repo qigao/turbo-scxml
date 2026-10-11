@@ -242,7 +242,8 @@ owner for initial/navigation/submit-response Programs.
 ### VoiceXMLScriptResource
 
 ScriptResource is the acquisition boundary for external QuickJS source. A
-successful lease is closed exactly once after execution/validation completes.
+successful lease is closed exactly once when its consumer finishes using the
+borrowed source bytes.
 
 ### VoiceXMLSubmitResource
 
@@ -535,8 +536,48 @@ CDATA is retained literally. Script completion values are ignored. Scripts can
 define temporary JavaScript helpers for that evaluation, but only admitted typed
 bindings persist into the next evaluation: script-local functions and arbitrary
 global object graphs are not retained. Source size, engine deadline and FIA
-execution-step limits also apply to scripts. External `src`/`srcexpr` scripts
-remain pending in this combined profile and are rejected at compilation.
+execution-step limits also apply to scripts.
+
+The private combined compiler also admits external `src` and VoiceXML 2.1
+`srcexpr` scripts in these same action and initializer positions. It owns the
+decoded reference and copied limits, and performs no fetch during compilation.
+Inline source cannot be combined with a source attribute; external scripts
+accept UTF-8 only. The CMeta-only compiler continues to reject scripts.
+
+The private `vxml_session_init_quickjs_fia()` copies the ScriptResource adapter
+and URI/source limits into Session-owned backend state. The provider user and
+DocumentStore resolver remain borrowed through close. The generic Session owns
+an immutable current-document URI snapshot: DialogManager may update its row
+during navigation or submit, but producer quiescence and old-Session destruction
+still observe the old URI. Base VoiceXML uses its existing allocator for this
+bounded byte snapshot and gains no Salts::Core or QuickJS dependency.
+
+Resource acquisition is synchronous on the Session owner, using the existing
+ScriptResource resolver and provider contract. A dynamic URI and its source
+execute in the same fresh JavaScript context; typed writes publish together
+only after source evaluation and every typed conversion succeed. The enclosing
+FIA transaction can still roll them back with earlier actions or a staged
+recognition result. Source bytes are copied into bounded owning storage before
+the lease is closed, so provider acquisition/close are outside engine deadlines
+and no source lease crosses asynchronous media progress. Failed and partial
+acquisitions retain ScriptResource's exactly-once cleanup contract. Engine
+deadlines cover URI evaluation and source evaluation/conversion separately;
+they are not transport deadlines or a deterministic instruction quota.
+
+Executable evidence covers static/dynamic references, initializer/action/catch
+placements, source order, copied configuration, Session isolation, URI/source
+bounds, syntax/runtime/type/heap/deadline failures, owning-string rollback,
+partial leases, and external filled execution after delayed collection.
+DialogManager fixtures additionally exercise FULL without refetch or replay,
+navigation, submit-response effective URIs, and close/quiescence. These fixtures
+still enter at the CCXML adapter ticket boundary.
+
+External script failure recovery is not yet qualified: resource errors currently
+propagate as Session status failures rather than their exact scoped VoiceXML
+Events. Connecting `error.badfetch`/`error.unsupported.format`/`error.noresource`
+must preserve rollback, the correct initializer/action recovery position, and
+one dispatch-depth budget even when a catch executes another failing script.
+This remains a blocker for publishing the combined profile.
 
 Backend prompt selection and dynamic mark evaluation share the Session's media
 transaction with existing foreach projection. The Session owner stages changes
@@ -569,12 +610,12 @@ CMeta, which would break feature isolation. No public API migration is required
 while this work is internal. Rollback consists of removing the optional backend
 and its private dispatch while keeping the existing CMeta interpreter intact.
 
-Remaining qualification explicitly includes external scripts, standard
-scope aliases, expression effects across the remaining media prepare/discard
-paths, additional managed values, failure injection, engine limits, script URI
-and resource lifetime across asynchronous DialogManager navigation/close, a full
-CCXML language Session composition, and the feature/installed-package matrix. These
-are pending work, not capabilities implied by the private library's existence.
+Remaining qualification explicitly includes script failure Event recovery,
+standard scope aliases, expression effects across the remaining media
+prepare/discard paths, additional managed values, allocation failure injection,
+broader engine limits, a full CCXML language Session composition, and the
+feature/installed-package matrix. These are pending work, not capabilities
+implied by the private library's existence.
 
 ## Source of truth
 

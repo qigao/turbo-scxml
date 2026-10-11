@@ -1,5 +1,6 @@
 #include <voicexml/dialog_manager.h>
 #include <voicexml/document_store.h>
+#include "voicexml_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -954,6 +955,11 @@ static vxml_status start_current_session(
         return status;
     row->session_live = true;
     row->session_quiesced = false;
+    if (impl->store_backed) {
+        status = vxml_session_bind_document(&row->session, impl->document_store,
+            row->current_document_uri, row->current_document_uri_size);
+        if (status != VXML_OK) return status;
+    }
     return fragment_size != 0u
         ? vxml_session_start_at_form(
               &row->session, fragment, fragment_size)

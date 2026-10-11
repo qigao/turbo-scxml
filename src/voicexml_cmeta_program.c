@@ -1333,10 +1333,43 @@ static vxml_status cmeta_measure_script(
     if (!measurement->scripts_enabled)
         return cmeta_program_fail(diagnostic, VXML_UNSUPPORTED_FEATURE,
             salts_xml_node_location(node), "script requires the QuickJS FIA backend");
-    vxml_status status = cmeta_validate_attributes(node, NULL, 0u, diagnostic);
+    static const char *const attributes[] = {"src", "srcexpr", "charset"};
+    vxml_status status = cmeta_validate_attributes(node, attributes, 3u, diagnostic);
     if (status != VXML_OK) return status;
-    status = cmeta_script_text(node, NULL, 0u, &size, diagnostic);
-    if (status != VXML_OK) return status;
+    const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute expression = cmeta_attribute(node, "srcexpr");
+    const salts_xml_attribute charset = cmeta_attribute(node, "charset");
+    if (src.impl != NULL && expression.impl != NULL)
+        return cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+            salts_xml_node_location(node), "script cannot combine src and srcexpr");
+    if (expression.impl != NULL && !measurement->version_21)
+        return cmeta_program_fail(diagnostic, VXML_UNSUPPORTED_FEATURE,
+            salts_xml_node_location(node), "script srcexpr requires VoiceXML 2.1");
+    if (src.impl != NULL || expression.impl != NULL) {
+        const salts_xml_attribute reference = src.impl != NULL ? src : expression;
+        status = cmeta_validate_empty_element(node, diagnostic);
+        if (status != VXML_OK) return status;
+        if (!cmeta_decode_entities(salts_xml_attribute_value(reference), NULL, 0u, &size) || size == 0u)
+            return cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node), "script reference must be nonempty");
+        if (charset.impl != NULL) {
+            char decoded[5];
+            size_t charset_size = 0u;
+            if (!cmeta_decode_entities(salts_xml_attribute_value(charset), decoded, sizeof(decoded), &charset_size) ||
+                charset_size != sizeof(decoded) ||
+                (decoded[0] != 'u' && decoded[0] != 'U') ||
+                (decoded[1] != 't' && decoded[1] != 'T') ||
+                (decoded[2] != 'f' && decoded[2] != 'F') || decoded[3] != '-' || decoded[4] != '8')
+                return cmeta_program_fail(diagnostic, VXML_UNSUPPORTED_FEATURE,
+                    salts_xml_node_location(node), "external script supports UTF-8 only");
+        }
+    } else {
+        if (charset.impl != NULL)
+            return cmeta_program_fail(diagnostic, VXML_INVALID_STRUCTURE,
+                salts_xml_node_location(node), "inline script cannot specify charset");
+        status = cmeta_script_text(node, NULL, 0u, &size, diagnostic);
+        if (status != VXML_OK) return status;
+    }
     if (size > options->max_expression_bytes ||
         !cmeta_measure_increment(&measurement->expression_count) ||
         (initializer && (!cmeta_measure_increment(&measurement->initializer_count) ||
@@ -9943,25 +9976,43 @@ static vxml_status cmeta_append_script(
     cmeta_program_builder *builder, salts_xml_node node, size_t *out_expression) {
     size_t size = 0u, written = 0u;
     vxml_cmeta_expr_diagnostic detail = {0};
+    vxml_status status;
+    const salts_xml_attribute src = cmeta_attribute(node, "src");
+    const salts_xml_attribute expression = cmeta_attribute(node, "srcexpr");
     if (builder->profile->expression_backend.compile == NULL ||
         builder->expression_index >= builder->profile->expression_count)
         return VXML_INVALID_STRUCTURE;
-    vxml_status status = cmeta_script_text(node, NULL, 0u, &size, builder->diagnostic);
-    if (status != VXML_OK) return status;
-    if (size > builder->options->max_expression_bytes) return VXML_LIMIT_EXCEEDED;
-    tstr source = size != 0u ? tstr_new_len(NULL, size) : tstr_dup(";");
-    if (source == NULL) return VXML_ALLOCATION_FAILED;
-    status = cmeta_script_text(node, source, size, &written, builder->diagnostic);
     vxml_cmeta_expression_row *row = &builder->profile->expressions[builder->expression_index];
     row->location = salts_xml_node_location(node);
     row->source_kind = VXML_CMETA_EXPRESSION_GENERIC;
     row->source_field = VXML_CMETA_NO_INDEX;
-    if (status == VXML_OK && written != size) status = VXML_INVALID_STRUCTURE;
-    if (status == VXML_OK)
-        status = builder->profile->expression_backend.compile(builder->backend_user,
-            source, tstr_len(source), VXML_CMETA_CODE_SCRIPT, builder->profile->root,
-            &row->backend_program, &detail);
-    tstr_free(source);
+    if (src.impl != NULL || expression.impl != NULL) {
+        cmeta_decoded_value reference = {0};
+        if (builder->profile->expression_backend.compile_external_script == NULL)
+            return VXML_UNSUPPORTED_FEATURE;
+        const salts_xml_attribute attribute = src.impl != NULL ? src : expression;
+        status = cmeta_decode_temporary(builder, salts_xml_attribute_value(attribute),
+            salts_xml_attribute_location(attribute), &reference);
+        if (status == VXML_OK)
+            status = builder->profile->expression_backend.compile_external_script(
+                builder->backend_user, reference.view.data, reference.view.size,
+                expression.impl != NULL, "UTF-8", 5u, builder->profile->root,
+                &row->backend_program, &detail);
+        cmeta_decoded_value_destroy(&reference);
+    } else {
+        status = cmeta_script_text(node, NULL, 0u, &size, builder->diagnostic);
+        if (status != VXML_OK) return status;
+        if (size > builder->options->max_expression_bytes) return VXML_LIMIT_EXCEEDED;
+        tstr source = size != 0u ? tstr_new_len(NULL, size) : tstr_dup(";");
+        if (source == NULL) return VXML_ALLOCATION_FAILED;
+        status = cmeta_script_text(node, source, size, &written, builder->diagnostic);
+        if (status == VXML_OK && written != size) status = VXML_INVALID_STRUCTURE;
+        if (status == VXML_OK)
+            status = builder->profile->expression_backend.compile(builder->backend_user,
+                source, tstr_len(source), VXML_CMETA_CODE_SCRIPT, builder->profile->root,
+                &row->backend_program, &detail);
+        tstr_free(source);
+    }
     if (status != VXML_OK)
         return cmeta_program_fail(builder->diagnostic, status, row->location,
             detail.message[0] != '\0' ? detail.message : "VoiceXML script compilation failed");

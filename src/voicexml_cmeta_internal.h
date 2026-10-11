@@ -807,6 +807,9 @@ typedef struct vxml_cmeta_transfer_completion_mailbox {
 } vxml_cmeta_transfer_completion_mailbox;
 
 typedef struct vxml_cmeta_session_data {
+    const vxml_session_document_context *document_context;
+    void *backend_session;
+    void (*backend_session_destroy)(void *);
     size_t max_transaction_bytes;
     size_t max_execution_steps;
     size_t transaction_bytes_required;

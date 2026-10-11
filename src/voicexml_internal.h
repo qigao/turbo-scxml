@@ -103,6 +103,15 @@ typedef enum vxml_profile_kind {
 
 typedef struct vxml_session_impl vxml_session_impl;
 typedef struct vxml_program_impl vxml_program_impl;
+struct vxml_document_store;
+
+/* Private document binding. The host retains the Store through Session close.
+ * The Session owns the URI snapshot; navigation cannot invalidate its bytes. */
+typedef struct vxml_session_document_context {
+    const struct vxml_document_store *resolver;
+    char *uri;
+    size_t uri_size;
+} vxml_session_document_context;
 
 typedef vxml_status (*vxml_profile_session_init_fn)(
     vxml_session_impl *session, const void *options);
@@ -121,6 +130,7 @@ struct vxml_session_impl {
     const vxml_program_impl *program;
     vxml_session_state state;
     vxml_status error;
+    vxml_session_document_context document_context;
     const char *navigation_uri;
     size_t navigation_uri_size;
     const char *navigation_fetchaudio_uri;
@@ -185,6 +195,9 @@ vxml_status vxml_compile_with_features(
 
 vxml_status vxml_session_init_profile(
     vxml_session *session, const vxml_program *program, const void *options);
+vxml_status vxml_session_bind_document(
+    vxml_session *session, const struct vxml_document_store *resolver,
+    const char *uri, size_t uri_size);
 vxml_status vxml_session_start_literal(vxml_session_impl *impl);
 vxml_status vxml_session_start_literal_at(
     vxml_session_impl *impl, size_t form_index);

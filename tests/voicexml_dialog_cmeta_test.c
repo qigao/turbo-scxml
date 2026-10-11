@@ -5,6 +5,7 @@
 #include <string.h>
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
 #include "voicexml_quickjs_fia.h"
+#include "voicexml_internal.h"
 #endif
 
 typedef struct dialog_value { int value; } dialog_value;
@@ -35,6 +36,9 @@ typedef struct collect_probe {
     uint64_t generation;
     size_t prepares, commits, cancels, progress_calls, barriers;
     bool stopped;
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    char bound_uri[256];
+#endif
 } collect_probe;
 struct dialog_probe {
     vxml_document_store store;
@@ -48,7 +52,64 @@ struct dialog_probe {
     bool full;
     vxml_status progress_status;
     int64_t last_exit_value;
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    const char *script;
+    size_t script_opens, script_closes;
+    size_t submit_opens, submit_closes;
+    char script_uri[256];
+#endif
 };
+
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+static vxml_script_resource_status open_script(void *user, const char *uri, size_t size,
+    const char *charset, size_t charset_size, size_t max_bytes, vxml_script_source *out) {
+    dialog_probe *probe = user;
+    check_less(size, sizeof(probe->script_uri));
+    memcpy(probe->script_uri, uri, size);
+    probe->script_uri[size] = '\0';
+    check_equal(charset_size, (size_t)5u);
+    check_equal(charset, "UTF-8", 5u);
+    check_not_null(probe->script);
+    check_less_equal(strlen(probe->script), max_bytes);
+    ++probe->script_opens;
+    *out = (vxml_script_source){probe->script, strlen(probe->script), probe};
+    return VXML_SCRIPT_RESOURCE_OK;
+}
+static void close_script(void *user, vxml_script_source *source) {
+    dialog_probe *probe = user;
+    check_true(source->lease == probe);
+    ++probe->script_closes;
+    *source = (vxml_script_source){0};
+}
+static const vxml_script_resource_adapter_v1 script_adapter = {
+    .abi_version = VXML_SCRIPT_RESOURCE_ADAPTER_ABI_V1, .struct_size = sizeof(script_adapter),
+    .open = open_script, .close = close_script};
+static vxml_submit_resource_status submit_response(void *user,
+    const vxml_submit_wire_request_v1 *request, vxml_submit_response *out) {
+    dialog_probe *probe = user;
+    check_equal(request->method, VXML_SUBMIT_METHOD_POST);
+    check_equal(request->uri_size, strlen("https://voice.example/submit"));
+    check_equal(request->uri, "https://voice.example/submit", request->uri_size);
+    check_equal(request->body_size, (size_t)7u);
+    check_equal(request->body, "value=7", 7u);
+    ++probe->submit_opens;
+    static const char effective_uri[] = "https://voice.example/replies/final.vxml";
+    static const char media_type[] = "application/voicexml+xml";
+    *out = (vxml_submit_response){.data = probe->next_source, .size = strlen(probe->next_source),
+        .media_type = media_type, .media_type_size = sizeof(media_type) - 1u,
+        .effective_uri = effective_uri, .effective_uri_size = sizeof(effective_uri) - 1u, .lease = probe};
+    return VXML_SUBMIT_RESOURCE_OK;
+}
+static void close_submit(void *user, vxml_submit_response *response) {
+    dialog_probe *probe = user;
+    check_true(response->lease == probe);
+    ++probe->submit_closes;
+    *response = (vxml_submit_response){0};
+}
+static const vxml_submit_resource_adapter_v1 submit_adapter = {
+    .abi_version = VXML_SUBMIT_RESOURCE_ADAPTER_ABI_V1, .struct_size = sizeof(submit_adapter),
+    .execute = submit_response, .close = close_submit};
+#endif
 
 static void collect_commit(void *user) { ++((collect_probe *)user)->commits; }
 static void collect_discard(void *user) { (void)user; }
@@ -81,7 +142,9 @@ static vxml_status compile_document(void *user, const void *bytes, size_t size,
         .max_expression_operands = 32u, .max_expression_depth = 16u, .max_path_depth = 8u,
         .max_literal_bytes = 1024u, .max_string_bytes = 1024u, .max_scope_slots = 32u,
         .max_scope_storage_bytes = 4096u, .max_conditional_depth = 8u,
-        .max_fields = 4u, .max_grammar_bytes = 256u};
+        .max_fields = 4u, .max_grammar_bytes = 256u,
+        .max_submit_fields = 4u, .max_submit_value_bytes = 128u,
+        .max_submit_uri_bytes = 255u};
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
     const vxml_quickjs_fia_limits limits = {
         .engine = {1024u, 1024u, 4u * 1024u * 1024u, 256u * 1024u, 100u},
@@ -125,7 +188,12 @@ static vxml_status init_session(void *user, vxml_session *session, const vxml_pr
         .initial_root = &initial, .initially_undefined = undefined, .initially_undefined_count = 1u,
         .max_transaction_bytes = 4096u, .max_execution_steps = 128u,
         .collect = &collect_adapter, .collect_user = collect};
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    const vxml_quickjs_fia_scripts scripts = {&script_adapter, probe, 255u, 1024u};
+    vxml_status status = vxml_session_init_quickjs_fia(session, program, &options, &scripts);
+#else
     vxml_status status = vxml_session_init_cmeta(session, program, &options);
+#endif
     check_equal(status, VXML_OK);
     return status;
 }
@@ -138,6 +206,14 @@ static vxml_status progress_session(void *user, vxml_session *session, bool *pro
     dialog_probe *probe = user;
     collect_probe *collect = find_collect(probe, session);
     if (collect == NULL) return VXML_INVALID_STATE;
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    const vxml_session_document_context *document = &((vxml_session_impl *)session->impl)->document_context;
+    if (collect->bound_uri[0] == '\0') {
+        check_less(document->uri_size, sizeof(collect->bound_uri));
+        memcpy(collect->bound_uri, document->uri, document->uri_size);
+        collect->bound_uri[document->uri_size] = '\0';
+    }
+#endif
     ++collect->progress_calls;
     *progressed = false;
     if (probe->progress_status != VXML_OK) return probe->progress_status;
@@ -155,6 +231,10 @@ static void quiesce_session(void *user, vxml_session *session) {
     collect_probe *collect = find_collect(user, session);
     check_not_null(collect);
     check_not_null(session->impl);
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    if (collect->bound_uri[0] != '\0')
+        check_equal(((vxml_session_impl *)session->impl)->document_context.uri, collect->bound_uri);
+#endif
     ++collect->barriers;
     collect->stopped = true;
 }
@@ -257,6 +337,10 @@ spec("DialogManager asynchronous CMeta ownership") {
         }
         check_equal(vxml_document_store_destroy(&probe.store), VXML_DOCUMENT_STORE_OK);
         check_equal(probe.opens, probe.closes);
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+        check_equal(probe.script_opens, probe.script_closes);
+        check_equal(probe.submit_opens, probe.submit_closes);
+#endif
         const size_t expected_barriers = factory.struct_size <= offsetof(vxml_session_factory_v1, run_ready) ? 0u : 1u;
         for (size_t i = 0; i < probe.inits; ++i) check_equal(probe.collect[i].barriers, expected_barriers);
     }
@@ -365,4 +449,94 @@ spec("DialogManager asynchronous CMeta ownership") {
         check_equal(probe.collect[0].progress_calls, (size_t)0u);
         check_equal(probe.collect[0].commits, (size_t)0u);
     }
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    it("executes external filled source once despite repeated FULL publication") {
+        probe.script = "value = value ** 2;";
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><script src='scripts/filled.js'/><exit expr='value'/></filled></field></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        start_dialog(&probe); tick(&probe); tick(&probe);
+        complete(&probe.collect[0]);
+        probe.full = true;
+        size_t processed = 0u;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        check_equal(probe.script_uri, "https://voice.example/scripts/filled.js");
+        check_equal(probe.last_exit_value, (int64_t)49);
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.script_opens, (size_t)1u);
+        probe.full = false;
+        tick(&probe);
+        check_equal(probe.events[1], "dialog.exit");
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+    }
+    it("binds the replacement document URI before external script execution after navigation") {
+        probe.script = "value = 11;";
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><script src='scripts/first.js'/><goto next='nested/next.vxml'/></filled>"
+            "</field></form></vxml>";
+        probe.next_source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><script src='scripts/second.js'/><block><exit expr='value'/></block></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        start_dialog(&probe); tick(&probe); tick(&probe);
+        complete(&probe.collect[0]);
+        tick(&probe);
+        check_equal(probe.inits, (size_t)2u);
+        check_equal(probe.script_opens, (size_t)2u);
+        check_equal(probe.script_closes, (size_t)2u);
+        check_equal(probe.script_uri, "https://voice.example/nested/scripts/second.js");
+        check_equal(probe.events[0], "dialog.started");
+        check_equal(probe.events[1], "dialog.exit");
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+        check_equal(probe.collect[1].barriers, (size_t)1u);
+    }
+    it("closes a dialog after external initialization without retaining its script lease") {
+        probe.script = "value = undefined;";
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<script src='init.js'/><form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='a'/></field></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        start_dialog(&probe); tick(&probe); tick(&probe);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        vxml_dialog_manager_close(&probe.manager);
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+        check_equal(probe.collect[0].cancels, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+    }
+    it("uses the submit response effective URI for subsequent external scripts") {
+        probe.script = "value = 12;";
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><submit next='submit' method='post' namelist='value'/></filled>"
+            "</field></form></vxml>";
+        probe.next_source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<script src='scripts/response.js'/><form><block><exit expr='value'/></block></form></vxml>";
+        vxml_dialog_manager_config_v4 submit = vxml_dialog_manager_default_config_v4();
+        submit.capacity = config.capacity;
+        submit.upstream = config.upstream;
+        submit.upstream_user = config.upstream_user;
+        submit.document_store = config.document_store;
+        submit.events = config.events;
+        submit.event_user = config.event_user;
+        submit.session_factory = config.session_factory;
+        submit.session_factory_user = config.session_factory_user;
+        submit.submit = &submit_adapter;
+        submit.submit_user = &probe;
+        check_equal(vxml_dialog_manager_init_v4(&probe.manager, &submit), VXML_DIALOG_MANAGER_OK);
+        start_dialog(&probe); tick(&probe); tick(&probe);
+        complete(&probe.collect[0]); tick(&probe);
+        check_equal(probe.event_count, (size_t)2u);
+        check_equal(probe.statuses[1], VXML_OK);
+        check_equal(probe.inits, (size_t)2u);
+        check_equal(probe.submit_opens, (size_t)1u);
+        check_equal(probe.submit_closes, (size_t)1u);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_uri, "https://voice.example/replies/scripts/response.js");
+        check_equal(probe.events[1], "dialog.exit");
+    }
+#endif
 }

@@ -1688,6 +1688,8 @@ static void session_data_destroy(
     vxml_free(session->declared_offsets);
     vxml_free(session->staged_scopes);
     vxml_free(session->committed_scopes);
+    if (session->backend_session_destroy != NULL)
+        session->backend_session_destroy(session->backend_session);
     vxml_free(session);
 }
 
@@ -2376,7 +2378,8 @@ static vxml_status evaluate_expression(
     if (program->expressions[expression].backend_program != NULL) {
         const vxml_cmeta_backend_runtime backend_runtime = {
             root->storage, root->bound, runtime.root_bound_count,
-            runtime.scopes, runtime.scope_count};
+            runtime.scopes, runtime.scope_count,
+            session->backend_session, session->document_context};
         return program->expression_backend.evaluate(
             program->expressions[expression].backend_program,
             program->expressions[expression].value_kind,
@@ -5937,6 +5940,7 @@ vxml_status vxml_cmeta_session_init_profile(
     if (status != VXML_OK) goto failure;
     vxml_free(undefined);
     session->profile_data = profile;
+    profile->document_context = &session->document_context;
     return VXML_OK;
 
 failure:

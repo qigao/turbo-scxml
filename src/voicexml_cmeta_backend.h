@@ -8,6 +8,7 @@ typedef enum vxml_cmeta_code_kind {
     VXML_CMETA_CODE_CONDITION,
     VXML_CMETA_CODE_SCRIPT
 } vxml_cmeta_code_kind;
+struct vxml_session_document_context;
 
 /* Explicit write authority supplied only by the Session owner. The QueryVM
  * evaluator's read-only runtime carrier remains unchanged. Scope views expose
@@ -18,6 +19,8 @@ typedef struct vxml_cmeta_backend_runtime {
     size_t root_bound_count;
     const vxml_cmeta_expr_runtime_scope *scopes;
     size_t scope_count;
+    const void *session_user;
+    const struct vxml_session_document_context *document;
 } vxml_cmeta_backend_runtime;
 
 /* Private composition seam. The compiler copies this table; user is borrowed
@@ -38,6 +41,11 @@ typedef struct vxml_cmeta_expression_backend {
         const void *expression, vxml_cmeta_value_kind expected,
         const vxml_cmeta_backend_runtime *runtime,
         vxml_cmeta_expr_scratch *scratch, vxml_cmeta_value_view *out);
+    vxml_status (*compile_external_script)(
+        const void *user, const char *reference, size_t reference_size,
+        bool dynamic, const char *charset, size_t charset_size,
+        const cmeta_data_desc *root, void **out,
+        vxml_cmeta_expr_diagnostic *diagnostic);
 } vxml_cmeta_expression_backend;
 
 /* Internal until QuickJS script handoffs, media prepare rollback and installed

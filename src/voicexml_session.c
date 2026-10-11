@@ -223,6 +223,7 @@ vxml_status vxml_session_init_profile(
     impl->script_charset = NULL;
     impl->script_charset_size = 0u;
     impl->profile_data = NULL;
+    impl->document_context = (vxml_session_document_context){0};
     if (program_impl->profile_session_init != NULL) {
         status = program_impl->profile_session_init(impl, options);
         if (status != VXML_OK) {
@@ -231,6 +232,24 @@ vxml_status vxml_session_init_profile(
         }
     }
     session->impl = impl;
+    return VXML_OK;
+}
+
+vxml_status vxml_session_bind_document(
+    vxml_session *session, const struct vxml_document_store *resolver,
+    const char *uri, size_t uri_size) {
+    if (session == NULL || resolver == NULL || uri == NULL || uri_size == 0u || uri_size == SIZE_MAX ||
+        memchr(uri, '\0', uri_size) != NULL) return VXML_INVALID_ARGUMENT;
+    vxml_session_impl *impl = session->impl;
+    if (impl == NULL || impl->state != VXML_SESSION_READY) return VXML_INVALID_STATE;
+    /* Base VoiceXML has no Salts::Core dependency. Keep this immutable bounded
+     * byte snapshot under the same allocator as Program and Session storage. */
+    char *snapshot = vxml_malloc(uri_size + 1u);
+    if (snapshot == NULL) return VXML_ALLOCATION_FAILED;
+    memcpy(snapshot, uri, uri_size);
+    snapshot[uri_size] = '\0';
+    vxml_free(impl->document_context.uri);
+    impl->document_context = (vxml_session_document_context){resolver, snapshot, uri_size};
     return VXML_OK;
 }
 
@@ -767,6 +786,8 @@ vxml_status vxml_session_close(vxml_session *session) {
         if (impl->program != NULL &&
             impl->program->profile_session_destroy != NULL)
             impl->program->profile_session_destroy(impl);
+        vxml_free(impl->document_context.uri);
+        impl->document_context = (vxml_session_document_context){0};
         impl->navigation_uri = NULL;
         impl->navigation_uri_size = 0u;
         impl->navigation_fetchaudio_uri = NULL;
@@ -792,6 +813,7 @@ void vxml_session_destroy(vxml_session *session) {
         vxml_session_impl *impl = (vxml_session_impl *)session->impl;
         if (impl->program != NULL && impl->program->profile_session_destroy != NULL)
             impl->program->profile_session_destroy(impl);
+        vxml_free(impl->document_context.uri);
     }
     vxml_free(session->impl);
     session->impl = NULL;
