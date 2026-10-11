@@ -3,12 +3,13 @@
 ## Status and scope
 
 This slice adds the first bounded CCXML `<send>` profile. It accepts an empty
-action with required literal-expression `target` and `name` attributes,
+action with required `target` and literal-expression `name` attributes,
 optional literal-expression `targettype` and `delay` attributes, and an
 optional dotted-location `sendid` and bounded dotted-location `namelist`:
 
 ```xml
 <send target="'session:callee'" name="'call.notice'"/>
+<send target="('session:' + count)" name="'call.notice'"/>
 <send target="'https://example.test/events'"
       targettype="'basichttp'" name="'call.notice'" delay="'250ms'"/>
 <send target="'session:callee'" name="'call.notice'"
@@ -25,15 +26,43 @@ is zero. `sendid` is a dotted writable string location populated with a
 generated identifier. `<cancel>` accepts a dotted readable string location or
 a quoted literal identifier. `namelist` accepts at most
 `SCXML_PAYLOAD_MAX_ENTRIES` whitespace-separated dotted locations.
-Inline-content forms, arbitrary dynamic expressions, and escaped string
-literals remain unsupported.
+`target` also accepts dynamic strings through the configured CMeta or
+QuickJS-NG expression adapter. Inline-content forms, dynamic `name` and
+`targettype`, and escaped string literals remain unsupported.
+
+### Dynamic target ownership and failure protocol
+
+The [CCXML send contract](https://www.w3.org/TR/ccxml/#Send) defines the target
+as an expression. Reuse the existing destination-expression path rather than
+introducing another evaluator or changing the Event I/O ABI. A Program owns
+the decoded source; a Session owns its compiled expression handle. Admission
+rejects dynamic targets when the datamodel lacks the complete string-expression
+tail. Literal-only send programs remain compatible with legacy adapters.
+
+Dispatch resolves delay and payload first, then evaluates the target before
+generating a send ID or calling `prepare_send`. The result must be a nonempty,
+NUL-free string bounded by the selected datamodel. It is borrowed through that
+prepare callback; the provider must copy any bytes needed by its ticket or
+delayed queue. No new queue, thread, scheduler or mutable routing state is added.
+The host retains target/type interpretation and transport authorization.
+
+Evaluation failure discards all prior transition tickets without publishing a
+send or ID. Provider rejection and later-action failure preserve the existing
+rollback order. Expression FULL maps to allocation failure; invalid result/contract
+maps to invalid contract; execution failure maps to adapter error. Provider
+refusal, including FULL, keeps the existing adapter-error mapping. Retry reevaluates
+current application state. CMeta foreach uses its staged typed scope; QuickJS
+foreach remains unsupported. Source storage shares `max_name_bytes` and handle
+count remains bounded by the existing Program/Session and adapter limits.
 
 ## Compiler contract
 
 `target` and `name` are required. `targettype`, `delay`, `sendid`, and
 `namelist` are
-optional. Target, name, type, and delay values must be exactly one nonempty
-single-quoted or double-quoted string literal. `sendid` must be a dotted NCName
+optional. Name, type, and literal delay values must be exactly one nonempty
+single-quoted or double-quoted string literal. Target uses the shared decoded
+destination classifier: quoted literals retain their interior; other nonempty
+values retain complete expression source. `sendid` must be a dotted NCName
 location. Dynamic delay may instead be an unquoted dotted location with at least
 one dot. The compiler strips expression quotes for literals and retains decoded
 literal and location bytes in program-owned storage. The default `ccxml` target
@@ -73,7 +102,7 @@ its validation. Empty namelists behave like an omitted payload.
 The shared `scxml_send_request` carries CCXML values as follows:
 
 - `event` is the compiled CCXML `name`;
-- `target` is the compiled CCXML `target`;
+- `target` is the compiled literal or evaluated CCXML `target`;
 - `type` is the compiled `targettype` or `ccxml`;
 - `id` is empty unless `sendid` is present; then it is a bounded
   `send.<session-uuid>.<token>` value also staged into the datamodel location;
@@ -116,7 +145,7 @@ The slice is complete when tests prove:
 
 1. literal target/name, explicit/default target types, and CSS delays compile;
 2. source overwrite does not affect prepared request bytes;
-3. missing, empty, nonliteral, invalid-name, unsupported-attribute, and nested
+3. missing, empty, unsupported nonliteral fields, invalid-name, unsupported-attribute, and nested
    content forms fail deterministically;
 4. dispatch prepares and commits the exact shared send request;
 5. adapter rejection and malformed tickets map to the existing status model;
@@ -128,6 +157,8 @@ The slice is complete when tests prove:
 9. generated IDs are unique, committed before send publication, readable by a
    later transition, and forwarded exactly to cancel;
 10. focused, full-preset, and installed-consumer checks remain green.
+11. dynamic targets preserve decoded storage bounds, adapter admission,
+    CMeta foreach scope, QuickJS scratch ownership, ID ordering and rollback.
 
 Detailed identifier and cancellation semantics are specified in
 `docs/specs/ccxml-send-cancel-design.md`. Namelist projection and lifetime

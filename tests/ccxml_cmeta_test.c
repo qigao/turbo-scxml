@@ -717,6 +717,20 @@ static bool foreach_provider_quiescent(void *user) {
     return true;
 }
 
+static scxml_adapter_status foreach_prepare_send(
+    void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    const ccxml_create_call_request destination = {
+        .destination = request->target, .destination_size = request->target_size};
+    return foreach_prepare_create_call(user, &destination, out_ticket, out_error);
+}
+
+static const scxml_event_io_adapter foreach_send_adapter = {
+    .abi_version = SCXML_ADAPTER_ABI, .struct_size = sizeof(scxml_event_io_adapter),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND,
+    .prepare_send = foreach_prepare_send, .close = foreach_provider_close,
+    .is_quiescent = foreach_provider_quiescent};
+
 static const ccxml_telephony_adapter_v1 foreach_provider_adapter = {
     .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1,
     .struct_size = sizeof(ccxml_telephony_adapter_v1),
@@ -1321,92 +1335,113 @@ spec("CCXML CMeta datamodel") {
         vec_destroy(&state.values);
     }
 
-    it("evaluates createcall destinations from the staged foreach item") {
-        static const char source[] =
-            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
-            "<eventprocessor><transition event='go'>"
-            "<foreach array='values' item='item'>"
-            "<createcall dest='item.destination'/>"
-            "</foreach>"
-            "</transition></eventprocessor></ccxml>";
-        static const ccxml_foreach_record elements[] = {
-            {.destination = {.size = 7u, .data = "tel:111"}, .code = 11},
-            {.destination = {.size = 7u, .data = "tel:222"}, .code = 22},
-            {.destination = {.size = 7u, .data = "tel:333"}, .code = 33}};
-        const cmeta_data_desc *semantic_data[] = {
-            &foreach_record_alias_data};
-        ccxml_limits limits = ccxml_default_limits();
-        foreach_record_state state = {
-            .values = VecOf(ccxml_foreach_record)};
-        ccxml_program program = {0};
-        ccxml_session session = {0};
-        ccxml_cmeta_datamodel datamodel = {0};
-        foreach_provider_probe provider = {.reject_on_prepare = 2u};
-        ccxml_diagnostic diagnostic = {0};
-        ccxml_session_config session_config;
-        const ccxml_event event = {
-            .name = "go", .name_size = 2u,
-            .connection_id = "conn-1", .connection_id_size = 6u};
-        size_t index;
-        size_t item_slot = SIZE_MAX;
-        const cmeta_data_desc *item_data = NULL;
-        const void *item_object = NULL;
-        const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
-            .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
-            .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
-            .root = &foreach_record_state_desc,
-            .state = &state,
-            .max_path_depth = 3u,
-            .max_string_bytes = TEST_TEXT_CAPACITY,
-            .semantic_data = semantic_data,
-            .semantic_data_count = sizeof(semantic_data) /
-                sizeof(semantic_data[0])};
+    for (size_t sending = 0u; sending < 2u; ++sending) {
+        it("evaluates %s destinations from the staged foreach item",
+           sending ? "send" : "createcall") {
+            static const char *const sources[] = {
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<foreach array='values' item='item'>"
+                "<createcall dest='item.destination'/>"
+                "</foreach>"
+                "</transition></eventprocessor></ccxml>",
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<foreach array='values' item='item'>"
+                "<send target='item.destination' name=\"'notice'\"/>"
+                "</foreach>"
+                "</transition></eventprocessor></ccxml>"};
+            const char *source = sources[sending];
+            static const ccxml_foreach_record elements[] = {
+                {.destination = {.size = 7u, .data = "tel:111"}, .code = 11},
+                {.destination = {.size = 7u, .data = "tel:222"}, .code = 22},
+                {.destination = {.size = 7u, .data = "tel:333"}, .code = 33}};
+            const cmeta_data_desc *semantic_data[] = {
+                &foreach_record_alias_data};
+            ccxml_limits limits = ccxml_default_limits();
+            foreach_record_state state = {
+                .values = VecOf(ccxml_foreach_record)};
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            ccxml_cmeta_datamodel datamodel = {0};
+            foreach_provider_probe provider = {.reject_on_prepare = 2u};
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_session_config session_config;
+            const ccxml_event event = {
+                .name = "go", .name_size = 2u,
+                .connection_id = "conn-1", .connection_id_size = 6u};
+            size_t index;
+            size_t item_slot = SIZE_MAX;
+            const cmeta_data_desc *item_data = NULL;
+            const void *item_object = NULL;
+            const ccxml_cmeta_datamodel_config_v1 datamodel_config = {
+                .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+                .struct_size = sizeof(ccxml_cmeta_datamodel_config_v1),
+                .root = &foreach_record_state_desc,
+                .state = &state,
+                .max_path_depth = 3u,
+                .max_string_bytes = TEST_TEXT_CAPACITY,
+                .semantic_data = semantic_data,
+                .semantic_data_count = sizeof(semantic_data) /
+                    sizeof(semantic_data[0])};
 
-        limits.max_foreach_iterations = 4u;
-        limits.max_foreach_storage_bytes = 4096u;
-        check_equal(vec_init(&state.values, 4u), STL_OK);
-        for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
-             ++index)
-            check_equal(vec_push(&state.values, &elements[index]), STL_OK);
-        check_equal(
-            ccxml_compile(
-                &program, source, strlen(source), &limits, &diagnostic),
-            CCXML_OK);
-        check_equal(
-            ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
-            CCXML_OK);
-        session_config = (ccxml_session_config){
-            .program = &program,
-            .telephony = &foreach_provider_adapter,
-            .telephony_user = &provider,
-            .datamodel = ccxml_cmeta_datamodel_adapter(),
-            .datamodel_user = &datamodel};
-        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            limits.max_foreach_iterations = 4u;
+            limits.max_foreach_storage_bytes = 4096u;
+            check_equal(vec_init(&state.values, 4u), STL_OK);
+            for (index = 0u; index < sizeof(elements) / sizeof(elements[0]);
+                 ++index)
+                check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+            check_equal(
+                ccxml_compile(
+                    &program, source, strlen(source), &limits, &diagnostic),
+                CCXML_OK);
+            check_equal(
+                ccxml_cmeta_datamodel_init(&datamodel, &datamodel_config),
+                CCXML_OK);
+            session_config = (ccxml_session_config){
+                .program = &program,
+                .telephony = &foreach_provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = ccxml_cmeta_datamodel_adapter(),
+                .datamodel_user = &datamodel,
+                .event_io = sending ? &foreach_send_adapter : NULL,
+                .event_io_user = sending ? &provider : NULL};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
 
-        check_equal(
-            ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
-        check_equal(provider.prepare_count, (size_t)2u);
-        check_equal(provider.destinations[0], "tel:111");
-        check_equal(provider.destinations[1], "tel:222");
-        check_equal(provider.commit_count, (size_t)0u);
-        check_equal(provider.discard_count, (size_t)1u);
-        {
-            const ccxml_session_impl *impl =
-                (const ccxml_session_impl *)session.impl;
-            check_not_null(scxml_scope_find(
-                &impl->foreach_scope, "item", 4u, &item_slot));
-            check_false(scxml_scope_view_read(
-                &impl->foreach_scope_committed, item_slot,
-                &item_data, &item_object));
-            check_false(scxml_scope_view_read(
-                &impl->foreach_scope_staged, item_slot,
-                &item_data, &item_object));
+            check_equal(
+                ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(provider.prepare_count, (size_t)2u);
+            check_equal(provider.destinations[0], "tel:111");
+            check_equal(provider.destinations[1], "tel:222");
+            check_equal(provider.commit_count, (size_t)0u);
+            check_equal(provider.discard_count, (size_t)1u);
+            {
+                const ccxml_session_impl *impl =
+                    (const ccxml_session_impl *)session.impl;
+                check_not_null(scxml_scope_find(
+                    &impl->foreach_scope, "item", 4u, &item_slot));
+                check_false(scxml_scope_view_read(
+                    &impl->foreach_scope_committed, item_slot,
+                    &item_data, &item_object));
+                check_false(scxml_scope_view_read(
+                    &impl->foreach_scope_staged, item_slot,
+                    &item_data, &item_object));
+            }
+
+            if (sending) {
+                provider = (foreach_provider_probe){0};
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(provider.prepare_count, (size_t)3);
+                check_equal(provider.commit_count, (size_t)3);
+                check_equal(provider.discard_count, (size_t)0);
+                check_equal(provider.destinations[0], "tel:111");
+                check_equal(provider.destinations[2], "tel:333");
+            }
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_cmeta_datamodel_destroy(&datamodel);
+            ccxml_program_destroy(&program);
+            vec_destroy(&state.values);
         }
-
-        check_equal(ccxml_session_destroy(&session), CCXML_OK);
-        ccxml_cmeta_datamodel_destroy(&datamodel);
-        ccxml_program_destroy(&program);
-        vec_destroy(&state.values);
     }
 
     it("evaluates redirect destinations from the staged foreach item") {

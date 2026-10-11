@@ -2,6 +2,7 @@
 #include <voicexml/dialog_manager.h>
 #include <cmeta/cmeta.h>
 #include "tinytest.h"
+#include <tstr.h>
 #include <string.h>
 
 enum { TEST_TEXT_CAPACITY = 95u };
@@ -122,6 +123,7 @@ static const ccxml_event event = {
 typedef struct dialog_probe {
     bool reject;
     size_t committed, discarded, opened, closed, events;
+    size_t accept_count, reject_accept_at;
 } dialog_probe;
 static void commit_accept(void *user) { ++((dialog_probe *)user)->committed; }
 static void discard_accept(void *user) { ++((dialog_probe *)user)->discarded; }
@@ -132,7 +134,9 @@ static scxml_adapter_status prepare_accept(void *user, const ccxml_accept_reques
     dialog_probe *probe = user;
     (void)request;
     if (error != NULL) *error = NULL;
-    if (probe->reject) return SCXML_ADAPTER_ERROR_EXECUTION;
+    ++probe->accept_count;
+    if (probe->reject || probe->accept_count == probe->reject_accept_at)
+        return SCXML_ADAPTER_ERROR_EXECUTION;
     *ticket = (cflow_statechart_effect_ticket){commit_accept, discard_accept, probe};
     return SCXML_ADAPTER_ACCEPTED;
 }
@@ -168,6 +172,69 @@ static const vxml_dialog_event_sink_v1 events = {
     .abi_version = VXML_DIALOG_EVENT_SINK_ABI_V1, .struct_size = sizeof(events),
     .try_publish = publish_event};
 
+typedef struct send_probe send_probe;
+typedef struct send_ticket {
+    send_probe *owner;
+    tstr target, id;
+    bool live;
+} send_ticket;
+struct send_probe {
+    send_ticket tickets[2];
+    const test_state *state;
+    size_t prepared, committed, discarded, ids_visible;
+    bool full;
+    uint64_t delay;
+    size_t payload_count;
+    scxml_payload_value payload;
+};
+static void commit_send(void *user) {
+    send_ticket *ticket = user;
+    send_probe *probe = ticket->owner;
+    if (!ticket->live) return;
+    ticket->live = false;
+    ++probe->committed;
+    if (probe->state->id.size == tstr_len(ticket->id) &&
+        memcmp(probe->state->id.data, ticket->id, tstr_len(ticket->id)) == 0)
+        ++probe->ids_visible;
+}
+static void discard_send(void *user) {
+    send_ticket *ticket = user;
+    if (!ticket->live) return;
+    ticket->live = false;
+    ++ticket->owner->discarded;
+}
+static scxml_adapter_status prepare_send(void *user, const scxml_send_request *request,
+    cflow_statechart_effect_ticket *out, const char **error) {
+    send_probe *probe = user;
+    if (error != NULL) *error = NULL;
+    if (probe->full || probe->prepared == 2u) return SCXML_ADAPTER_FULL;
+    send_ticket *ticket = &probe->tickets[probe->prepared];
+    ticket->target = tstr_new_len(request->target, request->target_size);
+    ticket->id = tstr_new_len(request->id, request->id_size);
+    if (ticket->target == NULL || ticket->id == NULL) {
+        tstr_free(ticket->target);
+        tstr_free(ticket->id);
+        *ticket = (send_ticket){0};
+        return SCXML_ADAPTER_FULL;
+    }
+    if (probe->prepared == 0u) {
+        probe->delay = request->delay_ms;
+        probe->payload_count = request->payload.entry_count;
+        if (request->payload.entry_count == 1u)
+            probe->payload = request->payload.entries[0].value.scalar;
+    }
+    ticket->owner = probe;
+    ticket->live = true;
+    ++probe->prepared;
+    *out = (cflow_statechart_effect_ticket){commit_send, discard_send, ticket};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+static const scxml_event_io_adapter event_io = {
+    .abi_version = SCXML_ADAPTER_ABI, .struct_size = sizeof(scxml_event_io_adapter),
+    .capabilities = SCXML_EVENT_IO_CAP_SEND | SCXML_EVENT_IO_CAP_DELAYED_SEND |
+        SCXML_EVENT_IO_CAP_PAYLOAD,
+    .prepare_send = prepare_send, .close = close_provider, .is_quiescent = quiescent};
+
 spec("CCXML QuickJS-NG expression adapter") {
     static test_state state;
     static ccxml_quickjs_datamodel owner;
@@ -178,6 +245,7 @@ spec("CCXML QuickJS-NG expression adapter") {
     static ccxml_session session;
     static vxml_dialog_manager manager;
     static dialog_probe provider;
+    static send_probe sends;
     static const ccxml_datamodel_adapter_v1 *adapter;
     static const char *error;
 
@@ -190,6 +258,7 @@ spec("CCXML QuickJS-NG expression adapter") {
         session = (ccxml_session){0};
         manager = (vxml_dialog_manager){0};
         provider = (dialog_probe){0};
+        sends = (send_probe){.state = &state};
         config = ccxml_quickjs_default_datamodel_config();
         config.state_config.root = &state_desc;
         config.state_config.state = &state;
@@ -199,6 +268,11 @@ spec("CCXML QuickJS-NG expression adapter") {
     }
     after_each() {
         if (session.impl != NULL) check_equal(ccxml_session_destroy(&session), CCXML_OK);
+        for (size_t index = 0u; index < 2u; ++index) {
+            check_false(sends.tickets[index].live);
+            tstr_free(sends.tickets[index].target);
+            tstr_free(sends.tickets[index].id);
+        }
         if (manager.impl != NULL) {
             vxml_dialog_manager_close(&manager);
             check_equal(vxml_dialog_manager_destroy(&manager), VXML_DIALOG_MANAGER_OK);
@@ -391,6 +465,99 @@ spec("CCXML QuickJS-NG expression adapter") {
         config.max_expressions = 0u;
         check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_INVALID_ARGUMENT);
         check_null(owner.impl);
+    }
+
+    it("releases earlier send handles when a later target fails syntax admission") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<send target='id' name=\"'notice'\"/>"
+            "<send target='count +' name=\"'notice'\"/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_diagnostic diagnostic = {0};
+        config.max_expressions = 2u;
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+            NULL, &diagnostic), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = &telephony, .telephony_user = &provider,
+            .event_io = &event_io, .event_io_user = &sends};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_ADAPTER_ERROR);
+        check_null(session.impl);
+        check_equal(sends.prepared, (size_t)0);
+        check_equal(adapter->compile_string_expression(&owner, "'ok'", 4u,
+            &expression, &error), SCXML_ADAPTER_ACCEPTED);
+        check_equal(adapter->compile_condition(&owner, "true", 4u,
+            &condition, &error), SCXML_ADAPTER_ACCEPTED);
+    }
+
+    group("dynamic Event I/O targets") {
+        before_each() {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'><accept/>"
+                "<send target=\"('session:' + count + '/' + event$.connectionid)\" "
+                "name=\"'notice'\" sendid='id' namelist='count' delay=\"'1ms'\"/>"
+                "<send target=\"(count === 0 ? '' : (count &lt; 0 ? missingTarget : 'session:' + (count + 1)))\" "
+                "name=\"'notice'\" sendid='id'/><accept/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_diagnostic diagnostic = {0};
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        }
+        it("copies both targets before scratch reuse and publishes IDs before sends") {
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(sends.tickets[0].target, "session:7/call-7");
+            check_equal(sends.tickets[1].target, "session:8");
+            check_equal(sends.committed, (size_t)2);
+            check_equal(sends.ids_visible, (size_t)2);
+            check_equal(sends.delay, UINT64_C(1));
+            check_equal(sends.payload_count, (size_t)1);
+            check_equal(sends.payload.kind, SCXML_PAYLOAD_VALUE_SINT);
+            check_equal(sends.payload.data.sint, INT64_C(7));
+            check_equal(provider.committed, (size_t)2);
+        }
+        for (size_t invalid = 0u; invalid < 2u; ++invalid) {
+            it("rolls back the first send and ID on %s", invalid ? "JS exception" : "empty target") {
+                state.count = invalid ? -1 : 0;
+                check_equal(ccxml_session_dispatch(&session, &event),
+                    invalid ? CCXML_ADAPTER_ERROR : CCXML_INVALID_CONTRACT);
+                check_equal(sends.prepared, (size_t)1);
+                check_equal(sends.committed, (size_t)0);
+                check_equal(sends.discarded, (size_t)1);
+                check_equal(provider.discarded, (size_t)1);
+                check_equal(state.id.data, "old");
+            }
+        }
+        it("reevaluates current state when retrying after provider backpressure") {
+            sends.full = true;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(sends.prepared, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+            sends.full = false;
+            state.count = 9;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(sends.tickets[0].target, "session:9/call-7");
+            check_equal(sends.tickets[1].target, "session:10");
+            check_equal(sends.ids_visible, (size_t)2);
+        }
+        it("discards both prepared sends and ID writes when a later action fails") {
+            provider.reject_accept_at = 2u;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(sends.prepared, (size_t)2);
+            check_equal(sends.committed, (size_t)0);
+            check_equal(sends.discarded, (size_t)2);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+        }
     }
 
     group("real VoiceXML dialog transaction") {

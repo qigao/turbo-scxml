@@ -815,6 +815,7 @@ static ccxml_status validate_send_action(
     char *send_id_location = NULL;
     char *namelist_value = NULL;
     bool delay_is_literal = false;
+    bool target_is_dynamic = false;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
@@ -862,8 +863,9 @@ static ccxml_status validate_send_action(
             salts_xml_node_location(action),
             "CCXML send requires target and name");
     }
-    status = decode_send_literal(
-        target_attribute, &target_value, &target_size, diagnostic);
+    status = decode_destination_value(
+        target_attribute, true, &target_value, &target_size,
+        &target_is_dynamic, diagnostic);
     if (status != CCXML_OK) goto cleanup;
     status = decode_send_literal(
         name_attribute, &name_value, &name_size, diagnostic);
@@ -3120,11 +3122,23 @@ static ccxml_status copy_program(
                     const salts_xml_attribute namelist_attribute =
                         node_unqualified_attribute(action, "namelist");
                     static const char default_type[] = "ccxml";
+                    char *target_value = NULL;
                     action_row->kind = CCXML_ACTION_SEND;
                     action_row->payload_first = payload_index;
+                    status = decode_destination_value(
+                        target_attribute, true, &target_value,
+                        &action_row->destination_size,
+                        &action_row->destination_is_dynamic, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
+                    if (action_row->destination_is_dynamic)
+                        impl->uses_string_expression = true;
                     action_row->destination = cursor;
-                    action_row->destination_size =
-                        copy_send_literal(target_attribute, cursor);
+                    memcpy(cursor, target_value, action_row->destination_size);
+                    free(target_value);
+                    cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
                     action_row->name = cursor;
                     action_row->name_size =

@@ -1733,6 +1733,17 @@ static ccxml_status execute_transition_actions(
                     .entries = impl->payload_scratch,
                     .entry_count = action->payload_count};
             }
+            if (action->destination_is_dynamic) {
+                ccxml_string_view target = {0};
+                status = evaluate_action_string_expression(
+                    impl, action_index, event, &target);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+                request.target = target.data;
+                request.target_size = target.size;
+            }
             if (action->location != NULL) {
                 const uint64_t token = impl->next_send_token;
                 const int written = token == 0u ? -1 : snprintf(

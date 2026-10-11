@@ -4,11 +4,11 @@
 
 This facility provides typed dynamic string evaluation to
 `<createcall dest="...">`, `<redirect dest="...">`, optional
-`<createconference confname="...">`, and `src` on `<dialogprepare>` and direct
-`<dialogstart>`. Quoted, nonempty literals keep their
+`<createconference confname="...">`, `src` on `<dialogprepare>` and direct
+`<dialogstart>`, and `<send target="...">`. Quoted, nonempty literals keep their
 existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
-the telephony prepare callback.
+the consuming provider prepare callback.
 
 XPath is not part of this design. The built-in CMeta implementation uses the
 existing typed expression compiler. The opt-in QuickJS-NG adapter described
@@ -113,8 +113,9 @@ These fields are an additive, size-versioned tail. Existing adapter prefixes
 remain valid for programs that use literals only. A program containing a
 dynamic string action requires the complete tail at session admission.
 
-The returned string is borrowed through the immediately following telephony
-prepare callback. Neither the CCXML core nor the provider may retain it.
+The returned string is borrowed through the immediately following provider
+prepare callback. Neither the CCXML core nor the provider may retain the
+borrowed view; providers copy bytes needed after prepare returns.
 
 ## Compile and storage model
 
@@ -158,19 +159,20 @@ uses staged scope; otherwise it uses committed scope. Thus
 `<createconference conferenceid="conference_id"
 confname="item.destination"/>`, observe the current typed iteration. Dialog
 preparation and direct start likewise accept `src="item.destination"`.
+Send accepts `target="item.destination"` against the same staged scope.
 
 ## Session lifecycle and transaction behavior
 
 Session initialization allocates a zeroed expression-handle array only when
 the program uses dynamic string expressions. Every dynamic createcall,
-redirect, createconference, dialogprepare, or direct dialogstart action is compiled before the session is
-published. Any failure
+redirect, createconference, dialogprepare, direct dialogstart, or send action
+is compiled before the session is published. Any failure
 destroys all handles that compiled successfully, then follows normal session
 rollback.
 
 Dispatch evaluates the value immediately before calling the matching
 `prepare_create_call`, `prepare_redirect`, `prepare_create_conference`,
-`prepare_dialog_prepare`, or `prepare_dialog_start` operation. Redirect and
+`prepare_dialog_prepare`, `prepare_dialog_start`, or `prepare_send` operation. Redirect and
 direct dialogstart first validate their mandatory current Event connection.
 Evaluation failure, an invalid returned view, or provider rejection discards
 all tickets already prepared by the transition and rolls back staged foreach
@@ -188,7 +190,7 @@ releasing the datamodel owner relationship.
   appended callbacks.
 - Literal-only programs accept legacy adapter prefixes and do not compile or
   evaluate expressions.
-- Conference IDs, assignment values, send targets, and delay
+- Conference IDs, assignment values, send names/types, and delay
   expressions are not migrated in this facility.
 - General string concatenation and coercion are not added to the CMeta
   expression language.

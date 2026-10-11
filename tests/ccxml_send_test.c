@@ -576,7 +576,7 @@ spec("CCXML send") {
                 CCXML_INVALID_STRUCTURE);
         }
 
-        it("rejects empty and nonliteral values") {
+        it("rejects empty values and nonliteral name or type") {
             ccxml_program program = {0};
             check_equal(
                 compile_actions(
@@ -586,8 +586,8 @@ spec("CCXML send") {
             check_equal(
                 compile_actions(
                     &program,
-                    "<send target='destination' name=\"'call.notice'\"/>"),
-                CCXML_UNSUPPORTED_FEATURE);
+                    "<send target='' name=\"'call.notice'\"/>"),
+                CCXML_INVALID_STRUCTURE);
             check_equal(
                 compile_actions(
                     &program,
@@ -792,6 +792,54 @@ spec("CCXML send") {
                 ccxml_compile(
                     &program, source, strlen(source), &limits, &diagnostic),
                 CCXML_OK);
+            ccxml_program_destroy(&program);
+        }
+
+        it("retains decoded dynamic target source within the exact name budget") {
+            char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='a &amp;&amp; b' name=\"'e'\"/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            ccxml_program program = {0};
+            /* go + NUL, a && b + NUL, e + NUL. */
+            limits.max_name_bytes = 11u;
+            check_equal(ccxml_compile(&program, source, strlen(source),
+                &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+            limits.max_name_bytes = 12u;
+            check_equal(ccxml_compile(&program, source, strlen(source),
+                &limits, &diagnostic), CCXML_OK);
+            memset(source, 'x', sizeof(source)-1u);
+            const ccxml_program_impl *impl = program.impl;
+            check_true(impl->uses_string_expression);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_equal(impl->actions[0].destination, "a && b");
+            check_equal(impl->actions[0].destination_size, (size_t)6);
+            ccxml_program_destroy(&program);
+        }
+
+        it("requires the string-expression adapter tail only for dynamic targets") {
+            ccxml_program program = {0};
+            ccxml_session session = {0};
+            effect_probe provider = {.quiescent = true};
+            send_probe send = {.effects = {.quiescent = true}};
+            datamodel_probe datamodel = {0};
+            check_equal(compile_actions(&program,
+                "<send target='destination' name=\"'call.notice'\"/>"), CCXML_OK);
+            check_equal(init_send_session(&session, &program, &provider,
+                &send, &event_io_adapter), CCXML_INVALID_ARGUMENT);
+            check_equal(init_send_session_with_datamodel(&session, &program,
+                &provider, &datamodel, &send, &event_io_adapter), CCXML_INVALID_ARGUMENT);
+            check_null(session.impl);
+            ccxml_program_destroy(&program);
+            check_equal(compile_actions(&program,
+                "<send target=\"'session:callee'\" name=\"'call.notice'\"/>"), CCXML_OK);
+            check_equal(init_send_session_with_datamodel(&session, &program,
+                &provider, &datamodel, &send, &event_io_adapter), CCXML_OK);
+            check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_program_destroy(&program);
         }
 
