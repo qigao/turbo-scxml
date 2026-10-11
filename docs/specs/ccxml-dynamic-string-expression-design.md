@@ -3,8 +3,9 @@
 ## Scope
 
 This facility provides typed dynamic string evaluation to
-`<createcall dest="...">`, `<redirect dest="...">`, and optional
-`<createconference confname="...">`. Quoted, nonempty literals keep their
+`<createcall dest="...">`, `<redirect dest="...">`, optional
+`<createconference confname="...">`, and `src` on `<dialogprepare>` and direct
+`<dialogstart>`. Quoted, nonempty literals keep their
 existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
 the telephony prepare callback.
@@ -81,23 +82,25 @@ uses staged scope; otherwise it uses committed scope. Thus
 `<createcall dest="item.destination"/>` and
 `<redirect dest="item.destination"/>`, as well as
 `<createconference conferenceid="conference_id"
-confname="item.destination"/>`, observe the current typed iteration.
+confname="item.destination"/>`, observe the current typed iteration. Dialog
+preparation and direct start likewise accept `src="item.destination"`.
 
 ## Session lifecycle and transaction behavior
 
 Session initialization allocates a zeroed expression-handle array only when
 the program uses dynamic string expressions. Every dynamic createcall,
-redirect, or createconference action is compiled before the session is
+redirect, createconference, dialogprepare, or direct dialogstart action is compiled before the session is
 published. Any failure
 destroys all handles that compiled successfully, then follows normal session
 rollback.
 
 Dispatch evaluates the value immediately before calling the matching
-`prepare_create_call`, `prepare_redirect`, or `prepare_create_conference`
-operation. Redirect first validates its mandatory current Event connection.
+`prepare_create_call`, `prepare_redirect`, `prepare_create_conference`,
+`prepare_dialog_prepare`, or `prepare_dialog_start` operation. Redirect and
+direct dialogstart first validate their mandatory current Event connection.
 Evaluation failure, an invalid returned view, or provider rejection discards
 all tickets already prepared by the transition and rolls back staged foreach
-scope. Createconference retains its separate returned-ID writeback ticket and
+scope. Createconference, dialogprepare, and direct dialogstart retain a separate returned-ID writeback ticket and
 commits that write before publishing the provider operation. A successful
 provider prepare is retained in the existing effect journal, so commit ordering
 and exact-once discard remain unchanged.
@@ -111,7 +114,7 @@ releasing the datamodel owner relationship.
   appended callbacks.
 - Literal-only programs accept legacy adapter prefixes and do not compile or
   evaluate expressions.
-- Dialog source, conference IDs, assignment values, send targets, and delay
+- Conference IDs, assignment values, send targets, and delay
   expressions are not migrated in this facility.
 - General string concatenation and coercion are not added to the CMeta
   expression language.

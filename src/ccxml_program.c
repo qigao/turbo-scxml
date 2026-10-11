@@ -1326,7 +1326,9 @@ static ccxml_status validate_dialog_start_action(
     salts_xml_attribute source_attribute = {0};
     salts_xml_attribute connection_id_attribute = {0};
     salts_xml_string_view location;
-    salts_xml_string_view source_expression;
+    char *source_value = NULL;
+    size_t source_size = 0u;
+    bool source_is_dynamic = false;
     salts_xml_string_view connection_expression;
     size_t index;
     size_t retained_size;
@@ -1374,9 +1376,11 @@ static ccxml_status validate_dialog_start_action(
             salts_xml_attribute_location(dialog_id_attribute),
             "dialogstart dialogid must be a dotted NCName location");
     }
-    status = validate_string_literal(
-        source_attribute, &source_expression, diagnostic);
+    status = decode_destination_value(
+        source_attribute, true, &source_value, &source_size,
+        &source_is_dynamic, diagnostic);
     if (status != CCXML_OK) return status;
+    free(source_value);
     connection_expression =
         salts_xml_attribute_value(connection_id_attribute);
     if (!view_equal(connection_expression, "event$.connectionid")) {
@@ -1396,7 +1400,8 @@ static ccxml_status validate_dialog_start_action(
     }
     if (!checked_add(location.size, 1u, &retained_size) ||
         !checked_add(
-            retained_size, source_expression.size - 1u, &retained_size) ||
+            retained_size, source_size, &retained_size) ||
+        !checked_add(retained_size, 1u, &retained_size) ||
         measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
                      &measurement->action_count) ||
@@ -1501,7 +1506,9 @@ static ccxml_status validate_dialog_prepare_action(
     salts_xml_attribute dialog_id_attribute = {0};
     salts_xml_attribute source_attribute = {0};
     salts_xml_string_view location;
-    salts_xml_string_view source_expression;
+    char *source_value = NULL;
+    size_t source_size = 0u;
+    bool source_is_dynamic = false;
     size_t index;
     size_t retained_size;
     ccxml_status status;
@@ -1544,9 +1551,11 @@ static ccxml_status validate_dialog_prepare_action(
             salts_xml_attribute_location(dialog_id_attribute),
             "dialogprepare dialogid must be a dotted NCName location");
     }
-    status = validate_string_literal(
-        source_attribute, &source_expression, diagnostic);
+    status = decode_destination_value(
+        source_attribute, true, &source_value, &source_size,
+        &source_is_dynamic, diagnostic);
     if (status != CCXML_OK) return status;
+    free(source_value);
     for (index = 0u; index < salts_xml_node_child_count(action); ++index) {
         const salts_xml_node child = salts_xml_node_child_at(action, index);
         if (!node_is_ignorable(child)) {
@@ -1558,7 +1567,8 @@ static ccxml_status validate_dialog_prepare_action(
     }
     if (!checked_add(location.size, 1u, &retained_size) ||
         !checked_add(
-            retained_size, source_expression.size - 1u, &retained_size) ||
+            retained_size, source_size, &retained_size) ||
+        !checked_add(retained_size, 1u, &retained_size) ||
         measurement->action_count >= limits->max_actions ||
         !checked_add(measurement->action_count, 1u,
                      &measurement->action_count) ||
@@ -2990,6 +3000,9 @@ static ccxml_status copy_program(
                     salts_xml_attribute id_attribute = {0};
                     salts_xml_attribute source_attribute = {0};
                     salts_xml_string_view value;
+                    char *source_value = NULL;
+                    size_t source_size = 0u;
+                    bool source_is_dynamic = false;
                     if (view_equal(action_name, "dialogprepare")) {
                         action_row->kind = CCXML_ACTION_DIALOG_PREPARE;
                         impl->uses_dialog_prepare = true;
@@ -3017,12 +3030,19 @@ static ccxml_status copy_program(
                     memcpy(cursor, value.data, value.size);
                     cursor[value.size] = '\0';
                     cursor += value.size + 1u;
-                    value = salts_xml_attribute_value(source_attribute);
+                    status = decode_destination_value(
+                        source_attribute, true, &source_value, &source_size,
+                        &source_is_dynamic, diagnostic);
+                    if (status != CCXML_OK) {
+                        free(items);
+                        return status;
+                    }
                     action_row->destination = cursor;
-                    action_row->destination_size = value.size - 2u;
-                    memcpy(
-                        cursor, value.data + 1u,
-                        action_row->destination_size);
+                    action_row->destination_size = source_size;
+                    action_row->destination_is_dynamic = source_is_dynamic;
+                    if (source_is_dynamic) impl->uses_string_expression = true;
+                    memcpy(cursor, source_value, source_size);
+                    free(source_value);
                     cursor[action_row->destination_size] = '\0';
                     cursor += action_row->destination_size + 1u;
                 } else if (view_equal(

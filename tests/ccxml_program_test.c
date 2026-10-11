@@ -12,6 +12,63 @@ static ccxml_status compile_source(
 }
 
 spec("CCXML program") {
+    group("dialog source decoding budgets") {
+        static ccxml_program program;
+        before_each() { program = (ccxml_program){0}; }
+        after_each() { ccxml_program_destroy(&program); }
+
+        it("charges decoded dynamic sources and every retained terminator") {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<dialogprepare dialogid='dialog.id' src='mo&#100;e'/>"
+                "<dialogstart dialogid='dialog.id' src='mo&#100;e' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            /* go + NUL, twice (dialog.id + NUL + mode + NUL). */
+            limits.max_name_bytes = 32u;
+            check_equal(ccxml_compile(&program, source, sizeof(source) - 1u,
+                &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+            limits.max_name_bytes = 33u;
+            check_equal(ccxml_compile(&program, source, sizeof(source) - 1u,
+                &limits, &diagnostic), CCXML_OK);
+            const ccxml_program_impl *impl = program.impl;
+            check_true(impl->uses_string_expression);
+            for (size_t index = 0u; index < 2u; ++index) {
+                check_true(impl->actions[index].destination_is_dynamic);
+                check_equal(impl->actions[index].destination, "mode");
+            }
+        }
+
+        it("decodes quoted literal sources without requiring an expression adapter") {
+            static const char source[] =
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<dialogprepare dialogid='dialog.id' src='&quot;a&amp;b.vxml&quot;'/>"
+                "<dialogstart dialogid='dialog.id' src='&quot;a&amp;b.vxml&quot;' "
+                "connectionid='event$.connectionid'/>"
+                "</transition></eventprocessor></ccxml>";
+            ccxml_limits limits = ccxml_default_limits();
+            ccxml_diagnostic diagnostic = {0};
+            limits.max_name_bytes = 40u;
+            check_equal(ccxml_compile(&program, source, sizeof(source) - 1u,
+                &limits, &diagnostic), CCXML_LIMIT_EXCEEDED);
+            check_null(program.impl);
+            limits.max_name_bytes = 41u;
+            check_equal(ccxml_compile(&program, source, sizeof(source) - 1u,
+                &limits, &diagnostic), CCXML_OK);
+            const ccxml_program_impl *impl = program.impl;
+            check_false(impl->uses_string_expression);
+            for (size_t index = 0u; index < 2u; ++index) {
+                check_false(impl->actions[index].destination_is_dynamic);
+                check_equal(impl->actions[index].destination, "a&b.vxml");
+            }
+        }
+    }
+
     it("copies a bounded eventprocessor program") {
         char source[] =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
@@ -1501,19 +1558,25 @@ spec("CCXML program") {
             check_null(program.impl);
         }
 
-        it("rejects a nonliteral source expression") {
-            const char *source =
+        it("retains a decoded dynamic source independently of input") {
+            char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='dialog.prepare'>"
-                "<dialogprepare dialogid='dialog.prepared' src='dialog_uri'/>"
+                "<dialogprepare dialogid='dialog.prepared' src='dialog&#95;uri'/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_program program = {0};
             ccxml_diagnostic diagnostic = {0};
 
             check_equal(
                 compile_source(&program, source, &diagnostic),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_null(program.impl);
+                CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            const ccxml_program_impl *impl = program.impl;
+            check_true(impl->uses_string_expression);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_equal(impl->actions[0].destination, "dialog_uri");
+            check_equal(impl->actions[0].destination_size, (size_t)10);
+            ccxml_program_destroy(&program);
         }
 
         it("rejects an empty source literal") {
@@ -1705,11 +1768,11 @@ spec("CCXML program") {
             check_null(program.impl);
         }
 
-        it("rejects a nonliteral source expression") {
-            const char *source =
+        it("retains a decoded dynamic source independently of input") {
+            char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='connection.connected'>"
-                "<dialogstart dialogid='dialog.id' src='dialog_uri' "
+                "<dialogstart dialogid='dialog.id' src='dialog&#95;uri' "
                 "connectionid='event$.connectionid'/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_program program = {0};
@@ -1717,8 +1780,14 @@ spec("CCXML program") {
 
             check_equal(
                 compile_source(&program, source, &diagnostic),
-                CCXML_UNSUPPORTED_FEATURE);
-            check_null(program.impl);
+                CCXML_OK);
+            memset(source, 'x', sizeof(source) - 1u);
+            const ccxml_program_impl *impl = program.impl;
+            check_true(impl->uses_string_expression);
+            check_true(impl->actions[0].destination_is_dynamic);
+            check_equal(impl->actions[0].destination, "dialog_uri");
+            check_equal(impl->actions[0].destination_size, (size_t)10);
+            ccxml_program_destroy(&program);
         }
 
         it("rejects an empty source literal") {

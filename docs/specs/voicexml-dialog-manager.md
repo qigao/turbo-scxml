@@ -41,7 +41,10 @@ serialized progress point.
 Event sink returning FULL retains the dialog until publication succeeds, then
 the single slot can be reused with a new ID. A later telephony action failure
 discards both the dialog reservation and returned-ID ticket before any document
-opens; a subsequent dispatch can use the released capacity.
+opens; a subsequent dispatch can use the released capacity. Both literal and
+typed dynamic `src` variants exercise these paths. CCXML evaluates a dynamic
+source immediately before prepare; the manager copies that borrowed result
+under the same capacity and ownership limits as a literal source.
 
 With Component enabled, `voicexml_component_dialog_test` additionally dispatches
 real CCXML prepare, prepared start and terminate through an old DSO resource

@@ -2080,11 +2080,22 @@ static ccxml_status execute_transition_actions(
             const char *error = NULL;
             scxml_adapter_status adapter_status;
             ccxml_status status;
-            const ccxml_dialog_prepare_request request = {
+            ccxml_dialog_prepare_request request = {
                 .source = action->destination,
                 .source_size = action->destination_size,
                 .media_type = voice_xml_media_type,
                 .media_type_size = sizeof(voice_xml_media_type) - 1u};
+            if (action->destination_is_dynamic) {
+                ccxml_string_view source = {0};
+                status = evaluate_action_string_expression(
+                    impl, action_index, event, &source);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+                request.source = source.data;
+                request.source_size = source.size;
+            }
             adapter_status = impl->telephony.prepare_dialog_prepare(
                 impl->telephony_user, &request, &dialog_id,
                 &provider_ticket, &error);
@@ -2123,7 +2134,7 @@ static ccxml_status execute_transition_actions(
             const char *error = NULL;
             scxml_adapter_status adapter_status;
             ccxml_status status;
-            const ccxml_dialog_start_request request = {
+            ccxml_dialog_start_request request = {
                 .source = action->destination,
                 .source_size = action->destination_size,
                 .media_type = voice_xml_media_type,
@@ -2133,6 +2144,17 @@ static ccxml_status execute_transition_actions(
             if (!connection_id_valid(event)) {
                 discard_tickets(impl->tickets, prepared);
                 return CCXML_INVALID_EVENT;
+            }
+            if (action->destination_is_dynamic) {
+                ccxml_string_view source = {0};
+                status = evaluate_action_string_expression(
+                    impl, action_index, event, &source);
+                if (status != CCXML_OK) {
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+                request.source = source.data;
+                request.source_size = source.size;
             }
             adapter_status = impl->telephony.prepare_dialog_start(
                 impl->telephony_user, &request, &dialog_id,

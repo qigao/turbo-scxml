@@ -23,8 +23,9 @@ Standard reference:
 
 ## Compiler contract
 
-`dialogid` is a required dotted NCName write location. `src` is a required,
-nonempty quoted string literal with no escape processing. `connectionid` is
+`dialogid` is a required dotted NCName write location. `src` is required and
+accepts a nonempty quoted literal or a typed dynamic string expression, with
+XML entities decoded before classification. `connectionid` is
 required and must be exactly `event$.connectionid`; the source text is not
 retained because the runtime reads the current event field directly.
 
@@ -56,6 +57,9 @@ delivery.
 Session initialization requires the existing write-capable datamodel prefix
 and validates `dialogid` once. Dispatch rejects a missing, empty, or
 NUL-containing current event connection ID before provider prepare.
+It also performs this check before evaluating a dynamic source. Dynamic
+source admission, borrowing, errors, and handle cleanup follow the
+[detached preparation contract](ccxml-dialogprepare-design.md#dynamic-source-ownership-and-admission).
 
 The core prepares the provider reservation first and then stages the returned
 dialog ID through `prepare_assign_string`. It swaps the two tickets so the ID
@@ -79,3 +83,8 @@ current-event ID forwarding, provider ID writeback and commit order, rollback,
 invalid events/IDs/tickets, session-time location validation, append-only
 callback compatibility, CMeta end-to-end writeback, and the supported
 build/install matrix.
+
+The dynamic-source variants additionally cover connection validation before
+evaluation, current CMeta root and foreach values, legacy literal admission,
+expression-handle cleanup, and transactional rollback. The real DialogManager
+integration runs both literal and dynamic sources under Event backpressure.

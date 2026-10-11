@@ -808,128 +808,315 @@ static const vxml_dialog_event_sink_v1 dialog_manager_event_sink = {
     .try_publish = dialog_manager_publish_event};
 
 spec("CCXML session") {
+    for (size_t direct = 0u; direct < 2u; ++direct) {
+        group("dynamic dialog source: %s", direct ? "start" : "prepare") {
+            static ccxml_program program;
+            static ccxml_session session;
+            static provider_probe provider;
+            static datamodel_probe datamodel;
+            static ccxml_event event;
+            static const char *actions[] = {
+                "<accept/><dialogprepare dialogid='dialog.id' src='mode'/>",
+                "<accept/><dialogstart dialogid='dialog.id' src='mode' "
+                "connectionid='event$.connectionid'/>"};
 
-    group("VoiceXML direct-start transaction integration") {
-        static ccxml_program program;
-        static ccxml_session session;
-        static vxml_dialog_manager manager;
-        static provider_probe upstream;
-        static datamodel_probe datamodel;
-        static dialog_manager_document_probe documents;
-        static dialog_manager_event_probe events;
-
-        before_each() {
-            program = (ccxml_program){0};
-            session = (ccxml_session){0};
-            manager = (vxml_dialog_manager){0};
-            upstream = (provider_probe){.quiescent = true};
-            datamodel = (datamodel_probe){0};
-            documents = (dialog_manager_document_probe){0};
-            events = (dialog_manager_event_probe){0};
-            vxml_dialog_manager_config_v1 config =
-                vxml_dialog_manager_default_config_v1();
-            config.capacity = 1u;
-            config.upstream = &provider_adapter;
-            config.upstream_user = &upstream;
-            config.documents = &dialog_manager_document_adapter;
-            config.document_user = &documents;
-            config.events = &dialog_manager_event_sink;
-            config.event_user = &events;
-            check_equal(vxml_dialog_manager_init(&manager, &config),
-                        VXML_DIALOG_MANAGER_OK);
-            check_equal(compile_program(&program,
-                "<dialogstart dialogid='dialog.id' src=\"'app.vxml'\" "
-                "connectionid='event$.connectionid'/><accept/>"), CCXML_OK);
-            const ccxml_session_config session_config = {
-                .program = &program,
-                .telephony = vxml_dialog_manager_ccxml_adapter(),
-                .telephony_user = vxml_dialog_manager_ccxml_user(&manager),
-                .datamodel = &datamodel_adapter,
-                .datamodel_user = &datamodel};
-            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
-        }
-
-        after_each() {
-            upstream.quiescent = true;
-            check_equal(ccxml_session_destroy(&session), CCXML_OK);
-            if (manager.impl != NULL) {
-                vxml_dialog_manager_close(&manager);
-                check_equal(vxml_dialog_manager_destroy(&manager),
-                            VXML_DIALOG_MANAGER_OK);
+            before_each() {
+                program = (ccxml_program){0};
+                session = (ccxml_session){0};
+                provider = (provider_probe){
+                    .quiescent = true,
+                    .dialog_id_result = "dialog-dynamic",
+                    .dialog_id_result_size = sizeof("dialog-dynamic") - 1u};
+                datamodel = (datamodel_probe){
+                    .string_expression_result = "first.vxml",
+                    .string_expression_result_size = sizeof("first.vxml") - 1u};
+                event = alerting_event();
+                check_equal(compile_program(&program, actions[direct]), CCXML_OK);
             }
-            ccxml_program_destroy(&program);
-        }
 
-        it("retains a committed dialog under event backpressure and reuses its slot after exit") {
-            const ccxml_event event = alerting_event();
-            vxml_dialog_manager_stats stats = {0};
-            size_t processed = 0u;
-            char first_id[sizeof(datamodel.value)];
-            events.full = true;
-            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
-            check_equal(datamodel.commit_count, (size_t)1u);
-            check_equal(upstream.commit_count, (size_t)1u);
-            check_equal(documents.open_calls, (size_t)0u);
-            memcpy(first_id, datamodel.value, sizeof(first_id));
+            after_each() {
+                if (session.impl != NULL)
+                    check_equal(ccxml_session_destroy(&session), CCXML_OK);
+                ccxml_program_destroy(&program);
+            }
 
-            check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
-                        VXML_DIALOG_MANAGER_EVENT_FULL);
-            check_equal(documents.open_calls, (size_t)1u);
-            check_equal(events.count, (size_t)0u);
-            check_true(vxml_dialog_manager_get_stats(&manager, &stats));
-            check_equal(stats.active, (size_t)1u);
-            check_equal(stats.event_pending, (size_t)1u);
+            it("reevaluates each dispatch and writes the ID before publication") {
+                check_equal(init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel), CCXML_OK);
+                check_equal(datamodel.string_expression_compile_count, (size_t)1);
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(provider.dialog_source, "first.vxml");
+                check_equal(datamodel.value, "dialog-dynamic");
+                check_less(datamodel.commit_sequence, direct
+                    ? provider.dialog_start_commit_sequence
+                    : provider.dialog_prepare_commit_sequence);
+                datamodel.string_expression_result = "second.vxml";
+                datamodel.string_expression_result_size = sizeof("second.vxml") - 1u;
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(provider.dialog_source, "second.vxml");
+                check_equal(datamodel.string_expression_evaluate_count, (size_t)2);
+                check_equal(provider.commit_count, (size_t)4);
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+                check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+            }
 
-            events.full = false;
-            check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
-                        VXML_DIALOG_MANAGER_OK);
-            check_equal(events.count, (size_t)2u);
-            check_equal(events.name, "dialog.exit");
-            check_equal(events.dialog_id, first_id);
-            check_equal(documents.open_calls, (size_t)1u);
-            check_equal(documents.close_calls, (size_t)1u);
-            check_true(vxml_dialog_manager_get_stats(&manager, &stats));
-            check_equal(stats.active, (size_t)0u);
+            it("requires a complete expression adapter tail before publication") {
+                ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+                legacy.struct_size = offsetof(
+                    ccxml_datamodel_adapter_v1, compile_string_expression);
+                const ccxml_session_config config = {
+                    .program = &program, .telephony = &provider_adapter,
+                    .telephony_user = &provider, .datamodel = &legacy,
+                    .datamodel_user = &datamodel};
+                check_equal(ccxml_session_init(&session, &config),
+                    CCXML_INVALID_ARGUMENT);
+                check_null(session.impl);
+                check_equal(datamodel.string_expression_compile_count, (size_t)0);
+                check_equal(provider.prepare_count, (size_t)0);
+            }
 
-            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
-            check_not_equal(datamodel.value, first_id);
-            check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
-                        VXML_DIALOG_MANAGER_OK);
-            check_equal(events.count, (size_t)4u);
-            check_equal(events.dialog_id, datamodel.value);
-            check_equal(documents.open_calls, (size_t)2u);
-            check_equal(documents.close_calls, (size_t)2u);
-        }
+            it("keeps literal sources compatible with a legacy datamodel prefix") {
+                ccxml_program_destroy(&program);
+                check_equal(compile_program(&program, direct
+                    ? "<dialogstart dialogid='dialog.id' src=\"'app.vxml'\" "
+                      "connectionid='event$.connectionid'/>"
+                    : "<dialogprepare dialogid='dialog.id' src=\"'app.vxml'\"/>"),
+                    CCXML_OK);
+                ccxml_datamodel_adapter_v1 legacy = datamodel_adapter;
+                legacy.struct_size = offsetof(
+                    ccxml_datamodel_adapter_v1, compile_string_expression);
+                const ccxml_session_config config = {
+                    .program = &program, .telephony = &provider_adapter,
+                    .telephony_user = &provider, .datamodel = &legacy,
+                    .datamodel_user = &datamodel};
+                check_equal(ccxml_session_init(&session, &config), CCXML_OK);
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(provider.dialog_source, "app.vxml");
+                check_equal(datamodel.string_expression_compile_count, (size_t)0);
+                check_equal(datamodel.string_expression_evaluate_count, (size_t)0);
+            }
 
-        it("rolls back the dialog and ID tickets when a later telephony action fails") {
-            const ccxml_event event = alerting_event();
-            vxml_dialog_manager_stats stats = {0};
-            size_t processed = 0u;
-            upstream.reject_on_prepare = 1u;
-            check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
-            check_equal(datamodel.commit_count, (size_t)0u);
-            check_equal(datamodel.discard_count, (size_t)1u);
-            check_equal(upstream.commit_count, (size_t)0u);
-            check_true(vxml_dialog_manager_get_stats(&manager, &stats));
-            check_equal(stats.active, (size_t)0u);
-            check_equal(stats.discarded_operations, UINT64_C(1));
-            check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
-                        VXML_DIALOG_MANAGER_OK);
-            check_equal(processed, (size_t)0u);
-            check_equal(documents.open_calls, (size_t)0u);
-            check_equal(events.count, (size_t)0u);
+            it("destroys an admitted source handle when a later expression fails") {
+                ccxml_program_destroy(&program);
+                check_equal(compile_program(&program, direct
+                    ? "<dialogstart dialogid='dialog.id' src='mode' "
+                      "connectionid='event$.connectionid'/><createcall dest='other'/>"
+                    : "<dialogprepare dialogid='dialog.id' src='mode'/>"
+                      "<createcall dest='other'/>"), CCXML_OK);
+                datamodel.reject_string_expression_compile_at = 2u;
+                check_equal(init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel), CCXML_ADAPTER_ERROR);
+                check_null(session.impl);
+                check_equal(datamodel.string_expression_compile_count, (size_t)2);
+                check_equal(datamodel.string_expression_destroy_count, (size_t)1);
+                check_equal(provider.prepare_count, (size_t)0);
+                check_equal(provider.close_count, (size_t)1);
+            }
 
-            upstream.reject_on_prepare = 0u;
-            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
-            check_equal(datamodel.commit_count, (size_t)1u);
-            check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
-                        VXML_DIALOG_MANAGER_OK);
-            check_equal(events.count, (size_t)2u);
-            check_equal(events.name, "dialog.exit");
-            check_equal(documents.open_calls, (size_t)1u);
-            check_equal(documents.close_calls, (size_t)1u);
+            it("rolls back earlier effects when evaluation fails") {
+                datamodel.reject_string_expression_evaluate = true;
+                check_equal(init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel), CCXML_OK);
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+                check_equal(provider.prepare_count, (size_t)1);
+                check_equal(provider.discard_count, (size_t)1);
+                check_equal(provider.commit_count, (size_t)0);
+                check_equal(datamodel.prepare_count, (size_t)0);
+            }
+
+            for (size_t invalid = 0u; invalid < 3u; ++invalid) {
+                it("rejects invalid source view %zu before provider admission", invalid) {
+                    static const char embedded_nul[] = "bad\0.vxml";
+                    const ccxml_string_view values[] = {
+                        {NULL, 1u}, {"", 0u},
+                        {embedded_nul, sizeof(embedded_nul) - 1u}};
+                    datamodel.string_expression_result = values[invalid].data;
+                    datamodel.string_expression_result_size = values[invalid].size;
+                    check_equal(init_session_with_datamodel(
+                        &session, &program, &provider, &datamodel), CCXML_OK);
+                    check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_CONTRACT);
+                    check_equal(provider.prepare_count, (size_t)1);
+                    check_equal(provider.discard_count, (size_t)1);
+                    check_equal(provider.commit_count, (size_t)0);
+                    check_equal(datamodel.prepare_count, (size_t)0);
+                }
+            }
+
+            it("rolls back the reservation if ID writeback is refused") {
+                datamodel.reject_prepare = true;
+                check_equal(init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel), CCXML_OK);
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+                check_equal(provider.dialog_source, "first.vxml");
+                check_equal(provider.discard_count, (size_t)2);
+                check_equal(provider.discard_order[0], (size_t)2);
+                check_equal(provider.discard_order[1], (size_t)1);
+                check_equal(provider.commit_count, (size_t)0);
+                check_equal(datamodel.commit_count, (size_t)0);
+            }
+
+            it("discards the earlier effect when the dialog provider refuses") {
+                provider.reject_on_prepare = 2u;
+                check_equal(init_session_with_datamodel(
+                    &session, &program, &provider, &datamodel), CCXML_OK);
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+                check_equal(provider.discard_count, (size_t)1);
+                check_equal(provider.commit_count, (size_t)0);
+                check_equal(datamodel.prepare_count, (size_t)0);
+            }
+
+            if (direct) {
+                it("validates the connection before evaluating the source") {
+                    ccxml_program_destroy(&program);
+                    check_equal(compile_program(&program,
+                        "<dialogstart dialogid='dialog.id' src='mode' "
+                        "connectionid='event$.connectionid'/>"), CCXML_OK);
+                    check_equal(init_session_with_datamodel(
+                        &session, &program, &provider, &datamodel), CCXML_OK);
+                    event.connection_id = NULL;
+                    event.connection_id_size = 0u;
+                    check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_EVENT);
+                    check_equal(datamodel.string_expression_evaluate_count, (size_t)0);
+                    check_equal(provider.prepare_count, (size_t)0);
+                }
+            }
         }
     }
+
+    for (size_t dynamic = 0u; dynamic < 2u; ++dynamic) {
+        group("VoiceXML direct-start transaction integration: %s",
+              dynamic ? "dynamic source" : "literal source") {
+            static ccxml_program program;
+            static ccxml_session session;
+            static vxml_dialog_manager manager;
+            static provider_probe upstream;
+            static datamodel_probe datamodel;
+            static char evaluated_source[sizeof("app.vxml")];
+            static dialog_manager_document_probe documents;
+            static dialog_manager_event_probe events;
+
+            before_each() {
+                program = (ccxml_program){0};
+                session = (ccxml_session){0};
+                manager = (vxml_dialog_manager){0};
+                upstream = (provider_probe){.quiescent = true};
+                memcpy(evaluated_source, "app.vxml", sizeof(evaluated_source));
+                datamodel = (datamodel_probe){
+                    .string_expression_result = evaluated_source,
+                    .string_expression_result_size = sizeof("app.vxml") - 1u};
+                documents = (dialog_manager_document_probe){0};
+                events = (dialog_manager_event_probe){0};
+                vxml_dialog_manager_config_v1 config =
+                    vxml_dialog_manager_default_config_v1();
+                config.capacity = 1u;
+                config.upstream = &provider_adapter;
+                config.upstream_user = &upstream;
+                config.documents = &dialog_manager_document_adapter;
+                config.document_user = &documents;
+                config.events = &dialog_manager_event_sink;
+                config.event_user = &events;
+                check_equal(vxml_dialog_manager_init(&manager, &config),
+                            VXML_DIALOG_MANAGER_OK);
+                check_equal(compile_program(&program, dynamic
+                    ? "<dialogstart dialogid='dialog.id' src='mode' "
+                      "connectionid='event$.connectionid'/><accept/>"
+                    : "<dialogstart dialogid='dialog.id' src=\"'app.vxml'\" "
+                    "connectionid='event$.connectionid'/><accept/>"), CCXML_OK);
+                const ccxml_session_config session_config = {
+                    .program = &program,
+                    .telephony = vxml_dialog_manager_ccxml_adapter(),
+                    .telephony_user = vxml_dialog_manager_ccxml_user(&manager),
+                    .datamodel = &datamodel_adapter,
+                    .datamodel_user = &datamodel};
+                check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+            }
+
+            after_each() {
+                upstream.quiescent = true;
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+                if (manager.impl != NULL) {
+                    vxml_dialog_manager_close(&manager);
+                    check_equal(vxml_dialog_manager_destroy(&manager),
+                                VXML_DIALOG_MANAGER_OK);
+                }
+                ccxml_program_destroy(&program);
+            }
+
+            it("retains a committed dialog under event backpressure and reuses its slot after exit") {
+                const ccxml_event event = alerting_event();
+                vxml_dialog_manager_stats stats = {0};
+                size_t processed = 0u;
+                char first_id[sizeof(datamodel.value)];
+                events.full = true;
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(datamodel.commit_count, (size_t)1u);
+                check_equal(upstream.commit_count, (size_t)1u);
+                check_equal(documents.open_calls, (size_t)0u);
+                memcpy(first_id, datamodel.value, sizeof(first_id));
+                /* The manager must own the URI before the borrowed view changes. */
+                memset(evaluated_source, 'x', sizeof(evaluated_source) - 1u);
+
+                check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
+                            VXML_DIALOG_MANAGER_EVENT_FULL);
+                check_equal(documents.open_calls, (size_t)1u);
+                check_equal(events.count, (size_t)0u);
+                check_true(vxml_dialog_manager_get_stats(&manager, &stats));
+                check_equal(stats.active, (size_t)1u);
+                check_equal(stats.event_pending, (size_t)1u);
+
+                events.full = false;
+                check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
+                            VXML_DIALOG_MANAGER_OK);
+                check_equal(events.count, (size_t)2u);
+                check_equal(events.name, "dialog.exit");
+                check_equal(events.dialog_id, first_id);
+                check_equal(documents.open_calls, (size_t)1u);
+                check_equal(documents.close_calls, (size_t)1u);
+                check_true(vxml_dialog_manager_get_stats(&manager, &stats));
+                check_equal(stats.active, (size_t)0u);
+
+                memcpy(evaluated_source, "app.vxml", sizeof(evaluated_source));
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_not_equal(datamodel.value, first_id);
+                check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
+                            VXML_DIALOG_MANAGER_OK);
+                check_equal(events.count, (size_t)4u);
+                check_equal(events.dialog_id, datamodel.value);
+                check_equal(documents.open_calls, (size_t)2u);
+                check_equal(documents.close_calls, (size_t)2u);
+            }
+
+            it("rolls back the dialog and ID tickets when a later telephony action fails") {
+                const ccxml_event event = alerting_event();
+                vxml_dialog_manager_stats stats = {0};
+                size_t processed = 0u;
+                upstream.reject_on_prepare = 1u;
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+                check_equal(datamodel.commit_count, (size_t)0u);
+                check_equal(datamodel.discard_count, (size_t)1u);
+                check_equal(upstream.commit_count, (size_t)0u);
+                check_true(vxml_dialog_manager_get_stats(&manager, &stats));
+                check_equal(stats.active, (size_t)0u);
+                check_equal(stats.discarded_operations, UINT64_C(1));
+                check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
+                            VXML_DIALOG_MANAGER_OK);
+                check_equal(processed, (size_t)0u);
+                check_equal(documents.open_calls, (size_t)0u);
+                check_equal(events.count, (size_t)0u);
+
+                upstream.reject_on_prepare = 0u;
+                check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+                check_equal(datamodel.commit_count, (size_t)1u);
+                check_equal(vxml_dialog_manager_run_ready(&manager, 1u, &processed),
+                            VXML_DIALOG_MANAGER_OK);
+                check_equal(events.count, (size_t)2u);
+                check_equal(events.name, "dialog.exit");
+                check_equal(documents.open_calls, (size_t)1u);
+                check_equal(documents.close_calls, (size_t)1u);
+            }
+        }
+    }
+
 
     it("requires the built-in typed CMeta profile for foreach") {
         const char *source =

@@ -22,8 +22,10 @@ Standard reference:
 
 ## Compiler contract
 
-`dialogid` is a required dotted NCName write location. `src` is a required,
-nonempty quoted string literal with no escape processing. All other attributes
+`dialogid` is a required dotted NCName write location. `src` is required and
+nonempty. XML entities are decoded before classification: a quoted string is
+a literal without escape processing; other values use the existing typed
+string-expression adapter. All other attributes
 and non-whitespace child content are unsupported, including `connectionid`,
 `conferenceid`, `type`, parameter lists, media direction, cache/HTTP controls,
 and hints.
@@ -31,6 +33,28 @@ and hints.
 The compiler copies the location and decoded source URI into bounded program
 storage, charges one trailing NUL per retained value, and reserves two effect
 slots: provider preparation and datamodel writeback.
+
+## Dynamic source ownership and admission
+
+The existing dynamic-string mechanism used by `createcall` and `redirect`
+also owns dialog source expressions; no new evaluator or public ABI is added.
+The Program owns the decoded source text under `max_name_bytes`. Each Session
+compiles one handle per dynamic action and destroys it on admission rollback
+or final destruction. Literal sources still accept the legacy datamodel prefix.
+
+Dispatch is synchronous and single-owner. Each execution evaluates the source
+against the current datamodel (including staged foreach scope). The returned
+view is borrowed only through the immediately following provider prepare;
+the provider copies any bytes it retains. NULL, empty, or embedded-NUL results
+fail with `CCXML_INVALID_CONTRACT` before provider admission. Evaluation errors
+retain the existing adapter-status mapping and discard earlier effect tickets.
+No queue, retry, additional thread, or new retained payload is introduced.
+Provider refusal and ID writeback failure keep the existing rollback protocol.
+
+This extends the supported typed subset of the standard's `src` expression.
+Applications may migrate individual literal sources to typed paths; reverting
+to literals restores compatibility with older runtimes. Arbitrary ECMAScript
+and string coercion remain outside this profile.
 
 ## Provider contract
 
@@ -74,3 +98,9 @@ provider request bytes, generated ID writeback and commit order, rollback,
 malformed IDs/tickets, session-time location validation, append-only callback
 compatibility, real CMeta lifecycle behavior, and the supported build/install
 matrix.
+
+Dynamic sources add executable witnesses in `ccxml_program_test` (entity
+decoding and exact storage limits), `ccxml_session_test` (reevaluation, legacy
+prefix admission, handle cleanup, invalid results and rollback), and
+`ccxml_cmeta_test` (root state changes and staged foreach iteration). The
+DialogManager integration also runs direct start with a dynamic source.

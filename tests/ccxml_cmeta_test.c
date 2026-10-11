@@ -689,6 +689,29 @@ static void foreach_provider_close(void *user) {
     ++((foreach_provider_probe *)user)->close_count;
 }
 
+static scxml_adapter_status foreach_prepare_dialog(
+    void *user, const ccxml_dialog_prepare_request *request,
+    ccxml_string_view *out_dialog_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    const ccxml_create_conference_request projected = {
+        .conference_name = request->source,
+        .conference_name_size = request->source_size};
+    return foreach_prepare_create_conference(
+        user, &projected, out_dialog_id, out_ticket, out_error);
+}
+
+static scxml_adapter_status foreach_start_dialog(
+    void *user, const ccxml_dialog_start_request *request,
+    ccxml_string_view *out_dialog_id,
+    cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
+    const ccxml_dialog_prepare_request projected = {
+        .source = request->source, .source_size = request->source_size,
+        .media_type = request->media_type,
+        .media_type_size = request->media_type_size};
+    return foreach_prepare_dialog(
+        user, &projected, out_dialog_id, out_ticket, out_error);
+}
+
 static bool foreach_provider_quiescent(void *user) {
     (void)user;
     return true;
@@ -702,7 +725,9 @@ static const ccxml_telephony_adapter_v1 foreach_provider_adapter = {
     .is_quiescent = foreach_provider_quiescent,
     .prepare_create_call = foreach_prepare_create_call,
     .prepare_redirect = foreach_prepare_redirect,
-    .prepare_create_conference = foreach_prepare_create_conference};
+    .prepare_create_conference = foreach_prepare_create_conference,
+    .prepare_dialog_prepare = foreach_prepare_dialog,
+    .prepare_dialog_start = foreach_start_dialog};
 
 typedef struct conference_provider_probe {
     bool live;
@@ -1539,6 +1564,92 @@ spec("CCXML CMeta datamodel") {
         vec_destroy(&state.values);
     }
 
+    group("dynamic dialog sources in staged foreach scope") {
+        static foreach_record_state state;
+        static ccxml_program program;
+        static ccxml_session session;
+        static ccxml_cmeta_datamodel datamodel;
+        static foreach_provider_probe provider;
+        static const cmeta_data_desc *semantic_data[] = {
+            &foreach_record_alias_data};
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'>"
+            "<foreach array='values' item='item'>"
+            "<dialogprepare dialogid='conference_id' src='item.destination'/>"
+            "<dialogstart dialogid='conference_id' src='item.destination' "
+            "connectionid='event$.connectionid'/>"
+            "</foreach></transition></eventprocessor></ccxml>";
+        static const ccxml_foreach_record elements[] = {
+            {.destination = {.size = 6u, .data = "a.vxml"}},
+            {.destination = {.size = 6u, .data = "b.vxml"}}};
+        static const ccxml_event event = {
+            .name = "go", .name_size = 2u,
+            .connection_id = "conn-1", .connection_id_size = 6u};
+
+        before_each() {
+            state = (foreach_record_state){.values = VecOf(ccxml_foreach_record),
+                .conference_id = {.size = 3u, .data = "old"}};
+            program = (ccxml_program){0};
+            session = (ccxml_session){0};
+            datamodel = (ccxml_cmeta_datamodel){0};
+            provider = (foreach_provider_probe){
+                .conference_id_result = "dialog-42",
+                .conference_id_result_size = 9u};
+            ccxml_limits limits = ccxml_default_limits();
+            limits.max_foreach_iterations = 4u;
+            limits.max_foreach_storage_bytes = 4096u;
+            ccxml_diagnostic diagnostic = {0};
+            const ccxml_cmeta_datamodel_config_v1 config = {
+                .abi_version = CCXML_CMETA_DATAMODEL_CONFIG_ABI_V1,
+                .struct_size = sizeof(config),
+                .root = &foreach_record_state_desc, .state = &state,
+                .max_path_depth = 3u, .max_string_bytes = TEST_TEXT_CAPACITY,
+                .semantic_data = semantic_data, .semantic_data_count = 1u};
+            check_equal(vec_init(&state.values, 2u), STL_OK);
+            for (size_t index = 0u; index < 2u; ++index)
+                check_equal(vec_push(&state.values, &elements[index]), STL_OK);
+            check_equal(ccxml_compile(&program, source, sizeof(source) - 1u,
+                &limits, &diagnostic), CCXML_OK);
+            check_equal(ccxml_cmeta_datamodel_init(&datamodel, &config), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .telephony = &foreach_provider_adapter,
+                .telephony_user = &provider,
+                .datamodel = ccxml_cmeta_datamodel_adapter(),
+                .datamodel_user = &datamodel};
+            check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        }
+
+        after_each() {
+            if (session.impl != NULL)
+                check_equal(ccxml_session_destroy(&session), CCXML_OK);
+            ccxml_cmeta_datamodel_destroy(&datamodel);
+            ccxml_program_destroy(&program);
+            vec_destroy(&state.values);
+        }
+
+        it("prepares and starts each iteration using its own typed source") {
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+            check_equal(provider.prepare_count, (size_t)4);
+            check_equal(provider.destinations[0], "a.vxml");
+            check_equal(provider.destinations[1], "a.vxml");
+            check_equal(provider.destinations[2], "b.vxml");
+            check_equal(provider.destinations[3], "b.vxml");
+            check_equal(provider.commit_count, (size_t)4);
+            check_equal(state.conference_id.data, "dialog-42");
+        }
+
+        it("restores the published ID when a later iteration is refused") {
+            provider.reject_on_prepare = 3u;
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
+            check_equal(provider.prepare_count, (size_t)3);
+            check_equal(provider.destinations[2], "b.vxml");
+            check_equal(provider.commit_count, (size_t)0);
+            check_equal(provider.discard_count, (size_t)2);
+            check_equal(state.conference_id.data, "old");
+        }
+    }
+
     it("prefers a registered descriptor to the root fallback") {
         foreach_state state = {.values = VecOf(int)};
         ccxml_cmeta_datamodel datamodel = {0};
@@ -2167,11 +2278,11 @@ spec("CCXML CMeta datamodel") {
         ccxml_program_destroy(&program);
     }
 
-    it("prepares, starts, and terminates a dialog through nested CMeta") {
+    it("prepares a dynamic source, starts, and terminates through nested CMeta") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition event='ccxml.loaded'>"
-            "<dialogprepare dialogid='dialog.id' src=\"'menu.vxml'\"/>"
+            "<dialogprepare dialogid='dialog.id' src='mode'/>"
             "</transition><transition event='connection.connected'>"
             "<dialogstart prepareddialogid='dialog.id' "
             "connectionid='event$.connectionid'/>"
@@ -2181,7 +2292,7 @@ spec("CCXML CMeta datamodel") {
         ccxml_program program = {0};
         ccxml_session session = {0};
         ccxml_cmeta_datamodel datamodel = {0};
-        test_state state = {0};
+        test_state state = {.mode = {.size = 9u, .data = "menu.vxml"}};
         conference_provider_probe provider = {
             .published_dialog_id = &state.dialog.id};
         ccxml_diagnostic diagnostic = {0};
@@ -2211,8 +2322,9 @@ spec("CCXML CMeta datamodel") {
             .datamodel_user = &datamodel};
         check_equal(
             ccxml_session_init(&session, &session_config), CCXML_OK);
+        state.mode = (test_text){.size = 9u, .data = "next.vxml"};
         check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
-        check_equal(provider.dialog_source, "menu.vxml");
+        check_equal(provider.dialog_source, "next.vxml");
         check_equal(provider.dialog_connection_id, "");
         check_equal(
             provider.dialog_media_type,
@@ -2235,12 +2347,12 @@ spec("CCXML CMeta datamodel") {
         ccxml_program_destroy(&program);
     }
 
-    it("starts and normally terminates a dialog through nested CMeta") {
+    it("starts a dynamic source and normally terminates through nested CMeta") {
         const char *source =
             "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
             "<eventprocessor><transition event='connection.alerting'>"
             "<dialogstart dialogid='dialog.id' "
-            "src=\"'menu.vxml'\" "
+            "src='mode' "
             "connectionid='event$.connectionid'/>"
             "</transition><transition event='dialog.stop'>"
             "<dialogterminate dialogid='dialog.id'/>"
@@ -2248,7 +2360,7 @@ spec("CCXML CMeta datamodel") {
         ccxml_program program = {0};
         ccxml_session session = {0};
         ccxml_cmeta_datamodel datamodel = {0};
-        test_state state = {0};
+        test_state state = {.mode = {.size = 9u, .data = "menu.vxml"}};
         conference_provider_probe provider = {
             .published_dialog_id = &state.dialog.id};
         ccxml_diagnostic diagnostic = {0};
@@ -2275,8 +2387,9 @@ spec("CCXML CMeta datamodel") {
             .datamodel_user = &datamodel};
         check_equal(
             ccxml_session_init(&session, &session_config), CCXML_OK);
+        state.mode = (test_text){.size = 9u, .data = "next.vxml"};
         check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
-        check_equal(provider.dialog_source, "menu.vxml");
+        check_equal(provider.dialog_source, "next.vxml");
         check_equal(provider.dialog_connection_id, "call-e2e");
         check_equal(
             provider.dialog_media_type,
