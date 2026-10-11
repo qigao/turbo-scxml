@@ -1,6 +1,7 @@
 #include <voicexml/quickjs.h>
 #include <voicexml/script_resource.h>
 #include <cmeta/data_reflect.h>
+#include <tstr.h>
 
 #include "tinytest.h"
 #include "voicexml_internal.h"
@@ -69,6 +70,86 @@ static const cmeta_data_desc voice_quickjs_state_data = {
     .storage_type = &voice_quickjs_state_type,
     .shape = &voice_quickjs_state_shape
 };
+
+/* Native owners may retain resources outside the script-visible projection. */
+typedef struct voice_quickjs_owned_state {
+    int value;
+    tstr resource;
+} voice_quickjs_owned_state;
+
+static struct {
+    size_t copy_attempts;
+    size_t destroys;
+    size_t live;
+    bool fail_copy;
+} owned_state_probe;
+
+static bool owned_state_copy(void *destination, const void *source) {
+    voice_quickjs_owned_state *out = destination;
+    const voice_quickjs_owned_state *initial = source;
+    ++owned_state_probe.copy_attempts;
+    *out = (voice_quickjs_owned_state){0};
+    if (owned_state_probe.fail_copy) return false;
+    out->resource = tstr_new_len(initial->resource, tstr_len(initial->resource));
+    if (out->resource == NULL) return false;
+    out->value = initial->value;
+    ++owned_state_probe.live;
+    return true;
+}
+
+static void owned_state_move(void *destination, void *source) {
+    *(voice_quickjs_owned_state *)destination = *(voice_quickjs_owned_state *)source;
+    *(voice_quickjs_owned_state *)source = (voice_quickjs_owned_state){0};
+}
+
+static void owned_state_destroy(void *object) {
+    voice_quickjs_owned_state *state = object;
+    ++owned_state_probe.destroys;
+    if (state->resource != NULL) {
+        tstr_free(state->resource);
+        --owned_state_probe.live;
+    }
+    *state = (voice_quickjs_owned_state){0};
+}
+
+static const cmeta_type_traits owned_state_traits = {
+    .flags = CMETA_TRAIT_COPY | CMETA_TRAIT_MOVE | CMETA_TRAIT_DESTROY,
+    .copy_construct = owned_state_copy,
+    .move_construct = owned_state_move,
+    .destroy = owned_state_destroy};
+static const cmeta_type_identity owned_state_identity =
+    CMETA_TYPE_ID_ATOM_INIT("test.voicexml.quickjs.owned-state");
+static const cmeta_type_desc owned_state_type = {
+    .name = "voice_quickjs_owned_state",
+    .size = sizeof(voice_quickjs_owned_state),
+    .align = _Alignof(voice_quickjs_owned_state),
+    .kind = CMETA_T_OBJECT,
+    .traits = &owned_state_traits,
+    .identity = &owned_state_identity};
+static const cmeta_field_desc owned_state_layout_fields[] = {
+    {"value", "int", offsetof(voice_quickjs_owned_state, value),
+     sizeof(int), _Alignof(int), &cmeta_type_int, NULL}};
+static const cmeta_struct_desc owned_state_layout = {
+    .name = "voice_quickjs_owned_state",
+    .size = sizeof(voice_quickjs_owned_state),
+    .align = _Alignof(voice_quickjs_owned_state),
+    .fields = owned_state_layout_fields,
+    .field_count = 1u};
+static const cmeta_data_field_desc owned_state_fields[] = {
+    {"test.voicexml.quickjs.owned-state.value", "value",
+     offsetof(voice_quickjs_owned_state, value), &cmeta_data_int}};
+static const cmeta_data_struct_shape owned_state_shape = {
+    .layout = &owned_state_layout,
+    .fields = owned_state_fields,
+    .field_count = 1u};
+static const cmeta_data_desc owned_state_data = {
+    .struct_size = sizeof(cmeta_data_desc),
+    .abi_version = CMETA_DATA_DESC_ABI_VERSION,
+    .stable_id = "test.voicexml.quickjs.owned-state.data",
+    .display_name = "VoiceXML QuickJS owned test state",
+    .kind = CMETA_DATA_STRUCT,
+    .storage_type = &owned_state_type,
+    .shape = &owned_state_shape};
 
 typedef struct quickjs_script_probe {
     size_t open_calls;
@@ -526,6 +607,89 @@ spec("VoiceXML QuickJS script target profile") {
             check_equal(vxml_session_script(&session, &target), VXML_OK);
             check_equal(target.src_size, sizeof("scripts/7.js") - 1u);
             check_equal(memcmp(target.src, "scripts/7.js", target.src_size), 0);
+        }
+    }
+
+    group("owned state initialization rollback") {
+        /* Static targets defer VM creation until Session init, after state copy. */
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='scripts/static.js'/></block></form></vxml>";
+        static vxml_program program;
+        static vxml_session session;
+        static voice_quickjs_owned_state initial;
+        static vxml_quickjs_compile_options_v1 compile;
+        static vxml_quickjs_session_options_v1 options;
+        before_each() {
+            program = (vxml_program){0};
+            session = (vxml_session){0};
+            memset(&owned_state_probe, 0, sizeof(owned_state_probe));
+            initial = (voice_quickjs_owned_state){7, tstr_dup("caller-owned")};
+            check_not_null(initial.resource);
+            compile = vxml_quickjs_default_compile_options();
+            compile.root = &owned_state_data;
+            options = vxml_quickjs_default_session_options();
+            options.initial_state = &initial;
+        }
+        after_each() {
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+            tstr_free(initial.resource);
+            initial = (voice_quickjs_owned_state){0};
+            check_equal(owned_state_probe.live, (size_t)0u);
+        }
+        it("keeps failed copies unpublished and retries with an independent owned value") {
+            const void *state = NULL;
+            check_equal(vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+            owned_state_probe.fail_copy = true;
+            check_equal(vxml_session_init_quickjs(&session, &program, &options),
+                VXML_ALLOCATION_FAILED);
+            check_null(session.impl);
+            check_equal(owned_state_probe.copy_attempts, (size_t)1u);
+            check_equal(owned_state_probe.live, (size_t)0u);
+            check_equal(owned_state_probe.destroys, (size_t)0u);
+            check_equal(initial.value, 7);
+            check_equal(initial.resource, "caller-owned");
+
+            owned_state_probe.fail_copy = false;
+            check_equal(vxml_session_init_quickjs(&session, &program, &options), VXML_OK);
+            check_equal(owned_state_probe.copy_attempts, (size_t)2u);
+            check_equal(owned_state_probe.live, (size_t)1u);
+            check_equal(vxml_quickjs_session_state(&session, &state), VXML_OK);
+            check_not_null(state);
+            const voice_quickjs_owned_state *committed = state;
+            check_true(committed->resource != initial.resource);
+            initial.value = 9;
+            initial.resource[0] = 'C';
+            check_equal(committed->value, 7);
+            check_equal(committed->resource, "caller-owned");
+            check_equal(vxml_session_start(&session), VXML_OK);
+
+            vxml_session_destroy(&session);
+            check_null(session.impl);
+            check_equal(owned_state_probe.live, (size_t)0u);
+            check_equal(owned_state_probe.destroys, (size_t)1u);
+            vxml_session_destroy(&session);
+            check_equal(owned_state_probe.destroys, (size_t)1u);
+            check_equal(initial.resource, "Caller-owned");
+        }
+        it("releases the copied owner exactly once when VM creation fails") {
+            compile.max_heap_bytes = 1u;
+            check_equal(vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+            for (size_t attempt = 1u; attempt <= 2u; ++attempt) {
+                check_equal(vxml_session_init_quickjs(&session, &program, &options),
+                    VXML_ALLOCATION_FAILED);
+                check_null(session.impl);
+                check_equal(owned_state_probe.copy_attempts, attempt);
+                check_equal(owned_state_probe.live, (size_t)0u);
+                check_equal(owned_state_probe.destroys, attempt);
+                check_equal(initial.value, 7);
+                check_equal(initial.resource, "caller-owned");
+                vxml_session_destroy(&session);
+                check_equal(owned_state_probe.destroys, attempt);
+            }
         }
     }
 
