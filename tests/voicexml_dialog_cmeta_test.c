@@ -6,6 +6,9 @@
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
 #include "voicexml_quickjs_fia.h"
 #include "voicexml_internal.h"
+#include <ccxml/quickjs.h>
+#include <cmeta/data_reflect.h>
+#include <cmeta_cmeta_data.h>
 #endif
 
 typedef struct dialog_value { int value; } dialog_value;
@@ -316,6 +319,269 @@ static void complete(collect_probe *probe) {
     check_equal(vxml_session_cmeta_collect_try_complete(probe->session, &completion),
         VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
 }
+
+#ifdef TURBOSCXML_TEST_QUICKJS_FIA
+typedef struct language_state { tstr id; int count; } language_state;
+cmeta_reflect_value(language_state, "test.dialog.language",
+    cmeta_data_field(tstr, id, SALTS_TSTR_CMETA_DATA_REF, SALTS_TSTR_CMETA_TYPE_REF)
+    cmeta_field(int, count)
+);
+typedef struct language_probe {
+    language_state state;
+    ccxml_quickjs_datamodel datamodel;
+    ccxml_program program;
+    ccxml_session session;
+    tstr name, dialog_id, connection_id;
+    vxml_status voice_status;
+    size_t published, received;
+    bool pending, full;
+} language_probe;
+
+static void language_release_event(language_probe *probe) {
+    tstr_free(probe->name);
+    tstr_free(probe->dialog_id);
+    tstr_free(probe->connection_id);
+    probe->name = probe->dialog_id = probe->connection_id = NULL;
+    probe->pending = false;
+}
+/* Test-local single-owner inbox, one event with three bounded owned strings.
+ * FULL publishes nothing. Dispatch occurs only after run_ready returns, never
+ * by reentering the manager from its sink. Teardown releases an unconsumed row. */
+static vxml_dialog_event_sink_status language_publish(void *user, const vxml_dialog_event_v1 *event) {
+    language_probe *probe = user;
+    if (probe->full || probe->pending) return VXML_DIALOG_EVENT_FULL;
+    check_less_equal(event->name_size, (size_t)64u);
+    check_less_equal(event->dialog_id_size, (size_t)255u);
+    check_less_equal(event->connection_id_size, (size_t)255u);
+    probe->name = tstr_new_len(event->name, event->name_size);
+    probe->dialog_id = tstr_new_len(event->dialog_id, event->dialog_id_size);
+    probe->connection_id = tstr_new_len(event->connection_id, event->connection_id_size);
+    if (probe->name == NULL || probe->dialog_id == NULL || probe->connection_id == NULL) {
+        language_release_event(probe);
+        return VXML_DIALOG_EVENT_CLOSED;
+    }
+    probe->voice_status = event->voice_status;
+    probe->pending = true;
+    ++probe->published;
+    return VXML_DIALOG_EVENT_ACCEPTED;
+}
+static void language_accept_commit(void *user) { ++((language_probe *)user)->received; }
+static void language_accept_discard(void *user) { (void)user; }
+static scxml_adapter_status language_accept(void *user, const ccxml_accept_request *request,
+    cflow_statechart_effect_ticket *ticket, const char **error) {
+    (void)error;
+    check_equal(request->connection_id_size, (size_t)4u);
+    check_equal(request->connection_id, "call", 4u);
+    *ticket = (cflow_statechart_effect_ticket){language_accept_commit, language_accept_discard, user};
+    return SCXML_ADAPTER_ACCEPTED;
+}
+static void language_init(language_probe *language, dialog_probe *probe,
+    vxml_dialog_manager_config_v3 *config) {
+    static const vxml_dialog_event_sink_v1 sink = {
+        .abi_version = VXML_DIALOG_EVENT_SINK_ABI_V1, .struct_size = sizeof(sink),
+        .try_publish = language_publish};
+    static const ccxml_telephony_adapter_v1 upstream = {
+        .abi_version = CCXML_TELEPHONY_ADAPTER_ABI_V1, .struct_size = sizeof(upstream),
+        .prepare_accept = language_accept, .close = close_upstream, .is_quiescent = upstream_quiescent};
+    static const char source[] =
+        "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'><eventprocessor>"
+        "<transition event='go'><dialogstart dialogid='id' src=\"('app'+count+'.vxml')\" "
+        "connectionid='event$.connectionid'/></transition>"
+        "<transition event='stop'><dialogterminate dialogid='id'/></transition>"
+        "<transition event='dialog.started' cond=\"event$.name === 'dialog.started'\"><accept/></transition>"
+        "<transition event='dialog.exit' cond=\"event$.name === 'dialog.exit'\"><accept/></transition>"
+        "<transition event='error.dialog.start' cond=\"event$.name === 'error.dialog.start'\"><accept/></transition>"
+        "</eventprocessor></ccxml>";
+    config->events = &sink;
+    config->event_user = language;
+    config->upstream = &upstream;
+    config->upstream_user = language;
+    check_equal(vxml_dialog_manager_init_v3(&probe->manager, config), VXML_DIALOG_MANAGER_OK);
+    language->state.count = 7;
+    ccxml_quickjs_datamodel_config_v1 datamodel = ccxml_quickjs_default_datamodel_config();
+    datamodel.state_config.root = cmeta_reflected_data(language_state);
+    datamodel.state_config.state = &language->state;
+    datamodel.state_config.max_string_bytes = 255u;
+    check_equal(ccxml_quickjs_datamodel_init(&language->datamodel, &datamodel), CCXML_OK);
+    check_equal(ccxml_compile(&language->program, source, sizeof(source) - 1u, NULL, NULL), CCXML_OK);
+    const ccxml_session_config session = {
+        .program = &language->program,
+        .datamodel = ccxml_quickjs_datamodel_adapter(), .datamodel_user = &language->datamodel,
+        .telephony = vxml_dialog_manager_ccxml_adapter(),
+        .telephony_user = vxml_dialog_manager_ccxml_user(&probe->manager)};
+    check_equal(ccxml_session_init(&language->session, &session), CCXML_OK);
+}
+static void language_dispatch(language_probe *probe, const char *name) {
+    const ccxml_event event = {.name = name, .name_size = strlen(name),
+        .connection_id = "call", .connection_id_size = 4u};
+    check_equal(ccxml_session_dispatch(&probe->session, &event), CCXML_OK);
+}
+static void language_receive(language_probe *probe, const char *name, vxml_status status) {
+    check_true(probe->pending);
+    check_equal(probe->name, name);
+    check_equal(probe->dialog_id, probe->state.id);
+    check_equal(probe->connection_id, "call");
+    check_equal(probe->voice_status, status);
+    /* ccxml_event currently exposes name/connection, not dialog ID or exit data.
+     * Assert manager correlation above; observe exit data at its Session owner. */
+    const ccxml_event event = {.name = probe->name, .name_size = tstr_len(probe->name),
+        .connection_id = probe->connection_id, .connection_id_size = tstr_len(probe->connection_id)};
+    const size_t received = probe->received;
+    check_equal(ccxml_session_dispatch(&probe->session, &event), CCXML_OK);
+    check_equal(probe->received, received + 1u);
+    language_release_event(probe);
+}
+static void language_collect(language_probe *language, dialog_probe *probe) {
+    language_dispatch(language, "go");
+    check_not_null(language->state.id);
+    check_greater(tstr_len(language->state.id), (size_t)0u);
+    tick(probe);
+    language_receive(language, "dialog.started", VXML_OK);
+    tick(probe);
+    check_equal(probe->collect[0].commits, (size_t)1u);
+    check_equal(probe->collect[0].bound_uri, "https://voice.example/app7.vxml");
+    check_equal(probe->script_opens, (size_t)0u);
+}
+
+spec("CCXML language with asynchronous QuickJS FIA dialogs") {
+    static dialog_probe probe;
+    static language_probe language;
+    static vxml_session_factory_v1 factory;
+    static vxml_dialog_manager_config_v3 config;
+    before_each() {
+        probe = (dialog_probe){0};
+        language = (language_probe){0};
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><script src='scripts/filled.js'/><exit expr='value'/></filled></field></form></vxml>";
+        probe.script = "value = value ** 2;";
+        config = setup(&probe, &factory);
+        language_init(&language, &probe, &config);
+    }
+    after_each() {
+        ccxml_session_close(&language.session);
+        check_equal(ccxml_session_destroy(&language.session), CCXML_OK);
+        ccxml_program_destroy(&language.program);
+        ccxml_quickjs_datamodel_destroy(&language.datamodel);
+        vxml_dialog_manager_close(&probe.manager);
+        check_equal(vxml_dialog_manager_destroy(&probe.manager), VXML_DIALOG_MANAGER_OK);
+        check_equal(vxml_document_store_destroy(&probe.store), VXML_DOCUMENT_STORE_OK);
+        language_release_event(&language);
+        tstr_free(language.state.id);
+        check_equal(probe.opens, probe.closes);
+        check_equal(probe.script_opens, probe.script_closes);
+        for (size_t i = 0u; i < probe.inits; ++i)
+            check_equal(probe.collect[i].barriers, (size_t)1u);
+    }
+    it("delivers delayed script exit to CCXML once despite started and exit backpressure") {
+        language_dispatch(&language, "go");
+        check_not_null(language.state.id);
+        language.full = true;
+        size_t processed = 0u;
+        for (size_t i = 0u; i < 2u; ++i)
+            check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(language.published, (size_t)0u);
+        check_equal(probe.inits, (size_t)1u);
+        check_equal(probe.opens, (size_t)1u);
+        check_equal(probe.collect[0].commits, (size_t)0u);
+        language.full = false;
+        tick(&probe);
+        language_receive(&language, "dialog.started", VXML_OK);
+        tick(&probe);
+        check_equal(probe.collect[0].bound_uri, "https://voice.example/app7.vxml");
+        check_equal(probe.collect[0].commits, (size_t)1u);
+        tick(&probe);
+        check_equal(language.published, (size_t)1u);
+        check_equal(probe.script_opens, (size_t)0u);
+        complete(&probe.collect[0]);
+        language.full = true;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        const size_t progress_calls = probe.collect[0].progress_calls;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.collect[0].progress_calls, progress_calls);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        check_equal(probe.last_exit_value, (int64_t)49);
+        check_equal(language.received, (size_t)1u);
+        language.full = false;
+        tick(&probe);
+        vxml_dialog_manager_stats stats = {0};
+        check_true(vxml_dialog_manager_get_stats(&probe.manager, &stats));
+        check_equal(stats.active, (size_t)0u);
+        language_receive(&language, "dialog.exit", VXML_OK);
+        check_equal(language.received, (size_t)2u);
+        check_equal(language.published, (size_t)2u);
+        check_equal(probe.collect[0].cancels, (size_t)0u);
+    }
+    it("returns a recovered external-script failure through dialog.exit to CCXML") {
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><script>value = 13;</script><exit expr='value'/></catch>"
+            "</field></form></vxml>";
+        probe.script_status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        language_collect(&language, &probe);
+        complete(&probe.collect[0]);
+        tick(&probe);
+        language_receive(&language, "dialog.exit", VXML_OK);
+        check_equal(probe.last_exit_value, (int64_t)13);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        check_equal(language.received, (size_t)2u);
+    }
+    it("routes an unhandled JavaScript failure to the CCXML error transition") {
+        probe.script = "throw new Error('failed');";
+        language_collect(&language, &probe);
+        complete(&probe.collect[0]);
+        tick(&probe);
+        language_receive(&language, "error.dialog.start", VXML_SEMANTIC_ERROR);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        check_equal(language.received, (size_t)2u);
+    }
+    it("terminates pending collection using the CCXML-owned dialog ID") {
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/></field>"
+            "<catch event='connection.disconnect.hangup'><exit/></catch></form></vxml>";
+        language_collect(&language, &probe);
+        language_dispatch(&language, "stop");
+        check_equal(probe.collect[0].barriers, (size_t)0u);
+        tick(&probe);
+        language_receive(&language, "dialog.exit", VXML_OK);
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+        check_equal(probe.collect[0].cancels, (size_t)1u);
+        check_equal(probe.script_opens, (size_t)0u);
+    }
+    it("retains started before exit when the CCXML event consumer is delayed") {
+        language_dispatch(&language, "go");
+        tick(&probe);
+        check_true(language.pending);
+        tick(&probe);
+        complete(&probe.collect[0]);
+        size_t processed = 0u;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(language.published, (size_t)1u);
+        check_equal(language.received, (size_t)0u);
+        check_equal(probe.script_opens, (size_t)1u);
+        language_receive(&language, "dialog.started", VXML_OK);
+        tick(&probe);
+        language_receive(&language, "dialog.exit", VXML_OK);
+        check_equal(language.published, (size_t)2u);
+        check_equal(language.received, (size_t)2u);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.last_exit_value, (int64_t)49);
+    }
+    it("quiesces pending media when the owning CCXML Session closes") {
+        language_collect(&language, &probe);
+        ccxml_session_close(&language.session);
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+        check_equal(probe.collect[0].cancels, (size_t)1u);
+        check_equal(probe.script_opens, (size_t)0u);
+        check_equal(language.published, (size_t)1u);
+        check_equal(ccxml_session_destroy(&language.session), CCXML_OK);
+    }
+}
+#endif
 
 spec("DialogManager asynchronous CMeta ownership") {
     static dialog_probe probe;

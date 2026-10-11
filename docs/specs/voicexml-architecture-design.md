@@ -569,8 +569,9 @@ placements, source order, copied configuration, Session isolation, URI/source
 bounds, syntax/runtime/type/heap/deadline failures, owning-string rollback,
 partial leases, and external filled execution after delayed collection.
 DialogManager fixtures additionally exercise FULL without refetch or replay,
-navigation, submit-response effective URIs, and close/quiescence. These fixtures
-still enter at the CCXML adapter ticket boundary.
+navigation, submit-response effective URIs, and close/quiescence. The ownership
+fixtures enter at the CCXML adapter ticket boundary; the language composition
+fixtures described below also enter through a real CCXML Session.
 
 ScriptResource failures now retain their exact `error.badfetch`,
 `error.unsupported.format` or `error.noresource` Event. Script evaluation and
@@ -644,8 +645,27 @@ and their prepare/discard boundaries still need combined-profile qualification.
 ownership fixtures with this private compiler backend. A real delayed collect
 completion executes JavaScript in `filled`, produces the squared exit value,
 and survives event-sink FULL without replay; navigation, producer quiescence
-and historical factory prefixes use the same fixtures. The entry in these
-fixtures is the CCXML adapter ticket boundary, not a CCXML language Session.
+and historical factory prefixes use the same fixtures.
+
+The same combined test target now includes six real CCXML language Session
+scenarios. `CCXMLQuickJS` selects a dynamic document URI and commits an owned
+dialog ID; DialogManager runs the combined FIA through delayed provider
+completion and an external script. Its callback-scoped events are copied into a
+test-local, single-owner, one-event inbox, then dispatched to CCXML after manager
+progress returns. CCXML transition conditions and committed telephony effects
+prove receipt. Tests cover started/exit FULL without refetch or script replay,
+a delayed event consumer, caught resource failures, unhandled JavaScript errors,
+language `dialogterminate`, and owner close during pending collection. Normal
+termination explicitly handles `connection.disconnect.hangup` in the VoiceXML
+document. Session close quiesces the media producer before cancellation.
+
+This is in-tree integration evidence, not an installed combined API or a generic
+event transport. The current `ccxml_event` ABI exposes event name and connection
+identity but no dialog ID or VoiceXML exit payload. Tests verify the dialog ID
+against the CCXML-owned assignment at the manager sink and observe exit data
+through the existing VoiceXML Session API; they do not claim those values reach
+the CCXML datamodel. Broader CCXML dialog-event payload support remains outside
+this fixture's demonstrated surface.
 
 Rejected alternatives are a second JavaScript FIA, which would duplicate the
 state machine and media ownership, and an unconditional QuickJS dependency in
@@ -656,8 +676,9 @@ and its private dispatch while keeping the existing CMeta interpreter intact.
 Remaining qualification explicitly includes standard scope aliases,
 expression effects across the remaining media
 prepare/discard paths, additional managed values, allocation failure injection,
-broader engine limits, a full CCXML language Session composition, and the
-feature/installed-package matrix. These are pending work, not capabilities
+broader engine limits, and the feature/installed-package matrix. The language
+composition evidence above does not qualify additional event payloads or every
+media/navigation combination. These are pending work, not capabilities
 implied by the private library's existence.
 
 ## Source of truth
