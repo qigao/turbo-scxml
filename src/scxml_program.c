@@ -3,6 +3,7 @@
 #include "scxml_emit.h"
 #include "scxml_runtime.h"
 #include "scxml_quickjs.h"
+#include "quickjs_cmeta_bridge.h"
 
 #include <cflow/function_projection.h>
 
@@ -1362,6 +1363,15 @@ scxml_status scxml_program_compile_quickjs_model(
             (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
                 "%s", "SCXML QuickJS requires native state lifecycle traits "
                 "(trivial copy/destroy or copy/move/destroy) for CFlow ownership");
+        }
+        return SCXML_INVALID_ARGUMENT;
+    }
+    if (!quickjs_cmeta_state_lifecycle_supported(options->root)) {
+        if (diagnostic != NULL) {
+            memset(diagnostic, 0, sizeof(*diagnostic));
+            diagnostic->status = SCXML_INVALID_ARGUMENT;
+            (void)snprintf(diagnostic->message, sizeof(diagnostic->message),
+                "%s", "SCXML QuickJS CMeta root lacks an owning snapshot lifecycle");
         }
         return SCXML_INVALID_ARGUMENT;
     }

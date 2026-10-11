@@ -315,7 +315,9 @@ SCXML additionally requires native storage traits for CFlow Statechart state
 ownership. A generated reflection descriptor alone is insufficient there:
 SCXML QuickJS compilation returns `SCXML_INVALID_ARGUMENT` before acquiring
 script resources if the root lacks native copy/move/destroy support (or its
-trivial equivalent).
+trivial equivalent). Compilation also checks the shared snapshot lifecycle:
+native storage traits do not make a reflection VIEW, or a VALUE containing
+a nested VIEW, eligible for an owning transaction snapshot.
 
 The feature is optional and does not redefine the core CFlow Statechart ownership boundary.
 

@@ -457,6 +457,8 @@ typedef struct scxml_text_resource_adapter_v1 {
  * copy/move/destroy traits for CFlow Statechart ownership. A generated
  * cmeta_reflect_value descriptor alone does not provide those native traits;
  * unsupported roots return SCXML_INVALID_ARGUMENT before script acquisition.
+ * Native storage traits do not grant reflection VALUE permissions: the root
+ * must also support the owning snapshot lifecycle, including nested fields.
  */
 typedef struct scxml_quickjs_compile_options_v1 {
     uint32_t abi_version;

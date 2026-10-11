@@ -22,6 +22,11 @@ typedef struct quickjs_view_state { int value; } quickjs_view_state;
 cmeta_reflect_data(quickjs_view_state, "test.scxml.quickjs.view-state",
     cmeta_field(int, value)
 );
+typedef struct quickjs_view_parent { quickjs_view_state child; } quickjs_view_parent;
+cmeta_reflect_value(quickjs_view_parent, "test.scxml.quickjs.view-parent",
+    cmeta_data_field(quickjs_view_state, child, cmeta_reflected_data(quickjs_view_state),
+        cmeta_reflected_storage(quickjs_view_state))
+);
 
 static const cmeta_type_identity quickjs_test_identity =
     CMETA_TYPE_ID_ATOM_INIT("test.scxml.quickjs.state");
@@ -605,6 +610,65 @@ spec("SCXML optional QuickJS sandbox profile") {
             check_equal(probe.open_count, (size_t)0u);
             check_equal(probe.close_count, (size_t)0u);
         }
+    }
+
+    it("rejects non-owning reflection despite native Statechart traits before loading scripts") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='quickjs-sandbox'><script src='memory:test'/>"
+            "<state id='s'/></scxml>";
+        const cmeta_data_desc *roots[] = {
+            cmeta_reflected_data(quickjs_view_state),
+            cmeta_reflected_data(quickjs_view_parent)};
+        for (size_t index = 0u; index < sizeof(roots) / sizeof(roots[0]); ++index) {
+            /* Native storage ownership does not change reflection VIEW permissions. */
+            cmeta_type_desc storage = *roots[index]->storage_type;
+            cmeta_data_desc root = *roots[index];
+            storage.traits = &quickjs_test_traits;
+            root.storage_type = &storage;
+            check_true(cmeta_data_desc_valid(&root));
+            check_false(cmeta_data_value_traits_supported(&root));
+            quickjs_text_probe probe = {"value = 2;", SCXML_RESOURCE_OK, 0u, 0u};
+            scxml_quickjs_compile_options_v1 options = scxml_quickjs_default_compile_options(&root);
+            scxml_program program = {0};
+            scxml_diagnostic diagnostic = {0};
+            options.script_resources = &quickjs_text_adapter;
+            options.script_resource_user = &probe;
+            const scxml_status status = scxml_compile_quickjs(
+                &program, source, sizeof(source) - 1u, NULL, &options, &diagnostic);
+            const bool empty = program.impl == NULL;
+            scxml_program_destroy(&program);
+            check_equal(status, SCXML_INVALID_ARGUMENT);
+            check_true(empty);
+            check_equal(diagnostic.status, SCXML_INVALID_ARGUMENT);
+            check_contains(diagnostic.message, "snapshot lifecycle");
+            check_equal(probe.open_count, (size_t)0u);
+            check_equal(probe.close_count, (size_t)0u);
+        }
+    }
+
+    it("executes a reflection VALUE with explicit native Statechart ownership") {
+        static const char source[] =
+            "<scxml xmlns='http://www.w3.org/2005/07/scxml' version='1.0' "
+            "datamodel='quickjs-sandbox'><script>value = value + 1;</script>"
+            "<state id='start'><transition cond='value == 8' target='pass'/>"
+            "<transition target='fail'/></state>"
+            "<final id='pass'/><state id='fail'/></scxml>";
+        const cmeta_data_desc *reflected = cmeta_reflected_data(quickjs_test_state);
+        cmeta_type_desc storage = *reflected->storage_type;
+        cmeta_data_desc root = *reflected;
+        storage.traits = &quickjs_test_traits;
+        root.storage_type = &storage;
+        const quickjs_test_state initial = {.value = 7};
+        cflow_statechart_instance_status init_status = CFLOW_STATECHART_INSTANCE_INVALID_ARGUMENT;
+        check_true(cmeta_data_desc_valid(&root));
+        check_true(cmeta_data_value_traits_supported(&root));
+        const cflow_statechart_instance_stats stats = quickjs_run_to_idle_with_root(
+            source, &root, &initial, &init_status);
+        check_equal(init_status, CFLOW_STATECHART_INSTANCE_OK);
+        check_true(stats.done);
+        check_false(stats.errored);
+        check_equal(initial.value, 7);
     }
 
     it("admits root and executable scripts with compile-time source loading") {
