@@ -402,6 +402,14 @@ upstream close per manager witness the boundaries. This covers serialized
 controller/resource composition; it does not add a production datamodel or
 qualify concurrent dispatch into one Session.
 
+Two rejection witnesses in that group exercise a later telephony action failure
+after gN+1 publication. Failed prepared start and terminate both restore the old
+prepared row, leave its Program and ID unchanged, publish no new Event, and allow
+a subsequent start without refetching. Failed replacement prepare discards its
+staged ID and reserved row while preserving the previous committed ID; the one
+dialog slot is then reusable through the original generation. Generation drain
+remains BUSY until the owning scope is released in teardown.
+
 With the Component-enabled graph and matching SDK roots, the focused Windows
 VS developer-environment commands are:
 

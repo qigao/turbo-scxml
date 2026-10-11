@@ -393,6 +393,13 @@ static ccxml_status voice_controller_init(
         "<dialogstart prepareddialogid='dialog.id' connectionid='event$.connectionid'/>"
         "</transition><transition event='terminate'>"
         "<dialogterminate dialogid='dialog.id'/>"
+        "</transition><transition event='start-fail'>"
+        "<dialogstart prepareddialogid='dialog.id' connectionid='event$.connectionid'/>"
+        "<accept/>"
+        "</transition><transition event='terminate-fail'>"
+        "<dialogterminate dialogid='dialog.id'/><accept/>"
+        "</transition><transition event='prepare-fail'>"
+        "<dialogprepare dialogid='dialog.id' src=\"'mem:voice-dso'\"/><accept/>"
         "</transition><transition event='direct'>"
         "<dialogstart dialogid='dialog.id' src=\"'mem:voice-dso'\" "
         "connectionid='event$.connectionid'/>"
@@ -1601,6 +1608,11 @@ spec("VoiceXML/CCXML Component resource generation") {
         static voice_controller controllers[2];
 
         before_each() {
+            const char *paths[] = {VOICE_RESOURCE_DSO_ONE, VOICE_RESOURCE_DSO_TWO};
+            const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
+            salts_component_plugin_generation *previous = NULL;
+            size_t i;
+
             memset(&registry, 0, sizeof(registry));
             memset(plugins, 0, sizeof(plugins));
             memset(generations, 0, sizeof(generations));
@@ -1611,6 +1623,35 @@ spec("VoiceXML/CCXML Component resource generation") {
             memset(upstream, 0, sizeof(upstream));
             memset(events, 0, sizeof(events));
             memset(controllers, 0, sizeof(controllers));
+
+            check_equal(cmeta_plugin_registry_init(
+                &registry, &registry_conf), CMETA_PLUGIN_OK);
+            for (i = 0u; i < 2u; ++i) {
+                check_equal(cmeta_plugin_registry_load(
+                    &registry, paths[i], &plugins[i]), CMETA_PLUGIN_OK);
+                check_equal(cmeta_plugin_registry_start(
+                    &registry, plugins[i]), CMETA_PLUGIN_OK);
+                check_equal(voice_dso_generation_build(
+                    &generations[i], &registry, plugins[i],
+                    UINT64_C(21) + (uint64_t)i),
+                    SALTS_COMPONENT_PLUGIN_OK);
+            }
+            check_equal(salts_component_plugin_runtime_init(&runtime),
+                        SALTS_COMPONENT_PLUGIN_OK);
+            check_equal(salts_component_plugin_runtime_publish(
+                &runtime, &generations[0].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            check_null(previous);
+            check_equal(scxml_component_scope_acquire(
+                &scopes[0], &runtime), SCXML_COMPONENT_OK);
+            check_true(voice_resource_bind(
+                &documents[0], &scopes[0], VOICE_DSO_COMPONENT));
+            check_equal(voice_dso_marker(&scopes[0]), 100);
+            check_equal(voice_manager_init(
+                &managers[0], &documents[0], &upstream[0], &events[0]),
+                VXML_DIALOG_MANAGER_OK);
+            check_equal(voice_controller_init(&controllers[0], &managers[0]), CCXML_OK);
+
         }
 
         after_each() {
@@ -1656,41 +1697,110 @@ spec("VoiceXML/CCXML Component resource generation") {
             }
         }
 
+        it("restores the old prepared Program when a later action rejects start or terminate") {
+            static const char *const rejected_events[] = {
+                "start-fail", "terminate-fail"};
+            salts_component_plugin_generation *previous = NULL;
+            vxml_dialog_manager_stats stats = {0};
+            size_t progressed = 0u;
+            size_t i;
+
+            check_equal(voice_controller_dispatch(&controllers[0], "prepare"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[0].count, (size_t)1u);
+            check_equal(events[0].names[0], "dialog.prepared");
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_equal(salts_component_plugin_runtime_publish(
+                &runtime, &generations[1].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            check_true(previous == &generations[0].generation);
+
+            for (i = 0u; i < sizeof(rejected_events) / sizeof(rejected_events[0]); ++i) {
+                check_equal(voice_controller_dispatch(
+                    &controllers[0], rejected_events[i]), CCXML_ADAPTER_ERROR);
+                check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+                check_equal(stats.active, (size_t)1u);
+                check_equal(stats.prepared, (size_t)1u);
+                check_equal(stats.reserved, (size_t)0u);
+                check_equal(stats.pending, (size_t)0u);
+                check_equal(stats.discarded_operations, (uint64_t)i + UINT64_C(1));
+                check_equal(vxml_dialog_manager_run_ready(
+                    &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+                check_equal(progressed, (size_t)0u);
+                check_equal(events[0].count, (size_t)1u);
+                check_equal(controllers[0].dialog_id, events[0].dialog_ids[0]);
+                check_equal(voice_dso_marker(&scopes[0]), 111);
+                check_equal(salts_component_plugin_generation_drain(
+                    &runtime, &generations[0].generation), SALTS_COMPONENT_PLUGIN_BUSY);
+            }
+
+            check_equal(voice_controller_dispatch(&controllers[0], "start"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[0].count, (size_t)3u);
+            check_equal(events[0].names[1], "dialog.started");
+            check_equal(events[0].names[2], "dialog.exit");
+            check_equal(events[0].dialog_ids[1], controllers[0].dialog_id);
+            check_equal(events[0].dialog_ids[2], controllers[0].dialog_id);
+            check_equal(controllers[0].commits, (size_t)1u);
+            check_equal(controllers[0].discards, (size_t)0u);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+            check_equal(stats.active, (size_t)0u);
+        }
+
+        it("preserves the committed dialog ID when a later action discards its replacement") {
+            salts_component_plugin_generation *previous = NULL;
+            vxml_dialog_manager_stats stats = {0};
+            size_t progressed = 0u;
+
+            check_equal(voice_controller_dispatch(&controllers[0], "direct"), CCXML_OK);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[0].count, (size_t)2u);
+            check_equal(controllers[0].dialog_id, events[0].dialog_ids[0]);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+            check_equal(salts_component_plugin_runtime_publish(
+                &runtime, &generations[1].generation, &previous),
+                SALTS_COMPONENT_PLUGIN_OK);
+            check_true(previous == &generations[0].generation);
+
+            check_equal(voice_controller_dispatch(&controllers[0], "prepare-fail"),
+                        CCXML_ADAPTER_ERROR);
+            check_equal(controllers[0].commits, (size_t)1u);
+            check_equal(controllers[0].discards, (size_t)1u);
+            check_null(controllers[0].staged_id);
+            check_equal(controllers[0].dialog_id, events[0].dialog_ids[0]);
+            check_true(vxml_dialog_manager_get_stats(&managers[0], &stats));
+            check_equal(stats.active, (size_t)0u);
+            check_equal(stats.reserved, (size_t)0u);
+            check_equal(stats.pending, (size_t)0u);
+            check_equal(stats.discarded_operations, UINT64_C(1));
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(progressed, (size_t)0u);
+            check_equal(events[0].count, (size_t)2u);
+            check_equal(voice_dso_marker(&scopes[0]), 111);
+
+            /* Capacity and the original generation remain usable after rollback. */
+            check_equal(voice_controller_dispatch(&controllers[0], "prepare"), CCXML_OK);
+            check_equal(controllers[0].commits, (size_t)2u);
+            check_not_equal(controllers[0].dialog_id, events[0].dialog_ids[0]);
+            check_equal(vxml_dialog_manager_run_ready(
+                &managers[0], 1u, &progressed), VXML_DIALOG_MANAGER_OK);
+            check_equal(events[0].count, (size_t)3u);
+            check_equal(events[0].names[2], "dialog.prepared");
+            check_equal(events[0].dialog_ids[2], controllers[0].dialog_id);
+            check_equal(voice_dso_marker(&scopes[0]), 122);
+            check_equal(salts_component_plugin_generation_drain(
+                &runtime, &generations[0].generation), SALTS_COMPONENT_PLUGIN_BUSY);
+        }
+
         it("dispatches real CCXML prepare start and terminate while retaining the original DSO generation") {
-            const char *paths[] = {VOICE_RESOURCE_DSO_ONE, VOICE_RESOURCE_DSO_TWO};
-            const cmeta_plugin_registry_config registry_conf = {.capacity = 2u};
             salts_component_plugin_generation *previous = NULL;
             size_t progressed = 0u;
             bool quiescent = false;
-            size_t i;
-
-            check_equal(cmeta_plugin_registry_init(
-                &registry, &registry_conf), CMETA_PLUGIN_OK);
-            for (i = 0u; i < 2u; ++i) {
-                check_equal(cmeta_plugin_registry_load(
-                    &registry, paths[i], &plugins[i]), CMETA_PLUGIN_OK);
-                check_equal(cmeta_plugin_registry_start(
-                    &registry, plugins[i]), CMETA_PLUGIN_OK);
-                check_equal(voice_dso_generation_build(
-                    &generations[i], &registry, plugins[i],
-                    UINT64_C(21) + (uint64_t)i),
-                    SALTS_COMPONENT_PLUGIN_OK);
-            }
-            check_equal(salts_component_plugin_runtime_init(&runtime),
-                        SALTS_COMPONENT_PLUGIN_OK);
-            check_equal(salts_component_plugin_runtime_publish(
-                &runtime, &generations[0].generation, &previous),
-                SALTS_COMPONENT_PLUGIN_OK);
-            check_null(previous);
-            check_equal(scxml_component_scope_acquire(
-                &scopes[0], &runtime), SCXML_COMPONENT_OK);
-            check_true(voice_resource_bind(
-                &documents[0], &scopes[0], VOICE_DSO_COMPONENT));
-            check_equal(voice_dso_marker(&scopes[0]), 100);
-            check_equal(voice_manager_init(
-                &managers[0], &documents[0], &upstream[0], &events[0]),
-                VXML_DIALOG_MANAGER_OK);
-            check_equal(voice_controller_init(&controllers[0], &managers[0]), CCXML_OK);
 
             /* CCXML commits the returned ID before gN+1 publication, but the
                actual DSO open/close callbacks execute AFTER publication. */
