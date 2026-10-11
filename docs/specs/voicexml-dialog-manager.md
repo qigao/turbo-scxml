@@ -37,6 +37,13 @@ Successful prepare returns one move-only CFlow effect ticket:
 The caller then invokes `vxml_dialog_manager_run_ready()` from its chosen
 serialized progress point.
 
+`ccxml_session_test` covers direct start through a real CCXML Session: an
+Event sink returning FULL retains the dialog until publication succeeds, then
+the single slot can be reused with a new ID. A later telephony action failure
+discards both the dialog reservation and returned-ID ticket before any document
+opens; a subsequent dispatch can use the released capacity.
+
+
 ## Progress
 
 `run_ready()` performs the expensive/fallible work:

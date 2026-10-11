@@ -21,6 +21,10 @@ function(turboscxml_add_test target source)
   add_test(NAME ${target} COMMAND ${target})
 endfunction()
 
+if(TURBOSCXML_ENABLE_FUZZ_TESTS)
+  add_subdirectory(fuzz)
+endif()
+
 add_executable(voicexml_api_test voicexml/test_voicexml_api.c)
 target_compile_features(voicexml_api_test PRIVATE c_std_11)
 set_target_properties(voicexml_api_test PROPERTIES

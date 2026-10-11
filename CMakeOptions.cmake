@@ -16,6 +16,9 @@ option(TURBOSCXML_ENABLE_CNET_EVENT_IO
   "Build optional owner-driven CNet chunk ingress into SCXML Sessions" OFF)
 option(ENABLE_SANITIZER_ADDRESS "Enable AddressSanitizer" OFF)
 
+option(TURBOSCXML_ENABLE_FUZZ_TESTS
+  "Build and register deterministic bounded VoiceXML fuzz tests" OFF)
+
 # Resolve optional native SDK dependencies before the vcpkg toolchain runs.
 set(VCPKG_MANIFEST_FEATURES "")
 if(TURBOSCXML_ENABLE_QUICKJS)
