@@ -55,6 +55,7 @@ struct dialog_probe {
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
     const char *script;
     size_t script_opens, script_closes;
+    vxml_script_resource_status script_status;
     size_t submit_opens, submit_closes;
     char script_uri[256];
 #endif
@@ -73,7 +74,7 @@ static vxml_script_resource_status open_script(void *user, const char *uri, size
     check_less_equal(strlen(probe->script), max_bytes);
     ++probe->script_opens;
     *out = (vxml_script_source){probe->script, strlen(probe->script), probe};
-    return VXML_SCRIPT_RESOURCE_OK;
+    return probe->script_status;
 }
 static void close_script(void *user, vxml_script_source *source) {
     dialog_probe *probe = user;
@@ -144,7 +145,8 @@ static vxml_status compile_document(void *user, const void *bytes, size_t size,
         .max_scope_storage_bytes = 4096u, .max_conditional_depth = 8u,
         .max_fields = 4u, .max_grammar_bytes = 256u,
         .max_submit_fields = 4u, .max_submit_value_bytes = 128u,
-        .max_submit_uri_bytes = 255u};
+        .max_submit_uri_bytes = 255u,
+        .max_event_handlers = 8u, .max_event_name_bytes = 64u};
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
     const vxml_quickjs_fia_limits limits = {
         .engine = {1024u, 1024u, 4u * 1024u * 1024u, 256u * 1024u, 100u},
@@ -187,7 +189,8 @@ static vxml_status init_session(void *user, vxml_session *session, const vxml_pr
         .abi_version = VXML_CMETA_SESSION_OPTIONS_ABI_V1, .struct_size = sizeof(options),
         .initial_root = &initial, .initially_undefined = undefined, .initially_undefined_count = 1u,
         .max_transaction_bytes = 4096u, .max_execution_steps = 128u,
-        .collect = &collect_adapter, .collect_user = collect};
+        .collect = &collect_adapter, .collect_user = collect,
+        .max_event_counters = 16u, .max_event_name_bytes = 64u, .max_event_dispatch_depth = 8u};
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
     const vxml_quickjs_fia_scripts scripts = {&script_adapter, probe, 255u, 1024u};
     vxml_status status = vxml_session_init_quickjs_fia(session, program, &options, &scripts);
@@ -450,6 +453,34 @@ spec("DialogManager asynchronous CMeta ownership") {
         check_equal(probe.collect[0].commits, (size_t)0u);
     }
 #ifdef TURBOSCXML_TEST_QUICKJS_FIA
+    it("publishes a caught external failure once despite repeated FULL publication") {
+        probe.script = "value = 99;";
+        probe.script_status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"
+            "<form><field name='value'><grammar type='application/srgs+xml' src='a'/>"
+            "<filled><script src='scripts/missing.js'/></filled>"
+            "<catch event='error.badfetch'><script>value = 13;</script><exit expr='value'/></catch>"
+            "</field></form></vxml>";
+        check_equal(vxml_dialog_manager_init_v3(&probe.manager, &config), VXML_DIALOG_MANAGER_OK);
+        start_dialog(&probe); tick(&probe); tick(&probe);
+        complete(&probe.collect[0]);
+        probe.full = true;
+        size_t processed = 0u;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.script_opens, (size_t)1u);
+        check_equal(probe.script_closes, (size_t)1u);
+        check_equal(probe.last_exit_value, (int64_t)13);
+        const size_t progress_calls = probe.collect[0].progress_calls;
+        check_equal(vxml_dialog_manager_run_ready(&probe.manager, 1u, &processed), VXML_DIALOG_MANAGER_EVENT_FULL);
+        check_equal(probe.collect[0].progress_calls, progress_calls);
+        check_equal(probe.script_opens, (size_t)1u);
+        probe.full = false;
+        tick(&probe);
+        check_equal(probe.events[1], "dialog.exit");
+        check_equal(probe.statuses[1], VXML_OK);
+        check_equal(probe.collect[0].barriers, (size_t)1u);
+        check_equal(probe.collect[0].cancels, (size_t)0u);
+    }
     it("executes external filled source once despite repeated FULL publication") {
         probe.script = "value = value ** 2;";
         probe.source = "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1' datamodel='cmeta'>"

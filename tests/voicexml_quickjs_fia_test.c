@@ -27,6 +27,22 @@ static const cmeta_data_desc root_data = {
     .stable_id = "test.voicexml.quickjs.fia", .display_name = "fia_root",
     .kind = CMETA_DATA_STRUCT, .storage_type = &root_type, .shape = &shape};
 
+typedef struct fia_child_root { fia_root child; int other; } fia_child_root;
+cmeta_reflect_value(fia_child_root, "test.voicexml.quickjs.fia.child",
+    cmeta_data_field(fia_root, child, &root_data, &root_type)
+    cmeta_field(int, other)
+);
+static const cmeta_type_identity child_identity = CMETA_TYPE_ID_ATOM_INIT("test.fia.child.native");
+static const cmeta_type_desc child_type = {
+    .name = "fia_child_root", .size = sizeof(fia_child_root), .align = _Alignof(fia_child_root),
+    .kind = CMETA_T_OBJECT, .traits = &root_traits, .identity = &child_identity};
+static const cmeta_data_desc *child_descriptor(void) {
+    static cmeta_data_desc data;
+    data = *cmeta_reflected_data(fia_child_root);
+    data.storage_type = &child_type;
+    return &data;
+}
+
 typedef struct fia_owned_root { int value; tstr text; } fia_owned_root;
 cmeta_reflect_value(fia_owned_root, "test.voicexml.quickjs.fia.owned",
     cmeta_field(int, value)
@@ -113,7 +129,7 @@ static vxml_cmeta_value_view exit_value(const vxml_session *session) {
 
 typedef struct collect_probe {
     uint64_t generation;
-    size_t commits, cancels, prepares, discards;
+    size_t commits, cancels, prepares, discards, quiesces, releases;
     vxml_status status;
     bool invalid_ticket;
     char uri[128];
@@ -149,6 +165,55 @@ static const vxml_cmeta_collect_adapter_v1 collect_adapter = {
     .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1, .struct_size = sizeof(collect_adapter),
     .capabilities = VXML_CMETA_COLLECT_CAP_SRGS_XML,
     .prepare = prepare_collect, .cancel = cancel_collect};
+
+static void quiesce_media(void *user, uint64_t generation) {
+    collect_probe *probe = user;
+    check_equal(generation, probe->generation);
+    ++probe->quiesces;
+}
+static void release_recording(void *user, void *lease) {
+    check_true(user == lease);
+    ++((collect_probe *)user)->releases;
+}
+static vxml_status prepare_record(void *user, const vxml_cmeta_record_request_v1 *request,
+    vxml_cmeta_record_ticket_v1 *ticket, const char **error) {
+    collect_probe *probe = user;
+    (void)error;
+    ++probe->prepares;
+    probe->generation = request->generation;
+    *ticket = (vxml_cmeta_record_ticket_v1){commit_collect, discard_collect, probe};
+    return VXML_OK;
+}
+static const vxml_cmeta_record_adapter_v1 record_adapter = {
+    .abi_version = VXML_CMETA_RECORD_ADAPTER_ABI_V1, .struct_size = sizeof(record_adapter),
+    .capabilities = VXML_CMETA_RECORD_CAP_DTMF_TERM | VXML_CMETA_RECORD_CAP_EXPLICIT_TYPE,
+    .prepare = prepare_record, .cancel = cancel_collect, .quiesce = quiesce_media};
+static vxml_status prepare_transfer(void *user, const vxml_cmeta_transfer_request_v1 *request,
+    vxml_cmeta_transfer_ticket_v1 *ticket, const char **error) {
+    collect_probe *probe = user;
+    (void)error;
+    ++probe->prepares;
+    probe->generation = request->generation;
+    *ticket = (vxml_cmeta_transfer_ticket_v1){commit_collect, discard_collect, probe};
+    return VXML_OK;
+}
+static const vxml_cmeta_transfer_adapter_v1 transfer_adapter = {
+    .abi_version = VXML_CMETA_TRANSFER_ADAPTER_ABI_V1, .struct_size = sizeof(transfer_adapter),
+    .capabilities = VXML_CMETA_TRANSFER_CAP_BRIDGE,
+    .prepare = prepare_transfer, .cancel = cancel_collect, .quiesce = quiesce_media};
+
+static vxml_status prepare_subdialog(void *user, const vxml_cmeta_subdialog_request_v1 *request,
+    vxml_cmeta_subdialog_ticket_v1 *ticket, const char **error) {
+    collect_probe *probe = user;
+    (void)error;
+    ++probe->prepares;
+    probe->generation = request->generation;
+    *ticket = (vxml_cmeta_subdialog_ticket_v1){commit_collect, discard_collect, probe};
+    return VXML_OK;
+}
+static const vxml_cmeta_subdialog_adapter_v1 subdialog_adapter = {
+    .abi_version = VXML_CMETA_SUBDIALOG_ADAPTER_ABI_V1, .struct_size = sizeof(subdialog_adapter),
+    .prepare = prepare_subdialog, .cancel = cancel_collect};
 
 typedef struct prompt_probe {
     vxml_status status;
@@ -413,7 +478,9 @@ spec("Internal QuickJS and CMeta FIA composition") {
     }
     it("stages form-level initial grammar expressions and retains their admitted URI") {
         attach_media(&options, &prompt, &collect);
-        vxml_cmeta_collect_adapter_v1 adapter = collect_adapter;
+        /* Session borrows this table through after_each teardown. */
+        static vxml_cmeta_collect_adapter_v1 adapter;
+        adapter = collect_adapter;
         adapter.capabilities |= VXML_CMETA_COLLECT_CAP_INITIAL_MULTI;
         adapter.prepare_initial = prepare_initial_collect;
         options.collect = &adapter;
@@ -472,7 +539,9 @@ spec("Internal QuickJS and CMeta FIA composition") {
     }
     it("rolls back grammar effects when the provider lacks the required capability") {
         attach_media(&options, &prompt, &collect);
-        vxml_cmeta_collect_adapter_v1 adapter = collect_adapter;
+        /* Session borrows this table through after_each teardown. */
+        static vxml_cmeta_collect_adapter_v1 adapter;
+        adapter = collect_adapter;
         adapter.capabilities = 0u;
         options.collect = &adapter;
         check_equal(compile(VXML_BEGIN "<form><field name='value'>"
@@ -1128,6 +1197,437 @@ spec("External scripts inside the QuickJS FIA transaction") {
         check_equal(vxml_document_store_destroy(&store), VXML_DOCUMENT_STORE_OK);
         check_equal(script.closes, script.leases);
         check_equal(second.closes, second.leases);
+    }
+    it("dispatches exact resource Events after rolling back the failed block") {
+        const vxml_script_resource_status failures[] = {
+            VXML_SCRIPT_RESOURCE_INVALID_URI, VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED,
+            VXML_SCRIPT_RESOURCE_PROVIDER_ERROR, VXML_SCRIPT_RESOURCE_INVALID_DATA,
+            VXML_SCRIPT_RESOURCE_UNSUPPORTED_CHARSET, VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED};
+        const int expected[] = {15, 15, 15, 15, 25, 35};
+        for (size_t i = 0u; i < sizeof(failures) / sizeof(failures[0]); ++i) {
+            script.status = failures[i];
+            script.partial = true;
+            check_equal(compile(VXML_BEGIN "<form><block><script>other = 99;</script>"
+                "<script src='missing.js'/><exit expr='99'/></block>"
+                "<catch event='error'><exit expr='-1'/></catch>"
+                "<catch event='error.badfetch'><exit expr='other + 10'/></catch>"
+                "<catch event='error.unsupported.format'><exit expr='other + 20'/></catch>"
+                "<catch event='error.noresource'><exit expr='other + 30'/></catch>"
+                "</form>" VXML_END, &program), VXML_OK);
+            check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+            bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(exit_value(&session).data.sint, (int64_t)expected[i]);
+            check_equal(committed(&session)->other, 5);
+            check_equal(script.opens, i + 1u);
+            check_equal(script.closes, script.leases);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+    it("ends initializer recovery without executing later initializers or the form body") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><script>other = 90;</script>"
+            "<script src='missing.js'/><script>other = 91;</script>"
+            "<block><script>other = 92;</script></block>"
+            "<catch event='error.badfetch'><script>other += 2;</script></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(committed(&session)->other, 7);
+        check_equal(script.opens, (size_t)1u);
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)0u);
+    }
+    it("starts document initializer failure at document scope and permits navigation") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<script src='missing.js'/>"
+            "<catch event='error.badfetch'><goto next='recovery.vxml'/></catch>"
+            "<form><block><exit expr='99'/></block>"
+            "<catch event='error.badfetch'><exit expr='98'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_NAVIGATING);
+        check_equal(script.opens, (size_t)1u);
+        check_equal(committed(&session)->other, 5);
+    }
+    it("resumes block selection after a nonterminal catch without replaying the failed block") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><block name='first'>"
+            "<script>other = 99;</script><script src='missing.js'/><script>other = 98;</script>"
+            "</block><block><exit expr='other'/></block>"
+            "<catch event='error.badfetch'><script>other += 2;</script></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)7);
+        check_equal(script.opens, (size_t)1u);
+    }
+    it("retries a failed block only when its catch explicitly clears the block guard") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><block name='retry'>"
+            "<script src='missing.js'/></block><block><exit expr='other'/></block>"
+            "<catch event='error.badfetch'><script>other += 1;</script>"
+            "<if cond='other === 6'><clear namelist='retry'/></if></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)7);
+        check_equal(script.opens, (size_t)2u);
+    }
+    it("bounds recursively failing catch scripts with the existing dispatch depth") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        options.max_event_dispatch_depth = 3u;
+        check_equal(compile(VXML_BEGIN "<form><block><script src='missing.js'/></block>"
+            "<catch event='error.badfetch'><script>other += 1;</script>"
+            "<script src='missing.js'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_LIMIT_EXCEEDED);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+        check_equal(script.opens, (size_t)4u);
+        check_equal(committed(&session)->other, 5);
+    }
+    it("rolls back a failing catch and admits its next counted recovery handler") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><block><script src='missing.js'/></block>"
+            "<catch event='error.badfetch'><script>other = 99;</script><script src='missing.js'/></catch>"
+            "<catch event='error.badfetch' count='2'><exit expr='other'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(script.opens, (size_t)2u);
+    }
+    it("recovers source script exceptions through error.semantic after resource close") {
+        script_body(&script, "other = 99; throw new Error('local');");
+        check_equal(compile(VXML_BEGIN "<form><block><script src='step.js'/></block>"
+            "<catch event='error.semantic'><exit expr='other'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(script.closes, (size_t)1u);
+    }
+    it("reselects after a field filled failure and rolls back the recognized value") {
+        attach_media(&options, &prompt, &collect);
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/>"
+            "<filled><script>other = value;</script><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><script>other += value === undefined ? 2 : 90; value = 17;</script></catch>"
+            "</field><filled><script>other = 99;</script></filled>"
+            "<catch event='error.badfetch'><exit expr='98'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const int recognized = 41;
+        const vxml_cmeta_collect_completion_v1 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(completion),
+            .generation = collect.generation, .data = &cmeta_data_int, .value = &recognized};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &completion), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(committed(&session)->value, 17);
+        check_equal(committed(&session)->other, 7);
+        check_equal(script.opens, (size_t)1u);
+        check_equal(collect.prepares, (size_t)1u);
+    }
+    it("starts form filled recovery at the form and discards earlier field filled writes") {
+        attach_media(&options, &prompt, &collect);
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/>"
+            "<filled><script>other = 99;</script></filled>"
+            "<catch event='error.badfetch'><exit expr='98'/></catch></field>"
+            "<filled><script src='missing.js'/><script>other = 97;</script></filled>"
+            "<catch event='error.badfetch'><script>other += value === undefined ? 3 : 90; value = 18;</script></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const int recognized = 41;
+        const vxml_cmeta_collect_completion_v1 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(completion),
+            .generation = collect.generation, .data = &cmeta_data_int, .value = &recognized};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &completion), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(committed(&session)->value, 18);
+        check_equal(committed(&session)->other, 8);
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)0u);
+    }
+    it("rearms collection after a nonterminal script catch without replaying the old completion") {
+        attach_media(&options, &prompt, &collect);
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/>"
+            "<filled><script src='step.js'/><exit expr='value'/></filled>"
+            "<catch event='error.badfetch'><script>other += 1;</script></catch>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const int recognized = 41;
+        vxml_cmeta_collect_completion_v1 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(completion),
+            .generation = collect.generation, .data = &cmeta_data_int, .value = &recognized};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &completion), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_RUNNING);
+        check_equal(committed(&session)->other, 6);
+        check_equal(script.opens, (size_t)1u);
+        script.status = VXML_SCRIPT_RESOURCE_OK;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_not_equal(collect.generation, completion.generation);
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &completion), VXML_CMETA_COLLECT_INGRESS_STALE);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_false(progressed);
+        check_equal(script.opens, (size_t)1u);
+        completion.generation = collect.generation;
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &completion), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)41);
+        check_equal(committed(&session)->other, 7);
+        check_equal(script.opens, (size_t)2u);
+    }
+    it("keeps a failing form catch out of the active field catch scope") {
+        attach_media(&options, &prompt, &collect);
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/>"
+            "<catch event='error.badfetch'><exit expr='99'/></catch></field>"
+            "<catch event='custom'><script>other = 98;</script><script src='missing.js'/></catch>"
+            "<catch event='error.badfetch'><exit expr='other'/></catch>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_raise(&session, "custom", 6u), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+    }
+    it("retains the field filled origin when mixed initiative supplied its value") {
+        attach_media(&options, &prompt, &collect);
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        /* Session borrows this table through after_each teardown. */
+        static vxml_cmeta_collect_adapter_v1 adapter;
+        adapter = collect_adapter;
+        adapter.capabilities |= VXML_CMETA_COLLECT_CAP_INITIAL_MULTI;
+        adapter.prepare_initial = prepare_initial_collect;
+        options.collect = &adapter;
+        options.max_collect_result_slots = 1u;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.max_initials = 1u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const char *source = VXML_BEGIN "<form>"
+            "<grammar type='application/srgs+xml' src='form'/>"
+            "<initial><catch event='error.badfetch'><exit expr='99'/></catch></initial>"
+            "<field name='value'><grammar type='application/srgs+xml' src='digits'/>"
+            "<filled><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><exit expr='other'/></catch></field>"
+            "<catch event='error.badfetch'><exit expr='98'/></catch></form>" VXML_END;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const int recognized = 41;
+        const vxml_cmeta_collect_result_slot_v1 slot = {{"value", 5u}, &cmeta_data_int, &recognized};
+        const vxml_cmeta_collect_completion_v2 completion = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V2, .struct_size = sizeof(completion),
+            .generation = collect.generation, .slots = &slot, .slot_count = 1u};
+        check_equal(vxml_session_cmeta_collect_try_complete_v2(&session, &completion), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+    }
+    it("shares the dispatch budget across resource failure rethrow and another failing catch") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        options.max_event_dispatch_depth = 2u;
+        check_equal(compile(VXML_BEGIN
+            "<catch event='error.badfetch'><script src='missing.js'/></catch>"
+            "<form><block><script src='missing.js'/></block>"
+            "<catch event='error.badfetch'><rethrow/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_LIMIT_EXCEEDED);
+        check_equal(script.opens, (size_t)2u);
+        check_equal(committed(&session)->other, 5);
+    }
+    it("restores owned values before a resource catch publishes its exit snapshot") {
+        const char *source = VXML_BEGIN "<form><block>"
+            "<script>text += ':pending';</script><script src='missing.js'/></block>"
+            "<catch event='error.badfetch'><exit expr='text'/></catch></form>" VXML_END;
+        fia_owned_root initial = {3, tstr_dup("original")};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL,
+            &config, &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        options.initial_root = &initial;
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        script.partial = true;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_quickjs_fia(&session, &program, &options, &scripts) : compiled;
+        tstr_free(initial.text);
+        check_equal(initialized, VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_value_view result = exit_value(&session);
+        check_equal(result.data.string.size, (size_t)8u);
+        check_equal(result.data.string.data, "original", 8u);
+        const vxml_cmeta_session_data *runtime = ((vxml_session_impl *)session.impl)->profile_data;
+        check_equal(((const fia_owned_root *)runtime->committed_root.storage)->text, "original");
+        check_equal(script.closes, (size_t)1u);
+    }
+    it("settles the recording lease before reselecting after a local filled script catch") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        options.record = &record_adapter;
+        options.record_user = &collect;
+        options.max_record_bytes = 1024u;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.max_records = 2u;
+        config.max_record_media_type_bytes = 32u;
+        config.max_record_duration_us = 10000000u;
+        config.max_record_final_silence_us = 2000000u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const char *source = VXML_BEGIN "<form><record name='voice' type='audio/wav'>"
+            "<filled><script src='step.js'/><exit expr='other'/></filled>"
+            "<catch event='error.badfetch'><script>other += 1;</script></catch>"
+            "</record><catch event='error.badfetch'><exit expr='99'/></catch></form>" VXML_END;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        static const unsigned char recording[] = {1u, 2u};
+        vxml_cmeta_record_completion_v1 result = {
+            .abi_version = VXML_CMETA_RECORD_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .outcome = VXML_CMETA_RECORD_OUTCOME_SUCCESS,
+            .duration_us = 1000u, .media_type = {"audio/wav", 9u},
+            .recording = {recording, sizeof(recording), &collect, release_recording, &collect}};
+        check_equal(vxml_session_cmeta_record_try_complete(&session, &result), VXML_CMETA_RECORD_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.releases, (size_t)1u);
+        check_equal(collect.quiesces, (size_t)1u);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_not_equal(result.generation, collect.generation);
+        script.status = VXML_SCRIPT_RESOURCE_OK;
+        result.generation = collect.generation;
+        check_equal(vxml_session_cmeta_record_try_complete(&session, &result), VXML_CMETA_RECORD_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)7);
+        check_equal(collect.releases, (size_t)1u);
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(collect.releases, (size_t)2u);
+        check_equal(collect.quiesces, (size_t)2u);
+        check_equal(collect.cancels, (size_t)0u);
+    }
+    it("retains transfer-local recovery scope after settling the producer generation") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        options.transfer = &transfer_adapter;
+        options.transfer_user = &collect;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.max_transfers = 2u;
+        config.max_transfer_uri_bytes = 128u;
+        config.max_transfer_connect_timeout_us = 5000000u;
+        config.max_transfer_duration_us = 10000000u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const char *source = VXML_BEGIN "<form><transfer name='call' dest='tel:+15551212' bridge='true'>"
+            "<filled><script>other = 99;</script><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><exit expr='other'/></catch>"
+            "</transfer><catch event='error.badfetch'><exit expr='98'/></catch></form>" VXML_END;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const vxml_cmeta_transfer_completion_v1 result = {
+            .abi_version = VXML_CMETA_TRANSFER_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .kind = VXML_CMETA_TRANSFER_COMPLETION_RESULT,
+            .result = VXML_CMETA_TRANSFER_RESULT_BUSY};
+        check_equal(vxml_session_cmeta_transfer_try_complete(&session, &result), VXML_CMETA_TRANSFER_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(collect.quiesces, (size_t)1u);
+        check_equal(collect.cancels, (size_t)0u);
+        check_equal(script.opens, (size_t)1u);
+    }
+    it("restores subdialog RETURN_DATA before dispatching its local filled script failure") {
+        script.status = VXML_SCRIPT_RESOURCE_PROVIDER_ERROR;
+        const fia_child_root initial = {{0}, 5};
+        static const vxml_cmeta_name_view undefined[] = {{"child", 5u}};
+        options.initial_root = &initial;
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        options.subdialog = &subdialog_adapter;
+        options.subdialog_user = &collect;
+        options.max_subdialog_snapshot_bytes = 512u;
+        options.max_subdialog_completion_entries = 2u;
+        options.max_subdialog_completion_bytes = 512u;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = child_descriptor();
+        config.max_subdialogs = 2u;
+        config.max_subdialog_uri_bytes = 128u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const char *source = VXML_BEGIN "<form><subdialog name='child' src='child.vxml'>"
+            "<filled><script>other = child.value;</script><script src='missing.js'/></filled>"
+            "<catch event='error.badfetch'><script>other += child === undefined ? 1 : 90;</script>"
+            "<exit expr='other'/></catch></subdialog>"
+            "<catch event='error.badfetch'><exit expr='99'/></catch></form>" VXML_END;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        const vxml_cmeta_subdialog_result_entry_v1 entry = {
+            .name = {"value", 5u}, .value = {.kind = VXML_CMETA_VALUE_SINT, .data.sint = 41}};
+        const vxml_cmeta_subdialog_completion_v1 result = {
+            .abi_version = VXML_CMETA_SUBDIALOG_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .kind = VXML_CMETA_SUBDIALOG_RETURN_DATA,
+            .entries = &entry, .entry_count = 1u};
+        check_equal(vxml_session_cmeta_subdialog_try_complete(&session, &result), VXML_CMETA_SUBDIALOG_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(exit_value(&session).data.sint, (int64_t)6);
+        check_equal(script.opens, (size_t)1u);
+        check_equal(collect.cancels, (size_t)0u);
+    }
+    it("keeps an unadmitted runtime Event terminal with the original failure status") {
+        script.status = VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED;
+        options.max_event_name_bytes = 8u;
+        check_equal(compile(VXML_BEGIN "<form><block><script src='missing.js'/></block>"
+            "<catch event='custom'><exit expr='99'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_quickjs_fia(&session, &program, &options, &scripts), VXML_OK);
+        bind_script_document(&session, &store, "https://voice.example/app/current.vxml");
+        check_equal(vxml_session_start(&session), VXML_ALLOCATION_FAILED);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+        check_equal(script.opens, (size_t)1u);
     }
     it("executes document form block and conditional external scripts in source order") {
         check_equal(compile(VXML_BEGIN "<script src='step.js'/><form><script src='step.js'/>"

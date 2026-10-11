@@ -899,6 +899,10 @@ typedef struct vxml_cmeta_session_data {
     bool handler_reprompt_requested;
     bool reprompt_requested;
     bool event_dispatch_active;
+    /* Error provenance is control state, not part of the rolled-back value snapshot. */
+    vxml_cmeta_name_view backend_failure_event;
+    vxml_cmeta_event_scope_kind backend_failure_scope;
+    size_t backend_failure_owner;
     const vxml_cmeta_prompt_media_adapter_v1 *prompt_media_adapter;
     void *prompt_media_user;
     vxml_cmeta_prompt_media_ticket_v1 prompt_media_ticket;

@@ -572,12 +572,35 @@ DialogManager fixtures additionally exercise FULL without refetch or replay,
 navigation, submit-response effective URIs, and close/quiescence. These fixtures
 still enter at the CCXML adapter ticket boundary.
 
-External script failure recovery is not yet qualified: resource errors currently
-propagate as Session status failures rather than their exact scoped VoiceXML
-Events. Connecting `error.badfetch`/`error.unsupported.format`/`error.noresource`
-must preserve rollback, the correct initializer/action recovery position, and
-one dispatch-depth budget even when a catch executes another failing script.
-This remains a blocker for publishing the combined profile.
+ScriptResource failures now retain their exact `error.badfetch`,
+`error.unsupported.format` or `error.noresource` Event. Script evaluation and
+typed conversion failures use `error.semantic`; native allocation failures use
+`error.noresource`. Engine deadline/limit and host-contract failures keep their
+terminal status unless the failure came from ScriptResource's explicit Event
+mapping. The backend only reports static Event names. The Session records the
+origin outside staged value storage and dispatches after the owning transaction
+and media payload have rolled back. An unhandled failure retains its original
+status. There is no recursive dispatch from the general Session failure helper.
+
+Recovery follows the phase and origin distinction in
+[VoiceXML 2.0 Appendix C](https://www.w3.org/TR/voicexml20/#dmlC): document/form
+initializers start at their containing scope and a non-transitioning catch ends
+that FIA; block and filled recovery reenter Select. A failed block's action values
+roll back while its visited guard remains set; a catch can explicitly clear the
+guard to retry. Field filled retains the field origin even when an initial
+supplied the values; form filled starts at the form. Record, transfer and
+subdialog filled retain the original owner after producer/payload settlement.
+This typed profile continues to roll back the entire owning transaction,
+including earlier filled writes and incoming recognition/child values; it does
+not claim general ECMAScript state or VoiceXML conformance from that contract.
+
+A script failure inside a catch reenters the existing iterative dispatcher at
+that catch's containing scope, sharing its depth budget with throw/rethrow.
+Failed handler writes roll back before another occurrence is selected. Tests
+cover exact resource mapping, initializer termination/navigation, nonterminal
+block/field recovery, explicit retry, field/form/mixed-initiative origin,
+record lease cleanup, transfer and child-result rollback, counted catch and
+rethrow depth, owned strings, and DialogManager terminal publication under FULL.
 
 Backend prompt selection and dynamic mark evaluation share the Session's media
 transaction with existing foreach projection. The Session owner stages changes
@@ -630,8 +653,8 @@ CMeta, which would break feature isolation. No public API migration is required
 while this work is internal. Rollback consists of removing the optional backend
 and its private dispatch while keeping the existing CMeta interpreter intact.
 
-Remaining qualification explicitly includes script failure Event recovery,
-standard scope aliases, expression effects across the remaining media
+Remaining qualification explicitly includes standard scope aliases,
+expression effects across the remaining media
 prepare/discard paths, additional managed values, allocation failure injection,
 broader engine limits, a full CCXML language Session composition, and the
 feature/installed-package matrix. These are pending work, not capabilities

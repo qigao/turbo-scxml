@@ -1930,6 +1930,9 @@ static void transaction_commit(
     }
 }
 
+static vxml_status recover_backend_failure(vxml_session_impl *impl, vxml_status status);
+static vxml_status recover_backend_process(vxml_session_impl *impl, vxml_status status);
+
 static vxml_status session_fail(
     vxml_session_impl *session, vxml_status status) {
     if (session == NULL) return status;
@@ -2378,10 +2381,12 @@ static vxml_status evaluate_expression(
         session->expression_scratch_bytes,
         0u};
     if (program->expressions[expression].backend_program != NULL) {
+        session->backend_failure_event = (vxml_cmeta_name_view){0};
         const vxml_cmeta_backend_runtime backend_runtime = {
             root->storage, root->bound, runtime.root_bound_count,
             runtime.scopes, runtime.scope_count,
-            session->backend_session, session->document_context};
+            session->backend_session, session->document_context,
+            &session->backend_failure_event};
         return program->expression_backend.evaluate(
             program->expressions[expression].backend_program,
             program->expressions[expression].value_kind,
@@ -2870,7 +2875,12 @@ static vxml_status initialize_initializers(
         } else {
             return VXML_INVALID_STRUCTURE;
         }
-        if (status != VXML_OK) return status;
+        if (status != VXML_OK) {
+            session->backend_failure_scope = scope_count == 1u
+                ? VXML_CMETA_EVENT_DOCUMENT : VXML_CMETA_EVENT_FORM;
+            session->backend_failure_owner = scope_count == 1u ? 0u : session->active_form;
+            return status;
+        }
     }
     return VXML_OK;
 }
@@ -6553,7 +6563,13 @@ static vxml_status cmeta_session_start_profile_at_entry(
             profile, program, form, entry);
     if (status != VXML_OK) {
         transaction_reset(profile, program);
-        return session_fail(session, status);
+        status = recover_backend_failure(session, status);
+        /* An initializer catch without a transition terminates this FIA. */
+        if (status == VXML_OK && session->state == VXML_SESSION_RUNNING) {
+            session->state = VXML_SESSION_EXITED;
+            session->error = VXML_OK;
+        }
+        return status;
     }
     transaction_commit(profile, program);
     if (!profile->document_initialized)
@@ -6620,7 +6636,20 @@ static vxml_status cmeta_session_start_profile_at_entry(
             if (status != VXML_OK) {
                 transaction_reset(profile, program);
                 exit_snapshot_destroy(&profile->pending_exit);
-                return session_fail(session, status);
+                if (profile->backend_failure_event.data != NULL) {
+                    /* The failed iteration consumed the block. Roll back action
+                     * values, but let a catch explicitly clear this guard to retry. */
+                    if (!cmeta_scope_view_assign(
+                            &profile->committed_scopes[form->scope].view,
+                            selected->form_item_slot, &completed))
+                        return session_fail(session, VXML_ALLOCATION_FAILED);
+                    profile->backend_failure_scope = VXML_CMETA_EVENT_FORM;
+                    profile->backend_failure_owner = form_index;
+                }
+                status = recover_backend_failure(session, status);
+                if (status != VXML_OK || session->state != VXML_SESSION_RUNNING)
+                    return status;
+                continue;
             }
         }
         transaction_commit(profile, program);
@@ -10294,6 +10323,23 @@ static vxml_status execute_filled_handler(
         profile, program, form, form->scope,
         scopes, 2u, filled->first_action, filled->action_end);
     if (status != VXML_OK) {
+        profile->backend_failure_scope = VXML_CMETA_EVENT_FORM;
+        profile->backend_failure_owner = profile->active_form;
+        if (filled->mode == VXML_CMETA_FILLED_FIELD) {
+            if (filled->field != VXML_CMETA_NO_INDEX) {
+                profile->backend_failure_scope = VXML_CMETA_EVENT_FIELD;
+                profile->backend_failure_owner = filled->field;
+            } else if (profile->active_record != VXML_CMETA_NO_INDEX) {
+                profile->backend_failure_scope = VXML_CMETA_EVENT_RECORD;
+                profile->backend_failure_owner = profile->active_record;
+            } else if (profile->active_transfer != VXML_CMETA_NO_INDEX) {
+                profile->backend_failure_scope = VXML_CMETA_EVENT_TRANSFER;
+                profile->backend_failure_owner = profile->active_transfer;
+            } else if (profile->active_subdialog != VXML_CMETA_NO_INDEX) {
+                profile->backend_failure_scope = VXML_CMETA_EVENT_SUBDIALOG;
+                profile->backend_failure_owner = profile->active_subdialog;
+            }
+        }
         exit_snapshot_destroy(&profile->pending_exit);
         return status;
     }
@@ -11019,7 +11065,7 @@ vxml_status vxml_session_cmeta_collect_run_ready(
                 &mailbox->state,
                 VXML_CMETA_COLLECT_MAILBOX_DISARMED,
                 memory_order_release);
-            return session_fail(impl, status);
+            return recover_backend_process(impl, status);
         }
 
         {
@@ -11470,18 +11516,31 @@ static vxml_status execute_event_handler(
     return VXML_OK;
 }
 
-static vxml_status cmeta_raise_event_impl(
+typedef struct cmeta_event_origin {
+    vxml_cmeta_event_scope_kind kind;
+    size_t owner;
+} cmeta_event_origin;
+
+static unsigned event_origin_rank(cmeta_event_origin origin) {
+    return origin.kind == VXML_CMETA_EVENT_DOCUMENT ? 2u
+        : origin.kind == VXML_CMETA_EVENT_FORM ? 1u : 0u;
+}
+
+static vxml_status dispatch_event_impl(
     vxml_session *session,
     const char *event_name,
     size_t event_name_size,
-    bool allow_subdialog) {
+    bool allow_subdialog, const cmeta_event_origin *origin,
+    vxml_status unhandled_status) {
     vxml_session_impl *impl;
     vxml_cmeta_program_data const *program;
     vxml_cmeta_session_data *profile;
     const char *current_event;
     size_t current_event_size;
-    unsigned depth = 0u;
-    unsigned start_scope = 0u;
+    size_t depth = 0u;
+    unsigned start_scope = origin != NULL ? event_origin_rank(*origin) : 0u;
+    cmeta_event_origin current_origin = origin != NULL ? *origin : (cmeta_event_origin){0};
+    bool explicit_origin = origin != NULL;
 
     if (session == NULL || session->impl == NULL ||
         event_name == NULL || event_name_size == 0u ||
@@ -11513,7 +11572,7 @@ static vxml_status cmeta_raise_event_impl(
             event_name, event_name_size))
         return VXML_INVALID_ARGUMENT;
     if (program->event_handler_count == 0u)
-        return session_fail(impl, VXML_SEMANTIC_ERROR);
+        return session_fail(impl, unhandled_status);
     if (profile->event_name_stride == 0u ||
         event_name_size >= profile->event_name_stride)
         return VXML_INVALID_ARGUMENT;
@@ -11535,7 +11594,10 @@ static vxml_status cmeta_raise_event_impl(
             const vxml_cmeta_event_handler_row *handler;
             vxml_status status;
 
-            if (!event_scope_owner(
+            if (explicit_origin && scope_rank == event_origin_rank(current_origin)) {
+                scope_kind = current_origin.kind;
+                owner = current_origin.owner;
+            } else if (!event_scope_owner(
                     profile, program, scope_rank,
                     &scope_kind, &owner))
                 continue;
@@ -11553,8 +11615,21 @@ static vxml_status cmeta_raise_event_impl(
 
             status = execute_event_handler(
                 impl, program, profile, handler);
-            if (status != VXML_OK)
-                return session_fail(impl, status);
+            if (status != VXML_OK) {
+                if (profile->backend_failure_event.data == NULL)
+                    return session_fail(impl, status);
+                /* No recursive dispatch: a failing catch consumes the same depth
+                 * budget, after execute_event_handler has rolled its values back. */
+                current_event = profile->backend_failure_event.data;
+                current_event_size = profile->backend_failure_event.size;
+                current_origin = (cmeta_event_origin){handler->scope_kind, handler->owner};
+                profile->backend_failure_event = (vxml_cmeta_name_view){0};
+                explicit_origin = true;
+                start_scope = event_origin_rank(current_origin);
+                unhandled_status = status;
+                handled = true;
+                break;
+            }
             handled = true;
             if (impl->state != VXML_SESSION_RUNNING)
                 return VXML_OK;
@@ -11564,7 +11639,11 @@ static vxml_status cmeta_raise_event_impl(
                 profile->throw_requested = false;
                 profile->thrown_event = NULL;
                 profile->thrown_event_size = 0u;
-                start_scope = 0u;
+                unhandled_status = VXML_SEMANTIC_ERROR;
+                if (explicit_origin) {
+                    current_origin = (cmeta_event_origin){handler->scope_kind, handler->owner};
+                    start_scope = event_origin_rank(current_origin);
+                } else start_scope = 0u;
                 break;
             }
             if (profile->rethrow_requested) {
@@ -11579,10 +11658,45 @@ static vxml_status cmeta_raise_event_impl(
             current_event_size != 0u &&
             start_scope < 3u)
             continue;
-        return session_fail(impl, VXML_SEMANTIC_ERROR);
+        return session_fail(impl, unhandled_status);
     }
 }
 
+
+static vxml_status cmeta_raise_event_impl(
+    vxml_session *session, const char *event_name, size_t event_name_size,
+    bool allow_subdialog) {
+    return dispatch_event_impl(session, event_name, event_name_size,
+        allow_subdialog, NULL, VXML_SEMANTIC_ERROR);
+}
+
+/* Called only after the owning FIA transaction and media payload have settled. */
+static vxml_status recover_backend_failure(vxml_session_impl *impl, vxml_status status) {
+    vxml_cmeta_session_data *profile = impl->profile_data;
+    const vxml_cmeta_name_view event = profile->backend_failure_event;
+    const cmeta_event_origin origin = {
+        profile->backend_failure_scope, profile->backend_failure_owner};
+    profile->backend_failure_event = (vxml_cmeta_name_view){0};
+    if (event.data == NULL) return session_fail(impl, status);
+    vxml_session borrowed = {.impl = impl};
+    const vxml_status dispatched = dispatch_event_impl(
+        &borrowed, event.data, event.size, true, &origin, status);
+    /* Public raise can reject admission without changing Session state. A
+     * runtime script failure cannot leave its aborted operation RUNNING. */
+    return dispatched != VXML_OK && impl->state == VXML_SESSION_RUNNING
+        ? session_fail(impl, status) : dispatched;
+}
+
+static vxml_status recover_backend_process(vxml_session_impl *impl, vxml_status status) {
+    status = recover_backend_failure(impl, status);
+    if (status != VXML_OK || impl->state != VXML_SESSION_RUNNING) return status;
+    vxml_cmeta_session_data *profile = impl->profile_data;
+    const vxml_cmeta_program_data *program = impl->program->profile_data;
+    if (profile->active_form >= program->form_count)
+        return session_fail(impl, VXML_INVALID_STRUCTURE);
+    return select_directed_item(impl, program, profile,
+        &program->forms[profile->active_form], profile->active_form);
+}
 
 static vxml_status subdialog_publish_global_exit(
     vxml_session_impl *impl,
@@ -11985,7 +12099,7 @@ vxml_status vxml_session_cmeta_record_run_ready(
             &mailbox->state,
             VXML_CMETA_RECORD_MAILBOX_DISARMED,
             memory_order_release);
-        return session_fail(impl, status);
+        return recover_backend_process(impl, status);
     }
 
     transaction_commit(profile, program);
@@ -12272,7 +12386,7 @@ vxml_status vxml_session_cmeta_transfer_run_ready(
             transaction_reset(profile, program);
             transfer_completion_disarm(profile);
             profile->active_transfer = VXML_CMETA_NO_INDEX;
-            return session_fail(impl, status);
+            return recover_backend_process(impl, status);
         }
         transaction_commit(profile, program);
         reset_owner_retry_counters(
@@ -12500,7 +12614,7 @@ vxml_status vxml_session_cmeta_subdialog_run_ready(
             transaction_reset(profile, program);
             subdialog_mailbox_payload_reset(mailbox);
             profile->active_subdialog = VXML_CMETA_NO_INDEX;
-            return session_fail(impl, status);
+            return recover_backend_process(impl, status);
         }
 
         transaction_commit(profile, program);

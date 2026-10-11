@@ -21,6 +21,8 @@ typedef struct vxml_cmeta_backend_runtime {
     size_t scope_count;
     const void *session_user;
     const struct vxml_session_document_context *document;
+    /* Optional static Event name; survives rollback without borrowing engine data. */
+    vxml_cmeta_name_view *failure_event;
 } vxml_cmeta_backend_runtime;
 
 /* Private composition seam. The compiler copies this table; user is borrowed

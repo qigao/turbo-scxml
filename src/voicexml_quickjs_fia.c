@@ -145,7 +145,12 @@ static vxml_status external_script_compile(const void *user,
     return VXML_OK;
 }
 
-static vxml_status script_resource_status(vxml_script_resource_status status) {
+static vxml_status script_resource_status(
+    const vxml_cmeta_backend_runtime *runtime, vxml_script_resource_status status) {
+    if (runtime->failure_event != NULL && status != VXML_SCRIPT_RESOURCE_OK) {
+        runtime->failure_event->data = vxml_script_resource_failure_event(
+            status, &runtime->failure_event->size);
+    }
     switch (status) {
     case VXML_SCRIPT_RESOURCE_OK: return VXML_OK;
     case VXML_SCRIPT_RESOURCE_ALLOCATION_FAILED: return VXML_ALLOCATION_FAILED;
@@ -189,8 +194,11 @@ static vxml_status external_script_evaluate(const fia_expression *expression,
         status = VXML_SEMANTIC_ERROR;
         goto done;
     }
-    if (size > session->max_uri_bytes || size > expression->limits.engine.max_string_bytes ||
-        quickjs_sandbox_deadline_expired(engine)) {
+    if (size > session->max_uri_bytes || size > expression->limits.engine.max_string_bytes) {
+        status = script_resource_status(runtime, VXML_SCRIPT_RESOURCE_LIMIT_EXCEEDED);
+        goto done;
+    }
+    if (quickjs_sandbox_deadline_expired(engine)) {
         status = VXML_LIMIT_EXCEEDED;
         goto done;
     }
@@ -208,18 +216,18 @@ static vxml_status external_script_evaluate(const fia_expression *expression,
     request.max_uri_bytes = session->max_uri_bytes;
     request.max_source_bytes = session->max_source_bytes < expression->limits.engine.max_source_bytes
         ? session->max_source_bytes : expression->limits.engine.max_source_bytes;
-    status = script_resource_status(vxml_script_resource_acquire(document->resolver,
+    status = script_resource_status(runtime, vxml_script_resource_acquire(document->resolver,
         &session->resources, session->user, &request, &source));
     if (status != VXML_OK) goto done;
     if (source.size != 0u && memchr(source.data, '\0', source.size) != NULL) {
-        status = VXML_SEMANTIC_ERROR;
+        status = script_resource_status(runtime, VXML_SCRIPT_RESOURCE_INVALID_DATA);
         goto done;
     }
     code = source.size != 0u ? tstr_new_len(source.data, source.size) : tstr_dup(";");
     if (code == NULL) { status = VXML_ALLOCATION_FAILED; goto done; }
     /* The bounded copy separates provider lifetime from engine execution.
      * Provider close, like acquisition, is outside the JavaScript deadline. */
-    status = script_resource_status(vxml_script_resource_close(&session->resources, session->user, &source));
+    status = script_resource_status(runtime, vxml_script_resource_close(&session->resources, session->user, &source));
     if (status != VXML_OK) goto done;
     *owns_deadline = quickjs_sandbox_deadline_begin(engine, expression->limits.engine.max_eval_milliseconds);
     *out = JS_Eval(context, code, tstr_len(code), "<voicexml-external-script>",
@@ -227,9 +235,9 @@ static vxml_status external_script_evaluate(const fia_expression *expression,
 done:
     tstr_free(code);
     if (source.lease != NULL) {
-        const vxml_status closed = script_resource_status(
-            vxml_script_resource_close(&session->resources, session->user, &source));
-        if (status == VXML_OK) status = closed;
+        const vxml_script_resource_status closed =
+            vxml_script_resource_close(&session->resources, session->user, &source);
+        if (status == VXML_OK) status = script_resource_status(runtime, closed);
     }
     if (dynamic != NULL) JS_FreeCString(context, dynamic);
     JS_FreeValue(context, target);
@@ -391,6 +399,8 @@ static vxml_status expression_evaluate(const void *opaque, vxml_cmeta_value_kind
     if (scratch == NULL || out == NULL ||
         (scratch->capacity != 0u && scratch->bytes == NULL)) return VXML_INVALID_ARGUMENT;
     *out = (vxml_cmeta_value_view){0};
+    if (runtime != NULL && runtime->failure_event != NULL)
+        *runtime->failure_event = (vxml_cmeta_name_view){0};
     scratch->used = 0u;
     status = bindings_create(expression, runtime, &bindings, &count);
     if (status != VXML_OK) goto done;
@@ -503,6 +513,14 @@ done:
     if (context != NULL) {
         JS_FreeValue(context, result);
         JS_FreeValue(context, global);
+    }
+    if (expression != NULL && runtime != NULL &&
+        expression->kind == VXML_CMETA_CODE_SCRIPT && runtime->failure_event != NULL &&
+        runtime->failure_event->data == NULL) {
+        if (status == VXML_SEMANTIC_ERROR)
+            *runtime->failure_event = (vxml_cmeta_name_view){"error.semantic", sizeof("error.semantic") - 1u};
+        else if (status == VXML_ALLOCATION_FAILED)
+            *runtime->failure_event = (vxml_cmeta_name_view){"error.noresource", sizeof("error.noresource") - 1u};
     }
     quickjs_sandbox_deadline_end(&engine, owns_deadline);
     quickjs_sandbox_runtime_destroy(&engine);
