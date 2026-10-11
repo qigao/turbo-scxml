@@ -1,6 +1,8 @@
 /build/
 /.worktrees/
 /vcpkg_installed/
+/tests/install_consumer/build/
+/tests/install_consumer/vcpkg_installed/
 /.codegraph/
 /.vs/
 /.vscode/

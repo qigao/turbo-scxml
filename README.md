@@ -266,7 +266,21 @@ The package is intended to fail fast when its configured dependency profile is m
 
 ## Optional QuickJS profile
 
-`TURBOSCXML_ENABLE_QUICKJS` enables the bounded QuickJS-backed SCXML data-model profile.
+`TURBOSCXML_ENABLE_QUICKJS` enables the bounded QuickJS-NG profiles, using the
+existing vcpkg `quickjs-ng` dependency:
+
+| Profile | Public entry |
+| --- | --- |
+| SCXML datamodel | `TurboSCXML::SCXML`, `<scxml/scxml.h>` |
+| CCXML conditions and dynamic strings | `TurboSCXML::CCXMLQuickJS`, `<ccxml/quickjs.h>` |
+| VoiceXML datamodel | `TurboSCXML::VoiceXMLQuickJS`, `<voicexml/quickjs.h>` |
+
+CCXML imports the current CMeta state and `event$` into a fresh context for each
+evaluation. Conditions use JavaScript truth conversion; dynamic destinations
+and dialog sources require nonempty strings. CMeta retains transactional ID
+writeback ownership; JavaScript mutations are discarded. See the
+[expression adapter contract and example](docs/specs/ccxml-dynamic-string-expression-design.md#quickjs-ng-adapter)
+for bounds, lifetime rules and unsupported syntax.
 
 The feature is optional and does not redefine the core CFlow Statechart ownership boundary.
 

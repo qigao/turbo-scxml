@@ -299,15 +299,16 @@ quickjs_sandbox_status quickjs_sandbox_runtime_eval(
 #endif
 }
 
-quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
+static quickjs_sandbox_status eval_expression_result(
     quickjs_sandbox_runtime *runtime,
     const char *source, size_t source_size,
     const char *filename,
     uint64_t max_eval_milliseconds,
-    const char **out_string, size_t *out_size,
+    const char **out_string, size_t *out_size, bool *out_boolean,
     char *diagnostic, size_t diagnostic_capacity) {
     static const char prefix[] = "(\n";
     static const char suffix[] = "\n)";
+    if (out_boolean != NULL) *out_boolean = false;
     if (out_string != NULL) *out_string = NULL;
     if (out_size != NULL) *out_size = 0u;
     if (runtime == NULL || runtime->runtime == NULL ||
@@ -362,6 +363,15 @@ quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
                 runtime, diagnostic, diagnostic_capacity);
             goto done;
         }
+        if (out_boolean != NULL) {
+            const int boolean = JS_ToBool(context, result);
+            if (boolean < 0) {
+                status = quickjs_sandbox_exception(runtime, diagnostic, diagnostic_capacity);
+                goto done;
+            }
+            *out_boolean = boolean != 0;
+            goto evaluated;
+        }
         if (!JS_IsString(result)) {
             quickjs_sandbox_diagnostic(
                 diagnostic, diagnostic_capacity,
@@ -386,6 +396,7 @@ quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
         runtime->result_string[text_size] = '\0';
         *out_string = runtime->result_string;
         *out_size = text_size;
+evaluated:
         if (quickjs_sandbox_deadline_expired(runtime)) {
             *out_string = NULL;
             *out_size = 0u;
@@ -404,6 +415,7 @@ done:
             JS_FreeValue(context, result);
         quickjs_sandbox_deadline_end(runtime, owns_deadline);
         if (status != QUICKJS_SANDBOX_OK) {
+            if (out_boolean != NULL) *out_boolean = false;
             *out_string = NULL;
             *out_size = 0u;
         }
@@ -412,6 +424,29 @@ done:
 #endif
 }
 
+
+quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size, const char *filename,
+    uint64_t max_eval_milliseconds, const char **out_string, size_t *out_size,
+    char *diagnostic, size_t diagnostic_capacity) {
+    return eval_expression_result(runtime, source, source_size, filename,
+        max_eval_milliseconds, out_string, out_size, NULL,
+        diagnostic, diagnostic_capacity);
+}
+
+quickjs_sandbox_status quickjs_sandbox_eval_expression_boolean(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size, const char *filename,
+    uint64_t max_eval_milliseconds, bool *out_boolean,
+    char *diagnostic, size_t diagnostic_capacity) {
+    const char *unused_string = NULL;
+    size_t unused_size = 0u;
+    if (out_boolean == NULL) return QUICKJS_SANDBOX_INVALID_ARGUMENT;
+    return eval_expression_result(runtime, source, source_size, filename,
+        max_eval_milliseconds, &unused_string, &unused_size, out_boolean,
+        diagnostic, diagnostic_capacity);
+}
 
 quickjs_sandbox_status quickjs_sandbox_eval_expression_scalar_string(
     quickjs_sandbox_runtime *runtime,

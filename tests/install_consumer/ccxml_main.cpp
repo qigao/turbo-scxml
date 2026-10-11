@@ -1,6 +1,22 @@
 #include <ccxml/ccxml.h>
+#ifdef TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
+#include <ccxml/quickjs.h>
+#endif
 
 int main() {
+#ifdef TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS
+    ccxml_quickjs_datamodel js_owner{};
+    const auto js_config = ccxml_quickjs_default_datamodel_config();
+    ccxml_status (*init_js)(ccxml_quickjs_datamodel *,
+        const ccxml_quickjs_datamodel_config_v1 *) = ccxml_quickjs_datamodel_init;
+    if (js_config.abi_version != CCXML_QUICKJS_DATAMODEL_CONFIG_ABI_V1 ||
+        js_config.struct_size != sizeof(js_config) ||
+        js_config.max_expressions == 0u ||
+        ccxml_quickjs_datamodel_adapter()->evaluate_string_expression == nullptr ||
+        init_js(&js_owner, &js_config) != CCXML_INVALID_ARGUMENT ||
+        js_owner.impl != nullptr) return 2;
+    ccxml_quickjs_datamodel_destroy(&js_owner);
+#endif
     ccxml_session session{};
     ccxml_cmeta_datamodel datamodel{};
     ccxml_telephony_adapter_v1 telephony{};

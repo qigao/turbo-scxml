@@ -73,6 +73,13 @@ quickjs_sandbox_status quickjs_sandbox_eval_expression_string(
     const char **out_string, size_t *out_size,
     char *diagnostic, size_t diagnostic_capacity);
 
+/* ECMAScript ToBoolean conversion; no result coercion executes user code. */
+quickjs_sandbox_status quickjs_sandbox_eval_expression_boolean(
+    quickjs_sandbox_runtime *runtime,
+    const char *source, size_t source_size, const char *filename,
+    uint64_t max_eval_milliseconds, bool *out_boolean,
+    char *diagnostic, size_t diagnostic_capacity);
+
 /*
  * Evaluate one expression and stringify only deterministic primitive values.
  *

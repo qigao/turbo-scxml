@@ -335,6 +335,21 @@ target_link_libraries(turbo_ccxml
   PUBLIC TurboSCXML::SCXML
   PRIVATE Salts::XmlParser)
 
+if(TURBOSCXML_ENABLE_QUICKJS)
+  add_library(turbo_ccxml_quickjs STATIC src/ccxml_quickjs.c)
+  add_library(TurboSCXML::CCXMLQuickJS ALIAS turbo_ccxml_quickjs)
+  set_target_properties(turbo_ccxml_quickjs PROPERTIES
+    EXPORT_NAME CCXMLQuickJS
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR})
+  target_compile_features(turbo_ccxml_quickjs PUBLIC c_std_11)
+  target_include_directories(turbo_ccxml_quickjs PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+  target_link_libraries(turbo_ccxml_quickjs PUBLIC TurboSCXML::CCXML
+    PRIVATE TurboSCXML::_QuickJSSandbox TurboSCXML::_QuickJSCMetaBridge)
+endif()
+
 add_library(turbo_voicexml STATIC
   src/voicexml_allocator.c
   src/voicexml_program.c
@@ -890,7 +905,7 @@ install(TARGETS turbo_voicexml_script_resource
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 if(TURBOSCXML_ENABLE_QUICKJS)
-  install(TARGETS turbo_voicexml_quickjs
+  install(TARGETS turbo_voicexml_quickjs turbo_ccxml_quickjs
     EXPORT TurboSCXMLTargets
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -993,6 +1008,8 @@ install(
     include/voicexml/submit_resource.h
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)
 if(TURBOSCXML_ENABLE_QUICKJS)
+  install(FILES include/ccxml/quickjs.h
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ccxml)
   install(
     FILES include/voicexml/quickjs.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/voicexml)

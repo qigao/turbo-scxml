@@ -5,6 +5,20 @@
   ],
   "configurePresets": [
     {
+      "name": "win-release-quickjs-installed-user",
+      "inherits": "win-release-quickjs-user",
+      "binaryDir": "${sourceDir}/build/quickjs-installed",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_DIR": "${sourceDir}/../..",
+        "VCPKG_MANIFEST_FEATURES": "quickjs",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "ON"
+      },
+      "environment": {
+        "TURBOSCXML_ROOT": "$penv{TURBOSCXML_ROOT}",
+        "PATH": "$env{TURBOSCXML_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
       "name": "ci-component-installed-user",
       "inherits": "ci-component-release-user",
       "binaryDir": "${sourceDir}/build/component-installed",
@@ -26,11 +40,25 @@
   ],
   "buildPresets": [
     {
+      "name": "win-release-quickjs-installed-user",
+      "configurePreset": "win-release-quickjs-installed-user"
+    },
+    {
       "name": "ci-component-installed-user",
       "configurePreset": "ci-component-installed-user"
     }
   ],
   "testPresets": [
+    {
+      "name": "win-release-quickjs-installed-user",
+      "configurePreset": "win-release-quickjs-installed-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
     {
       "name": "ci-component-installed-user",
       "configurePreset": "ci-component-installed-user",

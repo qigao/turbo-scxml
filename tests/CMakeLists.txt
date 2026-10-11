@@ -646,6 +646,9 @@ turboscxml_add_test(
     SCXML_W3C_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/w3c")
 
 if(TURBOSCXML_ENABLE_QUICKJS)
+  turboscxml_add_test(ccxml_quickjs_test ccxml_quickjs_test.c
+    LIBS TurboSCXML::CCXMLQuickJS TurboSCXML::VoiceXMLDialogManager)
+  set_tests_properties(ccxml_quickjs_test PROPERTIES TIMEOUT 30)
   add_executable(
     voicexml_quickjs_test
     voicexml_quickjs_test.c)

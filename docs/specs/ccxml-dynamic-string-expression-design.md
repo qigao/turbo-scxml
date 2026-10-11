@@ -10,9 +10,83 @@ existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
 the telephony prepare callback.
 
-XPath is not part of this design. The built-in implementation uses the
-existing CMeta expression compiler. QuickJS can implement the same adapter
-tail later without changing the CCXML program or session model.
+XPath is not part of this design. The built-in CMeta implementation uses the
+existing typed expression compiler. The opt-in QuickJS-NG adapter described
+below uses the same CCXML boundary without changing the Program or Session ABI.
+
+## QuickJS-NG adapter
+
+`TurboSCXML::CCXMLQuickJS` / `<ccxml/quickjs.h>` is installed only with
+`TURBOSCXML_ENABLE_QUICKJS=ON`. It reuses the existing vcpkg `quickjs-ng`
+dependency, private QuickJS sandbox, and CMeta projection bridge. A separate
+optional target preserves the CCXML feature-OFF graph. Reusing the SCXML
+session evaluator directly was rejected because it requires an SCXML Session
+and supplemental scope owner; duplicating the VM or CMeta conversion logic was
+also rejected.
+
+The adapter compiles condition and dynamic-string syntax at Session admission.
+Each evaluation recreates a hardened JS context, copies the current CMeta root
+into JS globals, and adds `event$` with `name`, `connectionid`, and `conferenceid`
+(absent IDs are `undefined`). Conditions use ECMAScript truth conversion;
+dynamic strings require an actual nonempty string without embedded NUL. The
+root field name `event$` is reserved. Script-local mutations are not imported
+into later evaluations, including after exceptions; this is an expression
+profile, not a persistent ECMAScript datamodel. No pending Promise jobs are
+executed; any objects retained by pending jobs remain subject to the runtime
+heap bound until runtime destruction.
+
+The application owns the CMeta schema and mutable state. The adapter owns one
+runtime, result scratch, and the inner CMeta adapter. Sessions own their
+validated expression handles (`tstr` source copies); destroy all Sessions and
+handles before destroying the adapter, then release the schema/state. Calls
+are synchronous, serialized, non-reentrant and must not overlap state mutation.
+String results borrow adapter scratch through the next consuming provider
+prepare; providers copy retained bytes. Existing CMeta location, payload, and
+transactional assignment operations handle ID writeback, commit and discard.
+Expression evaluation never exports JS mutations into application state.
+
+Positive source/result/heap/stack/deadline and CMeta conversion bounds are
+mandatory. `max_snapshot_bytes` bounds the CMeta root storage size; this adapter
+does not create a native state snapshot. VM heap and conversion budgets bound
+the projected values. One monotonic deadline covers context creation, projection and
+evaluation. Source and Event bytes are checked before entering the VM. Errors
+return existing CCXML/adapter status codes with fixed, payload-free messages;
+no JavaScript exception text is logged or exposed. This is not a deterministic
+instruction quota. Expression-handle capacity or explicit allocation failure
+returns FULL; type/contract failures return INVALID_CONTRACT; VM exceptions
+(including out-of-memory exceptions), result bounds and deadlines return
+ERROR_EXECUTION. Limits must also accommodate hardened context initialization;
+an insufficient setup budget fails initialization.
+
+The public API supplies a versioned config and explicit init/adapter/destroy
+operations. Existing literal/location programs keep their contracts. `foreach`
+continues to require the built-in CMeta profile and is rejected by Session
+admission for this adapter. Inline scripts, dynamic assignment expressions,
+modules, filesystem/network APIs, arbitrary JS object persistence, and a second
+Session/Actor owner are outside this profile. Applications opt in by selecting
+the adapter; selecting the original CMeta adapter rolls back the integration
+for programs whose expressions remain in the typed subset.
+
+For example, after initializing a zeroed `ccxml_quickjs_datamodel owner`:
+
+```c
+ccxml_quickjs_datamodel_config_v1 js = ccxml_quickjs_default_datamodel_config();
+js.state_config.root = application_schema;
+js.state_config.state = application_state;
+ccxml_status status = ccxml_quickjs_datamodel_init(&owner, &js);
+if (status != CCXML_OK) return status;
+/* owner must outlive all sessions configured this way. */
+session_config.datamodel = ccxml_quickjs_datamodel_adapter();
+session_config.datamodel_user = &owner;
+```
+
+A dynamic dialog source can be written as `src="('app' + count + '.vxml')"`.
+Parenthesize expressions starting and ending with quotes: the existing XML
+profile otherwise classifies them as quoted literals with restricted escapes.
+Destroy Sessions before `ccxml_quickjs_datamodel_destroy(&owner)`.
+
+QuickJS-NG's runtime/context ownership and execution limits follow its
+[embedding API](https://quickjs-ng.github.io/quickjs/developer-guide/intro/).
 
 ## Public boundary
 
@@ -100,8 +174,8 @@ Dispatch evaluates the value immediately before calling the matching
 direct dialogstart first validate their mandatory current Event connection.
 Evaluation failure, an invalid returned view, or provider rejection discards
 all tickets already prepared by the transition and rolls back staged foreach
-scope. Createconference, dialogprepare, and direct dialogstart retain a separate returned-ID writeback ticket and
-commits that write before publishing the provider operation. A successful
+scope. Createconference, dialogprepare, and direct dialogstart retain a separate
+returned-ID writeback ticket and commit that write before publishing the provider operation. A successful
 provider prepare is retained in the existing effect journal, so commit ordering
 and exact-once discard remain unchanged.
 
@@ -118,8 +192,8 @@ releasing the datamodel owner relationship.
   expressions are not migrated in this facility.
 - General string concatenation and coercion are not added to the CMeta
   expression language.
-- QuickJS support is a separate adapter/runtime extraction task because the
-  current QuickJS evaluator owns SCXML-session-specific runtime state.
+- QuickJS-NG is an explicit optional adapter; it does not silently replace
+  the CMeta expression language or enable unsupported CCXML syntax.
 
 ## Verification
 
@@ -128,3 +202,21 @@ missing-tail rejection, compile failure cleanup, successful CMeta root lookup,
 typed foreach staged lookup, empty/NUL runtime rejection, provider failure
 rollback, and exact-once handle destruction. Release configuration must build
 without QuickJS and the full CTest suite must pass.
+
+`ccxml_quickjs_test` exercises actual JS truth conversion and concatenation,
+fresh globals, bounded results and handles, deadline recovery, private error
+redaction, foreach rejection, transaction discard, and the real
+CCXML/DialogManager/VoiceXML source-selection path. Adjacent SCXML/VoiceXML and
+shared sandbox suites cover the shared evaluator implementation.
+
+The existing installed C/C++ CCXML consumers also exercise the optional ABI
+when `TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS` is enabled. On Windows, after
+installing a QuickJS-enabled SDK with its install user preset, set
+`TURBOSCXML_ROOT` to that SDK and run from `tests/install_consumer` in the VS
+developer environment:
+
+```sh
+cmake --preset win-release-quickjs-installed-user
+cmake --build --preset win-release-quickjs-installed-user
+ctest --preset win-release-quickjs-installed-user
+```

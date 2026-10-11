@@ -1,5 +1,5 @@
 option(TURBOSCXML_ENABLE_QUICKJS
-  "Enable the bounded quickjs-sandbox SCXML data-model profile" OFF)
+  "Enable bounded QuickJS-NG SCXML, CCXML and VoiceXML profiles" OFF)
 option(TURBOSCXML_ENABLE_CHTTP_RESOURCE
   "Enable the optional blocking CHTTP SCXML resource adapter" OFF)
 option(TURBOSCXML_ENABLE_CHTTP_EVENT_IO

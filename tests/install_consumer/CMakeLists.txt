@@ -157,7 +157,7 @@ if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_CHTTP_EVENT_IO)
   list(APPEND TURBOSCXML_INSTALL_COMPONENTS CHttpEventIO)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
-  list(APPEND TURBOSCXML_INSTALL_COMPONENTS QuickJS)
+  list(APPEND TURBOSCXML_INSTALL_COMPONENTS QuickJS CCXMLQuickJS)
 endif()
 if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS AND
    NOT VoiceXMLQuickJS IN_LIST TURBOSCXML_INSTALL_COMPONENTS)
@@ -514,6 +514,12 @@ else()
   target_link_libraries(
     turboscxml_ccxml_install_consumer_cpp PRIVATE TurboSCXML::CCXML)
   if(TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS)
+    foreach(consumer IN ITEMS
+        turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp)
+      target_link_libraries(${consumer} PRIVATE TurboSCXML::CCXMLQuickJS)
+      target_compile_definitions(${consumer} PRIVATE
+        TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)
+    endforeach()
     target_compile_definitions(
       turboscxml_install_consumer PRIVATE
       TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS=1)

@@ -12,7 +12,7 @@
       ]
     },
     "quickjs": {
-      "description": "Bounded quickjs-sandbox SCXML data-model profile",
+      "description": "Bounded QuickJS-NG SCXML, CCXML and VoiceXML profiles",
       "dependencies": [
         {
           "name": "quickjs-ng",
