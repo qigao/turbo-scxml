@@ -1,4 +1,5 @@
 #include <voicexml/quickjs.h>
+#include "voicexml_quickjs_cases.h"
 
 #include <type_traits>
 
@@ -59,5 +60,5 @@ int main() {
            execute_fn != nullptr &&
            state_fn != nullptr &&
            event_fn != nullptr
-        ? 0 : 1;
+        ? installed_voice_quickjs_cases() : 1;
 }

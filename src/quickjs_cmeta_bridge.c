@@ -896,16 +896,31 @@ quickjs_cmeta_default_collection_adapter(void) {
     return &adapter;
 }
 
-static bool quickjs_cmeta_state_type_supported(
-    const cmeta_type_desc *type,
-    bool *managed) {
-    if (!cmeta_type_desc_valid(type) || managed == NULL)
+typedef enum quickjs_cmeta_state_lifecycle {
+    QUICKJS_CMETA_STATE_TRIVIAL,
+    QUICKJS_CMETA_STATE_NATIVE,
+    QUICKJS_CMETA_STATE_REFLECTED
+} quickjs_cmeta_state_lifecycle;
+
+static bool quickjs_cmeta_state_lifecycle_of(
+    const cmeta_data_desc *root,
+    quickjs_cmeta_state_lifecycle *lifecycle) {
+    const cmeta_type_desc *type = root != NULL ? root->storage_type : NULL;
+    if (!cmeta_data_desc_valid(root) || !cmeta_type_desc_valid(type) || lifecycle == NULL)
         return false;
+    /* Reflection VALUE declares fieldwise lifecycle independently of storage
+     * traits. Let CMeta reject VIEW and any unsupported nested field. Legacy
+     * descriptors keep their explicitly declared native owner callbacks. */
+    if (root->abi_version == CMETA_DATA_DESC_REFLECTION_ABI_VERSION) {
+        if (!cmeta_data_value_traits_supported(root)) return false;
+        *lifecycle = QUICKJS_CMETA_STATE_REFLECTED;
+        return true;
+    }
     if (cmeta_type_require_traits(
             type,
             CMETA_TRAIT_TRIVIAL_COPY |
                 CMETA_TRAIT_TRIVIAL_DESTROY) == CMETA_OK) {
-        *managed = false;
+        *lifecycle = QUICKJS_CMETA_STATE_TRIVIAL;
         return true;
     }
     if (cmeta_type_require_traits(
@@ -914,7 +929,7 @@ static bool quickjs_cmeta_state_type_supported(
                 CMETA_TRAIT_MOVE |
                 CMETA_TRAIT_DESTROY) != CMETA_OK)
         return false;
-    *managed = true;
+    *lifecycle = QUICKJS_CMETA_STATE_NATIVE;
     return true;
 }
 
@@ -927,7 +942,7 @@ bool quickjs_cmeta_state_snapshot(
     uintptr_t address;
     uintptr_t aligned;
     size_t allocation_size;
-    bool managed;
+    quickjs_cmeta_state_lifecycle lifecycle;
     if (scratch == NULL || scratch->allocation != NULL ||
         scratch->value != NULL || committed == NULL ||
         !cmeta_data_desc_valid(root) ||
@@ -936,7 +951,7 @@ bool quickjs_cmeta_state_snapshot(
         max_snapshot_bytes == 0u)
         return false;
     type = root->storage_type;
-    if (!quickjs_cmeta_state_type_supported(type, &managed) ||
+    if (!quickjs_cmeta_state_lifecycle_of(root, &lifecycle) ||
         type->size > max_snapshot_bytes ||
         type->align == 0u ||
         (type->align & (type->align - 1u)) != 0u ||
@@ -954,9 +969,11 @@ bool quickjs_cmeta_state_snapshot(
     aligned = (address + type->align - 1u) &
         ~((uintptr_t)type->align - 1u);
     scratch->value = (void *)aligned;
-    if (managed) {
-        if (!type->traits->copy_construct(
-                scratch->value, committed)) {
+    if (lifecycle != QUICKJS_CMETA_STATE_TRIVIAL) {
+        const bool copied = lifecycle == QUICKJS_CMETA_STATE_REFLECTED
+            ? cmeta_data_trait_copy_construct(root, scratch->value, committed)
+            : type->traits->copy_construct(scratch->value, committed);
+        if (!copied) {
             free(scratch->allocation);
             memset(scratch, 0, sizeof(*scratch));
             return false;
@@ -973,12 +990,15 @@ void quickjs_cmeta_state_scratch_destroy(
     const cmeta_data_desc *root) {
     const cmeta_type_desc *type =
         root != NULL ? root->storage_type : NULL;
-    bool managed = false;
+    quickjs_cmeta_state_lifecycle lifecycle;
     if (scratch == NULL) return;
     if (scratch->live && scratch->value != NULL &&
-        quickjs_cmeta_state_type_supported(type, &managed) &&
-        managed)
-        type->traits->destroy(scratch->value);
+        quickjs_cmeta_state_lifecycle_of(root, &lifecycle)) {
+        if (lifecycle == QUICKJS_CMETA_STATE_REFLECTED)
+            cmeta_data_trait_destroy(root, scratch->value);
+        else if (lifecycle == QUICKJS_CMETA_STATE_NATIVE)
+            type->traits->destroy(scratch->value);
+    }
     free(scratch->allocation);
     memset(scratch, 0, sizeof(*scratch));
 }
@@ -988,16 +1008,20 @@ bool quickjs_cmeta_state_publish(
     void *committed,
     quickjs_cmeta_state_scratch *scratch) {
     const cmeta_type_desc *type;
-    bool managed;
+    quickjs_cmeta_state_lifecycle lifecycle;
     if (committed == NULL || scratch == NULL ||
         !scratch->live || scratch->value == NULL ||
         !cmeta_data_desc_valid(root) ||
         root->storage_type == NULL)
         return false;
     type = root->storage_type;
-    if (!quickjs_cmeta_state_type_supported(type, &managed))
+    if (!quickjs_cmeta_state_lifecycle_of(root, &lifecycle))
         return false;
-    if (managed) {
+    if (lifecycle == QUICKJS_CMETA_STATE_REFLECTED) {
+        cmeta_data_trait_destroy(root, committed);
+        cmeta_data_trait_move_construct(root, committed, scratch->value);
+        scratch->live = false;
+    } else if (lifecycle == QUICKJS_CMETA_STATE_NATIVE) {
         type->traits->destroy(committed);
         type->traits->move_construct(
             committed, scratch->value);

@@ -416,7 +416,7 @@ elseif(TURBOSCXML_INSTALL_CONSUMER_VOICEXML_CMETA_ONLY)
   target_link_libraries(
     turboscxml_voicexml_subdialog_owner_install_consumer_cpp
     PRIVATE TurboSCXML::VoiceXMLSubdialogOwner)
-else()
+elseif(NOT TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS)
   add_executable(turboscxml_install_consumer main.c)
   target_compile_features(turboscxml_install_consumer PRIVATE c_std_11)
   target_link_libraries(
@@ -694,6 +694,8 @@ endif()
 enable_testing()
 foreach(consumer IN ITEMS
     turboscxml_install_consumer
+    turboscxml_voicexml_quickjs_install_consumer
+    turboscxml_voicexml_quickjs_install_consumer_cpp
     turboscxml_provider_install_consumer turboscxml_provider_install_consumer_cpp
     turboscxml_ccxml_install_consumer turboscxml_ccxml_install_consumer_cpp
     turboscxml_plugin_install_consumer turboscxml_plugin_install_consumer_cpp

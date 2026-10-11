@@ -3,6 +3,7 @@
 
 #include <cmeta/cmeta.h>
 #include <cmeta/data.h>
+#include <cmeta/data_reflect.h>
 #include <quickjs.h>
 
 #include <stddef.h>
@@ -117,9 +118,11 @@ static cmeta_status bridge_collector_begin(
     void *context, const cmeta_type_desc *input, size_t limit) {
     bridge_int_sequence *sequence =
         (bridge_int_sequence *)context;
+    /* Canonical copy supplies SIZE_MAX as its caller quota. The provider's
+     * fixed eight-element capacity is enforced by accept(). */
+    (void)limit;
     if (sequence == NULL || input == NULL ||
-        !cmeta_type_equal(input, &cmeta_type_int) ||
-        limit > 8u)
+        !cmeta_type_equal(input, &cmeta_type_int))
         return CMETA_INVALID_ARGUMENT;
     memset(sequence, 0, sizeof(*sequence));
     return CMETA_OK;
@@ -237,6 +240,22 @@ static const cmeta_data_desc bridge_state_data = {
     .storage_type = &bridge_state_type,
     .shape = &bridge_state_shape};
 
+/* Same native fields, with lifecycle derived from the canonical data schema. */
+cmeta_reflect_value(bridge_state, "test.quickjs.bridge.reflected",
+    cmeta_field(int, marker)
+    cmeta_data_field(bridge_int_sequence, values, &bridge_sequence_data, &bridge_sequence_type)
+);
+
+typedef struct bridge_view { int marker; int hidden; } bridge_view;
+cmeta_reflect_data(bridge_view, "test.quickjs.bridge.view",
+    cmeta_field(int, marker)
+);
+typedef struct bridge_view_parent { bridge_view child; } bridge_view_parent;
+cmeta_reflect_value(bridge_view_parent, "test.quickjs.bridge.view_parent",
+    cmeta_data_field(bridge_view, child, cmeta_reflected_data(bridge_view),
+        cmeta_reflected_storage(bridge_view))
+);
+
 static quickjs_sandbox_options sandbox_options(void) {
     return (quickjs_sandbox_options){
         .max_source_bytes = 4096u,
@@ -256,6 +275,75 @@ static quickjs_cmeta_limits bridge_limits(void) {
 }
 
 spec("private QuickJS CMeta bridge") {
+    group("reflected state lifecycle") {
+        static quickjs_cmeta_state_scratch scratch;
+        static bridge_state committed;
+        static const cmeta_data_desc *root;
+        before_each() {
+            scratch = (quickjs_cmeta_state_scratch){0};
+            committed = (bridge_state){.marker = 1, .values = {{2, 3}, 2u}};
+            root = cmeta_reflected_data(bridge_state);
+        }
+        after_each() {
+            quickjs_cmeta_state_scratch_destroy(&scratch, root);
+        }
+        it("copies and moves reflected scalar and collection fields transactionally") {
+            check_true(cmeta_data_desc_valid(root));
+            check_true(cmeta_data_value_traits_supported(root));
+            check_true(quickjs_cmeta_state_snapshot(&scratch, root, &committed, sizeof(committed)));
+            bridge_state *staged = scratch.value;
+            check_equal(staged->marker, 1);
+            check_equal(staged->values.count, (size_t)2u);
+            check_equal(staged->values.values[0], 2);
+            staged->marker = 7;
+            staged->values.values[0] = 9;
+            check_equal(committed.marker, 1);
+            check_equal(committed.values.values[0], 2);
+            check_true(quickjs_cmeta_state_publish(root, &committed, &scratch));
+            check_equal(committed.marker, 7);
+            check_equal(committed.values.values[0], 9);
+            check_false(scratch.live);
+            check_equal(staged->values.count, (size_t)0u);
+        }
+        it("discards reflected scratch without changing committed state") {
+            check_true(quickjs_cmeta_state_snapshot(&scratch, root, &committed, sizeof(committed)));
+            ((bridge_state *)scratch.value)->marker = 77;
+            quickjs_cmeta_state_scratch_destroy(&scratch, root);
+            check_null(scratch.allocation);
+            check_null(scratch.value);
+            check_false(scratch.live);
+            check_equal(committed.marker, 1);
+            check_equal(committed.values.count, (size_t)2u);
+        }
+        it("leaves no live scratch after bounds or field copy failure") {
+            check_false(quickjs_cmeta_state_snapshot(&scratch, root, &committed, sizeof(committed) - 1u));
+            check_null(scratch.allocation);
+            /* The collection provider rejects an invalid source extent. */
+            committed.values.count = 9u;
+            check_false(quickjs_cmeta_state_snapshot(&scratch, root, &committed, sizeof(committed)));
+            check_null(scratch.allocation);
+            check_null(scratch.value);
+            check_false(scratch.live);
+            check_equal(committed.marker, 1);
+            check_equal(committed.values.count, (size_t)9u);
+        }
+        it("keeps read-only projections and nested views outside snapshot ownership") {
+            bridge_view view = {7, 9};
+            bridge_view_parent parent = {{3, 4}};
+            quickjs_cmeta_limits limits = bridge_limits();
+            check_true(quickjs_cmeta_schema_supported(cmeta_reflected_data(bridge_view),
+                &limits, NULL, NULL, 0u));
+            check_false(quickjs_cmeta_state_snapshot(&scratch, cmeta_reflected_data(bridge_view),
+                &view, sizeof(view)));
+            check_false(quickjs_cmeta_state_snapshot(&scratch, cmeta_reflected_data(bridge_view_parent),
+                &parent, sizeof(parent)));
+            check_null(scratch.allocation);
+            check_false(scratch.live);
+            check_equal(view.hidden, 9);
+            check_equal(parent.child.hidden, 4);
+        }
+    }
+
     it("imports canonical collection state and publishes one transactional snapshot") {
         static const char script[] =
             "marker = 7; values = [4, 5, 6];";

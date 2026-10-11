@@ -43,6 +43,11 @@ typedef struct vxml_quickjs_compile_options_v1 {
      * root is borrowed by the compiled Program and must outlive it. A NULL
      * root preserves the target-only #231 profile and ignores the conversion
      * fields below.
+     *
+     * Native reflection roots use cmeta_reflect_value and require complete
+     * canonical copy/move/cleanup support, including every nested field.
+     * Read-only cmeta_reflect_data projections cannot own Session snapshots.
+     * Legacy descriptors retain their native storage-trait lifecycle.
      */
     const cmeta_data_desc *root;
     size_t max_conversion_depth;

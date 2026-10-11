@@ -291,6 +291,24 @@ retry, and adapter shutdown. On Windows, after installing with
 configure/build/CTest with `win-release-quickjs-installed-user` from
 `tests/install_consumer`.
 
+VoiceXML's installed C11/C++17 consumers run with
+`win-release-voicexml-quickjs-installed-user` in the same directory against
+the same SDK. They execute static and computed script URIs through a local
+resource provider, verify committed-state isolation and exception rollback,
+and check exact lease settlement. CTest registers these consumers separately
+from the SCXML/CCXML profile.
+
+VoiceXML typed QuickJS state accepts `cmeta_reflect_value` roots through
+CMeta's canonical fieldwise copy/move/cleanup operations. Reflection storage
+descriptors deliberately do not supply native storage traits, so the shared
+snapshot bridge selects semantic lifecycle for reflection-format descriptors;
+legacy descriptors keep their existing native owner callbacks. This avoids
+duplicating field lifecycle or treating a read-only `cmeta_reflect_data` view
+as an owned value. Nested views remain ineligible for snapshots. No stored
+data or public ABI migration is required; consumers needing an older runtime
+can retain their existing legacy descriptor and native lifecycle callbacks.
+SCXML's separate compiler admission rules remain unchanged.
+
 The feature is optional and does not redefine the core CFlow Statechart ownership boundary.
 
 ## Optional CHTTP adapters

@@ -19,6 +19,15 @@
       }
     },
     {
+      "name": "win-release-voicexml-quickjs-installed-user",
+      "inherits": "win-release-quickjs-installed-user",
+      "binaryDir": "${sourceDir}/build/voicexml-quickjs-installed",
+      "cacheVariables": {
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_QUICKJS": "OFF",
+        "TURBOSCXML_INSTALL_CONSUMER_EXPECT_VOICEXML_QUICKJS": "ON"
+      }
+    },
+    {
       "name": "ci-component-installed-user",
       "inherits": "ci-component-release-user",
       "binaryDir": "${sourceDir}/build/component-installed",
@@ -40,6 +49,10 @@
   ],
   "buildPresets": [
     {
+      "name": "win-release-voicexml-quickjs-installed-user",
+      "configurePreset": "win-release-voicexml-quickjs-installed-user"
+    },
+    {
       "name": "win-release-quickjs-installed-user",
       "configurePreset": "win-release-quickjs-installed-user"
     },
@@ -49,6 +62,16 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "win-release-voicexml-quickjs-installed-user",
+      "configurePreset": "win-release-voicexml-quickjs-installed-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
     {
       "name": "win-release-quickjs-installed-user",
       "configurePreset": "win-release-quickjs-installed-user",

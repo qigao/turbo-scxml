@@ -1,4 +1,5 @@
 #include <voicexml/quickjs.h>
+#include "voicexml_quickjs_cases.h"
 
 int main(void) {
     vxml_quickjs_compile_options_v1 compile =
@@ -59,5 +60,5 @@ int main(void) {
            execution.struct_size == sizeof(execution) &&
            compile_fn != 0 && init_fn != 0 &&
            execute_fn != 0 && state_fn != 0 && event_fn != 0
-        ? 0 : 1;
+        ? installed_voice_quickjs_cases() : 1;
 }
