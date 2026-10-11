@@ -23,8 +23,9 @@ values sent through the `ccxml` processor map to nested event properties.
   payload-read tail operations during session initialization.
 
 General ECMAScript variable references, computed property access, inline XML
-content, dynamic target/name/targettype/delay expressions, and `hints` remain
-outside this bounded profile.
+content, general dynamic delay expressions, and `hints` remain outside this
+bounded profile. Dynamic target/name/targettype expressions are covered by the
+current [send profile](ccxml-send-design.md).
 
 ## Shared payload boundary
 

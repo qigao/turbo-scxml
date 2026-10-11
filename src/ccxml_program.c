@@ -684,24 +684,6 @@ static ccxml_status decode_send_literal(
     return CCXML_OK;
 }
 
-static size_t copy_send_literal(
-    salts_xml_attribute attribute, char *output) {
-    const salts_xml_string_view expression =
-        salts_xml_attribute_value(attribute);
-    size_t decoded_size = 0u;
-    if (scxml_xml_decode_attribute_entities(
-            expression.data, expression.size,
-            NULL, 0u, &decoded_size) != SCXML_XML_DECODE_OK ||
-        scxml_xml_decode_attribute_entities(
-            expression.data, expression.size,
-            output, decoded_size, &decoded_size) != SCXML_XML_DECODE_OK) {
-        return 0u;
-    }
-    memmove(output, output + 1u, decoded_size - 2u);
-    output[decoded_size - 2u] = '\0';
-    return decoded_size - 2u;
-}
-
 static bool send_delay_location_has_dot(salts_xml_string_view location) {
     return location.data != NULL && location.size > 0u &&
            memchr(location.data, '.', location.size) != NULL;
@@ -817,6 +799,7 @@ static ccxml_status validate_send_action(
     bool delay_is_literal = false;
     bool target_is_dynamic = false;
     bool name_is_dynamic = false;
+    bool type_is_dynamic = false;
     size_t target_size = 0u;
     size_t name_size = 0u;
     size_t type_size = 0u;
@@ -880,8 +863,9 @@ static ccxml_status validate_send_action(
         goto cleanup;
     }
     if (type_attribute.impl != NULL) {
-        status = decode_send_literal(
-            type_attribute, &type_value, &type_size, diagnostic);
+        status = decode_destination_value(
+            type_attribute, true, &type_value, &type_size,
+            &type_is_dynamic, diagnostic);
         if (status != CCXML_OK) goto cleanup;
     }
     if (delay_attribute.impl != NULL) {
@@ -3159,9 +3143,21 @@ static ccxml_status copy_program(
                     cursor[action_row->name_size] = '\0';
                     cursor += action_row->name_size + 1u;
                     if (type_attribute.impl != NULL) {
+                        char *type_value = NULL;
+                        status = decode_destination_value(
+                            type_attribute, true, &type_value,
+                            &action_row->target_type_size,
+                            &action_row->target_type_is_dynamic, diagnostic);
+                        if (status != CCXML_OK) {
+                            free(items);
+                            return status;
+                        }
+                        if (action_row->target_type_is_dynamic)
+                            impl->uses_string_expression = true;
                         action_row->target_type = cursor;
-                        action_row->target_type_size =
-                            copy_send_literal(type_attribute, cursor);
+                        memcpy(cursor, type_value, action_row->target_type_size);
+                        free(type_value);
+                        cursor[action_row->target_type_size] = '\0';
                         cursor += action_row->target_type_size + 1u;
                     } else {
                         action_row->target_type = default_type;

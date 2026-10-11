@@ -577,6 +577,7 @@ struct foreach_provider_probe {
     size_t close_count;
     char destinations[4][TEST_TEXT_CAPACITY + 1u];
     char event_names[4][TEST_TEXT_CAPACITY + 1u];
+    char target_types[4][TEST_TEXT_CAPACITY + 1u];
     size_t destination_sizes[4];
     const char *conference_id_result;
     size_t conference_id_result_size;
@@ -722,10 +723,13 @@ static scxml_adapter_status foreach_prepare_send(
     void *user, const scxml_send_request *request,
     cflow_statechart_effect_ticket *out_ticket, const char **out_error) {
     foreach_provider_probe *probe = user;
-    if (probe->prepare_count >= 4u || request->event_size > TEST_TEXT_CAPACITY)
+    if (probe->prepare_count >= 4u || request->event_size > TEST_TEXT_CAPACITY ||
+        request->type_size > TEST_TEXT_CAPACITY)
         return SCXML_ADAPTER_INVALID_CONTRACT;
     memcpy(probe->event_names[probe->prepare_count], request->event, request->event_size);
     probe->event_names[probe->prepare_count][request->event_size] = '\0';
+    memcpy(probe->target_types[probe->prepare_count], request->type, request->type_size);
+    probe->target_types[probe->prepare_count][request->type_size] = '\0';
     const ccxml_create_call_request destination = {
         .destination = request->target, .destination_size = request->target_size};
     return foreach_prepare_create_call(user, &destination, out_ticket, out_error);
@@ -1354,7 +1358,8 @@ spec("CCXML CMeta datamodel") {
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'>"
                 "<foreach array='values' item='item'>"
-                "<send target='item.destination' name='item.destination'/>"
+                "<send target='item.destination' name='item.destination' "
+                "targettype='item.destination'/>"
                 "</foreach>"
                 "</transition></eventprocessor></ccxml>"};
             const char *source = sources[sending];
@@ -1444,6 +1449,8 @@ spec("CCXML CMeta datamodel") {
                 check_equal(provider.destinations[2], "tel.333");
                 check_equal(provider.event_names[0], "tel.111");
                 check_equal(provider.event_names[2], "tel.333");
+                check_equal(provider.target_types[0], "tel.111");
+                check_equal(provider.target_types[2], "tel.333");
             }
             check_equal(ccxml_session_destroy(&session), CCXML_OK);
             ccxml_cmeta_datamodel_destroy(&datamodel);

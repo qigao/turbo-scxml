@@ -5,7 +5,7 @@
 This facility provides typed dynamic string evaluation to
 `<createcall dest="...">`, `<redirect dest="...">`, optional
 `<createconference confname="...">`, `src` on `<dialogprepare>` and direct
-`<dialogstart>`, and `target`/`name` on `<send>`. Quoted, nonempty literals keep their
+`<dialogstart>`, and `target`/`name`/`targettype` on `<send>`. Quoted, nonempty literals keep their
 existing behavior. An unquoted value is compiled by the configured CCXML
 datamodel adapter when a session is admitted and evaluated immediately before
 the consuming provider prepare callback.
@@ -159,12 +159,13 @@ uses staged scope; otherwise it uses committed scope. Thus
 `<createconference conferenceid="conference_id"
 confname="item.destination"/>`, observe the current typed iteration. Dialog
 preparation and direct start likewise accept `src="item.destination"`.
-Send accepts `target="item.destination"` and `name="item.event_name"` against
+Send accepts `target="item.destination"`, `name="item.event_name"`, and
+`targettype="item.processor_type"` against
 the same staged scope; evaluated names must satisfy the event-name grammar.
 
 ## Session lifecycle and transaction behavior
 
-Session initialization allocates a zeroed array with destination/name handles only when
+Session initialization allocates a zeroed array with destination/name/targettype handles only when
 the program uses dynamic string expressions. Every dynamic createcall,
 redirect, createconference, dialogprepare, direct dialogstart, or send action
 is compiled before the session is published. Any failure
@@ -175,10 +176,11 @@ Dispatch evaluates the value immediately before calling the matching
 `prepare_create_call`, `prepare_redirect`, `prepare_create_conference`,
 `prepare_dialog_prepare`, `prepare_dialog_start`, or `prepare_send` operation. Redirect and
 direct dialogstart first validate their mandatory current Event connection.
-Send evaluates and validates name first, copies it into a temporary `tstr`
-bounded by the Program's `max_name_bytes`, and then evaluates target. The name
-copy survives adapter scratch reuse and is released after `prepare_send` or
-on any intervening failure. Its provider must copy any retained bytes.
+Send evaluates and validates name first, then targettype, copying each dynamic
+result into a temporary `tstr` bounded by the Program's `max_name_bytes`, and
+then evaluates target. The copies survive adapter scratch reuse and are released
+after `prepare_send` or on any intervening failure. Its provider must copy any
+retained bytes and retains authority over supported processor types.
 Evaluation failure, an invalid returned view, or provider rejection discards
 all tickets already prepared by the transition and rolls back staged foreach
 scope. Createconference, dialogprepare, and direct dialogstart retain a separate
@@ -195,7 +197,7 @@ releasing the datamodel owner relationship.
   appended callbacks.
 - Literal-only programs accept legacy adapter prefixes and do not compile or
   evaluate expressions.
-- Conference IDs, assignment values, send types, and delay
+- Conference IDs, assignment values, and delay
   expressions are not migrated in this facility.
 - General string concatenation and coercion are not added to the CMeta
   expression language.

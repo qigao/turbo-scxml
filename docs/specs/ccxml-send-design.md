@@ -4,13 +4,15 @@
 
 This slice adds the first bounded CCXML `<send>` profile. It accepts an empty
 action with required `target` and `name` string-expression attributes,
-optional literal-expression `targettype` and `delay` attributes, and an
+optional string-expression `targettype`, literal-expression `delay`, and an
 optional dotted-location `sendid` and bounded dotted-location `namelist`:
 
 ```xml
 <send target="'session:callee'" name="'call.notice'"/>
 <send target="('session:' + count)" name="'call.notice'"/>
 <send target="('session:' + count)" name="('call.' + event$.name)"/>
+<send target="('session:' + count)" name="'call.notice'"
+      targettype="(count > 0 ? 'ccxml' : 'dialog')"/>
 <send target="'https://example.test/events'"
       targettype="'basichttp'" name="'call.notice'" delay="'250ms'"/>
 <send target="'session:callee'" name="'call.notice'"
@@ -27,20 +29,20 @@ is zero. `sendid` is a dotted writable string location populated with a
 generated identifier. `<cancel>` accepts a dotted readable string location or
 a quoted literal identifier. `namelist` accepts at most
 `SCXML_PAYLOAD_MAX_ENTRIES` whitespace-separated dotted locations.
-`target` and `name` accept dynamic strings through the configured CMeta or
-QuickJS-NG expression adapter. Inline-content forms, dynamic `targettype`,
-and escaped string literals remain unsupported.
+`target`, `name`, and `targettype` accept dynamic strings through the configured
+CMeta or QuickJS-NG expression adapter. Inline-content forms and escaped string
+literals remain unsupported.
 
 ### Dynamic string ownership and failure protocol
 
-The [CCXML send contract](https://www.w3.org/TR/ccxml/#Send) defines target and name
+The [CCXML send contract](https://www.w3.org/TR/ccxml/#Send) defines target, name, and targettype
 as expressions. Reuse the existing destination-expression path rather than
 introducing another evaluator or changing the Event I/O ABI. A Program owns
 the decoded source; a Session owns its compiled expression handle. Admission
-rejects dynamic targets or names when the datamodel lacks the complete string-expression
+rejects dynamic send strings when the datamodel lacks the complete string-expression
 tail. Literal-only send programs remain compatible with legacy adapters.
 
-Dispatch resolves delay and payload first, then evaluates name and target before
+Dispatch resolves delay and payload first, then evaluates name, targettype, and target before
 generating a send ID or calling `prepare_send`. The result must be a nonempty,
 NUL-free string bounded by the selected datamodel. It is borrowed through that
 prepare callback; the provider must copy any bytes needed by its ticket or
@@ -56,11 +58,22 @@ overflow returns `CCXML_LIMIT_EXCEEDED`; invalid name grammar returns
 `CCXML_INVALID_CONTRACT`. Providers still copy fields retained by effect tickets.
 No Session retains expression result views between actions or dispatches.
 
-Each action has separate destination and name handles in one bounded allocation;
-partial admission failure destroys all admitted handles. Both share the
+Dynamic targettype uses the same bounded temporary-copy protocol as name, but
+requires only a nonempty NUL-free string. Processor support and transport policy
+remain owned by the Event I/O provider, including extension types. The Session
+does not whitelist types or silently replace an invalid result with `ccxml`.
+An omitted targettype still uses the literal default without expression admission.
+Both copies are released on provider rejection or any earlier failure; existing
+transaction rollback handles already prepared sends and ID writes. Dispatch
+remains serialized by the Session owner, with no new cross-thread storage.
+
+Each action has separate destination, name, and targettype handles in one bounded allocation;
+partial admission failure destroys all admitted handles. All share the
 adapter's live-handle capacity. Literal names retain their compile-time grammar
 checks and require no result copy. The new runtime name bound only applies to
-newly supported dynamic names; existing programs preserve their behavior.
+newly supported dynamic names and targettypes; existing programs preserve their behavior.
+Applications can migrate individual targettypes to expressions or revert them to
+quoted literals without changing the adapter ABI or configuration layout.
 
 Evaluation failure discards all prior transition tickets without publishing a
 send or ID. Provider rejection and later-action failure preserve the existing
@@ -75,8 +88,8 @@ count remains bounded by the existing Program/Session and adapter limits.
 
 `target` and `name` are required. `targettype`, `delay`, `sendid`, and
 `namelist` are
-optional. Type and literal delay values must be exactly one nonempty
-single-quoted or double-quoted string literal. Target and name use the shared decoded
+optional. Literal delay values must be exactly one nonempty
+single-quoted or double-quoted string literal. Target, name, and type use the shared decoded
 destination classifier: quoted literals retain their interior; other nonempty
 values retain complete expression source. `sendid` must be a dotted NCName
 location. Dynamic delay may instead be an unquoted dotted location with at least
@@ -119,7 +132,7 @@ The shared `scxml_send_request` carries CCXML values as follows:
 
 - `event` is the compiled literal or evaluated CCXML `name`;
 - `target` is the compiled literal or evaluated CCXML `target`;
-- `type` is the compiled `targettype` or `ccxml`;
+- `type` is the compiled literal or evaluated `targettype`, defaulting to `ccxml`;
 - `id` is empty unless `sendid` is present; then it is a bounded
   `send.<session-uuid>.<token>` value also staged into the datamodel location;
 - `delay_ms` is the compiled literal or resolved dynamic payload value;
@@ -173,10 +186,10 @@ The slice is complete when tests prove:
 9. generated IDs are unique, committed before send publication, readable by a
    later transition, and forwarded exactly to cancel;
 10. focused, full-preset, and installed-consumer checks remain green.
-11. dynamic targets/names preserve decoded storage bounds, adapter admission,
+11. dynamic targets/names/types preserve decoded storage bounds, adapter admission,
     CMeta foreach scope, QuickJS scratch ownership, ID ordering and rollback;
-12. invalid and oversized dynamic names fail before publication, exact-limit
-    names succeed, and partial admission releases both kinds of handles.
+12. invalid and oversized dynamic names/types fail before publication, exact-limit
+    results succeed, and partial admission releases all kinds of handles.
 
 Detailed identifier and cancellation semantics are specified in
 `docs/specs/ccxml-send-cancel-design.md`. Namelist projection and lifetime

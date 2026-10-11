@@ -175,7 +175,7 @@ static const vxml_dialog_event_sink_v1 events = {
 typedef struct send_probe send_probe;
 typedef struct send_ticket {
     send_probe *owner;
-    tstr target, id, name;
+    tstr target, id, name, type;
     bool live;
 } send_ticket;
 struct send_probe {
@@ -183,6 +183,7 @@ struct send_probe {
     const test_state *state;
     size_t prepared, committed, discarded, ids_visible;
     bool full;
+    const char *rejected_type;
     uint64_t delay;
     size_t payload_count;
     scxml_payload_value payload;
@@ -208,14 +209,21 @@ static scxml_adapter_status prepare_send(void *user, const scxml_send_request *r
     send_probe *probe = user;
     if (error != NULL) *error = NULL;
     if (probe->full || probe->prepared == 2u) return SCXML_ADAPTER_FULL;
+    if (probe->rejected_type != NULL &&
+        strlen(probe->rejected_type) == request->type_size &&
+        memcmp(probe->rejected_type, request->type, request->type_size) == 0)
+        return SCXML_ADAPTER_INVALID_CONTRACT;
     send_ticket *ticket = &probe->tickets[probe->prepared];
     ticket->target = tstr_new_len(request->target, request->target_size);
     ticket->id = tstr_new_len(request->id, request->id_size);
     ticket->name = tstr_new_len(request->event, request->event_size);
-    if (ticket->target == NULL || ticket->id == NULL || ticket->name == NULL) {
+    ticket->type = tstr_new_len(request->type, request->type_size);
+    if (ticket->target == NULL || ticket->id == NULL ||
+        ticket->name == NULL || ticket->type == NULL) {
         tstr_free(ticket->target);
         tstr_free(ticket->id);
         tstr_free(ticket->name);
+        tstr_free(ticket->type);
         *ticket = (send_ticket){0};
         return SCXML_ADAPTER_FULL;
     }
@@ -275,6 +283,7 @@ spec("CCXML QuickJS-NG expression adapter") {
             tstr_free(sends.tickets[index].target);
             tstr_free(sends.tickets[index].id);
             tstr_free(sends.tickets[index].name);
+            tstr_free(sends.tickets[index].type);
         }
         if (manager.impl != NULL) {
             vxml_dialog_manager_close(&manager);
@@ -515,6 +524,43 @@ spec("CCXML QuickJS-NG expression adapter") {
             &expression, &error), SCXML_ADAPTER_ACCEPTED);
     }
 
+    for (size_t row = 0u; row < 2u; ++row) {
+        it("releases target and name handles when targettype admission fails %zu", row) {
+            static const char *const sources[] = {
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name='id' targettype='count +'/>"
+                "</transition></eventprocessor></ccxml>",
+                "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+                "<eventprocessor><transition event='go'>"
+                "<send target='id' name='id' targettype='id'/>"
+                "</transition></eventprocessor></ccxml>"};
+            ccxml_diagnostic diagnostic = {0};
+            config.max_expressions = row == 0u ? 3u : 2u;
+            check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+            check_equal(ccxml_compile(&program, sources[row], strlen(sources[row]),
+                NULL, &diagnostic), CCXML_OK);
+            const ccxml_session_config session_config = {
+                .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+                .telephony = &telephony, .telephony_user = &provider,
+                .event_io = &event_io, .event_io_user = &sends};
+            check_equal(ccxml_session_init(&session, &session_config),
+                row == 0u ? CCXML_ADAPTER_ERROR : CCXML_ALLOCATION_FAILED);
+            check_null(session.impl);
+            check_equal(adapter->compile_string_expression(&owner, "id", 2u,
+                &expression, &error), SCXML_ADAPTER_ACCEPTED);
+            check_equal(adapter->compile_condition(&owner, "true", 4u,
+                &condition, &error), SCXML_ADAPTER_ACCEPTED);
+            if (row == 0u) {
+                ccxml_string_expression final_slot = {0};
+                const scxml_adapter_status result = adapter->compile_string_expression(
+                    &owner, "id", 2u, &final_slot, &error);
+                adapter->destroy_string_expression(&owner, &final_slot);
+                check_equal(result, SCXML_ADAPTER_ACCEPTED);
+            }
+        }
+    }
+
     for (size_t row = 0u; row < 5u; ++row) {
         it("rejects invalid dynamic event name %zu before publishing any send", row) {
             static const char *const names[] = {"", "1notice", ".notice", "bad-name", "a\0b"};
@@ -572,15 +618,50 @@ spec("CCXML QuickJS-NG expression adapter") {
         check_equal(sends.ids_visible, (size_t)1);
     }
 
-    group("dynamic Event I/O target and name") {
+    it("bounds a dynamic targettype even when target and name are literals") {
+        static const char source[] =
+            "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
+            "<eventprocessor><transition event='go'><accept/>"
+            "<send target=\"'session:callee'\" name=\"'notice'\" "
+            "targettype=\"('x'.repeat(count))\" sendid='id'/>"
+            "</transition></eventprocessor></ccxml>";
+        ccxml_diagnostic diagnostic = {0};
+        ccxml_limits limits = ccxml_default_limits();
+        limits.max_name_bytes = 64u;
+        check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
+        check_equal(ccxml_compile(&program, source, sizeof(source)-1u,
+            &limits, &diagnostic), CCXML_OK);
+        const ccxml_session_config session_config = {
+            .program = &program, .datamodel = adapter, .datamodel_user = &owner,
+            .telephony = &telephony, .telephony_user = &provider,
+            .event_io = &event_io, .event_io_user = &sends};
+        check_equal(ccxml_session_init(&session, &session_config), CCXML_OK);
+        state.count = 65;
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_LIMIT_EXCEEDED);
+        check_equal(sends.prepared, (size_t)0);
+        check_equal(provider.discarded, (size_t)1);
+        check_equal(state.id.data, "old");
+        state.count = 64;
+        check_equal(ccxml_session_dispatch(&session, &event), CCXML_OK);
+        check_equal(tstr_len(sends.tickets[0].type), (size_t)64);
+        check_equal(sends.tickets[0].target, "session:callee");
+        check_equal(sends.tickets[0].name, "notice");
+        check_equal(sends.ids_visible, (size_t)1);
+    }
+
+    group("dynamic Event I/O target name and type") {
         before_each() {
             static const char source[] =
                 "<ccxml xmlns='http://www.w3.org/2002/09/ccxml' version='1.0'>"
                 "<eventprocessor><transition event='go'><accept/>"
                 "<send target=\"('session:' + count + '/' + event$.connectionid)\" "
-                "name=\"('notice.' + event$.name)\" sendid='id' namelist='count' delay=\"'1ms'\"/>"
+                "name=\"('notice.' + event$.name)\" targettype=\"('x-' + event$.name)\" "
+                "sendid='id' namelist='count' delay=\"'1ms'\"/>"
                 "<send target=\"(count === 0 ? '' : (count &lt; 0 ? missingTarget : 'session:' + (count + 1)))\" "
-                "name=\"(count === 13 ? 'bad-name' : 'notice.' + (count + 1))\" sendid='id'/><accept/>"
+                "name=\"(count === 13 ? 'bad-name' : 'notice.' + (count + 1))\" "
+                "targettype=\"(count === 14 ? '' : count === 15 ? 42 : "
+                "count === 16 ? missingType : count === 17 ? String.fromCharCode(0) : 'ccxml')\" "
+                "sendid='id'/><accept/>"
                 "</transition></eventprocessor></ccxml>";
             ccxml_diagnostic diagnostic = {0};
             check_equal(ccxml_quickjs_datamodel_init(&owner, &config), CCXML_OK);
@@ -598,6 +679,8 @@ spec("CCXML QuickJS-NG expression adapter") {
             check_equal(sends.tickets[1].target, "session:8");
             check_equal(sends.tickets[0].name, "notice.go");
             check_equal(sends.tickets[1].name, "notice.8");
+            check_equal(sends.tickets[0].type, "x-go");
+            check_equal(sends.tickets[1].type, "ccxml");
             check_equal(sends.committed, (size_t)2);
             check_equal(sends.ids_visible, (size_t)2);
             check_equal(sends.delay, UINT64_C(1));
@@ -644,6 +727,27 @@ spec("CCXML QuickJS-NG expression adapter") {
         it("rolls back the first send when the second event name is invalid") {
             state.count = 13;
             check_equal(ccxml_session_dispatch(&session, &event), CCXML_INVALID_CONTRACT);
+            check_equal(sends.prepared, (size_t)1);
+            check_equal(sends.discarded, (size_t)1);
+            check_equal(sends.committed, (size_t)0);
+            check_equal(provider.discarded, (size_t)1);
+            check_equal(state.id.data, "old");
+        }
+        for (size_t row = 0u; row < 4u; ++row) {
+            it("rolls back sends and ID writes for invalid targettype result %zu", row) {
+                state.count = 14 + (int32_t)row;
+                check_equal(ccxml_session_dispatch(&session, &event),
+                    row == 2u ? CCXML_ADAPTER_ERROR : CCXML_INVALID_CONTRACT);
+                check_equal(sends.prepared, (size_t)1);
+                check_equal(sends.discarded, (size_t)1);
+                check_equal(sends.committed, (size_t)0);
+                check_equal(provider.discarded, (size_t)1);
+                check_equal(state.id.data, "old");
+            }
+        }
+        it("preserves provider authority to reject an evaluated processor type") {
+            sends.rejected_type = "ccxml";
+            check_equal(ccxml_session_dispatch(&session, &event), CCXML_ADAPTER_ERROR);
             check_equal(sends.prepared, (size_t)1);
             check_equal(sends.discarded, (size_t)1);
             check_equal(sends.committed, (size_t)0);

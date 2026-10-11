@@ -213,7 +213,8 @@ static void destroy_string_expressions(ccxml_session_impl *impl) {
     for (index = 0u; index < impl->program->action_count; ++index) {
         ccxml_string_expression *expressions[] = {
             &impl->action_string_expressions[index].destination,
-            &impl->action_string_expressions[index].name};
+            &impl->action_string_expressions[index].name,
+            &impl->action_string_expressions[index].target_type};
         for (size_t slot = 0u; slot < sizeof(expressions) / sizeof(expressions[0]); ++slot) {
             if (expressions[slot]->impl == NULL) continue;
             impl->datamodel.destroy_string_expression(
@@ -1182,14 +1183,18 @@ ccxml_status ccxml_session_init(
          ++action_index) {
         const ccxml_action_row *action = &program->actions[action_index];
         ccxml_status status = CCXML_OK;
-        if (!action->destination_is_dynamic && !action->name_is_dynamic) continue;
+        if (!action->destination_is_dynamic && !action->name_is_dynamic &&
+            !action->target_type_is_dynamic) continue;
         const char *sources[] = {
             action->destination_is_dynamic ? action->destination : NULL,
-            action->name_is_dynamic ? action->name : NULL};
-        const size_t sizes[] = {action->destination_size, action->name_size};
+            action->name_is_dynamic ? action->name : NULL,
+            action->target_type_is_dynamic ? action->target_type : NULL};
+        const size_t sizes[] = {
+            action->destination_size, action->name_size, action->target_type_size};
         ccxml_string_expression *expressions[] = {
             &impl->action_string_expressions[action_index].destination,
-            &impl->action_string_expressions[action_index].name};
+            &impl->action_string_expressions[action_index].name,
+            &impl->action_string_expressions[action_index].target_type};
         for (size_t slot = 0u; slot < sizeof(expressions) / sizeof(expressions[0]); ++slot) {
             const char *error = NULL;
             scxml_adapter_status adapter_status;
@@ -1687,6 +1692,7 @@ static ccxml_status execute_transition_actions(
         }
         if (action->kind == CCXML_ACTION_SEND) {
             tstr name_storage = NULL;
+            tstr type_storage = NULL;
             cflow_statechart_effect_ticket send_ticket = {0};
             cflow_statechart_effect_ticket datamodel_ticket = {0};
             const char *error = NULL;
@@ -1777,12 +1783,33 @@ static ccxml_status execute_transition_actions(
                 request.event = name_storage;
                 request.event_size = name.size;
             }
+            if (action->target_type_is_dynamic) {
+                ccxml_string_view type = {0};
+                status = evaluate_string_expression(impl,
+                    &impl->action_string_expressions[action_index].target_type,
+                    event, &type);
+                if (status == CCXML_OK &&
+                    (type.size > impl->program->max_name_bytes || type.size == SIZE_MAX))
+                    status = CCXML_LIMIT_EXCEEDED;
+                if (status == CCXML_OK) {
+                    type_storage = tstr_new_len(type.data, type.size);
+                    if (type_storage == NULL) status = CCXML_ALLOCATION_FAILED;
+                }
+                if (status != CCXML_OK) {
+                    tstr_free(name_storage);
+                    discard_tickets(impl->tickets, prepared);
+                    return status;
+                }
+                request.type = type_storage;
+                request.type_size = type.size;
+            }
             if (action->destination_is_dynamic) {
                 ccxml_string_view target = {0};
                 status = evaluate_action_string_expression(
                     impl, action_index, event, &target);
                 if (status != CCXML_OK) {
                     tstr_free(name_storage);
+                    tstr_free(type_storage);
                     discard_tickets(impl->tickets, prepared);
                     return status;
                 }
@@ -1797,6 +1824,7 @@ static ccxml_status execute_transition_actions(
                 if (written < 0 ||
                     (size_t)written > SCXML_EVENT_METADATA_CAPACITY) {
                     tstr_free(name_storage);
+                    tstr_free(type_storage);
                     discard_tickets(impl->tickets, prepared);
                     return token == 0u
                         ? CCXML_LIMIT_EXCEEDED : CCXML_INVALID_CONTRACT;
@@ -1810,6 +1838,7 @@ static ccxml_status execute_transition_actions(
                 impl->event_io.prepare_send(
                     impl->event_io_user, &request, &send_ticket, &error);
             tstr_free(name_storage);
+            tstr_free(type_storage);
             status = retain_ticket(
                 impl, adapter_status, send_ticket, &prepared);
             (void)error;

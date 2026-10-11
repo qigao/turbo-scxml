@@ -65,6 +65,7 @@ typedef struct ccxml_action_row {
     uint64_t delay_ms;
     bool destination_is_dynamic;
     bool name_is_dynamic;
+    bool target_type_is_dynamic;
     bool delay_is_dynamic;
     size_t branch_next;
     size_t block_end;
@@ -136,6 +137,7 @@ typedef struct ccxml_transition_binding ccxml_transition_binding;
 typedef struct ccxml_action_string_expressions {
     ccxml_string_expression destination;
     ccxml_string_expression name;
+    ccxml_string_expression target_type;
 } ccxml_action_string_expressions;
 
 typedef struct ccxml_conditional_frame {
