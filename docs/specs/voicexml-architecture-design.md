@@ -587,6 +587,31 @@ Prompt/grammar discard and subdialog error recovery also use qualified accesses;
 the real CCXML asynchronous fixture writes its recognition result through
 `dialog.value` while reading the same storage through `application.value`.
 
+#### Item-selection transaction boundary
+
+In the private writable-expression profile, a directed SELECT pass stages all
+evaluated item conditions in source order using the Session's existing bounded
+root/scope transaction. A successful selection (including no eligible item)
+commits those writes once. Queries and media prepare/discard retries observe the
+selected item without rerunning its condition; media admission is a later,
+independent transaction. A failing condition discards the entire SELECT pass
+before dispatching its semantic/conversion or allocation-failure Event from
+form scope. Engine deadline and native limit failures stay terminal. A
+nonterminal catch may change the inputs and retry selection; each pass consumes the existing execution
+budget so an unchanged failing condition cannot cause an unbounded retry loop.
+
+For a block form, selection conditions and the selected block's executable
+content share one transaction. A later condition or action failure rolls back
+earlier condition writes before catch dispatch. A condition failure has not
+consumed a block guard; an action failure retains the existing consumed-guard
+rule, with explicit `clear` required to retry that block. All-false selection
+commits its effects before exiting. CMeta QueryVM keeps its pure selection path.
+No new storage owner, thread, provider callback or retained JavaScript context
+is introduced; native transaction limits and cleanup still govern these copies.
+Tests cover all directed item kinds, source-order dependencies, typed and owning
+value rollback, action/condition failure recovery, media retry without selection
+replay, and bounded catch/deadline failures.
+
 Current private executable evidence is in
 `tests/voicexml_quickjs_fia_test.c`: JavaScript arithmetic and conditions in FIA,
 delayed collect completion followed by JavaScript `filled`, lexical shadowing,
@@ -642,8 +667,8 @@ fixtures enter at the CCXML adapter ticket boundary; the language composition
 fixtures described below also enter through a real CCXML Session.
 
 ScriptResource failures now retain their exact `error.badfetch`,
-`error.unsupported.format` or `error.noresource` Event. Script evaluation and
-typed conversion failures use `error.semantic`; native allocation failures use
+`error.unsupported.format` or `error.noresource` Event. Script/condition evaluation
+and typed conversion failures use `error.semantic`; native allocation failures use
 `error.noresource`. Engine deadline/limit and host-contract failures keep their
 terminal status unless the failure came from ScriptResource's explicit Event
 mapping. The backend only reports static Event names. The Session records the

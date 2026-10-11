@@ -612,7 +612,8 @@ done:
         for (unsigned s = 0u; s < FIA_NAMED_SCOPES; ++s) JS_FreeValue(context, scopes[s]);
     }
     if (expression != NULL && runtime != NULL &&
-        expression->kind == VXML_CMETA_CODE_SCRIPT && runtime->failure_event != NULL &&
+        (expression->kind == VXML_CMETA_CODE_SCRIPT || expression->kind == VXML_CMETA_CODE_CONDITION) &&
+        runtime->failure_event != NULL &&
         runtime->failure_event->data == NULL) {
         if (status == VXML_SEMANTIC_ERROR)
             *runtime->failure_event = (vxml_cmeta_name_view){"error.semantic", sizeof("error.semantic") - 1u};

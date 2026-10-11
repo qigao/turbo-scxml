@@ -412,6 +412,239 @@ spec("Internal QuickJS and CMeta FIA composition") {
         check_equal(committed(&session)->other, 6);
         check_equal(collect.commits, (size_t)1u);
     }
+    it("rolls block selection effects back before recovering an action failure") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='++other === 6'>"
+            "<script>throw new Error();</script></block>"
+            "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(committed(&session)->other, 5);
+    }
+    it("rolls back earlier false block conditions when a later condition fails") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='(++other, false)'/>"
+            "<block cond='(() => { throw new Error(); })()'/>"
+            "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+    }
+    it("reselects a failed block condition after a nonterminal form catch") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='other === 5 ? (() => { throw 1; })() : true'>"
+            "<exit expr='other'/></block><catch event='error.semantic'>"
+            "<assign name='other' expr='other+1'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)6);
+    }
+    it("commits false block condition effects when selection exits without an item") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='(++other, false)'/></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(committed(&session)->other, 6);
+    }
+    it("rolls back the full directed selection before a form condition catch") {
+        static const vxml_cmeta_name_view undefined[] = {{"value", 5u}, {"other", 5u}};
+        attach_media(&options, &prompt, &collect);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        check_equal(compile(VXML_BEGIN "<var name='other' expr='5'/><form>"
+            "<field name='value' cond='(++document.other, false)'>"
+            "<grammar type='application/srgs+xml' src='first'/></field>"
+            "<field name='other' cond='(() => { throw 1; })()'>"
+            "<grammar type='application/srgs+xml' src='second'/>"
+            "<catch event='error.semantic'><exit expr='99'/></catch></field>"
+            "<catch event='error.semantic'><exit expr='document.other'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(collect.prepares, (size_t)0u);
+    }
+    it("commits field selection once before independent media prepare discard and retry") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value' cond='++other === 6'>"
+            "<grammar type='application/srgs+xml' src='digits'/></field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+        vxml_cmeta_collect_request_v1 request = {0};
+        for (unsigned i = 0u; i < 2u; ++i) {
+            check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_OK);
+            check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+            check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+            check_equal(committed(&session)->other, 6);
+        }
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+        check_equal(collect.prepares, (size_t)3u);
+        check_equal(collect.commits, (size_t)1u);
+    }
+    it("retries field selection after catch without replaying rolled back writes") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value' "
+            "cond='other === 5 ? (++other, (() => { throw 1; })()) : true'>"
+            "<grammar type='application/srgs+xml' src='digits'/></field>"
+            "<catch event='error.semantic'><assign name='other' expr='other+2'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(committed(&session)->other, 7);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.prepares, (size_t)1u);
+    }
+    it("bounds condition and nonterminal catch retry loops by the execution budget") {
+        static const char *sources[] = {
+            VXML_BEGIN "<form><block cond='(() => { throw 1; })()'/>"
+                "<catch event='error.semantic'/></form>" VXML_END,
+            VXML_BEGIN "<form><field name='value' cond='(() => { throw 1; })()'>"
+                "<grammar type='application/srgs+xml' src='digits'/></field>"
+                "<catch event='error.semantic'/></form>" VXML_END};
+        attach_media(&options, &prompt, &collect);
+        options.max_execution_steps = 6u;
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            check_equal(compile(sources[i], &program), VXML_OK);
+            check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_LIMIT_EXCEEDED);
+            check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+            check_equal(committed(&session)->other, 5);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+        check_equal(collect.prepares, (size_t)0u);
+    }
+    it("uses staged condition writes when deciding later field eligibility") {
+        static const vxml_cmeta_name_view undefined[] = {{"value", 5u}, {"other", 5u}};
+        attach_media(&options, &prompt, &collect);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        check_equal(compile(VXML_BEGIN "<form>"
+            "<field name='value' cond='(application.other=42, false)'>"
+            "<grammar type='application/srgs+xml' src='first'/></field>"
+            "<field name='other'><grammar type='application/srgs+xml' src='second'/></field>"
+            "</form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_EXITED);
+        check_equal(committed(&session)->other, 42);
+        check_equal(collect.prepares, (size_t)0u);
+    }
+    it("shares earlier false condition writes with the selected field condition") {
+        static const vxml_cmeta_name_view undefined[] = {{"value", 5u}, {"other", 5u}};
+        attach_media(&options, &prompt, &collect);
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 2u;
+        check_equal(compile(VXML_BEGIN "<var name='other' expr='5'/><form>"
+            "<field name='value' cond='(++document.other, false)'>"
+            "<grammar type='application/srgs+xml' src='first'/></field>"
+            "<field name='other' cond='document.other === 6'>"
+            "<grammar type='application/srgs+xml' src='second'/></field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.uri, "second");
+        check_equal(collect.prepares, (size_t)1u);
+    }
+    it("restores an owning condition replacement before the form catch snapshots it") {
+        const char *source = VXML_BEGIN "<form><block cond='(text += &quot;:pending&quot;, false)'/>"
+            "<block cond='(() => { throw 1; })()'/>"
+            "<catch event='error.semantic'><exit expr='text'/></catch></form>" VXML_END;
+        fia_owned_root initial = {3, tstr_dup("original")};
+        check_not_null(initial.text);
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        options.initial_root = &initial;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_cmeta(&session, &program, &options) : compiled;
+        tstr_free(initial.text);
+        check_equal(initialized, VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_value_view result = exit_value(&session);
+        check_equal(result.kind, VXML_CMETA_VALUE_STRING);
+        check_equal(result.data.string.size, (size_t)8u);
+        check_equal(result.data.string.data, "original", 8u);
+    }
+    it("rolls selection back when a condition cannot export its typed writes") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='(++other, false)'/>"
+            "<block cond='(value = &quot;invalid&quot;, true)'/>"
+            "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(committed(&session)->value, 3);
+    }
+    it("discards earlier selection effects when a later condition exceeds the engine deadline") {
+        check_equal(compile(VXML_BEGIN "<form><block cond='(++other, false)'/>"
+            "<block cond='(() => { for (;;) {} })()'/>"
+            "<catch event='error.semantic'><exit expr='99'/></catch></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_LIMIT_EXCEEDED);
+        check_equal(vxml_session_get_state(&session), VXML_SESSION_FAILED);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_exit_count(&session), (size_t)0u);
+    }
+    it("recovers initial record transfer and subdialog conditions before provider admission") {
+        static const char *sources[] = {
+            VXML_BEGIN "<form><grammar type='application/srgs+xml' src='form'/>"
+                "<initial cond='(++other, (() => { throw 1; })())'/>"
+                "<field name='other'><grammar type='application/srgs+xml' src='digits'/></field>"
+                "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END,
+            VXML_BEGIN "<form><record name='voice' type='audio/wav' cond='(++other, (() => { throw 1; })())'/>"
+                "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END,
+            VXML_BEGIN "<form><transfer name='call' dest='tel:+15551212' bridge='true' "
+                "cond='(++other, (() => { throw 1; })())'/>"
+                "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END,
+            VXML_BEGIN "<form><subdialog name='child' src='child.vxml' cond='(++other, (() => { throw 1; })())'/>"
+                "<catch event='error.semantic'><exit expr='other'/></catch></form>" VXML_END};
+        static const vxml_cmeta_name_view undefined[] = {{"child", 5u}};
+        const fia_child_root initial = {{0}, 5};
+        options.initial_root = &initial;
+        options.initially_undefined = undefined;
+        options.initially_undefined_count = 1u;
+        options.collect = &collect_adapter;
+        options.collect_user = &collect;
+        options.record = &record_adapter;
+        options.record_user = &collect;
+        options.max_record_bytes = 1024u;
+        options.transfer = &transfer_adapter;
+        options.transfer_user = &collect;
+        options.subdialog = &subdialog_adapter;
+        options.subdialog_user = &collect;
+        options.max_subdialog_snapshot_bytes = 512u;
+        options.max_subdialog_completion_entries = 2u;
+        options.max_subdialog_completion_bytes = 512u;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = child_descriptor();
+        config.max_initials = 1u;
+        config.max_records = 1u;
+        config.max_record_media_type_bytes = 32u;
+        config.max_record_duration_us = 10000000u;
+        config.max_record_final_silence_us = 2000000u;
+        config.max_transfers = 1u;
+        config.max_transfer_uri_bytes = 128u;
+        config.max_transfer_connect_timeout_us = 5000000u;
+        config.max_transfer_duration_us = 10000000u;
+        config.max_subdialogs = 1u;
+        config.max_subdialog_uri_bytes = 128u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            check_equal(vxml_compile_cmeta_backend(sources[i], strlen(sources[i]), NULL, &config,
+                &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+            check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            check_equal(exit_value(&session).data.sint, (int64_t)5);
+            check_equal(collect.prepares, (size_t)0u);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
     it("rolls back grammar and prompt selection together on discard and retry") {
         attach_media(&options, &prompt, &collect);
         check_equal(compile(VXML_BEGIN "<form><field name='value'>"
