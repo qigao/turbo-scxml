@@ -10,7 +10,7 @@ witnesses. It is not a substitute for those tests; it is an index for them.
 | admitted FunctionDesc actions execute from immutable ActionPlan state | `scxml_cmeta_test`: "executes admitted binary FunctionDesc actions from measured session scratch" |
 | current CMeta VALUE callable universe is enforced before Program publication | `scxml_cmeta_test`: "rejects FunctionDesc arity outside the current CMeta VALUE callable universe before publication" |
 | semantic / ABI / callable mismatch rejects before publication | `scxml_cmeta_test`: "rejects FunctionDesc-first semantic or ABI mismatch before publication" |
-| runtime does not repeat FunctionDesc/name/signature admission | `scxml_architecture_runtime_contract` scans the runtime boundary and fails if control-plane reflection APIs return to `scxml_runtime.c` |
+| static guard against reintroducing selected control-plane lookups | `scxml_architecture_runtime_contract` scans `scxml_runtime.c`; this is a source-layout guard, not executable proof of runtime lookup behavior |
 | direct CFlow execution and owning Session execution use the same compiled action | the binary FunctionDesc test executes both `run_to_idle()` and `run_direct_to_idle()` |
 
 The current CMeta VALUE callable policy is unary/binary. TurboSCXML does not
@@ -41,6 +41,35 @@ Session ticket commit/discard, adapter close, quiescence and queue semantics sta
 owned by the existing adapter/session implementation. The CMeta Interface layer
 only describes and adapts the provider contract.
 
+## Ownership and failure-atomic cleanup
+
+Three separate owners govern cleanup. Native CMeta value lifecycle balances
+COPY/MOVE/DESTROY for constructed values. Plugin leases retain module code and
+data. SCXML Session and provider protocols govern asynchronous completion,
+close and quiescence. Releasing a native value does not settle an outstanding
+request, and observing a Session terminal state does not authorize DSO unload.
+
+| Boundary | Executable witness and assertions |
+| --- | --- |
+| provider wrappers retain leases outside a borrowed Session | [`scxml_plugin_test.c`](../../tests/scxml_plugin_test.c): "keeps Plugin provider leases outside a live SCXML Session" attaches both wrappers, observes two leases and BUSY unload after stop, destroys the Session first, then releases wrappers with lease counts 2 → 1 → 0 before successful quiescence/unload |
+| both attached providers must quiesce before Session storage is released | [`scxml_test.c`](../../tests/scxml_test.c): "closes combined Event I/O and Invoke providers exactly once across destroy retry" checks repeated WOULD_BLOCK, a live Session handle, one close per provider, and final success only after both providers report quiescence |
+| failed initialization releases staged managed roots without publishing a Session | [`scxml_cmeta_test.c`](../../tests/scxml_cmeta_test.c): "balances managed CMeta root lifecycle when Session init fails after staging" forces top-level data initialization, reaches the initial send adapter once, rejects its invalid ticket with ACTION_FAILED, leaves `session.impl == NULL`, and checks nonzero COPY+MOVE equals DESTROY |
+
+These are the executable witnesses requested by
+[PR #289](https://github.com/qigao/turbo-scxml/pull/289),
+[PR #291](https://github.com/qigao/turbo-scxml/pull/291), and
+[PR #293](https://github.com/qigao/turbo-scxml/pull/293), indexed for
+[issue #294](https://github.com/qigao/turbo-scxml/issues/294).
+They reuse canonical lifecycle callbacks and existing owners; they introduce
+no cleanup registry or lexical substitute for asynchronous teardown.
+
+The lease fixture uses an initially final Session and proves attachment and
+release ordering, not an in-flight DSO callback. The combined-close fixture
+uses controlled quiescence probes. The rollback fixture proves balanced
+lifecycle accounting for the startup-action failure path, not every allocation
+failure. Component/Actor concurrency evidence remains separately described in
+the [VoiceXML architecture](voicexml-architecture-design.md#independent-host-active-object).
+
 ## XmlParser / DataBind
 
 | Boundary | Executable witness |
@@ -69,8 +98,8 @@ dependencies leaking into `Salts::CFlow`.
 
 ## Package / CI qualification
 
-The existing `Native SDK CI` remains the single architecture qualification
-workflow.
+[`Native SDK CI`](../../.github/workflows/native-sdk-ci.yml) qualifies the
+released SDK consumer graph, including the ownership witnesses above.
 
 It covers:
 
@@ -85,4 +114,15 @@ It covers:
   verification on Linux;
 - public `provider.h` C and C++ install consumers.
 
-No architecture slice adds a dependency version pin or `EXACT` requirement.
+[`Component runtime conformance`](../../.github/workflows/component-runtime-conformance.yml)
+separately covers Component/Host/CNet integration, real DSO generations,
+installed consumers and selected sanitizer gates.
+[`Component upstream source TSan`](../../.github/workflows/component-upstream-source-tsan.yml)
+instruments the first-party dependency graph and runs its selected concurrency
+tests. Neither selected suite replaces the native ownership or language tests.
+
+CI records coordinated release/source identities for reproducibility; public
+consumer package discovery does not impose a new `EXACT` version requirement.
+Android evidence is build/install-consumer qualification, not device execution.
+Workflow configuration describes intended coverage; actual pass/fail claims
+must identify the tested commit and completed run.

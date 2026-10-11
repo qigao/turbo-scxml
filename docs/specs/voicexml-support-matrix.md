@@ -109,6 +109,30 @@ SUPPORTED/PASS:
 A source URL without a local executable witness is evidence for provenance, not
 evidence for support.
 
+## Bounded hardening evidence
+
+The following local tests supplement the language rows without adding normative
+VoiceXML coverage. The [bounded fuzz guide](../../tests/fuzz/README.md) records
+the corpus provenance, exact limits and reproduction commands.
+
+| Surface | Executable evidence | Qualification limit |
+| --- | --- | --- |
+| Base and CMeta compiler / Session publication | `voicexml_base_fuzz_smoke`, `voicexml_cmeta_fuzz_smoke` | Base mutations compile and initialize only; runtime starts use fixed safe seeds. CMeta runtime has a 128-step bound. |
+| DocumentStore and SubmitResource boundaries | `voicexml_resource_fuzz_smoke` | Local inert adapters; versioned request prefixes, exact body/segment/part budgets, timeout and fetch-audio admission. No external I/O. |
+| QuickJS compiler options and static script metadata | `voicexml_quickjs_fuzz_smoke`, `voicexml_quickjs_test` group "static script metadata admission" | Compile-option size/data-limit sweeps and fixed invalid metadata rejection; arbitrary mutated JavaScript is not executed. |
+
+`TURBOSCXML_ENABLE_FUZZ_TESTS=ON` registers available targets under the CTest
+`voicexml-fuzz` label. CMeta and QuickJS targets follow their feature switches;
+each target has a 30-second watchdog. The existing Native SDK CI ASan+UBSan
+job enables the bounded smoke tests. This is deterministic regression coverage,
+not exhaustive fuzzing or a third-party VoiceXML conformance corpus.
+
+CCXML DialogManager transactions and Component/Host Actor lifecycle remain
+integration evidence, separately described in the
+[DialogManager contract](voicexml-dialog-manager.md) and
+[VoiceXML architecture](voicexml-architecture-design.md#independent-host-active-object).
+They do not promote an unsupported language row to SUPPORTED.
+
 ## Support claim boundary
 
 This matrix is the support truth for the incubating VoiceXML runtime. It does
