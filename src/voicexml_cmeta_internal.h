@@ -870,10 +870,14 @@ typedef struct vxml_cmeta_session_data {
     vxml_cmeta_collect_ticket_v1 collect_ticket;
     bool collect_prepared;
     bool collect_in_flight;
+    /* Writable request expressions own the FIA snapshot until admission settles. */
+    bool collect_media_transaction;
+    bool collect_prompt_selection_owned;
     uint64_t collect_quiesced_generation;
     vxml_cmeta_collect_mailbox collect_mailbox;
     char *collect_dynamic_grammar_uri;
     size_t collect_dynamic_grammar_uri_capacity;
+    size_t collect_dynamic_grammar_uri_size;
     size_t max_collect_recording_bytes;
     uint64_t collect_lastresult_generation;
     vxml_cmeta_collect_utterance_result_slot collect_utterance_result;

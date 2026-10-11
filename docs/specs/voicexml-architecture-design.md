@@ -595,8 +595,28 @@ new queue, worker or unbounded storage is introduced.
 Regression evidence includes counted prompt side effects, provider refusal,
 discard/retry, prepared close, dynamic marks, owning string rollback, and actual
 prompt and collect completions followed by an inline-script filled handler.
-These tests qualify that prompt path; other media expressions and their
-prepare/discard boundaries still need corresponding combined-profile evidence.
+Directed-field and mixed-initiative grammar `srcexpr` now use the same staged
+FIA storage. Public V1/V2/initial request queries preview and discard writes;
+prepare retains them until provider commit. Provider refusal, missing capability,
+invalid tickets, URI validation failure and explicit discard roll them back.
+Semantic recovery starts after that rollback, so a catch sees committed state.
+Close destroys staged owners and discards a reserved provider ticket exactly once.
+
+The admitted dynamic URI is copied into the existing bounded Session buffer and
+reused through prepared/in-flight queries; reading a request cannot rerun its
+JavaScript. A new collect activation evaluates it again. Collect preserves a
+previously committed prompt selection and includes any newly required selection
+effects in its transaction. Prompt and collect cannot both reserve the shared
+staged storage: collect queries/preparation during an uncommitted prompt, and
+prompt preparation or event dispatch during an uncommitted collect, return
+`VXML_INVALID_STATE`. This private-profile restriction avoids silently replacing
+another operation's staged owners; the pure QueryVM profile is unchanged.
+
+Regression evidence includes V1/V2 queries, form-level initial grammar, URI
+shape/size failures, partial/invalid tickets, discard/retry, close, owned-string
+replacement, rollback before a semantic catch, completion-mailbox FULL without
+replay, and explicit clear followed by a fresh activation. Other media expressions
+and their prepare/discard boundaries still need combined-profile qualification.
 `voicexml_dialog_quickjs_fia_test` also runs the existing DialogManager async
 ownership fixtures with this private compiler backend. A real delayed collect
 completion executes JavaScript in `filled`, produces the squared exit value,

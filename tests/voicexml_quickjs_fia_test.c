@@ -111,9 +111,15 @@ static vxml_cmeta_value_view exit_value(const vxml_session *session) {
     return value;
 }
 
-typedef struct collect_probe { uint64_t generation; size_t commits, cancels; } collect_probe;
+typedef struct collect_probe {
+    uint64_t generation;
+    size_t commits, cancels, prepares, discards;
+    vxml_status status;
+    bool invalid_ticket;
+    char uri[128];
+} collect_probe;
 static void commit_collect(void *user) { ++((collect_probe *)user)->commits; }
-static void discard_collect(void *user) { (void)user; }
+static void discard_collect(void *user) { ++((collect_probe *)user)->discards; }
 static void cancel_collect(void *user, uint64_t generation) {
     collect_probe *probe = user;
     check_equal(generation, probe->generation);
@@ -123,9 +129,21 @@ static vxml_status prepare_collect(void *user, const vxml_cmeta_collect_request_
     vxml_cmeta_collect_ticket_v1 *ticket, const char **error) {
     collect_probe *probe = user;
     (void)error;
+    ++probe->prepares;
     probe->generation = request->generation;
+    check_less(request->grammar_src.size, sizeof(probe->uri));
+    memcpy(probe->uri, request->grammar_src.data, request->grammar_src.size);
+    probe->uri[request->grammar_src.size] = '\0';
     *ticket = (vxml_cmeta_collect_ticket_v1){commit_collect, discard_collect, probe};
-    return VXML_OK;
+    if (probe->invalid_ticket) ticket->commit = NULL;
+    return probe->status;
+}
+static vxml_status prepare_initial_collect(void *user,
+    const vxml_cmeta_initial_collect_request_v1 *request,
+    vxml_cmeta_collect_ticket_v1 *ticket, const char **error) {
+    const vxml_cmeta_collect_request_v1 field = {
+        .generation = request->generation, .grammar_src = request->grammar_src};
+    return prepare_collect(user, &field, ticket, error);
 }
 static const vxml_cmeta_collect_adapter_v1 collect_adapter = {
     .abi_version = VXML_CMETA_COLLECT_ADAPTER_ABI_V1, .struct_size = sizeof(collect_adapter),
@@ -267,6 +285,270 @@ spec("Internal QuickJS and CMeta FIA composition") {
         check_equal(committed(&session)->other, 56);
         check_equal(exit_value(&session).data.sint, (int64_t)56);
         check_equal(root.other, 5);
+    }
+    it("previews grammar expressions and reuses the prepared and committed request") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        vxml_cmeta_collect_request_v1 request = {0};
+        vxml_cmeta_collect_request_v2 request_v2 = {0};
+        for (unsigned i = 0u; i < 2u; ++i) {
+            check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_OK);
+            check_equal(request.grammar_src.data, "digits6", request.grammar_src.size);
+            check_equal(committed(&session)->other, 5);
+        }
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits6");
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_collect_request_v2(&session, &request_v2), VXML_OK);
+        check_equal(request_v2.grammar_src.data, "digits6", request_v2.grammar_src.size);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "digits6", request.grammar_src.size);
+        check_equal(committed(&session)->other, 6);
+        check_equal(collect.commits, (size_t)1u);
+    }
+    it("rolls back grammar and prompt selection together on discard and retry") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<prompt cond='++other === 6'>selected</prompt>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        vxml_cmeta_collect_request_v1 request = {0};
+        check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "digits7", request.grammar_src.size);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits7");
+        check_equal(vxml_session_cmeta_prompt_media_prepare(&session, NULL), VXML_INVALID_STATE);
+        check_equal(vxml_session_cmeta_raise(&session, "noinput", 7u), VXML_INVALID_STATE);
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+        check_equal(committed(&session)->other, 5);
+        check_equal(collect.discards, (size_t)1u);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits7");
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 7);
+    }
+    it("rolls back rejected grammar admission and closes its partial ticket once") {
+        attach_media(&options, &prompt, &collect);
+        collect.status = VXML_ALLOCATION_FAILED;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_ALLOCATION_FAILED);
+        check_equal(committed(&session)->other, 5);
+        check_equal(collect.discards, (size_t)1u);
+        collect.status = VXML_OK;
+        collect.invalid_ticket = true;
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_INVALID_CONTRACT);
+        check_equal(committed(&session)->other, 5);
+        check_equal(collect.discards, (size_t)2u);
+        collect.invalid_ticket = false;
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits6");
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+    }
+    it("does not overwrite a prepared prompt snapshot while querying grammar") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<prompt cond='++other === 6'>selected</prompt>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_prompt_media_prepare(&session, NULL), VXML_OK);
+        vxml_cmeta_collect_request_v1 request = {0};
+        check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_INVALID_STATE);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_INVALID_STATE);
+        check_equal(vxml_session_cmeta_prompt_media_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits7");
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "digits7");
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 7);
+    }
+    it("rolls back invalid grammar writes before entering the semantic catch") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='(++other, 42)'/>"
+            "<catch event='error.semantic'><exit expr='other'/></catch>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        vxml_cmeta_collect_request_v1 request = {0};
+        check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_SEMANTIC_ERROR);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_SEMANTIC_ERROR);
+        check_equal(exit_value(&session).data.sint, (int64_t)5);
+        check_equal(collect.prepares, (size_t)0u);
+    }
+    it("discards pending grammar effects and provider ownership on close") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_close(&session), VXML_OK);
+        check_equal(collect.discards, (size_t)1u);
+        check_equal(collect.commits, (size_t)0u);
+        check_equal(collect.cancels, (size_t)0u);
+        vxml_session_destroy(&session);
+        check_equal(collect.discards, (size_t)1u);
+    }
+    it("stages form-level initial grammar expressions and retains their admitted URI") {
+        attach_media(&options, &prompt, &collect);
+        vxml_cmeta_collect_adapter_v1 adapter = collect_adapter;
+        adapter.capabilities |= VXML_CMETA_COLLECT_CAP_INITIAL_MULTI;
+        adapter.prepare_initial = prepare_initial_collect;
+        options.collect = &adapter;
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.max_initials = 2u;
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const char *source = VXML_BEGIN "<form>"
+            "<grammar type='application/srgs+xml' srcexpr='`form${++other}`'/>"
+            "<initial/><field name='value'>"
+            "<grammar type='application/srgs+xml' src='digits'/></field></form>" VXML_END;
+        check_equal(vxml_compile_cmeta_backend(source, strlen(source), NULL, &config,
+            &vxml_quickjs_fia_backend, &limits, &program, NULL), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        vxml_cmeta_initial_collect_request_v1 request = {0};
+        check_equal(vxml_session_cmeta_initial_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "form6", request.grammar_src.size);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "form6");
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+        check_equal(committed(&session)->other, 5);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_initial_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "form6", request.grammar_src.size);
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_initial_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "form6", request.grammar_src.size);
+        check_equal(committed(&session)->other, 6);
+    }
+    it("rejects invalid grammar results without retaining their writes or source bytes") {
+        const char *sources[] = {
+            VXML_BEGIN "<form><field name='value'><grammar type='application/srgs+xml' "
+                "srcexpr=\"(++other, '')\"/></field></form>" VXML_END,
+            VXML_BEGIN "<form><field name='value'><grammar type='application/srgs+xml' "
+                "srcexpr=\"(++other, 'a\\0b')\"/></field></form>" VXML_END,
+            VXML_BEGIN "<form><field name='value'><grammar type='application/srgs+xml' "
+                "srcexpr=\"(++other, 'x'.repeat(257))\"/></field></form>" VXML_END,
+            VXML_BEGIN "<form><field name='value'><grammar type='application/srgs+xml' "
+                "srcexpr=\"(++other, (() => { throw 1; })())\"/></field></form>" VXML_END
+        };
+        attach_media(&options, &prompt, &collect);
+        for (size_t i = 0u; i < sizeof(sources) / sizeof(sources[0]); ++i) {
+            check_equal(compile(sources[i], &program), VXML_OK);
+            check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+            vxml_cmeta_collect_request_v1 request = {0};
+            check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_SEMANTIC_ERROR);
+            check_null(request.grammar_src.data);
+            check_equal(committed(&session)->other, 5);
+            check_equal(collect.prepares, (size_t)0u);
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+        }
+    }
+    it("rolls back grammar effects when the provider lacks the required capability") {
+        attach_media(&options, &prompt, &collect);
+        vxml_cmeta_collect_adapter_v1 adapter = collect_adapter;
+        adapter.capabilities = 0u;
+        options.collect = &adapter;
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "</field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_UNSUPPORTED_FEATURE);
+        check_equal(committed(&session)->other, 5);
+        check_equal(collect.prepares, (size_t)0u);
+    }
+    it("keeps admitted grammar effects once across FULL and reevaluates after explicit clear") {
+        attach_media(&options, &prompt, &collect);
+        check_equal(compile(VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='`digits${++other}`'/>"
+            "<filled><if cond='other === 6'><clear namelist='value'/><else/>"
+            "<exit expr='other'/></if></filled></field></form>" VXML_END, &program), VXML_OK);
+        check_equal(vxml_session_init_cmeta(&session, &program, &options), VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        bool progressed = false;
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(collect.uri, "digits6");
+        check_equal(committed(&session)->other, 6);
+        const uint64_t first_generation = collect.generation;
+        const int value = 8;
+        vxml_cmeta_collect_completion_v1 result = {
+            .abi_version = VXML_CMETA_COLLECT_COMPLETION_ABI_V1, .struct_size = sizeof(result),
+            .generation = collect.generation, .data = &cmeta_data_int, .value = &value};
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_FULL);
+        check_equal(committed(&session)->other, 6);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_true(progressed);
+        check_not_equal(collect.generation, first_generation);
+        check_equal(collect.uri, "digits7");
+        check_equal(committed(&session)->other, 7);
+        result.generation = collect.generation;
+        check_equal(vxml_session_cmeta_collect_try_complete(&session, &result), VXML_CMETA_COLLECT_INGRESS_ACCEPTED);
+        check_equal(vxml_session_cmeta_run_ready(&session, &progressed), VXML_OK);
+        check_equal(exit_value(&session).data.sint, (int64_t)7);
+        check_equal(collect.prepares, (size_t)2u);
+        check_equal(collect.commits, (size_t)2u);
+    }
+    it("owns grammar string updates through preview discard commit and close") {
+        const char *source = VXML_BEGIN "<form><field name='value'>"
+            "<grammar type='application/srgs+xml' srcexpr='(text += &quot;:grammar&quot;)'/>"
+            "</field></form>" VXML_END;
+        fia_owned_root owned = {3, tstr_dup("application")};
+        vxml_cmeta_compile_options_v1 config = compile_options();
+        config.root = owned_descriptor();
+        const vxml_quickjs_fia_limits limits = engine_limits();
+        const vxml_status compiled = vxml_compile_cmeta_backend(source, strlen(source), NULL,
+            &config, &vxml_quickjs_fia_backend, &limits, &program, NULL);
+        attach_media(&options, &prompt, &collect);
+        options.initial_root = &owned;
+        const vxml_status initialized = compiled == VXML_OK
+            ? vxml_session_init_cmeta(&session, &program, &options) : compiled;
+        tstr_free(owned.text);
+        check_equal(initialized, VXML_OK);
+        check_equal(vxml_session_start(&session), VXML_OK);
+        const vxml_cmeta_session_data *runtime = ((vxml_session_impl *)session.impl)->profile_data;
+        vxml_cmeta_collect_request_v1 request = {0};
+        check_equal(vxml_session_cmeta_collect_request(&session, &request), VXML_OK);
+        check_equal(request.grammar_src.data, "application:grammar", request.grammar_src.size);
+        check_equal(((const fia_owned_root *)runtime->committed_root.storage)->text, "application");
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(vxml_session_cmeta_collect_discard(&session), VXML_OK);
+        check_equal(((const fia_owned_root *)runtime->committed_root.storage)->text, "application");
+        check_equal(vxml_session_cmeta_collect_prepare(&session, NULL), VXML_OK);
+        check_equal(collect.uri, "application:grammar");
+        check_equal(vxml_session_cmeta_collect_commit(&session), VXML_OK);
+        check_equal(((const fia_owned_root *)runtime->committed_root.storage)->text, "application:grammar");
+        check_equal(vxml_session_close(&session), VXML_OK);
     }
     it("previews a side-effecting prompt condition without changing committed state") {
         attach_media(&options, &prompt, &collect);

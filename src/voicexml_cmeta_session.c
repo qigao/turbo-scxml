@@ -1841,6 +1841,8 @@ static bool transaction_begin(
     vxml_cmeta_session_data *session,
     const vxml_cmeta_program_data *program) {
     size_t index;
+    /* A pending collect owns the shared staged state. */
+    if (session->collect_media_transaction) return false;
     session->pending_navigation_uri = NULL;
     session->pending_navigation_uri_size = 0u;
     session->pending_navigation_fetchaudio =
@@ -8087,6 +8089,32 @@ static vxml_status selected_prompt_row(
     const vxml_cmeta_prompt_row **out_prompt,
     unsigned *out_prompt_count);
 
+static vxml_status collect_begin_transaction(
+    vxml_cmeta_session_data *profile, const vxml_cmeta_program_data *program) {
+    if (program->expression_backend.evaluate == NULL) return VXML_OK;
+    if (profile->prompt_media_transaction) return VXML_INVALID_STATE;
+    if (profile->collect_media_transaction) return VXML_OK;
+    if (!transaction_begin(profile, program)) return VXML_ALLOCATION_FAILED;
+    profile->collect_media_transaction = true;
+    profile->collect_dynamic_grammar_uri_size = 0u;
+    profile->collect_prompt_selection_owned = !(profile->prompt_selection_valid &&
+        profile->prompt_selection_generation == profile->collect_generation &&
+        profile->prompt_selection_field_index == profile->active_field &&
+        profile->prompt_selection_initial_index == profile->active_initial);
+    return VXML_OK;
+}
+
+static void collect_abort_transaction(
+    vxml_cmeta_session_data *profile, const vxml_cmeta_program_data *program) {
+    if (!profile->collect_media_transaction) return;
+    transaction_reset(profile, program);
+    profile->collect_media_transaction = false;
+    profile->collect_dynamic_grammar_uri_size = 0u;
+    if (profile->collect_prompt_selection_owned)
+        profile->prompt_selection_valid = false;
+    profile->collect_prompt_selection_owned = false;
+}
+
 static vxml_status collect_materialize_grammar_uri(
     const vxml_session_impl *impl,
     size_t expression,
@@ -8125,10 +8153,16 @@ static vxml_status collect_materialize_grammar_uri(
         profile->collect_dynamic_grammar_uri_capacity == 0u)
         return VXML_INVALID_STRUCTURE;
 
+    if ((profile->collect_media_transaction || profile->collect_in_flight) &&
+        profile->collect_dynamic_grammar_uri_size != 0u) {
+        *out_uri = (vxml_cmeta_name_view){profile->collect_dynamic_grammar_uri,
+            profile->collect_dynamic_grammar_uri_size};
+        return VXML_OK;
+    }
     scopes[0] = form_scope;
     scopes[1] = program->document_scope;
     status = evaluate_expression(
-        profile, program, false,
+        profile, program, profile->collect_media_transaction,
         expression, scopes, 2u, &value);
     if (status != VXML_OK)
         return VXML_SEMANTIC_ERROR;
@@ -8149,6 +8183,8 @@ static vxml_status collect_materialize_grammar_uri(
     *out_uri = (vxml_cmeta_name_view){
         profile->collect_dynamic_grammar_uri,
         value.data.string.size};
+    if (profile->collect_media_transaction)
+        profile->collect_dynamic_grammar_uri_size = value.data.string.size;
     return VXML_OK;
 }
 
@@ -8511,7 +8547,7 @@ static vxml_status initial_collect_request_from_impl(
         impl->profile_data == NULL)
         return VXML_INVALID_STATE;
     program = (const vxml_cmeta_program_data *)impl->program->profile_data;
-    profile = (const vxml_cmeta_session_data *)impl->profile_data;
+    profile = (vxml_cmeta_session_data *)impl->profile_data;
     if (profile->active_field != VXML_CMETA_NO_INDEX ||
         profile->active_menu != VXML_CMETA_NO_INDEX ||
         profile->active_initial == VXML_CMETA_NO_INDEX ||
@@ -8548,6 +8584,28 @@ static vxml_status initial_collect_request_from_impl(
     return VXML_OK;
 }
 
+/* Queries may borrow an admitted request, but must never publish JavaScript
+ * effects or reset another media operation's staged owners. */
+static vxml_status collect_query_begin(const vxml_session_impl *impl, bool *preview) {
+    *preview = false;
+    if (impl == NULL || impl->state != VXML_SESSION_RUNNING ||
+        impl->profile_data == NULL || impl->program->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    vxml_cmeta_session_data *profile = impl->profile_data;
+    const vxml_cmeta_program_data *program = impl->program->profile_data;
+    if (program->expression_backend.evaluate == NULL || profile->collect_in_flight)
+        return VXML_OK;
+    *preview = !profile->collect_media_transaction;
+    return collect_begin_transaction(profile, program);
+}
+
+static vxml_status collect_query_end(
+    const vxml_session_impl *impl, bool preview, vxml_status status) {
+    if (preview)
+        collect_abort_transaction(impl->profile_data, impl->program->profile_data);
+    return status;
+}
+
 vxml_status vxml_session_cmeta_collect_request(
     const vxml_session *session,
     vxml_cmeta_collect_request_v1 *out_request) {
@@ -8567,7 +8625,11 @@ vxml_status vxml_session_cmeta_collect_request(
             program->forms[profile->active_form].record_utterance)
             return VXML_UNSUPPORTED_FEATURE;
     }
-    return collect_request_from_impl(impl, out_request);
+    bool preview;
+    vxml_status status = collect_query_begin(impl, &preview);
+    if (status != VXML_OK) return status;
+    status = collect_request_from_impl(impl, out_request);
+    return collect_query_end(impl, preview, status);
 }
 
 vxml_status vxml_session_cmeta_collect_request_v2(
@@ -8578,7 +8640,11 @@ vxml_status vxml_session_cmeta_collect_request_v2(
         *out_request = (vxml_cmeta_collect_request_v2){0};
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     if (impl == NULL) return VXML_INVALID_CONTRACT;
-    return collect_request_v2_from_impl(impl, out_request);
+    bool preview;
+    vxml_status status = collect_query_begin(impl, &preview);
+    if (status != VXML_OK) return status;
+    status = collect_request_v2_from_impl(impl, out_request);
+    return collect_query_end(impl, preview, status);
 }
 
 vxml_status vxml_session_cmeta_menu_collect_request(
@@ -8611,38 +8677,27 @@ vxml_status vxml_session_cmeta_initial_collect_request(
         *out_request = (vxml_cmeta_initial_collect_request_v1){0};
     if (out_request == NULL) return VXML_INVALID_ARGUMENT;
     if (impl == NULL) return VXML_INVALID_CONTRACT;
-    return initial_collect_request_from_impl(impl, out_request);
+    bool preview;
+    vxml_status status = collect_query_begin(impl, &preview);
+    if (status != VXML_OK) return status;
+    status = initial_collect_request_from_impl(impl, out_request);
+    return collect_query_end(impl, preview, status);
 }
 
-vxml_status vxml_session_cmeta_collect_prepare(
-    vxml_session *session, const char **out_error) {
-    vxml_session_impl *impl;
-    vxml_cmeta_session_data *profile;
+static vxml_status collect_prepare_request(
+    vxml_session_impl *impl, const char **out_error, bool *request_error) {
+    vxml_cmeta_session_data *profile = impl->profile_data;
     vxml_cmeta_collect_ticket_v1 ticket = {0};
     const char *provider_error = NULL;
     vxml_status status;
-    if (out_error != NULL) *out_error = NULL;
-    if (session == NULL || session->impl == NULL)
-        return VXML_INVALID_ARGUMENT;
-    impl = (vxml_session_impl *)session->impl;
-    if (impl->program == NULL ||
-        impl->program->profile_kind != VXML_PROFILE_CMETA)
-        return VXML_INVALID_CONTRACT;
-    if (impl->state != VXML_SESSION_RUNNING ||
-        impl->profile_data == NULL)
-        return VXML_INVALID_STATE;
-    profile = (vxml_cmeta_session_data *)impl->profile_data;
-    if (profile->collect_adapter == NULL)
-        return VXML_INVALID_CONTRACT;
-    if (profile->collect_prepared || profile->collect_in_flight)
-        return VXML_INVALID_STATE;
 
     if (profile->active_initial != VXML_CMETA_NO_INDEX) {
         vxml_cmeta_initial_collect_request_v1 request = {0};
         status = initial_collect_request_from_impl(impl, &request);
-        if (status != VXML_OK)
-            return status == VXML_SEMANTIC_ERROR
-                ? collect_raise_semantic(session) : status;
+        if (status != VXML_OK) {
+            *request_error = true;
+            return status;
+        }
         if ((profile->collect_adapter->capabilities &
              request.required_capabilities) !=
             request.required_capabilities)
@@ -8699,9 +8754,10 @@ vxml_status vxml_session_cmeta_collect_prepare(
         if (form->record_utterance) {
             vxml_cmeta_collect_request_v2 request = {0};
             status = collect_request_v2_from_impl(impl, &request);
-            if (status != VXML_OK)
-                return status == VXML_SEMANTIC_ERROR
-                    ? collect_raise_semantic(session) : status;
+            if (status != VXML_OK) {
+                *request_error = true;
+                return status;
+            }
             if ((profile->collect_adapter->capabilities &
                  request.required_capabilities) !=
                 request.required_capabilities)
@@ -8713,9 +8769,10 @@ vxml_status vxml_session_cmeta_collect_prepare(
         } else {
             vxml_cmeta_collect_request_v1 request = {0};
             status = collect_request_from_impl(impl, &request);
-            if (status != VXML_OK)
-                return status == VXML_SEMANTIC_ERROR
-                    ? collect_raise_semantic(session) : status;
+            if (status != VXML_OK) {
+                *request_error = true;
+                return status;
+            }
             if ((profile->collect_adapter->capabilities &
                  request.required_capabilities) !=
                 request.required_capabilities)
@@ -8742,6 +8799,32 @@ vxml_status vxml_session_cmeta_collect_prepare(
     profile->collect_ticket = ticket;
     profile->collect_prepared = true;
     return VXML_OK;
+}
+
+vxml_status vxml_session_cmeta_collect_prepare(
+    vxml_session *session, const char **out_error) {
+    if (out_error != NULL) *out_error = NULL;
+    if (session == NULL || session->impl == NULL) return VXML_INVALID_ARGUMENT;
+    vxml_session_impl *impl = session->impl;
+    if (impl->program == NULL || impl->program->profile_kind != VXML_PROFILE_CMETA ||
+        impl->program->profile_data == NULL) return VXML_INVALID_CONTRACT;
+    if (impl->state != VXML_SESSION_RUNNING || impl->profile_data == NULL)
+        return VXML_INVALID_STATE;
+    vxml_cmeta_session_data *profile = impl->profile_data;
+    const vxml_cmeta_program_data *program = impl->program->profile_data;
+    if (profile->collect_adapter == NULL) return VXML_INVALID_CONTRACT;
+    if (profile->collect_prepared || profile->collect_in_flight) return VXML_INVALID_STATE;
+    vxml_status status = collect_begin_transaction(profile, program);
+    if (status != VXML_OK) return status;
+    bool request_error = false;
+    status = collect_prepare_request(impl, out_error, &request_error);
+    /* Failed/partial provider tickets have already been discarded exactly once.
+     * Recovery must start only after the rejected request effects are rolled back. */
+    if (status != VXML_OK)
+        collect_abort_transaction(profile, program);
+    if (request_error && status == VXML_SEMANTIC_ERROR)
+        return collect_raise_semantic(session);
+    return status;
 }
 
 vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
@@ -8856,6 +8939,11 @@ vxml_status vxml_session_cmeta_collect_commit(vxml_session *session) {
     profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
     profile->collect_prepared = false;
     profile->collect_in_flight = true;
+    if (profile->collect_media_transaction) {
+        transaction_commit(profile, impl->program->profile_data);
+        profile->collect_media_transaction = false;
+        profile->collect_prompt_selection_owned = false;
+    }
     ticket.commit(ticket.user);
     return VXML_OK;
 }
@@ -8882,6 +8970,7 @@ vxml_status vxml_session_cmeta_collect_discard(vxml_session *session) {
     profile->collect_ticket = (vxml_cmeta_collect_ticket_v1){0};
     profile->collect_prepared = false;
     ticket.discard(ticket.user);
+    collect_abort_transaction(profile, impl->program->profile_data);
     return VXML_OK;
 }
 
@@ -11409,6 +11498,7 @@ static vxml_status cmeta_raise_event_impl(
     program = (const vxml_cmeta_program_data *)
         impl->program->profile_data;
     profile = (vxml_cmeta_session_data *)impl->profile_data;
+    if (profile->collect_media_transaction) return VXML_INVALID_STATE;
     if (profile->active_subdialog != VXML_CMETA_NO_INDEX &&
         !allow_subdialog)
         return VXML_INVALID_STATE;
@@ -12796,7 +12886,8 @@ static vxml_status selected_prompt_row(
         *out_prompt_count = profile->prompt_selection_count;
         return VXML_OK;
     }
-    const bool preview = !profile->prompt_media_transaction;
+    const bool preview = !profile->prompt_media_transaction &&
+        !profile->collect_media_transaction;
     if (preview && !transaction_begin(profile, program))
         return VXML_ALLOCATION_FAILED;
     const vxml_status status = select_prompt_row(
@@ -12819,7 +12910,8 @@ static vxml_status prompt_media_begin_transaction(
     vxml_cmeta_session_data *profile,
     const vxml_cmeta_program_data *program) {
     if (program->expression_backend.evaluate == NULL) return VXML_OK;
-    if (profile->prompt_media_transaction) return VXML_INVALID_STATE;
+    if (profile->prompt_media_transaction || profile->collect_media_transaction)
+        return VXML_INVALID_STATE;
     profile->prompt_selection_valid = false;
     if (!transaction_begin(profile, program)) return VXML_ALLOCATION_FAILED;
     profile->prompt_media_transaction = true;
