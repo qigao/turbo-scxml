@@ -388,6 +388,20 @@ in [issue #303](https://github.com/qigao/turbo-scxml/issues/303); replacing the
 Session execution owner remains a separate investigation in
 [issue #304](https://github.com/qigao/turbo-scxml/issues/304).
 
+The same suite's "CCXML controllers across Component publication" group runs
+compiled CCXML Programs through real `ccxml_session_dispatch` calls. A bounded
+test datamodel stages returned dialog IDs in owned storage and publishes them
+only on ticket commit. The old controller prepares before publication, then
+starts the retained Program after publication without refetching. A second
+prepare uses a fresh ID and terminates without refetching. Closing the controller
+returns BUSY while upstream is non-quiescent and rejects further dispatch;
+successful destruction still leaves generation drain blocked until its outer
+Component scope is released. After old DSO unload, the new controller executes
+direct start with the new DSO. Event IDs, resource open/close markers and one
+upstream close per manager witness the boundaries. This covers serialized
+controller/resource composition; it does not add a production datamodel or
+qualify concurrent dispatch into one Session.
+
 With the Component-enabled graph and matching SDK roots, the focused Windows
 VS developer-environment commands are:
 

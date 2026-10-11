@@ -43,6 +43,13 @@ the single slot can be reused with a new ID. A later telephony action failure
 discards both the dialog reservation and returned-ID ticket before any document
 opens; a subsequent dispatch can use the released capacity.
 
+With Component enabled, `voicexml_component_dialog_test` additionally dispatches
+real CCXML prepare, prepared start and terminate through an old DSO resource
+generation after a new generation is published. It checks returned-ID writeback,
+matching Event IDs, no refetch on prepared start/terminate, BUSY controller
+destruction until upstream quiescence, and new-generation direct start after
+the old module unloads. The controller and manager are destroyed before their
+borrowed Component scope is released.
 
 ## Progress
 
