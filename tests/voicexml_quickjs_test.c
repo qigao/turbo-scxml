@@ -79,6 +79,8 @@ typedef struct voice_quickjs_owned_state {
 
 static struct {
     size_t copy_attempts;
+    size_t copies;
+    size_t moves;
     size_t destroys;
     size_t live;
     bool fail_copy;
@@ -93,11 +95,13 @@ static bool owned_state_copy(void *destination, const void *source) {
     out->resource = tstr_new_len(initial->resource, tstr_len(initial->resource));
     if (out->resource == NULL) return false;
     out->value = initial->value;
+    ++owned_state_probe.copies;
     ++owned_state_probe.live;
     return true;
 }
 
 static void owned_state_move(void *destination, void *source) {
+    ++owned_state_probe.moves;
     *(voice_quickjs_owned_state *)destination = *(voice_quickjs_owned_state *)source;
     *(voice_quickjs_owned_state *)source = (voice_quickjs_owned_state){0};
 }
@@ -693,6 +697,116 @@ spec("VoiceXML QuickJS script target profile") {
         }
     }
 
+    group("owned state script transactions") {
+        static const char document[] =
+            "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
+            "<form><block><script src='scripts/first.js'/></block>"
+            "<block><script src='scripts/second.js'/></block>"
+            "<block><exit/></block></form></vxml>";
+        static const char first_body[] = "value = 8;";
+        static const struct {
+            const char *name;
+            const char *body;
+            bool fail_copy;
+            vxml_status status;
+        } cases[] = {
+            {"publishes a second managed value", "value = 9;", false, VXML_OK},
+            {"discards a throwing script", "value = 99; throw new Error('rollback');",
+                false, VXML_SEMANTIC_ERROR},
+            {"discards non-integral state export", "value = 1.5;", false, VXML_SEMANTIC_ERROR},
+            {"settles the lease after snapshot copy fails", "value = 9;", true,
+                VXML_ALLOCATION_FAILED}};
+        static vxml_program program;
+        static vxml_session session;
+        static vxml_document_store store;
+        static voice_quickjs_owned_state initial;
+        static quickjs_script_probe probe;
+        static vxml_quickjs_script_execution_v1 execution;
+        before_each() {
+            vxml_quickjs_compile_options_v1 compile = vxml_quickjs_default_compile_options();
+            vxml_quickjs_session_options_v1 options = vxml_quickjs_default_session_options();
+            program = (vxml_program){0};
+            session = (vxml_session){0};
+            store = (vxml_document_store){0};
+            memset(&owned_state_probe, 0, sizeof(owned_state_probe));
+            initial = (voice_quickjs_owned_state){7, tstr_dup("caller-owned")};
+            check_not_null(initial.resource);
+            probe = (quickjs_script_probe){
+                .open_status = VXML_SCRIPT_RESOURCE_OK,
+                .first_body = first_body,
+                .first_body_size = sizeof(first_body) - 1u};
+            quickjs_init_resolver(&store);
+            execution = script_execution(&store);
+            execution.script_resource_user = &probe;
+            compile.root = &owned_state_data;
+            options.initial_state = &initial;
+            check_equal(vxml_compile_quickjs_script_profile(
+                document, sizeof(document) - 1u, NULL, &compile, &program, NULL), VXML_OK);
+            check_equal(vxml_session_init_quickjs(&session, &program, &options), VXML_OK);
+            check_equal(vxml_session_start(&session), VXML_OK);
+        }
+        after_each() {
+            vxml_session_destroy(&session);
+            vxml_program_destroy(&program);
+            const vxml_document_store_status store_status = vxml_document_store_destroy(&store);
+            tstr_free(initial.resource);
+            initial = (voice_quickjs_owned_state){0};
+            check_equal(store_status, VXML_DOCUMENT_STORE_OK);
+            check_equal(owned_state_probe.live, (size_t)0u);
+            check_equal(owned_state_probe.destroys, owned_state_probe.copies);
+            check_equal(probe.close_calls, probe.open_calls);
+        }
+        for (size_t index = 0u; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            it("%s", cases[index].name) {
+                const void *state = NULL;
+                const char *event = NULL;
+                size_t event_size = 0u;
+                probe.second_body = cases[index].body;
+                probe.second_body_size = strlen(cases[index].body);
+                check_equal(vxml_quickjs_session_execute_script(&session, &execution), VXML_OK);
+                check_equal(vxml_session_get_state(&session), VXML_SESSION_SCRIPTING);
+                check_equal(vxml_quickjs_session_state(&session, &state), VXML_OK);
+                check_not_null(state);
+                check_equal(((const voice_quickjs_owned_state *)state)->value, 8);
+                check_equal(owned_state_probe.copies, (size_t)2u);
+                check_equal(owned_state_probe.moves, (size_t)1u);
+                check_equal(owned_state_probe.destroys, (size_t)1u);
+                check_equal(owned_state_probe.live, (size_t)1u);
+
+                owned_state_probe.fail_copy = cases[index].fail_copy;
+                check_equal(vxml_quickjs_session_execute_script(&session, &execution), cases[index].status);
+                const bool succeeded = cases[index].status == VXML_OK;
+                check_equal(vxml_session_get_state(&session),
+                    succeeded ? VXML_SESSION_EXITED : VXML_SESSION_FAILED);
+                check_equal(vxml_quickjs_session_state(&session, &state), VXML_OK);
+                check_not_null(state);
+                const voice_quickjs_owned_state *committed = state;
+                check_equal(committed->value, succeeded ? 9 : 8);
+                check_equal(committed->resource, "caller-owned");
+                check_true(committed->resource != initial.resource);
+                check_equal(initial.value, 7);
+                check_equal(initial.resource, "caller-owned");
+                check_equal(owned_state_probe.copy_attempts, (size_t)3u);
+                check_equal(owned_state_probe.copies, cases[index].fail_copy ? (size_t)2u : (size_t)3u);
+                check_equal(owned_state_probe.moves, succeeded ? (size_t)2u : (size_t)1u);
+                check_equal(owned_state_probe.destroys, cases[index].fail_copy ? (size_t)1u : (size_t)2u);
+                check_equal(owned_state_probe.live, (size_t)1u);
+                check_equal(probe.open_calls, (size_t)2u);
+                check_equal(probe.close_calls, (size_t)2u);
+                check_equal(vxml_quickjs_session_last_event(&session, &event, &event_size),
+                    succeeded ? VXML_INVALID_STATE : VXML_OK);
+                if (!succeeded) {
+                    check_equal(event_size, sizeof("error.semantic") - 1u);
+                    check_equal(memcmp(event, "error.semantic", event_size), 0);
+                }
+                check_equal(vxml_quickjs_session_execute_script(&session, &execution), VXML_INVALID_STATE);
+                check_equal(probe.open_calls, (size_t)2u);
+                check_equal(probe.close_calls, (size_t)2u);
+                check_equal(owned_state_probe.copy_attempts, (size_t)3u);
+            }
+        }
+    }
+
     it("executes static and dynamic scripts transactionally and resumes after each action") {
         static const char document[] =
             "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
@@ -902,7 +1016,9 @@ spec("VoiceXML QuickJS script target profile") {
         const char *event = NULL;
         size_t event_size = 0u;
 
-        compile.max_eval_milliseconds = UINT64_C(5);
+        /* This budget also covers VM initialization. Leave sanitizer/scheduler
+         * headroom; the infinite script must still terminate at the deadline. */
+        compile.max_eval_milliseconds = UINT64_C(1000);
         quickjs_init_resolver(&store);
         execution = script_execution(&store);
         execution.script_resource_user = &probe;
@@ -1898,7 +2014,9 @@ spec("VoiceXML QuickJS script target profile") {
             size_t event_size = 0u;
             int written;
 
-            compile.max_eval_milliseconds = UINT64_C(5);
+            /* Compilation and Session init share this configured budget.
+             * Test termination, not a 5ms startup latency on CI runners. */
+            compile.max_eval_milliseconds = UINT64_C(1000);
             written = snprintf(
                 document, sizeof(document),
                 "<vxml xmlns='http://www.w3.org/2001/vxml' version='2.1'>"
